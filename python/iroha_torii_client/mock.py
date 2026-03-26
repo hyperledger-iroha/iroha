@@ -1222,16 +1222,16 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
     if owner is None:
         return
     if not isinstance(owner, str):
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     trimmed = owner.strip()
     if not trimmed or trimmed != owner:
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     if any(ch.isspace() for ch in trimmed):
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     if "@" in trimmed:
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     if trimmed.lower().startswith("0x"):
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
 
 
 class ToriiMockServer:

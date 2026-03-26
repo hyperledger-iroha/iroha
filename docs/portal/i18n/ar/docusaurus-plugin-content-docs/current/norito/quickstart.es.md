@@ -86,7 +86,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 ## 4. قم بإرسال الرمز الثانوي عبر Toriiمع العقدة للتصحيح، أرسل الرمز الثانوي المجمع إلى Torii باستخدام CLI. يتم استخلاص معرف التطوير المعيب من المفتاح الرئيسي المنشور في `defaults/client.toml`، لأنه يتم حساب معرف الحساب
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 استخدام ملف التكوين لإخفاء عنوان URL الخاص بـ Torii ومعرف السلسلة ومفتاح الشركة:
@@ -106,7 +106,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

@@ -67,11 +67,11 @@ public final class TransferWirePayloadEncoder {
    * Encodes an asset transfer instruction as a wire-framed InstructionBox.
    *
    * @param assetId The internal asset balance-bucket literal as
-   *     {@code <base58-asset-definition-id>#<katakana-i105-account-id>} with an optional
+   *     {@code <base58-asset-definition-id>#<i105-account-id>} with an optional
    *     {@code #dataspace:<id>} suffix. Public asset ids remain bare Base58
    *     asset-definition ids.
    * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
-   * @param destinationAccountId The recipient's canonical Katakana i105 account ID
+   * @param destinationAccountId The recipient's canonical I105 account ID
    * @return InstructionBox with wire payload ready for Norito encoding
    */
   public static InstructionBox encodeAssetTransfer(
@@ -267,7 +267,7 @@ public final class TransferWirePayloadEncoder {
         address = AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAccountId, null).address;
       } catch (AccountAddress.AccountAddressException e) {
         throw new IllegalArgumentException(
-            "Failed to parse canonical Katakana i105 account identifier: " + canonicalAccountId, e);
+            "Failed to parse canonical I105 account identifier: " + canonicalAccountId, e);
       }
 
       try {
@@ -287,7 +287,7 @@ public final class TransferWirePayloadEncoder {
         }
       } catch (AccountAddress.AccountAddressException e) {
         throw new IllegalArgumentException(
-            "Failed to extract controller from canonical Katakana i105 account id", e);
+            "Failed to extract controller from canonical I105 account id", e);
       }
 
       throw new IllegalArgumentException(
@@ -336,7 +336,7 @@ public final class TransferWirePayloadEncoder {
     }
 
     /**
-     * Parse from {@code <base58-asset-definition-id>#<katakana-i105-account-id>} with an optional
+     * Parse from {@code <base58-asset-definition-id>#<i105-account-id>} with an optional
      * {@code #dataspace:<id>} suffix.
      */
     static AssetId parse(String assetIdStr) {
@@ -344,7 +344,7 @@ public final class TransferWirePayloadEncoder {
       final String[] parts = trimmed.split("#", -1);
       if (parts.length < 2 || parts.length > 3) {
         throw new IllegalArgumentException(
-            "Invalid AssetId format: expected <base58-asset-definition-id>#<katakana-i105-account-id> with optional #dataspace:<id>");
+            "Invalid AssetId format: expected <base58-asset-definition-id>#<i105-account-id> with optional #dataspace:<id>");
       }
       final String assetDefPart = parts[0];
       final String accountIdPart = parts[1];
@@ -352,7 +352,7 @@ public final class TransferWirePayloadEncoder {
 
       if (!AssetDefinitionIdEncoder.isCanonicalAddress(assetDefPart)) {
         throw new IllegalArgumentException(
-            "Invalid AssetId format: expected canonical <base58-asset-definition-id>#<katakana-i105-account-id>");
+            "Invalid AssetId format: expected canonical <base58-asset-definition-id>#<i105-account-id>");
       }
       final AssetDefinitionId assetDef = AssetDefinitionId.fromAddress(assetDefPart);
       final byte[] scopePayload;

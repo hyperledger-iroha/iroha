@@ -2,11 +2,11 @@
 
 Status: Accepted 2026-03-30  
 Owners: Data Model Team / QA Guild  
-Roadmap reference: ADDR-2 — Canonical Katakana i105 Compliance Suite
+Roadmap reference: ADDR-2 — Canonical I105 Compliance Suite
 
 ### 1. Overview
 
-- Fixture: `fixtures/account/address_vectors.json` (canonical Katakana i105 +
+- Fixture: `fixtures/account/address_vectors.json` (canonical I105 +
   multisig positive/negative cases).
 - Scope: deterministic V1 payloads covering canonical account-id rendering,
   multisig controllers, and explicit rejection of non-canonical account-id
@@ -33,7 +33,7 @@ Flags:
 
 | Surface | Enforcement | Notes |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Parses the JSON, reconstructs canonical payloads, and checks canonical Katakana i105 plus canonical-hex conversions + structured errors. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Parses the JSON, reconstructs canonical payloads, and checks canonical I105 plus canonical-hex conversions + structured errors. |
 | Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Validates server-side codecs so Torii refuses malformed i105 payloads deterministically. |
 | JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 fixtures (i105/fullwidth) and asserts Norito-style error codes for every negative case. |
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Exercises i105 decoding, multisig payloads, and error surfacing on Apple platforms. |

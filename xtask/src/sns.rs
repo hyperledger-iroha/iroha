@@ -623,13 +623,13 @@ fn ensure_account_literal(literal: &str, field: &str, prefix: &str, errors: &mut
     }
     if trimmed.contains('@') {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be a canonical Katakana i105-encoded account id and must not include `@domain`"
+            "{prefix}: {field} `{literal}` must be a canonical I105-encoded account id and must not include `@domain`"
         ));
         return;
     }
     if let Err(err) = iroha_data_model::account::AccountId::parse_encoded(trimmed) {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be a canonical Katakana i105-encoded account id: {err}"
+            "{prefix}: {field} `{literal}` must be a canonical I105-encoded account id: {err}"
         ));
     }
 }
@@ -650,7 +650,7 @@ fn ensure_asset_literal(literal: &str, field: &str, prefix: &str, errors: &mut V
     }
     if let Err(err) = iroha_data_model::asset::AssetId::parse_literal(trimmed) {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be an asset-holding id in `<base58-asset-definition-id>#<katakana-i105-account-id>` form: {err}"
+            "{prefix}: {field} `{literal}` must be an asset-holding id in `<base58-asset-definition-id>#<i105-account-id>` form: {err}"
         ));
     }
 }

@@ -47,7 +47,7 @@ Tahlil qiluvchi quyidagi sarlavha qatorini talab qiladi (tartib moslashuvchan):
 |--------|----------|-------------|
 | `label` | Ha | Talab qilingan yorliq (aralash holatda qabul qilinadi; asbob v1 va UTS-46 normalariga muvofiq normallashadi). |
 | `suffix_id` | Ha | Raqamli qo'shimcha identifikator (o'nlik yoki `0x` hex). |
-| `owner` | Ha | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | Ha | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Ha | Butun son `1..=255`. |
 | `payment_asset_id` | Ha | Hisob-kitob aktivi (masalan, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Ha | Obyektning asl birliklarini ifodalovchi belgisiz butun sonlar. |
@@ -88,9 +88,9 @@ Muvaffaqiyatli skript yig'ilgan manifestni yozadi:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -99,7 +99,7 @@ Muvaffaqiyatli skript yig'ilgan manifestni yozadi:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -258,7 +258,7 @@ Kengash `release` tomonidan filtrlanadi, shuning uchun auditorlar bitta CSV ishg
   murojaatlar CSV manziliga nisbatan hal qilinadi. Ob'ekt bo'lmagan metama'lumotlar
   tekshirish xatosini keltirib chiqaradi.
 - **Kontrollerlar:** bo'sh hujayralar `--default-controllers` ni hurmat qiladi. Aniq taqdim eting
-  boshqaruvchi ro'yxatlari (masalan, `<katakana-i105-account-id>;<katakana-i105-account-id>`) egasi bo'lmaganlarga topshirilganda
+  boshqaruvchi ro'yxatlari (masalan, `<i105-account-id>;<i105-account-id>`) egasi bo'lmaganlarga topshirilganda
   aktyorlar.
 
 Xatolar kontekstli qator raqamlari bilan xabar qilinadi (masalan

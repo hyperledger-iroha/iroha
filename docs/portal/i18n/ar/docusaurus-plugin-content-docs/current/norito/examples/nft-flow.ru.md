@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## Почаговый обдод еестра
 
-- تأكد من أن بروتوكول NFT (على سبيل المثال `n0#wonderland`) موجود مباشرة مع حساب الخادم/المستخدم، مستخدمًا في المقتطف (`<katakana-i105-account-id>`، `<katakana-i105-account-id>`).
+- تأكد من أن بروتوكول NFT (على سبيل المثال `n0#wonderland`) موجود مباشرة مع حساب الخادم/المستخدم، مستخدمًا في المقتطف (`<i105-account-id>`، `<i105-account-id>`).
 - قم باختيار `nft_issue_and_transfer` من أجل استخدام NFT وتحويل نفسه من Alice إلى Bob وكسر علم الميتادانات، الوصف.
 - التحقق من إعدادات NFT-rest عبر `iroha_cli ledger nfts list --account <id>` أو ما يعادلها من SDK، من أجل إعادة التحديث ثم الانضمام إلى ما هو نشط يتم استكماله بعد تعليمات الاستخدام للحرق.
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

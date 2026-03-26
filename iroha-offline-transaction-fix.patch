@@ -411,7 +411,7 @@ index 000000000..5bf6678d6
 +    }
 +
 +    // Test values derived from Rust unit test (encode_offline_spend_receipt_payload_matches_native)
-+    // These use canonical Katakana i105 account ids and an owner-qualified asset-holding id
++    // These use canonical I105 account ids and an owner-qualified asset-holding id
 +    final String sender =
 +        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 +    final String receiver =

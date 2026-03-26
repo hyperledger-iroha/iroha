@@ -34,8 +34,8 @@ istifadə etməyi planlaşdırdığınız hesab identifikatorları. Defolt paket
 demo açarlarından əldə edilmişdir:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 İlk bir neçə hesabı sadalayaraq dəyərləri təsdiqləyin:

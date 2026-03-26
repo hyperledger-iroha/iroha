@@ -227,7 +227,7 @@ register_trigger wake {
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Prelude 宏为这些构造函数提供更短的别名和内联验证：
-- `account!("<katakana-i105-account-id>")`, `account_id!("<katakana-i105-account-id>")`
+- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
 - `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`、`asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

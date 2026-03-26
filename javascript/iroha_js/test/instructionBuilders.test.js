@@ -285,7 +285,7 @@ test("normalizeAccountId rejects Local-8 selectors", () => {
     () => exportedNormalizeAccountId(SAMPLE_ACCOUNT_LOCAL8_LITERAL),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical katakana i105 account id/i);
+      assert.match(String(error?.message), /canonical I105 account id/i);
       return true;
     },
   );

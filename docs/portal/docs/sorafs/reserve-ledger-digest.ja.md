@@ -34,9 +34,9 @@ Reserve+Rent ポリシー (ロードマップ項目 **SFM-6**) では、`sorafs 
 
    sorafs reserve ledger \
      --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-     --provider-account <katakana-i105-account-id> \
-     --treasury-account <katakana-i105-account-id> \
-     --reserve-account <katakana-i105-account-id> \
+     --provider-account <i105-account-id> \
+     --treasury-account <i105-account-id> \
+     --reserve-account <i105-account-id> \
      --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
      --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```

@@ -14,9 +14,9 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## 台帳ウォークスルー
 
-- 宛先アカウント（例: `<katakana-i105-account-id>`）が存在することを確認し、各 SDK クイックスタートのセットアップ段階を反映します。
+- 宛先アカウント（例: `<i105-account-id>`）が存在することを確認し、各 SDK クイックスタートのセットアップ段階を反映します。
 - `register_and_mint` エントリポイントを呼び出して ROSE 資産定義を作成し、1 トランザクションで Alice に 250 単位をミントします。
-- `client.request(FindAccountAssets)` または `iroha_cli ledger assets list --account <katakana-i105-account-id>` で残高を確認し、ミントが成功したことを確かめます。
+- `client.request(FindAccountAssets)` または `iroha_cli ledger assets list --account <i105-account-id>` で残高を確認し、ミントが成功したことを確かめます。
 
 ## 関連 SDK ガイド
 
@@ -38,7 +38,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

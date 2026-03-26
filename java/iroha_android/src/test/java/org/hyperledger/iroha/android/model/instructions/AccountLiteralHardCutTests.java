@@ -88,7 +88,7 @@ public final class AccountLiteralHardCutTests {
           sessionId, appPublic, walletPublic, account + "@hbl.dataspace", null, null);
       throw new AssertionError("expected ConnectProtocolException");
     } catch (final ConnectProtocolException expected) {
-      assert expected.getMessage().contains("canonical Katakana i105 encoded")
+      assert expected.getMessage().contains("canonical I105 encoded")
           : "unexpected error: " + expected.getMessage();
     }
   }

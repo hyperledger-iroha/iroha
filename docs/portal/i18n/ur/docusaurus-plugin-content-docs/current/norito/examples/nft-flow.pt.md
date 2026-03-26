@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## لیجر اسکرپٹ
 
-- اس بات کو یقینی بنائیں کہ این ایف ٹی تعریف (جیسے `n0#wonderland`) اسنیپٹ (`<katakana-i105-account-id>` ، `<katakana-i105-account-id>`) میں استعمال ہونے والے مالک/وصول کنندہ اکاؤنٹس کے ساتھ موجود ہے۔
+- اس بات کو یقینی بنائیں کہ این ایف ٹی تعریف (جیسے `n0#wonderland`) اسنیپٹ (`<i105-account-id>` ، `<i105-account-id>`) میں استعمال ہونے والے مالک/وصول کنندہ اکاؤنٹس کے ساتھ موجود ہے۔
 - `nft_issue_and_transfer` انٹری پوائنٹ کو این ایف ٹی کو ٹکسال کرنے کے لئے طلب کریں ، اسے ایلس سے باب میں منتقل کریں ، اور میٹا ڈیٹا سگنل منسلک کریں جو جاری کرنے کی وضاحت کرتا ہے۔
 - منتقلی کی تصدیق کے ل I `iroha_cli ledger nfts list --account <id>` یا SDK کے مساویوں کے ساتھ NFT لیجر کی حالت کا معائنہ کریں ، پھر اس بات کی تصدیق کریں کہ جب برن کی ہدایت چلتی ہے تو اثاثہ ہٹا دیا جاتا ہے۔
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

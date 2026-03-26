@@ -90,7 +90,7 @@ O Runner obteve o log `info("Hello from Kotodama")` e o syscall `SET_ACCOUNT_DET
 
 Ao usar o trabalho, abra o arquivo compactado em Torii pela CLI. Дефолтная dev-идентичность выводится из публичного ключа em `defaults/client.toml`, поэтому ID аккаунта:
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 Use o arquivo de configuração, insira o URL Torii, ID da cadeia e código de identificação:
@@ -108,7 +108,7 @@ Use este perfil CLI, veja mais detalhes da conta e contrate o contrato:
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

@@ -36,7 +36,7 @@ and
 now carry the remaining first-party account-literal cleanup:
 
 - stale ASCII-corrupted examples and bogus unsupported-kana placeholders were
-  replaced with canonical katakana-I105 account ids;
+  replaced with canonical I105 account ids;
 - the shared address fixture now re-encodes every positive I105 vector from
   canonical bytes, which removes the last stale multisig checksum drift; and
 - the checked-in JS `dist` bundle was rebuilt so the published package matches

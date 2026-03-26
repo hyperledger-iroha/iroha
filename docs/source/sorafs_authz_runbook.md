@@ -43,8 +43,8 @@ burst = 10
 [governance.sorafs_telemetry]
 require_submitter = true
 require_nonce = true
-submitters = ["<katakana-i105-account-id>"]
-per_provider_submitters = { "deadbeef..." = ["<katakana-i105-account-id>"] }
+submitters = ["<i105-account-id>"]
+per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
 ```
 
 ## CLI/REST quick reference

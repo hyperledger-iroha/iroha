@@ -719,12 +719,14 @@ mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let bind = iroha_data_model::isi::domain_link::BindAccountAlias {
-            account: account_id.clone(),
-            label,
-        };
-        bind.execute(account_id, &mut tx)
-            .expect("bind account alias for test");
+        let world = tx.world_mut_for_testing();
+        world
+            .account_aliases_mut_for_testing()
+            .insert(label.clone(), account_id.clone());
+        world.account_rekey_records_mut_for_testing().insert(
+            label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
         tx.apply();
         block.commit().expect("commit account alias for test");
     }

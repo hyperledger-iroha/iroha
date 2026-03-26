@@ -193,7 +193,7 @@ impl AssetId {
     /// Render this identifier in the canonical internal balance-bucket literal form.
     ///
     /// Public asset ids remain bare Base58 asset-definition ids. Global balance
-    /// buckets use `<base58-asset-definition-id>#<katakana-i105-account-id>`.
+    /// buckets use `<base58-asset-definition-id>#<i105-account-id>`.
     /// Dataspace-scoped balances append `#dataspace:<id>`.
     #[must_use]
     pub fn canonical_literal(&self) -> String {
@@ -211,7 +211,7 @@ impl AssetId {
     /// # Errors
     ///
     /// Returns [`ParseError`] when the literal is empty, not in internal
-    /// `<base58-asset-definition-id>#<katakana-i105-account-id>` form, or uses an invalid
+    /// `<base58-asset-definition-id>#<i105-account-id>` form, or uses an invalid
     /// dataspace scope suffix.
     pub fn parse_literal(input: &str) -> Result<Self, ParseError> {
         let trimmed = input.trim();
@@ -231,7 +231,7 @@ impl AssetId {
         let scope_literal = parts.next();
         if parts.next().is_some() {
             return Err(ParseError::new(
-                "Asset balance bucket literal must use `<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` suffix; canonical asset-definition ids are Base58",
+                "Asset balance bucket literal must use `<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` suffix; canonical asset-definition ids are Base58",
             ));
         }
 

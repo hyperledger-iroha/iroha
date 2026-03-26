@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## رجسٹری براؤزنگ
 
-- معاہدہ اتھارٹی (جیسے `<katakana-i105-account-id>`) کے اثاثے کے ساتھ یہ فراہمی اور اس کو `CanTransfer` یا مساوی اجازت کی فراہمی اور اس کی فراہمی کرے گی۔
-- کال انٹری پوائنٹ `call_transfer_asset` کو معاہدہ اکاؤنٹ سے 5 یونٹوں کو `<katakana-i105-account-id>` میں منتقل کرنے کے لئے ، اس بات کی عکاسی کرتی ہے کہ آن چین آٹومیشن میزبان کالوں کو کس طرح گھیر سکتا ہے۔
-- `FindAccountAssets` یا `iroha_cli ledger assets list --account <katakana-i105-account-id>` کے ذریعے بیلنس چیک کریں اور واقعات کا معائنہ کریں تاکہ اس بات کی تصدیق کی جاسکے کہ میٹا ڈیٹا گارڈ نے منتقلی کے تناظر میں لاگ ان کیا ہے۔
+- معاہدہ اتھارٹی (جیسے `<i105-account-id>`) کے اثاثے کے ساتھ یہ فراہمی اور اس کو `CanTransfer` یا مساوی اجازت کی فراہمی اور اس کی فراہمی کرے گی۔
+- کال انٹری پوائنٹ `call_transfer_asset` کو معاہدہ اکاؤنٹ سے 5 یونٹوں کو `<i105-account-id>` میں منتقل کرنے کے لئے ، اس بات کی عکاسی کرتی ہے کہ آن چین آٹومیشن میزبان کالوں کو کس طرح گھیر سکتا ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account <i105-account-id>` کے ذریعے بیلنس چیک کریں اور واقعات کا معائنہ کریں تاکہ اس بات کی تصدیق کی جاسکے کہ میٹا ڈیٹا گارڈ نے منتقلی کے تناظر میں لاگ ان کیا ہے۔
 
 ## متعلقہ SDK گائیڈز
 
@@ -36,8 +36,8 @@ translation_last_reviewed: 2026-02-07
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

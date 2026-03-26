@@ -113,8 +113,8 @@ Iroha 2 продолжает философию дизайна, представ
 
 Крейт `iroha_data_model` определяет все объекты реестра, инструкции, запросы и события. Основные моменты:
 
-- **Domains, accounts, and assets** use canonical Katakana i105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
-  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to Katakana i105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+- **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
   operations; NFTs carry arbitrary structured metadata.
 
 - **Роли и разрешения** используют токены с нумерацией Norito, которые напрямую сопоставляются с проверками исполнителя.

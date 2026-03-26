@@ -250,7 +250,7 @@ mod tests {
         let err = crate::account::AccountId::decode_json_key("alice@hbl.dataspace")
             .expect_err("domain suffix literal must be rejected");
         assert!(
-            err.to_string().contains("canonical Katakana i105"),
+            err.to_string().contains("canonical I105"),
             "unexpected error: {err}"
         );
     }

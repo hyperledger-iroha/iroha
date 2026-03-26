@@ -19,9 +19,9 @@ title: Запрос на передачу хоста от Kotodama
 
 ## Запись мэра библиотеки
 
-- Назначьте авторизацию договора (например, `<katakana-i105-account-id>`) с активацией, которая передает и отменяет роль `CanTransfer` или эквивалентное разрешение.
-- Назовите точку входа `call_transfer_asset` для передачи 5 единиц от места контракта на `<katakana-i105-account-id>`, отобразив форму, в которой автоматизация в цепочке может охватывать сигналы хоста.
-- Проверка балансов медианте `FindAccountAssets` или `iroha_cli ledger assets list --account <katakana-i105-account-id>` и проверка событий для подтверждения того, что охраняется регистрация метаданных в контексте передачи.
+- Назначьте авторизацию договора (например, `<i105-account-id>`) с активацией, которая передает и отменяет роль `CanTransfer` или эквивалентное разрешение.
+- Назовите точку входа `call_transfer_asset` для передачи 5 единиц от места контракта на `<i105-account-id>`, отобразив форму, в которой автоматизация в цепочке может охватывать сигналы хоста.
+- Проверка балансов медианте `FindAccountAssets` или `iroha_cli ledger assets list --account <i105-account-id>` и проверка событий для подтверждения того, что охраняется регистрация метаданных в контексте передачи.
 
 ## Руководство по настройке SDK
 
@@ -36,8 +36,8 @@ title: Запрос на передачу хоста от Kotodama
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

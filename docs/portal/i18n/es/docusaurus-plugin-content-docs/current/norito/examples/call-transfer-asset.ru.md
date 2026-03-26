@@ -19,9 +19,9 @@ Coloque el cable de alimentación Kotodama en la instalación del servidor `tran
 
 ## Пошаговый обход реестра
 
-- Пополните полномочия контракта (например `<katakana-i105-account-id>`) активом, который он будет переводить, и выдайте полномочию роль `CanTransfer` или эквивалентное разрешение.
-- Utilice este vídeo `call_transfer_asset`, antes de 5 ediciones del contrato de cuenta con `<katakana-i105-account-id>`, además de eso. ончейн-автоматизация может оборачивать вызовы хоста.
-- Guarde los equilibrios entre `FindAccountAssets` y `iroha_cli ledger assets list --account <katakana-i105-account-id>` y promueva la seguridad, la protección y la protección de metadanos. записал контекст перевода.
+- Пополните полномочия контракта (например `<i105-account-id>`) активом, который он будет переводить, и выдайте полномочию роль `CanTransfer` или эквивалентное разрешение.
+- Utilice este vídeo `call_transfer_asset`, antes de 5 ediciones del contrato de cuenta con `<i105-account-id>`, además de eso. ончейн-автоматизация может оборачивать вызовы хоста.
+- Guarde los equilibrios entre `FindAccountAssets` y `iroha_cli ledger assets list --account <i105-account-id>` y promueva la seguridad, la protección y la protección de metadanos. записал контекст перевода.
 
 ## Связанные руководства SDK
 
@@ -36,8 +36,8 @@ Coloque el cable de alimentación Kotodama en la instalación del servidor `tran
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

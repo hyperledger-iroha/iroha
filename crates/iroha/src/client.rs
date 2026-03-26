@@ -129,7 +129,7 @@ fn ensure_canonical_i105_account_id(value: &str, field: &str) -> Result<()> {
         return Err(eyre!("{field} must not contain surrounding whitespace"));
     }
     AccountId::parse_encoded(trimmed)
-        .map_err(|err| eyre!("{field} must be a canonical Katakana i105 account id: {err}"))?;
+        .map_err(|err| eyre!("{field} must be a canonical I105 account id: {err}"))?;
     Ok(())
 }
 
@@ -16129,7 +16129,7 @@ mod tests {
             .expect_err("alias worker id must be rejected");
         assert!(
             err.to_string()
-                .contains("canonical Katakana i105 account id")
+                .contains("canonical I105 account id")
         );
     }
 
@@ -16153,7 +16153,7 @@ mod tests {
             .expect_err("alias auditor account must be rejected");
         assert!(
             err.to_string()
-                .contains("canonical Katakana i105 account id")
+                .contains("canonical I105 account id")
         );
     }
 

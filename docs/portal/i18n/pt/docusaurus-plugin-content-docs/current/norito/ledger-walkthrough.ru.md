@@ -29,8 +29,8 @@ Para suas instruções, digite `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT` em um novo
 ID de contas. No pacote padrão você tem sua conta, usando o demo-ключей:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Verifique sua segurança, você pode contar suas contas:

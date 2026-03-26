@@ -7,7 +7,7 @@
 Roadmap link: **ADDR-5c** — “Local → Global Normalisation Toolkit”
 
 This guide packages the operational steps, CLI helpers, and automation hooks
-needed to migrate Local selectors to canonical Katakana i105 forms ahead
+needed to migrate Local selectors to canonical I105 forms ahead
 of the Local-8/Local-12 enforcement gates. i105 is the preferred format for
 sharing and canonical output.
 
@@ -38,7 +38,7 @@ Pair it with:
 1. `audit.json` — structured report from `iroha tools address audit` with entry-by-entry status,
    domain-kind classification, and parse errors. Use this to prioritise remediation.
 2. `normalized.txt` — converted address list that replaces every Local selector
-   with the chosen format (canonical Katakana i105).
+   with the chosen format (canonical I105).
 
 ### 2.1 Invocation
 

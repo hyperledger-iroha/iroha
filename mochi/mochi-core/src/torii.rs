@@ -930,7 +930,7 @@ pub struct ExplorerBlocksQuery {
 /// Explorer account entry returned by `/v1/explorer/accounts`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountRecord {
-    /// Canonical Katakana i105 identifier.
+    /// Canonical I105 identifier.
     pub id: String,
     /// I105-encoded literal for the account.
     pub i105_address: String,

@@ -104,10 +104,10 @@ description = "Route CBDC contracts to the restricted lane"
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "<katakana-i105-account-id>",
-    "<katakana-i105-account-id>",
-    "<katakana-i105-account-id>",
-    "<katakana-i105-account-id>"
+    "<i105-account-id>",
+    "<i105-account-id>",
+    "<i105-account-id>",
+    "<i105-account-id>"
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,7 @@ description = "Route CBDC contracts to the restricted lane"
 }
 ```
 
-གཙོ་བོའི་དགོས་མཁོ།- བདེན་དཔྱད་འབད་མི་ **must** be canonical Katakana i105 རྩིས་ཐོ་ IDs (མེད་ `@domain`; མེན) ཐོ་གཞུང་ནང་ལུ་ཡོད་པའི་ `@domain` འདི་ གསལ་ཏོག་ཏོ་སྦེ་ ལམ་སྟོན་འབད་མི་བརྡ་སྟོན་སྦེ་རྐྱངམ་ཅིག་ཨིན། མང་སིག་ཚད་གཞི་ (≥2) ལུ་ `quorum` གཞི་སྒྲིག་འབད།
+གཙོ་བོའི་དགོས་མཁོ།- བདེན་དཔྱད་འབད་མི་ **must** be canonical I105 རྩིས་ཐོ་ IDs (མེད་ `@domain`; མེན) ཐོ་གཞུང་ནང་ལུ་ཡོད་པའི་ `@domain` འདི་ གསལ་ཏོག་ཏོ་སྦེ་ ལམ་སྟོན་འབད་མི་བརྡ་སྟོན་སྦེ་རྐྱངམ་ཅིག་ཨིན། མང་སིག་ཚད་གཞི་ (≥2) ལུ་ `quorum` གཞི་སྒྲིག་འབད།
 - ཉེན་སྲུང་འབད་ཡོད་པའི་མིང་གི་ས་སྒོ་ཚུ་ `Queue::push` གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ་ལས་ (Norito བལྟ།) དེ་འབདཝ་ལས་ CBDC གན་རྒྱ་ཆ་མཉམ་གྱིས་ `gov_namespace` + `gov_contract_id` གསལ་བཀོད་འབད་དགོ།
 - `composability_group` ས་ཁོངས་ཚུ་གིས་ `docs/source/nexus.md` §8.6 ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ལས་རིམ་གྱི་རྗེས་སུ་འབྲང་ཡོདཔ་ཨིན། ཇོ་བདག་ (CBDC lane) གིས་ ཐོ་ཡིག་དཀརཔོ་དང་ བསྡོམས་རྩིས་ཚུ་ བཀྲམ་སྤེལ་འབདཝ་ཨིན། དཀརཔོ་ཐོ་ཡིག་བཀོད་ཡོད་པའི་ཌི་ཨེསི་གིས་ `group_id_hex` + `activation_epoch` རྐྱངམ་ཅིག་གསལ་བཀོད་འབདཝ་ཨིན།
 - གསལ་སྟོན་འདི་འདྲ་བཤུས་རྐྱབ་པའི་ཤུལ་ལས་ `cargo test -p integration_tests nexus::lane_registry -- --nocapture` འདི་ གཡོག་བཀོལ་མི་འདི་གིས་ Norito འདི་མངོན་གསལ་འབདཝ་ཨིན།
@@ -246,7 +246,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "<katakana-i105-account-id>",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -262,7 +262,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "<katakana-i105-account-id>",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

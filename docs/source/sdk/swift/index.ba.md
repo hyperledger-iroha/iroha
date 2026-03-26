@@ -860,7 +860,7 @@ For higher-level walkthroughs, see:
   helper wraps `/v1/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
   metadata defined in {doc}`sns/address_display_guidelines` so explorers can embed share-ready
   preferred i105 QR payloads without reimplementing the renderer
-  (omit the format to use i105 or use canonical Katakana i105 output).
+  (omit the format to use i105 or use canonical I105 output).
 - **Explorer:** `getExplorerInstructions` and `getExplorerTransactions` wrap
   `/v1/explorer/instructions` and `/v1/explorer/transactions` with
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including

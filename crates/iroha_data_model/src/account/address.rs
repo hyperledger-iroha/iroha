@@ -353,7 +353,7 @@ impl AccountAddress {
         })
     }
 
-    /// Encode the payload as a canonical Katakana i105 literal using the active
+    /// Encode the payload as a canonical I105 literal using the active
     /// chain discriminant.
     ///
     /// # Errors
@@ -364,7 +364,7 @@ impl AccountAddress {
         self.to_i105_for_discriminant(chain_discriminant())
     }
 
-    /// Encode the payload as a canonical Katakana i105 literal with a specific
+    /// Encode the payload as a canonical I105 literal with a specific
     /// chain discriminant.
     ///
     /// # Errors
@@ -435,12 +435,12 @@ impl AccountAddress {
         })
     }
 
-    /// Decode the canonical Katakana i105 representation.
+    /// Decode the canonical I105 representation.
     ///
     /// # Errors
     ///
     /// Returns [`AccountAddressError`] if the string contains symbols outside
-    /// the canonical Katakana i105 alphabet, carries a mismatching chain discriminant,
+    /// the canonical I105 alphabet, carries a mismatching chain discriminant,
     /// or fails checksum validation.
     pub fn from_i105(encoded: &str) -> Result<Self, AccountAddressError> {
         let expected = chain_discriminant();
@@ -455,7 +455,7 @@ impl AccountAddress {
     /// # Errors
     ///
     /// Returns [`AccountAddressError`] if the string carries a mismatching
-    /// discriminant, has symbols outside the canonical Katakana i105 alphabet, or fails
+    /// discriminant, has symbols outside the canonical I105 alphabet, or fails
     /// checksum validation.
     pub fn from_i105_for_discriminant(
         encoded: &str,
@@ -1662,7 +1662,7 @@ mod tests {
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
         assert_eq!(
             parse_err.reason(),
-            "AccountId must use a canonical Katakana i105 literal"
+            "AccountId must use a canonical I105 literal"
         );
         assert_eq!(
             err.code_str(),
@@ -1683,7 +1683,7 @@ mod tests {
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
         assert_eq!(
             parse_err.reason(),
-            "AccountId must use a canonical Katakana i105 literal"
+            "AccountId must use a canonical I105 literal"
         );
         assert_eq!(
             err.code_str(),
@@ -1940,7 +1940,7 @@ mod tests {
         let canonical = AccountAddress::from_account_id(&account)
             .expect("encode")
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
-            .expect("canonical Katakana i105");
+            .expect("canonical I105");
         let noncanonical = fullwidth_sentinel_literal(&canonical);
 
         let err = AccountAddress::parse_encoded(&noncanonical, Some(CHAIN_DISCRIMINANT_SORA))
@@ -1968,7 +1968,7 @@ mod tests {
         );
         assert!(
             payload.chars().any(|ch| ch.is_ascii_alphanumeric()),
-            "canonical Katakana i105 payload must expose Base58 symbols: {literal}"
+            "canonical I105 payload must expose Base58 symbols: {literal}"
         );
         assert!(
             payload.chars().any(|ch| {
@@ -1978,7 +1978,7 @@ mod tests {
                     .iter()
                     .any(|candidate| *candidate == encoded)
             }),
-            "canonical Katakana i105 payload must expose Iroha-poem katakana: {literal}"
+            "canonical I105 payload must expose Iroha-poem katakana: {literal}"
         );
     }
 

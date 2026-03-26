@@ -105,8 +105,8 @@ The `iroha_crypto` crate powers key management, hashing, and signature verificat
 
 The `iroha_data_model` crate defines all ledger objects, instructions, queries, and events. Highlights:
 
-- **Domains, accounts, and assets** use canonical Katakana i105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
-  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to Katakana i105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+- **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
   operations; NFTs carry arbitrary structured metadata.
 
 - **Roles and permissions** use Norito-enumerated tokens that map directly to executor checks.

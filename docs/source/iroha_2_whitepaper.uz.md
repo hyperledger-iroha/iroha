@@ -113,8 +113,8 @@ barcha tengdoshlar tomonidan ishlatiladigan kanonik imzo to'plami.
 
 `iroha_data_model` kassasi barcha daftar ob'ektlari, ko'rsatmalar, so'rovlar va hodisalarni belgilaydi. Diqqatga sazovor joylar:
 
-- **Domains, accounts, and assets** use canonical Katakana i105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
-  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to Katakana i105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+- **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
   operations; NFTs carry arbitrary structured metadata.
 
 - **Rollar va ruxsatlar** Norito sanab o'tilgan tokenlardan foydalanadi, ular bevosita ijrochi tekshiruvlariga mos keladi.

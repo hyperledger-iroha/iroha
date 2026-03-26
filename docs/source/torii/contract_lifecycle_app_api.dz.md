@@ -95,7 +95,7 @@ the bytecode to be present on-chain (e.g., via the deploy endpoint above).【cra
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `authority` | `AccountId` | Canonical Katakana i105 account id (domainless encoded literal). Torii strict parser paths accept only canonical Katakana i105 and reject non-i105 literals and any `@<domain>` suffix. |
+| `authority` | `AccountId` | Canonical I105 account id (domainless encoded literal). Torii strict parser paths accept only canonical I105 and reject non-i105 literals and any `@<domain>` suffix. |
 | `private_key` | `ExposedPrivateKey` | Bare multihash hex string.【crates/iroha_crypto/src/lib.rs:1994】 |
 | `namespace` | `String` | Governance namespace hosting the instance (e.g., `apps.market`). |
 | `contract_id` | `String` | Logical identifier under the namespace (e.g., `calc.v1`). |

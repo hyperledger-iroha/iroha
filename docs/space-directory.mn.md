@@ -251,7 +251,7 @@ belong to that slice. Downstream components use this ledger-backed view:
   reloading manifest JSON.
 - Torii now exposes `GET /v1/space-directory/uaids/{uaid}` for operators and
   SDKs that need to introspect bindings directly. Append
-  `canonical Katakana i105 output` if you need the i105 literals for QR
+  `canonical I105 output` if you need the i105 literals for QR
   payloads; I105 strings remain the default.【docs/source/torii/portfolio_api.md】
 
 ### 5.1 CLI manifest & binding inspectors
@@ -321,7 +321,7 @@ GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}
 ```
 
 Use the optional `dataspace` query parameter (u64) to filter the response to a
-single dataspace. `canonical Katakana i105 output` rewrites the embedded `accounts`
+single dataspace. `canonical I105 output` rewrites the embedded `accounts`
 arrays to the Sora-specific `sora` encoding for wallet/UI parity. Each entry
 includes the manifest hash, lifecycle metadata, ledger bindings, and the
 canonical `AssetPermissionManifest` JSON:
@@ -340,7 +340,7 @@ canonical `AssetPermissionManifest` JSON:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["<katakana-i105-account-id>"],
+      "accounts": ["<i105-account-id>"],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -398,7 +398,7 @@ Sample request body:
 
 ```jsonc
 {
-  "authority": "<katakana-i105-account-id>",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -455,7 +455,7 @@ Sample JSON body:
 
 ```jsonc
 {
-  "authority": "<katakana-i105-account-id>",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,

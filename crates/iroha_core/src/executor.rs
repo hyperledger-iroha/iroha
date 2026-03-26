@@ -451,7 +451,7 @@ fn parse_fee_sponsor(
                 return Ok(Some(sponsor));
             }
             Err(ValidationFail::NotPermitted(format!(
-                "invalid fee_sponsor metadata: expected canonical Katakana i105 account id or on-chain alias ({err})"
+                "invalid fee_sponsor metadata: expected canonical I105 account id or on-chain alias ({err})"
             )))
         }
     }
@@ -720,7 +720,7 @@ pub(crate) fn charge_fees_for_applied_overlay(
             )
             .ok_or_else(|| {
                 ValidationFail::InternalError(
-                    "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id or on-chain alias"
+                    "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
                         .to_owned(),
                 )
             })?;
@@ -998,7 +998,7 @@ impl Executor {
         )
         .ok_or_else(|| {
             let reason =
-                "invalid nexus fee sink account id; expected canonical Katakana i105 account id or on-chain alias"
+                "invalid nexus fee sink account id; expected canonical I105 account id or on-chain alias"
                     .to_owned();
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
                 reason: reason.clone(),
@@ -1232,7 +1232,7 @@ impl Executor {
                 )
                 .ok_or_else(|| {
                     ValidationFail::InternalError(
-                        "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id or on-chain alias"
+                        "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
                             .to_owned(),
                     )
                 })?;
@@ -1841,7 +1841,7 @@ impl Executor {
                     )
                     .ok_or_else(|| {
                         ValidationFail::InternalError(
-                            "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id or on-chain alias"
+                            "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
                                 .to_owned(),
                         )
                     })?;

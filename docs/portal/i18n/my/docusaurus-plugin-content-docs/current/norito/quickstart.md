@@ -105,7 +105,7 @@ node လည်ပတ်နေသေးသဖြင့် CLI ကို အသု
 ပုံသေဖွံ့ဖြိုးတိုးတက်မှုအထောက်အထားသည် အများသူငှာသော့မှဆင်းသက်လာသည်။
 `defaults/client.toml`၊ ဒါကြောင့် အကောင့် ID ပါ။
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 Torii URL၊ ကွင်းဆက် ID နှင့် လက်မှတ်ထိုးသော့တို့ကို ပံ့ပိုးရန်အတွက် config ဖိုင်ကို အသုံးပြုပါ-
@@ -127,7 +127,7 @@ CLI သည် ငွေပေးငွေယူကို Norito ဖြင့် 
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

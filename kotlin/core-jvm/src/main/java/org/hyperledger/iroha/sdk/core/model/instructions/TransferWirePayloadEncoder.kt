@@ -59,7 +59,7 @@ object TransferWirePayloadEncoder {
      * Encodes an asset transfer instruction as a wire-framed InstructionBox.
      *
      * @param assetId The internal asset balance-bucket literal
-     * (`<base58-asset-definition-id>#<katakana-i105-account-id>` with an optional
+     * (`<base58-asset-definition-id>#<i105-account-id>` with an optional
      * `#dataspace:<id>` suffix; canonical asset-definition ids are Base58)
      * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
      * @param destinationAccountId The recipient's account ID
@@ -161,7 +161,7 @@ object TransferWirePayloadEncoder {
                     address = AccountAddress.parseEncodedIgnoringCurveSupport(accountIdStr, null).address
                 } catch (e: AccountAddressException) {
                     throw IllegalArgumentException(
-                        "AssetId.account must use canonical Katakana i105 form",
+                        "AssetId.account must use canonical I105 form",
                         e,
                     )
                 }
@@ -206,7 +206,7 @@ object TransferWirePayloadEncoder {
             fun parse(assetIdStr: String): AssetId {
                 val parts = assetIdStr.split('#')
                 require(parts.size == 2 || parts.size == 3) {
-                    "AssetId must use internal '<base58-asset-definition-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix; canonical asset-definition ids are Base58"
+                    "AssetId must use internal '<base58-asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix; canonical asset-definition ids are Base58"
                 }
 
                 val assetDef = AssetDefinitionId.fromAddress(parts[0])

@@ -25,7 +25,7 @@ This document explains the structures, identifiers, traits, and protocols that f
 
 String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as Katakana i105 only. Strict parser inputs must be canonical Katakana i105; domain suffixes (`@domain`), account-alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected. On-chain account aliases use `name@domain.dataspace` or `name@dataspace` and resolve to canonical `AccountId` values.
+- `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as I105 only. Strict parser inputs must be canonical I105; domain suffixes (`@domain`), account-alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected. On-chain account aliases use `name@domain.dataspace` or `name@dataspace` and resolve to canonical `AccountId` values.
 - `AssetDefinitionId`: canonical unprefixed Base58 address over the canonical asset-definition bytes. This is the public asset ID. On-chain asset aliases use `name#domain.dataspace` or `name#dataspace` and resolve only to this canonical Base58 asset ID.
 - `AssetId`: public asset identifier in canonical bare Base58 form. Asset aliases like `name#dataspace` or `name#domain.dataspace` resolve to `AssetId`. Internal ledger holdings may additionally expose split `asset + account + optional dataspace` fields where needed, but that composite shape is not the public `AssetId`.
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
@@ -39,7 +39,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - Builder: `NewDomain` with `with_logo`, `with_metadata`, then `Registrable::build(authority)` sets `owned_by`.
 
 ### Account
-- `AccountId` is the canonical domainless account identity keyed by the controller and encoded as canonical Katakana i105.
+- `AccountId` is the canonical domainless account identity keyed by the controller and encoded as canonical I105.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` carries explicit domain context only where a scoped view is required.
 - `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
 - Builder: `NewAccount` via `Account::new(id)`; registration requires an explicit `ScopedAccountId` domain and does not infer one from defaults.

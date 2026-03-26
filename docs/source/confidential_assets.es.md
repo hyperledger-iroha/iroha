@@ -423,7 +423,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "<katakana-i105-account-id>",
+    authority: "<i105-account-id>",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",

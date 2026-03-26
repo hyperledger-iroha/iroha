@@ -5033,10 +5033,7 @@ mod tests {
     fn canonical_account_helper_rejects_alias_literals() {
         let err = ensure_canonical_account_id_literal("alice@wallets", "account_id")
             .expect_err("aliases must be rejected");
-        assert!(
-            err.to_string()
-                .contains("canonical Katakana i105 account id")
-        );
+        assert!(err.to_string().contains("canonical I105 account id"));
     }
 
     #[test]
@@ -5199,7 +5196,7 @@ fn ensure_canonical_account_id_literal(value: &str, field_name: &str) -> Result<
     let trimmed = value.trim();
     AccountId::parse_encoded(trimmed).map_err(|err| {
         conversion_error(format!(
-            "{field_name} must be a canonical Katakana i105 account id: {err}"
+            "{field_name} must be a canonical I105 account id: {err}"
         ))
     })?;
     Ok(())

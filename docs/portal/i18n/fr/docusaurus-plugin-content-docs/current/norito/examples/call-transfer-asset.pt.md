@@ -19,9 +19,9 @@ En montrant le point d'entrée Kotodama, vous pouvez demander aux instructions d
 
 ## Roteiro do livro razão
 
-- Financer l'autorisation du contrat (par exemple `<katakana-i105-account-id>`) avec l'objectif du transfert et la concession de l'autorisation du papier `CanTransfer` ou autorisation équivalente.
-- Choisissez le point d'entrée `call_transfer_asset` pour transférer 5 unités du contrat pour `<katakana-i105-account-id>`, reflétant la possibilité d'envoyer automatiquement des commandes en chaîne à l'hôte.
-- Vérifiez les saldos via `FindAccountAssets` ou `iroha_cli ledger assets list --account <katakana-i105-account-id>` et inspectez les événements pour confirmer que le garde de métadonnées enregistré ou le contexte du transfert.
+- Financer l'autorisation du contrat (par exemple `<i105-account-id>`) avec l'objectif du transfert et la concession de l'autorisation du papier `CanTransfer` ou autorisation équivalente.
+- Choisissez le point d'entrée `call_transfer_asset` pour transférer 5 unités du contrat pour `<i105-account-id>`, reflétant la possibilité d'envoyer automatiquement des commandes en chaîne à l'hôte.
+- Vérifiez les saldos via `FindAccountAssets` ou `iroha_cli ledger assets list --account <i105-account-id>` et inspectez les événements pour confirmer que le garde de métadonnées enregistré ou le contexte du transfert.
 
 ## Guides des utilisateurs du SDK
 
@@ -36,8 +36,8 @@ En montrant le point d'entrée Kotodama, vous pouvez demander aux instructions d
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

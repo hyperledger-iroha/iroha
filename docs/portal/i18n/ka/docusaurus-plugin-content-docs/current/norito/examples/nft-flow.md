@@ -21,7 +21,7 @@ slug: /norito/examps/nft-flow
 
 ## ლეჯერის გზამკვლევი
 
-- დარწმუნდით, რომ NFT განმარტება (მაგალითად, `n0#wonderland`) არსებობს მფლობელის/მიმღების ანგარიშებთან ერთად, რომლებიც გამოიყენება ნაწყვეტში (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`).
+- დარწმუნდით, რომ NFT განმარტება (მაგალითად, `n0#wonderland`) არსებობს მფლობელის/მიმღების ანგარიშებთან ერთად, რომლებიც გამოიყენება ნაწყვეტში (`<i105-account-id>`, `<i105-account-id>`).
 - გამოიძახეთ `nft_issue_and_transfer` შესასვლელი წერტილი NFT-ის მოსაწყობად, გადაიტანეთ იგი ალისიდან ბობში და მიამაგრეთ მეტამონაცემების დროშა, რომელიც აღწერს გაცემას.
 - შეამოწმეთ NFT ledger-ის მდგომარეობა `iroha_cli ledger nfts list --account <id>`-ით ან SDK-ის ეკვივალენტებით გადაცემის შესამოწმებლად, შემდეგ დაადასტურეთ, რომ აქტივი ამოღებულია დამწვრობის ინსტრუქციის გაშვების შემდეგ.
 
@@ -37,11 +37,11 @@ slug: /norito/examps/nft-flow
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

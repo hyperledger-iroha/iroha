@@ -508,7 +508,7 @@ const registerAccount = buildRegisterAccountInstruction({
   accountId: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
 });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetHoldingId: "<base58-asset-definition-id>#<katakana-i105-account-id>",
+  sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
   destinationAccountId: "sorauロ1PケiコPヨソRhgラ1EコリNソnhレdシユAYGwワテYqケGLニwKヘaQUJKW1",
   quantity: "5",
 });
@@ -937,7 +937,7 @@ pinned to the configured base.
   bigint` but require plain decimal literals (no exponent), with up to 28
   fractional digits and a 512-bit mantissa.
 - Keep asset IDs in canonical holding form
-  (`<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>`) when
+  (`<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>`) when
   chaining mint and transfer steps. The helpers do not guess missing account or
   scope suffixes, ensuring all peers derive the same destination.
 - Reuse the exported `normalizeAccountId()` / `normalizeAssetId()` helpers when you
@@ -2101,7 +2101,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   privateKey,
 });
 
-const zkOwner = "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL"; // canonical Katakana i105 account id for ZK public inputs
+const zkOwner = "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL"; // canonical I105 account id for ZK public inputs
 
 const zkBallotTx = buildCastZkBallotTransaction({
   chainId: "test-chain",
@@ -2442,7 +2442,7 @@ const { signedTransaction } = buildTransaction({
   authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   instructions: [
     buildMintAssetInstruction({
-      assetHoldingId: "<base58-asset-definition-id>#<katakana-i105-account-id>",
+      assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
       quantity: "10",
     }),
   ],
@@ -3015,7 +3015,7 @@ so you can persist the verdict metadata immediately.
 
 ```js
 const draft = {
-  controller: "<katakana-i105-account-id>",
+  controller: "<i105-account-id>",
   allowance: {
     asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     amount: "10",
@@ -3035,7 +3035,7 @@ const draft = {
 // Torii derives the certificate operator from its configured offline issuer keypair.
 
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "<katakana-i105-account-id>",
+  authority: "<i105-account-id>",
   privateKey: "ed25519:...",
   certificate: draft,
 });
@@ -3048,7 +3048,7 @@ For renewals, call `topUpOfflineAllowanceRenewal` with the existing certificate 
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "<katakana-i105-account-id>",
+    authority: "<i105-account-id>",
     privateKey: "ed25519:...",
     certificate: draft,
   },
@@ -3078,7 +3078,7 @@ certificates), pass per-receipt `buildClaimOverrides` and set
 
 ```js
 const settlement = await torii.submitOfflineSettlement({
-  authority: "<katakana-i105-account-id>",
+  authority: "<i105-account-id>",
   privateKey: "ed25519:...",
   transfer: transferPayload,
   buildClaimOverrides: [
@@ -3103,7 +3103,7 @@ try {
   const settleAbort = new AbortController();
   const settlement = await torii.submitOfflineSettlementAndWait(
     {
-      authority: "<katakana-i105-account-id>",
+      authority: "<i105-account-id>",
       privateKey: "ed25519:...",
       transfer: transferPayload,
     },
@@ -3229,17 +3229,17 @@ const nfts = await torii.listNfts({ limit: 10 });
 console.log("first NFT ids", nfts.items.map((nft) => nft.id));
 const balances = await torii.listAccountAssets("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   limit: 3,
-  assetHoldingId: "<base58-asset-definition-id>#<katakana-i105-account-id>",
+  assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log("alice balances", balances.items);
 const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 3,
-  assetHoldingId: "<base58-asset-definition-id>#<katakana-i105-account-id>",
+  assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
 const history = await torii.listAccountTransactions("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   limit: 2,
-  assetHoldingId: "<base58-asset-definition-id>#<katakana-i105-account-id>",
+  assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log(
   "recent hashes",
@@ -3283,7 +3283,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 //     NFT_DEFINITION_ID=5Pz9SwdN9eXPbiXPX9HRCpzCcE3o
 ```
 
-> **Account selectors:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept canonical Katakana i105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before returning the result set.
+> **Account selectors:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before returning the result set.
 
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 
@@ -3471,7 +3471,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
 }
 
-const zkOwner = "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL"; // canonical Katakana i105 account id for ZK public inputs
+const zkOwner = "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL"; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -3600,7 +3600,7 @@ const timeAction = buildTimeTriggerAction({
   authority,
   instructions: [
     buildMintAssetInstruction({
-      assetHoldingId: "<base58-asset-definition-id>#<katakana-i105-account-id>",
+      assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
       quantity: "250",
     }),
   ],
@@ -3628,7 +3628,7 @@ await torii.registerTrigger({
 });
 ```
 
-`list*`/`query*` helpers and explorer QR snapshots now emit canonical Katakana i105 account
+`list*`/`query*` helpers and explorer QR snapshots now emit canonical I105 account
 literals only; address-format hints are no longer supported.
 
 `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` normalise

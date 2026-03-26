@@ -21,7 +21,7 @@ from iroha_python import (
 )
 
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
-authority = pair.default_account_id("wonderland")  # Canonical Katakana i105 account id
+authority = pair.default_account_id("wonderland")  # Canonical I105 account id
 instruction = Instruction.register_domain("wonderland")
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
@@ -102,7 +102,7 @@ If you already have a signed certificate, call `register_offline_allowance` or
 ## Account addresses
 
 The `iroha_python.address` module mirrors the Rust codecs so applications can
-round-trip canonical bytes and canonical Katakana i105 account literals without bespoke conversions:
+round-trip canonical bytes and canonical I105 account literals without bespoke conversions:
 
 ```python
 from iroha_python.address import AccountAddress

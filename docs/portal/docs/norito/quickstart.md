@@ -98,7 +98,7 @@ With the node still running, send the compiled bytecode to Torii using the CLI.
 The default development identity is derived from the public key in
 `defaults/client.toml`, so the account ID is
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 Use the config file to supply Torii URL, chain ID, and signing key:
@@ -120,7 +120,7 @@ Use the same CLI profile to fetch the account detail that the contract wrote:
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

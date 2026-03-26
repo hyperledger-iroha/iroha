@@ -34,8 +34,8 @@ foydalanishni rejalashtirgan hisob identifikatorlari. Standartlar to‘plami all
 demo kalitlardan olingan:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Birinchi bir nechta hisoblarni sanab, qiymatlarni tasdiqlang:

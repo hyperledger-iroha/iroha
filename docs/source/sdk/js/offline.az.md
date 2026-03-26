@@ -37,7 +37,7 @@ import {
 
 const { signedTransaction } = buildTransaction({
   chainId: "offline-demo",
-  authority: "<katakana-i105-account-id>",
+  authority: "<i105-account-id>",
   instructions: [
     buildMintAssetInstruction({
       assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",

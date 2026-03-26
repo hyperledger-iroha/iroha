@@ -47,7 +47,7 @@ Torii йәки CLI. Ярҙам һәр рәтте алдан раҫлай, ике
 |-------|----------|-------------|
 | I18NI000000030X | Эйе | Һораулы ярлыҡ (ҡатнаш осраҡ ҡабул ителә; инструмент нормалашалар бер Норма v1 һәм UTS-46). |
 | `suffix_id` | Эйе | Һанлы суффикс идентификаторы (ун йәки I18NI000000032X гекс). |
-| `owner` | Эйе | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | Эйе | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Эйе | Integer I18NI000000035X. |
 | `payment_asset_id` | Эйе | Ҡасаба активы (мәҫәлән, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | I18NI000000038X / I18NI000000039X X | Эйе | Актив-тыуған берәмектәрҙе күрһәткән ҡултамғаһыҙ бөтөн һандар. |
@@ -88,9 +88,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -99,7 +99,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,

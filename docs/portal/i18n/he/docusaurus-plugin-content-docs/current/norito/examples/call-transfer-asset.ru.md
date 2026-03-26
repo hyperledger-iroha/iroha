@@ -19,9 +19,9 @@ slug: /norito/examples/call-transfer-asset
 
 ## Пошаговый обход реестра
 
-- Пополните полномочия контракта (например `<katakana-i105-account-id>`) אקטיב, который он будет переводить, ивыдить `CanTransfer` или эквивалентное разрешение.
-- צור קשר עם `call_transfer_asset`, מתקנים 5 מכשירים עם תקשורת בתקן `<katakana-i105-account-id>`, ончейн-автоматизация может оборачивать вызовы хоста.
-- Проверьте балансы через `FindAccountAssets` או `iroha_cli ledger assets list --account <katakana-i105-account-id>` и просмотрите события, чтобы подтвердитан, чтобы подтвердитан, чтобы подтвердитан, чтобы контекст перевода.
+- Пополните полномочия контракта (например `<i105-account-id>`) אקטיב, который он будет переводить, ивыдить `CanTransfer` или эквивалентное разрешение.
+- צור קשר עם `call_transfer_asset`, מתקנים 5 מכשירים עם תקשורת בתקן `<i105-account-id>`, ончейн-автоматизация может оборачивать вызовы хоста.
+- Проверьте балансы через `FindAccountAssets` או `iroha_cli ledger assets list --account <i105-account-id>` и просмотрите события, чтобы подтвердитан, чтобы подтвердитан, чтобы подтвердитан, чтобы контекст перевода.
 
 ## Связанные руководства SDK
 
@@ -36,8 +36,8 @@ slug: /norito/examples/call-transfer-asset
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

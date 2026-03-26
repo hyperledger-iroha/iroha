@@ -1425,7 +1425,7 @@ pub struct ShieldArgs {
     /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// Account identifier to debit (canonical Katakana i105 account literal)
+    /// Account identifier to debit (canonical I105 account literal)
     #[arg(long, value_name = "ACCOUNT_ID")]
     from: String,
     /// Public amount to debit
@@ -1613,7 +1613,7 @@ pub struct UnshieldArgs {
     /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
-    /// Recipient account identifier to credit (canonical Katakana i105 account literal)
+    /// Recipient account identifier to credit (canonical I105 account literal)
     #[arg(long, value_name = "ACCOUNT_ID")]
     to: String,
     /// Public amount to credit

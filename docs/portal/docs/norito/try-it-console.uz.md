@@ -79,7 +79,7 @@ OAuth o'zgaruvchilari mavjud bo'lganda, sinov maydoni sozlangan Auth serveri bo'
 4. “Sinab ko‘ring” tortmasida `application/x-norito` kontent turini tanlang, **Faylni tanlang**-ni bosing va foydali yukingizni tanlang. Proksi-server so'rovni `/proxy/v1/pipeline/submit` ga qayta yozadi va uni `X-TryIt-Client=docs-portal-rapidoc` bilan teglaydi.
 5. Norito javoblarini yuklab olish uchun `Accept: application/x-norito` ni o'rnating. Swagger/RapiDoc bir xil tortmada sarlavha selektorini ochib beradi va ikkilik faylni proksi-server orqali qaytaradi.
 
-Faqat JSON marshrutlari uchun oʻrnatilgan “Try it” sinov maydoni koʻpincha tezroq boʻladi: yoʻlni kiriting (masalan, `/v1/accounts/<katakana-i105-account-id>/assets`), HTTP usulini tanlang, kerak boʻlganda JSON korpusini joylashtiring va sarlavhalar, davomiylik va foydali yuklarni satrda tekshirish uchun **Soʻrov yuborish** tugmasini bosing.
+Faqat JSON marshrutlari uchun oʻrnatilgan “Try it” sinov maydoni koʻpincha tezroq boʻladi: yoʻlni kiriting (masalan, `/v1/accounts/<i105-account-id>/assets`), HTTP usulini tanlang, kerak boʻlganda JSON korpusini joylashtiring va sarlavhalar, davomiylik va foydali yuklarni satrda tekshirish uchun **Soʻrov yuborish** tugmasini bosing.
 
 ## Nosozliklarni bartaraf etish
 

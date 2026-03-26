@@ -2642,7 +2642,7 @@ def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
     session.queue(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="canonical Katakana i105 account id"):
+    with pytest.raises(RuntimeError, match="canonical I105 account id"):
         client.submit_zk_ballot(
             authority="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
             chain_id="chain",
@@ -2677,7 +2677,7 @@ def test_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
     session.queue(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="canonical Katakana i105 account id"):
+    with pytest.raises(RuntimeError, match="canonical I105 account id"):
         client.submit_zk_ballot_v1(
             authority="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
             chain_id="chain",

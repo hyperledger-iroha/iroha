@@ -36,7 +36,7 @@ O analisador exige a seguinte linha de cabecalho (a ordem e flexivel):
 |--------|-------------|-----------|
 | `label` | Sim | Etiqueta solicitada (aceita maiúsculas e minúsculas; a ferramenta normaliza conforme Norma v1 e UTS-46). |
 | `suffix_id` | Sim | Identificador numérico de sufixo (decimal ou `0x` hex). |
-| `owner` | Sim | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | Sim | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Ativo de liquidação (por exemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sem sinal representando unidades nativas do ativo. |
@@ -77,9 +77,9 @@ Em caso de sucesso o script grava um manifesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ Em caso de sucesso o script grava um manifesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -244,7 +244,7 @@ submissões. O quadro filtrado por `release` para que os auditores possam focar 
   referencias a arquivos são resolvidos relativos à localização do CSV. Metadados
   nenhum objeto produz um erro de validação.
 - **Controladores:** celulas em branco respeitam `--default-controllers`. Forneca
-  listas explícitas (por exemplo `<katakana-i105-account-id>;<katakana-i105-account-id>`) ao delegar para atores não proprietário.
+  listas explícitas (por exemplo `<i105-account-id>;<i105-account-id>`) ao delegar para atores não proprietário.
 
 Falhas são reportadas com números de linha contextuais (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script sai com código

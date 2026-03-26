@@ -29,8 +29,8 @@ translation_last_reviewed: 2026-02-07
 اکاؤنٹ IDs. پہلے سے طے شدہ بنڈل میں پہلے ہی ڈیمو کیز سے دو اکاؤنٹس حاصل کیے گئے ہیں:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 پہلے اکاؤنٹس کی نمائش کرکے اقدار کی تصدیق کریں:

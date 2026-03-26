@@ -27,10 +27,10 @@ object OfflineSpendReceiptPayloadEncoder {
      * Encode OfflineSpendReceiptPayload to Norito bytes for signing.
      *
      * @param txIdHex 32-byte transaction ID as hex (64 chars)
-     * @param fromAccountId sender AccountId (e.g., "<katakana-i105-account-id>")
+     * @param fromAccountId sender AccountId (e.g., "<i105-account-id>")
      * @param toAccountId receiver AccountId
      * @param assetId internal asset balance-bucket literal
-     * (e.g., "<base58-asset-definition-id>#<katakana-i105-account-id>"; canonical asset-definition ids are Base58)
+     * (e.g., "<base58-asset-definition-id>#<i105-account-id>"; canonical asset-definition ids are Base58)
      * @param amount decimal amount string
      * @param issuedAtMs timestamp in milliseconds
      * @param invoiceId invoice identifier

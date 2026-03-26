@@ -724,7 +724,7 @@ For higher-level walkthroughs, see:
   helper wraps `/v1/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
   metadata defined in {doc}`sns/address_display_guidelines` so explorers can embed share-ready
   preferred i105 QR payloads without reimplementing the renderer
-  (omit the format to use i105 or use canonical Katakana i105 output).
+  (omit the format to use i105 or use canonical I105 output).
 - **Explorer:** `getExplorerInstructions` and `getExplorerTransactions` wrap
   `/v1/explorer/instructions` and `/v1/explorer/transactions` with
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
@@ -794,7 +794,7 @@ For higher-level walkthroughs, see:
   snapshots via the typed helpers. Responses that include `tx_instructions` can be fed
   directly into `TxBuilder` to produce signed transactions.
 
-> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept canonical Katakana i105 account literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically.
+> **Roadmap ADDR-5a:** Account-aware helpers (`getAssets`, `getTransactions`, and the matching `IrohaSDK` wrappers) accept canonical I105 account literals and percent-encode `/v1/accounts/{account_id}/…` paths automatically.
 
 Upcoming work (tracked under IOS3) includes governance endpoints, additional query
 builders, and WebSocket/SSE subscribers shared with Android/JS.

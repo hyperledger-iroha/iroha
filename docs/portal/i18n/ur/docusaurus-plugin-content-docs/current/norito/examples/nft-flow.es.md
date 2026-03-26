@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## لیجر ٹور
 
-- اس بات کو یقینی بنائیں کہ NFT کی تعریف موجود ہے (مثال کے طور پر `n0#wonderland`) کے ساتھ ساتھ شارڈ (`<katakana-i105-account-id>` ، `<katakana-i105-account-id>`) میں استعمال ہونے والے مالک/وصول کنندہ اکاؤنٹس کے ساتھ۔
+- اس بات کو یقینی بنائیں کہ NFT کی تعریف موجود ہے (مثال کے طور پر `n0#wonderland`) کے ساتھ ساتھ شارڈ (`<i105-account-id>` ، `<i105-account-id>`) میں استعمال ہونے والے مالک/وصول کنندہ اکاؤنٹس کے ساتھ۔
 - این ایف ٹی کو ٹکسال کرنے کے لئے انٹری پوائنٹ `nft_issue_and_transfer` ، ایلس سے باب میں منتقل کریں ، اور اجراء کو بیان کرنے والے میٹا ڈیٹا پرچم منسلک کریں۔
 - منتقلی کی تصدیق کے ل I `iroha_cli ledger nfts list --account <id>` یا SDK کے مساویوں کے ساتھ NFT لیجر کی حیثیت کا معائنہ کرتا ہے ، پھر اس بات کی تصدیق کرتا ہے کہ جلنے کی ہدایت پر عمل درآمد ہونے کے بعد اثاثہ حذف ہوجاتا ہے۔
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

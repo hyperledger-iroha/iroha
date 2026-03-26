@@ -19,7 +19,7 @@ fuente: crates/ivm/docs/examples/12_nft_flow.ko
 
 ## جولة دفتر الأستاذ
 
-- تأكد من وجود تعريف NFT (مثل `n0#wonderland`) إلى جانب حسابات المالك/المستلم المستخدمة في المقتطف (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`).
+- تأكد من وجود تعريف NFT (مثل `n0#wonderland`) إلى جانب حسابات المالك/المستلم المستخدمة في المقتطف (`<i105-account-id>`, `<i105-account-id>`).
 - Establece el nombre `nft_issue_and_transfer` de NFT y de Alice y Bob y crea una cuenta de usuario.
 - Soporte para NFT `iroha_cli ledger nfts list --account <id>` y SDK para dispositivos móviles. تنفيذ تعليمة الحرق.
 
@@ -35,11 +35,11 @@ fuente: crates/ivm/docs/examples/12_nft_flow.ko
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

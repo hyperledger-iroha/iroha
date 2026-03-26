@@ -74,7 +74,7 @@ public final class TransferWirePayloadEncoderTests {
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null
-              && ex.getMessage().contains("<base58-asset-definition-id>#<katakana-i105-account-id>");
+              && ex.getMessage().contains("<base58-asset-definition-id>#<i105-account-id>");
     }
 
     assert threw : "malformed asset ids must be rejected";
@@ -88,7 +88,7 @@ public final class TransferWirePayloadEncoderTests {
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null
-              && ex.getMessage().contains("<base58-asset-definition-id>#<katakana-i105-account-id>");
+              && ex.getMessage().contains("<base58-asset-definition-id>#<i105-account-id>");
     }
 
     assert threw : "legacy name/domain asset ids must be rejected";

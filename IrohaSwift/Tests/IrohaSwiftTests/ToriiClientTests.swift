@@ -8622,7 +8622,7 @@ id: 88
             guard case let ToriiClientError.invalidPayload(message) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
-            XCTAssertTrue(message.contains("owner must be a canonical Katakana i105 account id."))
+            XCTAssertTrue(message.contains("owner must be a canonical I105 account id."))
         }
     }
 

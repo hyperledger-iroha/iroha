@@ -34,7 +34,7 @@ Espelha `docs/source/sns/bulk_onboarding_toolkit.md` للمشغلين الخار
 |--------|------------|-----------|
 | `label` | سيم | تسمية الطلب (حالة مختلطة، وهي عبارة عن أداة طبيعية تتوافق مع المعيار v1 e UTS-46). |
 | `suffix_id` | سيم | المعرف الرقمي اللاحق (عشري أو `0x` سداسي عشري). |
-| `owner` | سيم | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | سيم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | سيم | انتيرو `1..=255`. |
 | `payment_asset_id` | سيم | قضية التسوية (على سبيل المثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | سيم | إن Inteiros لا تمثل سوى وحدات وطنية ذات أهمية. |
@@ -73,9 +73,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -236,7 +236,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   المراجع والملفات ذات الحلول المتعلقة بموقع ملف CSV. البيانات الوصفية
   لا يوجد خطأ في المنتج.
 - **وحدات التحكم:** شاشات بيضاء قابلة للاسترداد `--default-controllers`. فورنيكا
-  القوائم الصريحة (على سبيل المثال `<katakana-i105-account-id>;<katakana-i105-account-id>`) لتفويضها إلى المالك.
+  القوائم الصريحة (على سبيل المثال `<i105-account-id>;<i105-account-id>`) لتفويضها إلى المالك.
 
 Falhas sao Reportadas com numeros de linha contextuais (على سبيل المثال
 `error: row 12 term_years must be between 1 and 255`). يا سكريبت ساي كوم كوديجو

@@ -69,7 +69,7 @@ Il s'agit d'une option pour la CLI. Vous pouvez utiliser la charge utile `.to` p
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority <katakana-i105-account-id> \
+  --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

@@ -9,7 +9,7 @@ public final class AccountIdLiteralTests {
   public void acceptsCanonicalI105Literal() throws Exception {
     final String address = sampleI105(0x11);
     final String normalized = AccountIdLiteral.requireCanonicalI105Address(address, "accountId");
-    assert address.equals(normalized) : "canonical Katakana i105 literal must pass through unchanged";
+    assert address.equals(normalized) : "canonical I105 literal must pass through unchanged";
   }
 
   @Test
@@ -42,15 +42,15 @@ public final class AccountIdLiteralTests {
           "soraチキVMXfkAweDFテqSkhXウrdUイヒニ4eYqサアYsミヰヲt4オサウキHヰkNチヲメミwjQgmワdnク9h5BSkヱワルvセ6サyWtSヨロAカaヱロレサxトメシMAyス8ソjDZナイスMwチBモヰ9ホヰロRユQコk3キニリシmDラyiRGユfGコHaマVY5phTKQ316", "accountId");
       throw new AssertionError("expected legacy non-i105 literal to be rejected");
     } catch (final IllegalArgumentException expected) {
-      assert expected.getMessage().contains("canonical Katakana i105")
-          : "legacy rejection must mention canonical Katakana i105";
+      assert expected.getMessage().contains("canonical I105")
+          : "legacy rejection must mention canonical I105";
     }
     try {
       AccountIdLiteral.requireCanonicalI105Address(address.canonicalHex(), "accountId");
       throw new AssertionError("expected canonical hex literal to be rejected");
     } catch (final IllegalArgumentException expected) {
-      assert expected.getMessage().contains("canonical Katakana i105")
-          : "hex rejection must mention canonical Katakana i105";
+      assert expected.getMessage().contains("canonical I105")
+          : "hex rejection must mention canonical I105";
     }
   }
 

@@ -32,7 +32,7 @@ cargas útiles تلقائيا مع تسجيل ايصالات منظمة لاغر
 |--------|-------|-------|
 | `label` | نعم | التسمية المطلوبة (يقبل حالة مختلطة; الاداة تطبع حسب Norm v1 y UTS-46). |
 | `suffix_id` | نعم | معرف لاحقة رقمي (عشري او `0x` hexadecimal). |
-| `owner` | نعم | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | Aquí está `1..=255`. |
 | `payment_asset_id` | نعم | Este es el caso (modelo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | اعداد صحيحة غير موقعة تمثل وحدات الاصل. |
@@ -71,9 +71,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -82,7 +82,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -227,7 +227,7 @@ Y.
 - **تحليل metadatos y gobernanza:** يتم تحليل JSON en línea مباشرة؛ ويتم حل
   مراجع الملفات نسبة الى موقع CSV. metadatos غير الكائن ينتج خطا تحقق.
 - **Controladores:** الخلايا الفارغة تلتزم بـ `--default-controllers`. قدم قوائم
-  controlador صريحة (مثل `<katakana-i105-account-id>;<katakana-i105-account-id>`) عند التفويض لجهات غير المالك.
+  controlador صريحة (مثل `<i105-account-id>;<i105-account-id>`) عند التفويض لجهات غير المالك.
 
 يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا
 `error: row 12 term_years must be between 1 and 255`). يخرج السكربت بالكود `1`

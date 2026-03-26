@@ -165,7 +165,7 @@ pub struct ProposeDeployContractDto {
     /// Optional manifest provenance (public key + signature over the manifest payload).
     #[norito(default)]
     pub manifest_provenance: Option<ManifestProvenance>,
-    /// Optional authority as canonical Katakana i105 or on-chain account alias.
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
     /// Legacy private key field; rejected when provided.
@@ -211,7 +211,7 @@ pub struct ProposeDeployContractResponse {
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 /// Request body for submitting a zero-knowledge ballot.
 pub struct ZkBallotDto {
-    /// Authority as canonical Katakana i105 or on-chain account alias.
+    /// Authority as canonical I105 or on-chain account alias.
     pub authority: String,
     /// Chain id to build the transaction skeleton for
     pub chain_id: String,
@@ -253,12 +253,12 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ZkBallotDto {
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 /// Request body for submitting a plain (non-ZK) quadratic ballot.
 pub struct PlainBallotDto {
-    /// Authority as canonical Katakana i105 or on-chain account alias.
+    /// Authority as canonical I105 or on-chain account alias.
     pub authority: String,
     /// Chain id to build the transaction skeleton for
     pub chain_id: String,
     pub referendum_id: String,
-    /// Owner as canonical Katakana i105 or on-chain account alias.
+    /// Owner as canonical I105 or on-chain account alias.
     pub owner: String,
     /// Token amount as decimal string to avoid JSON f64 issues
     pub amount: String,
@@ -343,9 +343,9 @@ fn reject_zk_public_input_aliases(map: &json::Map) -> Result<(), String> {
 
 fn ensure_owner_canonical(owner: &str) -> Result<(), String> {
     let canonical = iroha_data_model::account::AccountId::canonicalize(owner)
-        .map_err(|_| "owner must be a canonical Katakana i105 account id".to_string())?;
+        .map_err(|_| "owner must be a canonical I105 account id".to_string())?;
     if canonical != owner {
-        return Err("owner must use canonical Katakana i105 account id form".to_string());
+        return Err("owner must use canonical I105 account id form".to_string());
     }
     Ok(())
 }
@@ -359,7 +359,7 @@ fn reject_zk_public_input_owner(map: &json::Map) -> Result<(), String> {
     }
     let owner = value
         .as_str()
-        .ok_or_else(|| "owner must be a canonical Katakana i105 account id".to_string())?;
+        .ok_or_else(|| "owner must be a canonical I105 account id".to_string())?;
     ensure_owner_canonical(owner)
 }
 
@@ -743,7 +743,7 @@ pub struct CouncilCurrentResponse {
 #[cfg(feature = "gov_vrf")]
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 pub struct VrfCandidateDto {
-    /// Candidate as canonical Katakana i105 or on-chain account alias.
+    /// Candidate as canonical I105 or on-chain account alias.
     pub account_id: String,
     /// Variant: "Normal" (pk in G1, sig in G2) or "Small" (pk in G2, sig in G1)
     pub variant: String,
@@ -1394,7 +1394,7 @@ pub struct FinalizeDto {
     pub referendum_id: String,
     /// Proposal id (hex 64)
     pub proposal_id: String,
-    /// Optional authority as canonical Katakana i105 or on-chain account alias.
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
     /// Legacy private key field; rejected when provided.
@@ -1478,7 +1478,7 @@ pub struct EnactDto {
     /// Optional enactment window to encode in the instruction
     #[norito(default)]
     pub window: Option<AtWindowDto>,
-    /// Optional authority as canonical Katakana i105 or on-chain account alias.
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
     /// Legacy private key field; rejected when provided.
@@ -2306,7 +2306,7 @@ pub struct CouncilPersistRequest {
     pub epoch: Option<u64>,
     /// Candidate set with VRF proofs
     pub candidates: Vec<VrfCandidateDto>,
-    /// Optional authority as canonical Katakana i105 or on-chain account alias.
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
     /// Optional private key (hex) for signing the on-chain transaction
@@ -2330,12 +2330,12 @@ pub struct CouncilPersistResponse {
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 /// Request to replace a council member with the next available alternate.
 pub struct CouncilReplaceRequest {
-    /// Member to replace, as canonical Katakana i105 or on-chain account alias.
+    /// Member to replace, as canonical I105 or on-chain account alias.
     pub missing: String,
     /// Optional epoch override; defaults to the latest persisted epoch.
     #[norito(default)]
     pub epoch: Option<u64>,
-    /// Optional authority as canonical Katakana i105 or on-chain account alias.
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
     /// Optional private key (hex) for signing the on-chain transaction
@@ -2843,12 +2843,14 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let bind = iroha_data_model::isi::domain_link::BindAccountAlias {
-            account: account_id.clone(),
-            label,
-        };
-        bind.execute(account_id, &mut tx)
-            .expect("bind account alias for test");
+        let world = tx.world_mut_for_testing();
+        world
+            .account_aliases_mut_for_testing()
+            .insert(label.clone(), account_id.clone());
+        world.account_rekey_records_mut_for_testing().insert(
+            label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
         tx.apply();
         block.commit().expect("commit account alias for test");
     }
@@ -3427,7 +3429,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical Katakana i105 account id form")
+            Some("owner must use canonical I105 account id form")
         );
     }
 
@@ -4106,7 +4108,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical Katakana i105 account id form")
+            Some("owner must use canonical I105 account id form")
         );
     }
 
@@ -4299,7 +4301,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical Katakana i105 account id form")
+            Some("owner must use canonical I105 account id form")
         );
     }
 

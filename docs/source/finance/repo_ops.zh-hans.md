@@ -803,8 +803,8 @@ evidence guarantees that every repo change satisfies the roadmap F1 governance
 
 1. **快照余额。** 使用支持的 `FindAssets` 查询
    `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) 或
-   `iroha_python` 帮助程序导出 `<katakana-i105-account-id>` 的异或余额，
-   `<katakana-i105-account-id>`，以及参与审核的每个台账。商店
+   `iroha_python` 帮助程序导出 `<i105-account-id>` 的异或余额，
+   `<i105-account-id>`，以及参与审核的每个台账。商店
    下的 JSON
    `artifacts/finance/repo/<period>/treasury_assets.json`并记录git
    随附的 `README.md` 中的提交/工具链。

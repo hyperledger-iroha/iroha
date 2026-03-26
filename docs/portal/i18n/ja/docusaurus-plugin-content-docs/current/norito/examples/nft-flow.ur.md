@@ -19,7 +19,7 @@ NFT の評価: مالک کو منٹ کرنا، منتقل کرنا، میٹا ٹ
 
 ## ٩جر واک تھرو
 
-- یقینی بنائیں کہ NFT ڈیفینیشن (مثلا `n0#wonderland`) موجود ہو اور اسنیپٹ میں استعمال ہونے والے مالک/موصول کنندہ اکاؤنٹس (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`) بھی موجود ہوں۔
+- یقینی بنائیں کہ NFT ڈیفینیشن (مثلا `n0#wonderland`) موجود ہو اور اسنیپٹ میں استعمال ہونے والے مالک/موصول کنندہ اکاؤنٹس (`<i105-account-id>`, `<i105-account-id>`) بھی موجود ہوں۔
 - `nft_issue_and_transfer` انٹری پوائنٹ کال کریں تاکہ NFT منٹ ہو، アリス سے ボブ کو منتقل ہو، اور اجرا کی وضاحت ٩رنے والا میٹا ڈیٹا فلیگ منسلک ہو۔
 - `iroha_cli ledger nfts list --account <id>` SDK セキュリティ セキュリティ NFT セキュリティ セキュリティ SDK セキュリティ セキュリティ NFT セキュリティ セキュリティتصدیق ہو، پھر تصدیق کریں کہ برن انسٹرکشن چلنے کے بعد اثاثہ حذف ہو جاتا ہے۔
 
@@ -35,11 +35,11 @@ NFT の評価: مالک کو منٹ کرنا، منتقل کرنا، میٹا ٹ
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

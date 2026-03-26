@@ -47,7 +47,7 @@ Torii ან CLI. დამხმარე ამოწმებს ყველ
 |--------|----------|-------------|
 | `label` | დიახ | მოთხოვნილი ეტიკეტი (მიღებულია შერეული შემთხვევა; ინსტრუმენტი ნორმალიზდება ნორმის მიხედვით v1 და UTS-46). |
 | `suffix_id` | დიახ | რიცხვითი სუფიქსის იდენტიფიკატორი (ათწილადი ან `0x` თექვსმეტობითი). |
-| `owner` | დიახ | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | დიახ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | დიახ | მთელი რიცხვი `1..=255`. |
 | `payment_asset_id` | დიახ | ანგარიშსწორების აქტივი (მაგალითად `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | დიახ | ხელმოუწერელი მთელი რიცხვები, რომლებიც წარმოადგენენ აქტივის მშობლიურ ერთეულებს. |
@@ -88,9 +88,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -99,7 +99,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -258,7 +258,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   მითითებები წყდება CSV მდებარეობის მიმართ. არაობიექტური მეტამონაცემები
   წარმოქმნის ვალიდაციის შეცდომას.
 - **კონტროლერები:** ცარიელი უჯრედები პატივია `--default-controllers`. მიაწოდეთ მკაფიო
-  კონტროლერების სიები (მაგალითად `<katakana-i105-account-id>;<katakana-i105-account-id>`) არამფლობელზე დელეგირებისას
+  კონტროლერების სიები (მაგალითად `<i105-account-id>;<i105-account-id>`) არამფლობელზე დელეგირებისას
   მსახიობები.
 
 წარუმატებლობა მოხსენებულია კონტექსტური მწკრივის ნომრებით (მაგალითად

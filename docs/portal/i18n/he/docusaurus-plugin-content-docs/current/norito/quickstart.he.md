@@ -96,7 +96,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 כאשר הצומת עדיין רץ, שלחו את הבייטקוד המקומפל ל-Torii באמצעות ה-CLI. הזהות הדיפולטית לפיתוח נגזרת מהמפתח הציבורי ב-`defaults/client.toml`, כך שמזהה החשבון הוא
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 השתמשו בקובץ ההגדרות כדי לספק את כתובת Torii, chain ID ומפתח החתימה:
@@ -116,7 +116,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

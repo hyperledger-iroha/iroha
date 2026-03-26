@@ -195,7 +195,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       try {
         parsed = AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAuthority, null);
       } catch (final AccountAddress.AccountAddressException ex) {
-        throw new IllegalArgumentException("authority must use canonical Katakana i105 encoding", ex);
+        throw new IllegalArgumentException("authority must use canonical I105 encoding", ex);
       }
       return parseAddressToController(parsed.address);
     }
@@ -217,7 +217,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
         }
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalArgumentException(
-            "Failed to extract controller from canonical Katakana i105 account id", ex);
+            "Failed to extract controller from canonical I105 account id", ex);
       }
       throw new IllegalArgumentException(
           "Address contains neither single-key nor multisig controller");

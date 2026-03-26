@@ -721,9 +721,9 @@ struct AddressPreviewCard: View {
         Button("Copy I105") {
           copy(value: address.i105, label: "I105", warning: nil, mode: .i105)
         }
-        .help("Copy the canonical Katakana i105 string; safe for QR codes and shared screens.")
+        .help("Copy the canonical I105 string; safe for QR codes and shared screens.")
         .accessibilityLabel("Copy I105 address")
-        .accessibilityHint("Copies the canonical Katakana i105 payload to the clipboard and records telemetry.")
+        .accessibilityHint("Copies the canonical I105 payload to the clipboard and records telemetry.")
         .accessibilityIdentifier("address-copy-i105")
       }
 

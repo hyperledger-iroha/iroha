@@ -93,7 +93,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   deliverable.
 - Added `ToriiClient.getExplorerAccountQr` with typed DTOs, TypeScript
   definitions, README usage, and Jest coverage so wallets and explorers can
-  fetch share-ready QR payloads in canonical Katakana i105 form directly from Torii
+  fetch share-ready QR payloads in canonical I105 form directly from Torii
   instead of reimplementing the renderer, progressing ADDR-6b’s SDK coverage
   goals.【javascript/iroha_js/src/toriiClient.js:1440】【javascript/iroha_js/index.d.ts:3513】【javascript/iroha_js/README.md:1538】【javascript/iroha_js/test/toriiClient.test.js:6650】
 - Broadened the Dockerised integration smoke suite to cover asset re-mint
@@ -174,7 +174,7 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   the `/v1/gov/proposals/deploy-contract` and ballot DTOs described in
   `docs/source/governance_api.md`.
 - Removed legacy `addressFormat` support from `ToriiClient.listAccounts`/`queryAccounts`;
-  SDK account-list/query helpers are now canonical Katakana i105-only.
+  SDK account-list/query helpers are now canonical I105-only.
 - Added runtime capability helpers to `ToriiClient`
   (`getNodeCapabilities`, `getRuntimeAbiActive`, `getRuntimeAbiHash`,
   `getRuntimeMetrics`, `listRuntimeUpgrades`) with README snippets, TypeScript

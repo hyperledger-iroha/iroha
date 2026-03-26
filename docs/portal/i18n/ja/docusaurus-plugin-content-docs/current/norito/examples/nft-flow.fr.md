@@ -19,7 +19,7 @@ NFT の試合中のパルクール サイクル ドゥ ヴィー ダン : フラ
 
 ## 登録公園
 
-- NFT の定義 (`n0#wonderland` など) は、スニペット (`<katakana-i105-account-id>`、`<katakana-i105-account-id>`) によって所有権/目的地が使用されることを保証します。
+- NFT の定義 (`n0#wonderland` など) は、スニペット (`<i105-account-id>`、`<i105-account-id>`) によって所有権/目的地が使用されることを保証します。
 - NFT のポイント ポイント `nft_issue_and_transfer` を呼び出し、アリスとボブの転送を指示し、メッセージの送信を指示します。
 - NFT の登録情報を検査し、`iroha_cli ledger nfts list --account <id>` と同等の SDK を検証して転送し、書き込み命令の実行を確認します。
 
@@ -35,11 +35,11 @@ NFT の試合中のパルクール サイクル ドゥ ヴィー ダン : フラ
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

@@ -42,7 +42,7 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "universal",
       "accounts": [
         {
-          "account_id": "sora<katakana-i105-account-id>",
+          "account_id": "sora<i105-account-id>",
           "label": null,
           "assets": [
             {
@@ -59,7 +59,7 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "cbdc",
       "accounts": [
         {
-          "account_id": "sora<katakana-i105-account-id-2>",
+          "account_id": "sora<i105-account-id-2>",
           "label": "primary-cbdc",
           "assets": [
             {
@@ -89,7 +89,7 @@ GET /v1/accounts/{uaid}/portfolio
   (`DataSpaceId::GLOBAL`).
 * Each account entry includes the optional stable label plus the sorted list of
   asset positions with their canonical identifiers and Norito numeric balances.
-  Account IDs are canonical katakana-i105 literals; asset definition IDs remain
+  Account IDs are canonical I105 literals; asset definition IDs remain
   canonical Base58.
 
 ## Notes
@@ -135,7 +135,7 @@ GET /v1/space-directory/uaids/{uaid}
 
 | Query | Description |
 |-------|-------------|
-| Address output | Canonical Katakana i105 only. |
+| Address output | Canonical I105 only. |
 
 Sample response:
 
@@ -146,12 +146,12 @@ Sample response:
     {
       "dataspace_id": 0,
       "dataspace_alias": "universal",
-      "accounts": ["sora<katakana-i105-account-id>"]
+      "accounts": ["sora<i105-account-id>"]
     },
     {
       "dataspace_id": 11,
       "dataspace_alias": "cbdc",
-      "accounts": ["sora<katakana-i105-account-id-2>"]
+      "accounts": ["sora<i105-account-id-2>"]
     }
   ]
 }
@@ -184,7 +184,7 @@ GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}
 | `status` (optional) | `active`, `inactive`, or `all` (default). Inactive captures pending, expired, and revoked manifests. |
 | `limit` (optional) | Maximum number of manifests to return (default unlimited). |
 | `offset` (optional) | Number of manifests to skip before collecting results (default `0`). |
-| Address output | Canonical Katakana i105 only. |
+| Address output | Canonical I105 only. |
 
 Sample response:
 
@@ -203,7 +203,7 @@ Sample response:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["sora<katakana-i105-account-id-2>"],
+      "accounts": ["sora<i105-account-id-2>"],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -228,7 +228,7 @@ Sample response:
   present.
 - `accounts` reuse the `uaid_dataspaces` ledger map so operators can see which
   concrete account IDs are tied to the manifest’s dataspace. These account
-  literals are canonical katakana-i105 outputs suitable for offline or QR
+  literals are canonical I105 outputs suitable for offline or QR
   workflows.
 - The `manifest` object is the exact `AssetPermissionManifest` structure
   published to the Space Directory, making it easy for SDKs to replay the
@@ -262,7 +262,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "<katakana-i105-account-id>",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -314,7 +314,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "<katakana-i105-account-id>",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d…ab11",
   "dataspace": 11,

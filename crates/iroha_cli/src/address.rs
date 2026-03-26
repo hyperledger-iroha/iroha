@@ -1,4 +1,4 @@
-//! Account address tooling (canonical Katakana i105 and public-key input/output).
+//! Account address tooling (canonical I105 and public-key input/output).
 
 use super::*;
 use clap::ValueEnum;
@@ -39,7 +39,7 @@ impl Run for Command {
 
 #[derive(clap::Args, Debug)]
 pub struct Convert {
-    /// Address literal to parse (canonical Katakana i105 or public key).
+    /// Address literal to parse (canonical I105 or public key).
     #[arg(value_name = "ADDRESS")]
     input: String,
     /// Require I105 inputs to match the provided network prefix.
@@ -389,7 +389,7 @@ fn parse_address_input(
         .get(..2)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
-        eyre::bail!("address literal must be canonical Katakana i105; canonical hex is not accepted");
+        eyre::bail!("address literal must be canonical I105; canonical hex is not accepted");
     }
     if let Ok(public_key) = trimmed.parse::<PublicKey>() {
         let account = AccountId::new(public_key);
@@ -683,7 +683,7 @@ mod tests {
                     .expect("public key literal should parse"),
             )
             .canonical_i105()
-            .expect("canonical Katakana i105"),
+            .expect("canonical I105"),
         );
     }
 }

@@ -270,7 +270,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                            creationTimeMs: 1)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .invalidZkBallotPublicInputs("owner must be a canonical Katakana i105 account id"))
+                           .invalidZkBallotPublicInputs("owner must be a canonical I105 account id"))
         }
     }
 }

@@ -168,7 +168,7 @@ impl norito::json::FastJsonWrite for AccountId {
     fn write_json(&self, out: &mut String) {
         let literal = self
             .canonical_i105()
-            .expect("AccountId JSON serialization requires canonical Katakana i105 encoding");
+            .expect("AccountId JSON serialization requires canonical I105 encoding");
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
 }
@@ -450,7 +450,7 @@ impl Default for AccountDetails {
 /// In other places use [`Account`] directly.
 pub type AccountValue = Owned<AccountDetails>;
 
-const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must use a canonical Katakana i105 literal";
+const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must use a canonical I105 literal";
 
 impl AccountId {
     /// Construct a single-signature account identifier.
@@ -542,7 +542,7 @@ impl AccountId {
         self.try_signatory().is_some_and(|pk| pk == public_key)
     }
 
-    /// Construct the address payload used for canonical Katakana i105 encoding.
+    /// Construct the address payload used for canonical I105 encoding.
     ///
     /// # Errors
     ///
@@ -568,7 +568,7 @@ impl AccountId {
             .to_i105_for_discriminant(network_prefix)
     }
 
-    /// Encode the account as canonical Katakana i105 using the configured chain discriminant.
+    /// Encode the account as canonical I105 using the configured chain discriminant.
     ///
     /// # Errors
     ///
@@ -591,11 +591,11 @@ impl AccountId {
 
     /// Parse an account identifier from text, returning the canonical representation and source.
     ///
-    /// Canonical Katakana i105 literals are accepted.
+    /// Canonical I105 literals are accepted.
     /// Legacy forms such as `<identifier>@<domain>`, canonical hex, dotted/non-canonical
     /// i105 literals, aliases, UAID, opaque account literals, and historical
     /// non-i105 envelopes are rejected.
-    /// The returned canonical string always matches the canonical Katakana i105 representation.
+    /// The returned canonical string always matches the canonical I105 representation.
     ///
     /// # Errors
     ///
@@ -1155,7 +1155,7 @@ mod account_id_parsing_tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
-            err.reason().contains("i105"),
+            err.reason().contains("canonical I105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1556,7 +1556,7 @@ mod tests {
     #[test]
     fn i105_checksum_failure_reports_error_code() {
         // Negative vector from fixtures/account/address_vectors.json (`i105-checksum-mismatch`).
-        let literal = "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+        let literal = "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSア";
         let err = AccountId::parse_encoded(literal).expect_err("invalid i105 payload must fail");
         assert_eq!(
             err.reason(),

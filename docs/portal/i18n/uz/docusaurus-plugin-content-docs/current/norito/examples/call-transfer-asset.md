@@ -21,9 +21,9 @@ Kotodama kirish nuqtasi qanday qilib ichki metadata tekshiruvi bilan `transfer_a
 
 ## Buxgalteriya kitobi bo'yicha ko'rsatmalar
 
-- Shartnoma organini (masalan, `<katakana-i105-account-id>`) u o'tkazadigan aktiv bilan moliyalashtiring va vakolatga `CanTransfer` rolini yoki unga tenglashtirilgan ruxsatni beradi.
-- `call_transfer_asset` kirish punktiga qo'ng'iroq qiling va 5 birlikni kontrakt hisobidan `<katakana-i105-account-id>` ga o'tkazing, bu zanjirdagi avtomatlashtirishning xost qo'ng'iroqlarini o'rash usulini aks ettiradi.
-- `FindAccountAssets` yoki `iroha_cli ledger asset list --account <katakana-i105-account-id>` orqali balanslarni tekshiring va metadata himoyachisi uzatish kontekstini qayd etganligini tasdiqlash uchun voqealarni tekshiring.
+- Shartnoma organini (masalan, `<i105-account-id>`) u o'tkazadigan aktiv bilan moliyalashtiring va vakolatga `CanTransfer` rolini yoki unga tenglashtirilgan ruxsatni beradi.
+- `call_transfer_asset` kirish punktiga qo'ng'iroq qiling va 5 birlikni kontrakt hisobidan `<i105-account-id>` ga o'tkazing, bu zanjirdagi avtomatlashtirishning xost qo'ng'iroqlarini o'rash usulini aks ettiradi.
+- `FindAccountAssets` yoki `iroha_cli ledger asset list --account <i105-account-id>` orqali balanslarni tekshiring va metadata himoyachisi uzatish kontekstini qayd etganligini tasdiqlash uchun voqealarni tekshiring.
 
 ## Tegishli SDK qo'llanmalari
 
@@ -38,8 +38,8 @@ Kotodama kirish nuqtasi qanday qilib ichki metadata tekshiruvi bilan `transfer_a
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

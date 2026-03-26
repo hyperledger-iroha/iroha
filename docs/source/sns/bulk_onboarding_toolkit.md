@@ -27,7 +27,7 @@ The parser requires the following header row (order is flexible):
 |--------|----------|-------------|
 | `label` | ✅ | Requested label (mixed case accepted; tool normalises per Norm v1/UTS‑46). |
 | `suffix_id` | ✅ | Numeric namespace identifier (`0x1001` account-alias, `0x1002` domain, `0x1003` dataspace; decimal or `0x` hex accepted). |
-| `owner` | ✅ | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | ✅ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | ✅ | Integer `1..=255`. |
 | `payment_asset_id` | ✅ | Settlement asset (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | ✅ | Unsigned integers representing asset-native units. |
@@ -68,9 +68,9 @@ On success the script writes an aggregated manifest:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":4098,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -79,7 +79,7 @@ On success the script writes an aggregated manifest:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ The board filters by `release` so auditors can drill into a single CSV run.
   references are resolved relative to the CSV location. Non-object metadata
   produces a validation error.
 - **Controllers:** blank cells honour `--default-controllers`. Provide explicit
-  controller lists (e.g., `<katakana-i105-account-id>;<katakana-i105-account-id>`) when delegating to non-owner actors.
+  controller lists (e.g., `<i105-account-id>;<i105-account-id>`) when delegating to non-owner actors.
 
 Failures are reported with contextual row numbers, e.g. `error: row 12
 term_years must be between 1 and 255`. The script exits with code `1` on

@@ -67,7 +67,7 @@ dashboards, and escalation paths.
 | Charter + KPI addenda | `docs/source/sns/governance_addenda/` | Version-controlled signed charters, KPI covenants, and governance decisions referenced by CLI votes. |
 | Registry schema | [`registry_schema.md`](./registry_schema.md) | Canonical Norito structures (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Registrar contract | [`registrar_api.md`](./registrar_api.md) | REST/gRPC payloads, `sns_registrar_status_total` metrics, and governance hook expectations. |
-| Address UX guide | [`address_display_guidelines.md`](./address_display_guidelines.md) | Canonical Katakana i105 renderings mirrored by wallets/explorers. |
+| Address UX guide | [`address_display_guidelines.md`](./address_display_guidelines.md) | Canonical I105 renderings mirrored by wallets/explorers. |
 | Address security review | [`address_security_review.md`](./address_security_review.md) | Collision math, Local-8 telemetry references, checksum guidance, and manifest immutability evidence required for ADDR-7. |
 | SoraDNS / GAR docs | [`../soradns/deterministic_hosts.md`](../soradns/deterministic_hosts.md), [`../reports/soradns_transparency.md`](../reports/soradns_transparency.md) | Deterministic host derivation, transparency tailer workflow, and alert rules. |
 | Regulatory memos | `docs/source/sns/regulatory/` | Jurisdictional intake notes (e.g., EU DSA), steward acknowledgements, template annexes. |
@@ -112,7 +112,7 @@ so auditors can reconstruct the decision trail within 24 hours.
    (see §4.5).
 6. **Customer disclosure:** Update the customer-facing ledger (wallet/explorer)
    via the shared fixtures in `address_display_guidelines.md`, ensuring i105 and
-   canonical Katakana i105 renderings match copy/QR guidance.
+   canonical I105 renderings match copy/QR guidance.
 
 ### 4.3 Renewals, Billing & Treasury Reconciliation
 

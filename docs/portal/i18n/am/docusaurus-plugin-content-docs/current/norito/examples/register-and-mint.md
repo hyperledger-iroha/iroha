@@ -21,9 +21,9 @@ slug: /norito/ምሳሌዎች/መመዝገብ-እና-አዝሙድና
 
 ## የመመዝገቢያ መመሪያ
 
-- የመድረሻ መለያው (ለምሳሌ `<katakana-i105-account-id>`) መኖሩን ያረጋግጡ፣ በእያንዳንዱ የኤስዲኬ ፈጣን ጅምር ውስጥ የማዋቀር ደረጃን ያንፀባርቃል።
+- የመድረሻ መለያው (ለምሳሌ `<i105-account-id>`) መኖሩን ያረጋግጡ፣ በእያንዳንዱ የኤስዲኬ ፈጣን ጅምር ውስጥ የማዋቀር ደረጃን ያንፀባርቃል።
 - በአንድ ግብይት የ ROSE ንብረት ትርጉም እና mint 250 አሃዶችን ወደ አሊስ ለመፍጠር የ I18NI0000008X መግቢያ ነጥብን ጥራ።
-- ሚዛኑን በI18NI0000009X ወይም `iroha_cli ledger asset list --account <katakana-i105-account-id>` በኩል ያረጋግጡ mint መሳካቱን ለማረጋገጥ።
+- ሚዛኑን በI18NI0000009X ወይም `iroha_cli ledger asset list --account <i105-account-id>` በኩል ያረጋግጡ mint መሳካቱን ለማረጋገጥ።
 
 ## ተዛማጅ የኤስዲኬ መመሪያዎች
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

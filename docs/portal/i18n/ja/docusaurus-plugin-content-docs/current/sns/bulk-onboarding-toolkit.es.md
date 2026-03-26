@@ -35,7 +35,7 @@ El parser requiere la siguiente fila de encabezado (柔軟な順序で):
 |----------|-----------|---------------|
 | `label` |シ | Etiqueta solicitada (安全性を保証する/マイナス; ラ・ヘルラミエンタ・ノーマルリザ・セグン・ノルムv1 y UTS-46)。 |
 | `suffix_id` |シ |識別番号 (10 進数または `0x` 16 進数)。 |
-| `owner` |シ | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` |シ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` |シ |エンテロ `1..=255`。 |
 | `payment_asset_id` |シ |決済活動 (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`)。 |
 | `payment_gross` / `payment_net` |シ | Enteros sin signo que は、unidades nativas del activo を表します。 |
@@ -76,9 +76,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -247,7 +247,7 @@ CSVのコリーダ。
   CSV に関する相対的なアーカイブを参照します。メタデータ
   海のオブジェクトは検証のエラーを生成しません。
 - **コントローラー:** セルダ エン ブランコ レスペタン `--default-controllers`。プロポルシオーネ
-  コントローラーの明示的なリスト (`<katakana-i105-account-id>;<katakana-i105-account-id>` から) の委任
+  コントローラーの明示的なリスト (`<i105-account-id>;<i105-account-id>` から) の委任
   俳優に所有者はいない。
 
 状況に応じた情報の損失 (レポートの内容)

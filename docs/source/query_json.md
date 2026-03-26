@@ -63,7 +63,7 @@ Example singular owned-asset lookup:
     "type": "FindAssetById",
     "payload": {
       "asset": "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
-      "account_id": "<katakana-i105-account-id>",
+      "account_id": "<i105-account-id>",
       "scope": {
         "kind": "Global"
       }
@@ -93,7 +93,7 @@ and a predicate payload:
     },
     "predicate": {
       "equals": [
-        {"field": "authority", "value": "<katakana-i105-account-id>"}
+        {"field": "authority", "value": "<i105-account-id>"}
       ],
       "in": [
         {"field": "metadata.tier", "values": [1, 2, 3]}

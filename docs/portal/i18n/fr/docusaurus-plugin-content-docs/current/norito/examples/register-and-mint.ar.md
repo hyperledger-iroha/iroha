@@ -19,9 +19,9 @@ source : crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## جولة دفتر الأستاذ
 
-- Utilisez le SDK (`<katakana-i105-account-id>`) pour télécharger le SDK.
+- Utilisez le SDK (`<i105-account-id>`) pour télécharger le SDK.
 - Le prix du produit `register_and_mint` est de 250 $ pour ROSE.
-- تحقق من أرصدة عبر `client.request(FindAccountAssets)` et `iroha_cli ledger assets list --account <katakana-i105-account-id>` لتأكيد نجاح السك.
+- تحقق من أرصدة عبر `client.request(FindAccountAssets)` et `iroha_cli ledger assets list --account <i105-account-id>` لتأكيد نجاح السك.
 
 ## Le SDK est disponible
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

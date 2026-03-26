@@ -11,7 +11,7 @@ formats without compromising safety or accessibility.
 
 ## Safe sharing flows
 
-- Default every copy/share action to the canonical Katakana i105 account id.
+- Default every copy/share action to the canonical I105 account id.
   If an on-chain alias is present, display it as supporting metadata in a
   separate labeled field.
 - Offer a “Share” affordance that bundles the full plain-text address and a QR
@@ -26,7 +26,7 @@ formats without compromising safety or accessibility.
 
 ## IME & input safeguards
 
-- Validate account-id fields as canonical Katakana i105 only. Validate alias
+- Validate account-id fields as canonical I105 only. Validate alias
   entry fields separately as `name@dataspace` or `name@domain.dataspace`.
 - When IME composition artefacts or zero-width characters appear, surface an
   inline warning instead of coercing the input into a different account-id
@@ -53,7 +53,7 @@ formats without compromising safety or accessibility.
 
 ## Single-format policy
 
-- Keep canonical Katakana i105 as the only user-facing account-id format for
+- Keep canonical I105 as the only user-facing account-id format for
   copy, share, and QR surfaces.
 - Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
   point to canonical i105 account ids.

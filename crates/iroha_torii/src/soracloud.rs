@@ -1730,14 +1730,14 @@ pub(crate) struct HfSharedLeaseStatusQuery {
     pub storage_class: String,
     pub lease_term_ms: u64,
     #[norito(default)]
-    /// Optional account filter as canonical Katakana i105 or on-chain account alias.
+    /// Optional account filter as canonical I105 or on-chain account alias.
     pub account_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, JsonDeserialize)]
 pub(crate) struct ModelHostStatusQuery {
     #[norito(default)]
-    /// Optional validator filter as canonical Katakana i105 or on-chain account alias.
+    /// Optional validator filter as canonical I105 or on-chain account alias.
     pub account_id: Option<String>,
 }
 

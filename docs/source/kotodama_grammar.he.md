@@ -200,7 +200,7 @@ register_trigger wake {
 - ‎`norito_bytes(bytes|string) -> NoritoBytes*`
 
 ה-prelude כולל גם מקרואים שסוגרים על אותם קונסטרוקטורים עם בדיקות קומפייל־טיים:
-- ‎`account!("<katakana-i105-account-id>")` / ‎`account_id!("<katakana-i105-account-id>")`
+- ‎`account!("<i105-account-id>")` / ‎`account_id!("<i105-account-id>")`
 - ‎`asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")` / ‎`asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - ‎`domain!("wonderland")` / ‎`domain_id!("wonderland")`
 - ‎`name!("example")`
