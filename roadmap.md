@@ -1,6 +1,25 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
+
+Latest sync (2026-03-26 permission JSON decode-time canonicalization and alias-scope schema alignment):
+`crates/iroha_data_model/src/permission.rs`,
+`crates/iroha_executor_data_model/src/permission.rs`,
+and
+`crates/iroha_core/src/state.rs`
+now keep `Permission` equality/order exact while canonicalizing only
+insignificant payload whitespace during JSON decode, preserving duplicate
+payload keys on the parser path, and publishing `AccountAliasPermissionScope`
+schema tags as `domain` / `dataspace` again.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_data_model permission --lib`
+- `cargo test -p iroha_executor_data_model alias_scope_ --lib`
+- `cargo test -p iroha_core permission_deserialized_from_json_matches_canonical_permission --lib`
+
+Open work for this slice now remains:
+- no additional confirmed work remains in this permission/schema compatibility slice.
 
 Latest sync (2026-03-25 active cargo-deny dependency findings are closed):
 `Cargo.toml`

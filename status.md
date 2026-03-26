@@ -2,6 +2,26 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: permission JSON normalization moved to decode time and alias-scope schema tags are back in sync
+- Hardened `crates/iroha_data_model/src/permission.rs` so `Permission`
+  equality/order semantics are exact again, while JSON decoding now
+  canonicalizes only insignificant payload whitespace, rejects duplicate
+  top-level `name` / `payload` fields on the parser path, and preserves
+  duplicate keys inside the payload instead of reparsing through
+  `norito::json::Value`.
+- Restored the Norito enum metadata on
+  `crates/iroha_executor_data_model/src/permission.rs` so
+  `AccountAliasPermissionScope` publishes the same snake-case schema tags that
+  the manual JSON codec already emits and accepts.
+- Kept the focused end-to-end regression in `crates/iroha_core/src/state.rs`
+  proving that a permission deserialized from JSON still matches the canonical
+  typed alias-management permission in the permission cache path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model permission --lib` (pass)
+  - `cargo test -p iroha_executor_data_model alias_scope_ --lib` (pass)
+  - `cargo test -p iroha_core permission_deserialized_from_json_matches_canonical_permission --lib` (pass)
+
 ## 2026-03-26 Follow-up: address canonicalisation integration assertions now validate canonical account literals instead of a stale `sora` prefix
 - Tightened `integration_tests/tests/address_canonicalisation.rs` so the
   account-listing, asset-holder, and account-transaction response assertions
