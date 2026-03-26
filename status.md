@@ -52,6 +52,19 @@ Last updated: 2026-03-26
   - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_subscription_plans_filters_provider_alias -- --nocapture` (pass)
   - `cargo fmt --all` is still blocked repo-wide by an unrelated syntax error in `mochi/mochi-ui-egui/src/main.rs:9920`
 
+## 2026-03-26 Follow-up: mochi state batch labels now cover the current RWA query output variants
+- Extended
+  `mochi/mochi-core/src/state.rs`
+  so the state explorer's `batch_label(...)` helper stays exhaustive after
+  `iroha_data_model::query::QueryOutputBatchBox` gained `RwaId` and `Rwa`.
+- The shipped behavior in this slice:
+  - `mochi-core` now compiles again against the current query batch enum; and
+  - the unit test coverage for `batch_label(...)` now exercises the RWA labels
+    alongside the existing offline-query variants.
+- Validation:
+  - `cargo check -p mochi-core --message-format short` (pass)
+  - `cargo test -p mochi-core batch_label_handles_rwa_and_offline_variants -- --nocapture` (pass)
+
 ## 2026-03-26 Follow-up: zk confidential localnet test config matches the current client `Config`
 - Extended
   `integration_tests/tests/zk_confidential_localnet.rs`

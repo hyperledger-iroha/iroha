@@ -1013,7 +1013,12 @@ mod tests {
     }
 
     #[test]
-    fn batch_label_handles_offline_variants() {
+    fn batch_label_handles_rwa_and_offline_variants() {
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),
+            "RwaId"
+        );
+        assert_eq!(batch_label(&QueryOutputBatchBox::Rwa(Vec::new())), "Rwa");
         assert_eq!(
             batch_label(&QueryOutputBatchBox::OfflineCounterSummary(Vec::new())),
             "OfflineCounterSummary"
