@@ -1452,7 +1452,7 @@ pub(crate) async fn top_up_reserve(
             }),
             InstructionBox::from(CommitOfflineReserveOperation {
                 expected_server_revision,
-                expected_state_hash,
+                expected_state_hash: expected_state_hash.clone(),
                 reserve: shared_record_from_local(issuer, &reserve)?,
                 result: SharedOfflineReserveOperationResult {
                     operation_key: operation_key.clone(),
@@ -1559,7 +1559,7 @@ pub(crate) async fn renew_reserve(
         issuer.operator_keypair.private_key().clone(),
         InstructionBox::from(CommitOfflineReserveOperation {
             expected_server_revision,
-            expected_state_hash,
+            expected_state_hash: expected_state_hash.clone(),
             reserve: shared_record_from_local(issuer, &reserve)?,
             result: SharedOfflineReserveOperationResult {
                 operation_key: operation_key.clone(),
@@ -1619,7 +1619,7 @@ pub(crate) async fn sync_reserve(
         issuer.operator_keypair.private_key().clone(),
         InstructionBox::from(CommitOfflineReserveOperation {
             expected_server_revision,
-            expected_state_hash,
+            expected_state_hash: expected_state_hash.clone(),
             reserve: shared_record_from_local(issuer, &reserve)?,
             result: SharedOfflineReserveOperationResult {
                 operation_key: operation_key.clone(),
@@ -1708,7 +1708,7 @@ pub(crate) async fn defund_reserve(
             }),
             InstructionBox::from(CommitOfflineReserveOperation {
                 expected_server_revision,
-                expected_state_hash,
+                expected_state_hash: expected_state_hash.clone(),
                 reserve: shared_record_from_local(issuer, &reserve)?,
                 result: SharedOfflineReserveOperationResult {
                     operation_key: operation_key.clone(),
@@ -2004,7 +2004,7 @@ pub(crate) async fn load_cash(
             }),
             InstructionBox::from(CommitOfflineReserveOperation {
                 expected_server_revision,
-                expected_state_hash,
+                expected_state_hash: expected_state_hash.clone(),
                 reserve: shared_record_from_local(issuer, &reserve)?,
                 result: SharedOfflineReserveOperationResult {
                     operation_key: operation_key.clone(),
@@ -2137,7 +2137,7 @@ pub(crate) async fn refresh_cash(
         issuer.operator_keypair.private_key().clone(),
         InstructionBox::from(CommitOfflineReserveOperation {
             expected_server_revision,
-            expected_state_hash,
+            expected_state_hash: expected_state_hash.clone(),
             reserve: shared_record_from_local(issuer, &reserve)?,
             result: SharedOfflineReserveOperationResult {
                 operation_key: operation_key.clone(),
@@ -3281,7 +3281,7 @@ struct SubmittedTransactionReceipt {
     block_height: u64,
 }
 
-fn offline_recursive_stark_ready() -> bool {
+pub(crate) fn offline_recursive_stark_ready() -> bool {
     cfg!(feature = "zk-stark")
 }
 

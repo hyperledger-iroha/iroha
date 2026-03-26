@@ -4560,6 +4560,15 @@ async fn handler_offline_cash_redeem(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_offline_cash_readiness() -> Result<impl IntoResponse, Error> {
+    json_ok(json_object([json_entry(
+        "offline_recursive_stark",
+        crate::offline_reserve::offline_recursive_stark_ready(),
+    )]))
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_offline_reserve_setup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -18908,6 +18917,10 @@ impl Torii {
                 .route("/v1/offline/policy", post(handler_offline_policy_update))
                 .route("/v1/offline/cash/setup", post(handler_offline_cash_setup))
                 .route("/v1/offline/cash/load", post(handler_offline_cash_load))
+                .route(
+                    "/v1/offline/cash/readiness",
+                    get(handler_offline_cash_readiness),
+                )
                 .route(
                     "/v1/offline/cash/refresh",
                     post(handler_offline_cash_refresh),

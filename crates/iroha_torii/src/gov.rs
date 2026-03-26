@@ -1044,75 +1044,40 @@ fn parse_authority_literal(
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
 }
 
-fn parse_private_key_literal(raw: &str) -> Result<iroha_crypto::PrivateKey, crate::Error> {
-    let trimmed = raw.trim();
-    trimmed
-        .parse::<iroha_crypto::PrivateKey>()
-        .map_err(|err| crate::routing::conversion_error(format!("invalid private_key: {err}")))
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn submit_signed_instructions(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
-    state: Arc<iroha_core::state::State>,
-    telemetry: MaybeTelemetry,
-    authority: iroha_data_model::account::AccountId,
-    private_key: iroha_crypto::PrivateKey,
-    instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
-    endpoint: &'static str,
-) -> Result<(), crate::Error> {
-    use iroha_data_model::prelude as dm;
-
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
-        .with_instructions(instructions)
-        .sign(&private_key);
-    crate::routing::handle_transaction_with_metrics(
-        chain_id, queue, state, tx, telemetry, endpoint,
-    )
-    .await?;
-    Ok(())
+fn reject_server_side_signing(endpoint: &'static str) -> crate::Error {
+    crate::routing::conversion_error(format!(
+        "{endpoint} no longer accepts private_key payloads; submit a locally signed transaction instead"
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn maybe_submit_with_authority(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
-    state: Arc<iroha_core::state::State>,
-    telemetry: MaybeTelemetry,
+    _chain_id: Arc<iroha_data_model::ChainId>,
+    _queue: Arc<iroha_core::queue::Queue>,
+    _state: Arc<iroha_core::state::State>,
+    _telemetry: MaybeTelemetry,
     authority: &iroha_data_model::account::AccountId,
     private_key: Option<&str>,
-    instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
+    _instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
     endpoint: &'static str,
 ) -> Result<bool, crate::Error> {
-    let Some(private_key) = private_key else {
+    let Some(_private_key) = private_key else {
         return Ok(false);
     };
-    let private_key = parse_private_key_literal(private_key)?;
-    submit_signed_instructions(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        authority.clone(),
-        private_key,
-        instructions,
-        endpoint,
-    )
-    .await?;
-    Ok(true)
+    let _ = authority;
+    Err(reject_server_side_signing(endpoint))
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn maybe_submit_optional_signer(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
-    state: Arc<iroha_core::state::State>,
+    _chain_id: Arc<iroha_data_model::ChainId>,
+    _queue: Arc<iroha_core::queue::Queue>,
+    _state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
     authority: Option<&str>,
     private_key: Option<&str>,
     authority_context: &'static str,
-    instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
+    _instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
     endpoint: &'static str,
 ) -> Result<bool, crate::Error> {
     match (authority, private_key) {
@@ -1120,21 +1085,9 @@ async fn maybe_submit_optional_signer(
         (Some(_), None) | (None, Some(_)) => Err(crate::routing::conversion_error(
             "authority and private_key must be provided together".into(),
         )),
-        (Some(authority), Some(private_key)) => {
-            let authority_id = parse_authority_literal(authority, &telemetry, authority_context)?;
-            let private_key = parse_private_key_literal(private_key)?;
-            submit_signed_instructions(
-                chain_id,
-                queue,
-                state,
-                telemetry,
-                authority_id,
-                private_key,
-                instructions,
-                endpoint,
-            )
-            .await?;
-            Ok(true)
+        (Some(authority), Some(_private_key)) => {
+            let _authority_id = parse_authority_literal(authority, &telemetry, authority_context)?;
+            Err(reject_server_side_signing(endpoint))
         }
     }
 }
@@ -2447,33 +2400,14 @@ pub async fn handle_gov_council_persist(
     if let (Some(authority), Some(private_key)) =
         (body.authority.as_deref(), body.private_key.as_deref())
     {
-        // Preferred path: submit signed transaction
-        use iroha_data_model::prelude as dm;
-        let authority: iroha_data_model::account::AccountId =
+        let _authority: iroha_data_model::account::AccountId =
             parse_account_literal(authority, &telemetry, CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| {
                     crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
                 })?;
-        let pk: iroha_crypto::PrivateKey = private_key.parse().map_err(|_| {
-            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid private_key".into(),
-                ),
-            ))
-        })?;
-        let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
-            .with_instructions(core::iter::once(dm::InstructionBox::from(instr)))
-            .sign(&pk);
-        crate::routing::handle_transaction_with_metrics(
-            chain_id,
-            queue,
-            state,
-            tx,
-            telemetry,
-            "/v1/gov/council/persist",
-        )
-        .await?;
+        let _ = private_key;
+        return Err(reject_server_side_signing("/v1/gov/council/persist"));
     } else {
         // Fallback: direct WSV mutation (admin/testing only)
         #[cfg(feature = "council_direct_wsv")]
@@ -2590,32 +2524,14 @@ pub async fn handle_gov_council_replace(
     if let (Some(authority), Some(private_key)) =
         (body.authority.as_deref(), body.private_key.as_deref())
     {
-        use iroha_data_model::prelude as dm;
-        let authority: iroha_data_model::account::AccountId =
+        let _authority: iroha_data_model::account::AccountId =
             parse_account_literal(authority, &telemetry, CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY)
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .map_err(|err| {
                     crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
                 })?;
-        let pk: iroha_crypto::PrivateKey = private_key.parse().map_err(|_| {
-            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid private_key".into(),
-                ),
-            ))
-        })?;
-        let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
-            .with_instructions(core::iter::once(dm::InstructionBox::from(instr)))
-            .sign(&pk);
-        crate::routing::handle_transaction_with_metrics(
-            chain_id,
-            queue,
-            state,
-            tx,
-            telemetry,
-            "/v1/gov/council/replace",
-        )
-        .await?;
+        let _ = private_key;
+        return Err(reject_server_side_signing("/v1/gov/council/replace"));
     } else {
         #[cfg(feature = "council_direct_wsv")]
         {

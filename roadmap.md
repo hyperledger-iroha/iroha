@@ -2,6 +2,36 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 Swift Torii RWA surface):
+`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`,
+`IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`,
+and
+`IrohaSwift/README.md`
+now give the Apple SDK first-class Torii coverage for the new RWA asset family:
+
+- Swift now exposes typed explorer RWA records/pages plus chain-state RWA list
+  pages for `/v1/explorer/rwas`, `/v1/explorer/rwas/{rwa_id}`, `/v1/rwas`,
+  and `/v1/rwas/query`;
+- `ToriiClient` now wraps those endpoints directly, including chain-state
+  pagination via `iterateRwas(...)`; and
+- the Swift README now documents the dedicated RWA helpers instead of leaving
+  the feature implicit.
+
+Validation:
+- `cd IrohaSwift && swift test --filter ToriiClientTests/testExplorerRwasParamsQueryItemsEncodePaginationAndDomain`
+- `cd IrohaSwift && swift test --filter ToriiClientTests/testExplorerRwaRecordDecodesNullStatusAndMetadataDefaults`
+- `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testGetExplorerRwaDetailEncodesPathAndDecodesResponse`
+- `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testListRwasEncodesOptions`
+- `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testQueryRwasPostsEnvelope`
+- `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testIterateRwasRespectsPagingAndMaxItems`
+
+Open work for this slice now remains:
+- add dedicated Swift RWA instruction builders if we want full mobile parity
+  with Kotlin/Java instead of Torii-only coverage; and
+- decide whether the mobile SDKs should grow typed `NewRwa` / `MergeRwas` /
+  `RwaControlPolicy` value objects instead of the current JSON-carrying
+  wrappers for richer RWA payloads.
+
 Latest sync (2026-03-26 Base58-only asset-definition literal hardening):
 `crates/iroha_config/src/parameters/user.rs`,
 `crates/iroha_torii/src/iso20022_bridge.rs`,
@@ -71,8 +101,8 @@ Validation:
 - `./gradlew :core:test --tests org.hyperledger.iroha.android.model.instructions.RwaInstructionBuilderTests --tests org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests --console=plain`
 
 Open work for this slice now remains:
-- decide whether Swift should gain matching RWA explorer/builder helpers or
-  stay REST-only for this asset family; and
+- decide whether Swift should gain matching RWA instruction builders instead
+  of staying Torii-only for this asset family; and
 - decide whether the mobile SDKs should grow typed `NewRwa` / `MergeRwas` /
   `RwaControlPolicy` value objects instead of the current JSON-carrying
   wrappers for the richer RWA payloads.

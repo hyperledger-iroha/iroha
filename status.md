@@ -2,6 +2,42 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: Swift Torii client now exposes the dedicated RWA list/detail surface
+- Extended `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`,
+  `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`, and
+  `IrohaSwift/README.md` so the Apple SDK now has typed Torii helpers for the
+  first-class RWA endpoints.
+- The shipped behavior in this slice:
+  - Swift now decodes typed explorer RWA records/pages plus chain-state RWA
+    list pages instead of leaving `/v1/explorer/rwas`, `/v1/explorer/rwas/{id}`,
+    `/v1/rwas`, and `/v1/rwas/query` as raw ad hoc payloads;
+  - `ToriiClient` now wraps those RWA endpoints directly, including chain-state
+    pagination via `iterateRwas(...)`; and
+  - the Swift README now documents the dedicated RWA Torii helpers alongside
+    the existing explorer/history guidance.
+- Validation:
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testExplorerRwasParamsQueryItemsEncodePaginationAndDomain` (pass)
+  - `cd IrohaSwift && swift test --filter ToriiClientTests/testExplorerRwaRecordDecodesNullStatusAndMetadataDefaults` (pass)
+  - `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testGetExplorerRwaDetailEncodesPathAndDecodesResponse` (pass)
+  - `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testListRwasEncodesOptions` (pass)
+  - `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testQueryRwasPostsEnvelope` (pass)
+  - `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testIterateRwasRespectsPagingAndMaxItems` (pass)
+- Remaining implementation gap:
+  - Swift still does not expose dedicated RWA instruction builders or typed
+    `NewRwa` / `MergeRwas` / `RwaControlPolicy` value objects; this pass only
+    closes the Torii client/list-detail parity layer.
+
+## 2026-03-26 Follow-up: address canonicalisation integration assertions now validate canonical account literals instead of a stale `sora` prefix
+- Tightened `integration_tests/tests/address_canonicalisation.rs` so the
+  account-listing, asset-holder, and account-transaction response assertions
+  validate canonical encoded account literals by parsing them, instead of
+  requiring a stale `sora...` textual prefix that no longer matches the Torii
+  account-literal formatter or the current `AccountId`/`AccountAddress`
+  canonical rendering.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation -- --nocapture --test-threads=1` (pass; 24 passed, 0 failed, finished in 620.03s)
+
 ## 2026-03-26 Follow-up: Base58-only asset-definition literals are now enforced on the remaining Torii config and Kotodama sample paths
 - Tightened the remaining positive legacy asset-definition literal paths in
   `crates/iroha_config/src/parameters/user.rs`,
@@ -99,10 +135,10 @@ Last updated: 2026-03-26
   - `./gradlew :core:test --tests org.hyperledger.iroha.android.model.instructions.RwaInstructionBuilderTests --tests org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests --console=plain` (pass)
 - Remaining implementation gap:
   - the Kotlin/Java builder family now covers the RWA instruction set used in
-    the current tree; remaining parity work is mostly about whether Swift
-    should gain matching helpers and whether the mobile SDKs should eventually
-    expose typed `NewRwa` / `MergeRwas` / `RwaControlPolicy` value objects
-    instead of the current JSON-carrying wrappers.
+    the current tree; remaining mobile parity work is mostly about whether the
+    SDKs should eventually expose typed `NewRwa` / `MergeRwas` /
+    `RwaControlPolicy` value objects instead of the current JSON-carrying
+    wrappers, plus whether Swift should grow matching instruction builders.
 
 ## 2026-03-25 Follow-up: RWA lots now generate deterministic unique IDs and Torii/MCP parity coverage is in place
 - Completed the missing first-class RWA follow-up across

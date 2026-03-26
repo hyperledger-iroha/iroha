@@ -29,6 +29,7 @@ default = [
     "circuit-params",
     "zk-halo2",
     "zk-halo2-ipa",
+    "zk-stark",
     "ipa-commitment"
 ]
 # Enables Telemetry (i.e. Status, Metrics, and API Version) endpoints

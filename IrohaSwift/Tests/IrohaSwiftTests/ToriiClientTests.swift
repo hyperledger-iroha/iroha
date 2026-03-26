@@ -3277,17 +3277,14 @@ final class ToriiClientTests: XCTestCase {
         waitForExpectations(timeout: 2.0)
     }
 
-    func testExplorerRwasParamsQueryItemsEncodeOwnedByAndDomain() throws {
-        let owner = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+    func testExplorerRwasParamsQueryItemsEncodePaginationAndDomain() throws {
         let params = ToriiExplorerRwasParams(page: 2,
                                              perPage: 25,
-                                             ownedBy: owner,
                                              domain: "commodities")
         let queryItems = try XCTUnwrap(params.queryItems())
         let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
         XCTAssertEqual(query["page"], "2")
         XCTAssertEqual(query["per_page"], "25")
-        XCTAssertEqual(query["owned_by"], owner)
         XCTAssertEqual(query["domain"], "commodities")
     }
 

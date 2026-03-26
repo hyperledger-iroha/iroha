@@ -68,7 +68,7 @@ use iroha_data_model::{
         AccountController, AccountId,
         address::{self, AccountAddress, AccountAddressError},
     },
-    asset::{AssetDefinitionId, AssetId},
+    asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         *,
@@ -793,6 +793,25 @@ pub(crate) fn parse_account_literal_with_world(
     }
 
     Some(account)
+}
+
+pub(crate) fn parse_asset_definition_literal_with_world(
+    world: &impl WorldReadOnly,
+    input: &str,
+    now_ms: u64,
+) -> Option<AssetDefinitionId> {
+    let literal = input.trim();
+    if literal.is_empty() {
+        return None;
+    }
+
+    AssetDefinitionId::parse_address_literal(literal)
+        .ok()
+        .or_else(|| {
+            AssetDefinitionAlias::from_str(literal)
+                .ok()
+                .and_then(|alias| world.asset_definition_id_by_alias_at(&alias, now_ms))
+        })
 }
 
 fn parse_account_literal_relaxed(literal: &str) -> Option<AccountId> {
