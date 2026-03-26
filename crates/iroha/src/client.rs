@@ -13425,7 +13425,16 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let uaid_hex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543211";
-        let asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+        let asset_definition =
+            iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+                "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            )
+            .expect("asset definition literal");
+        let asset_account = iroha_data_model::account::AccountId::parse_encoded(TEST_WORKER_I105)
+            .expect("worker account literal")
+            .into_account_id();
+        let asset_id = iroha_data_model::asset::AssetId::new(asset_definition, asset_account)
+            .to_string();
         let payload = format!(
             r#"{{
   "uaid":"uaid:{uaid_hex}",
@@ -13438,7 +13447,7 @@ mod tests {
             client.get_uaid_portfolio_with_query(
                 &format!("uaid:{uaid_hex}"),
                 Some(UaidPortfolioQuery {
-                    asset_id: Some(asset_id.to_owned()),
+                    asset_id: Some(asset_id.clone()),
                 }),
             )
         })
@@ -13450,9 +13459,11 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
-        let expected_query = format!("asset_id={asset_id}");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.query(), Some(expected_query.as_str()));
+        assert!(snapshot
+            .url
+            .query_pairs()
+            .any(|(name, value)| name == "asset_id" && value == asset_id));
     }
 
     #[test]

@@ -69,6 +69,22 @@ Last updated: 2026-03-26
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-clippy cargo clippy -p iroha_data_model --all-targets -- -D warnings` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-clippy cargo clippy --workspace --all-targets -- -D warnings` (pass)
 
+## 2026-03-26 Follow-up: `iroha` UAID portfolio client test now uses a valid owner-qualified `AssetId` literal and the query assertion matches the decoded URL pair
+- Extended
+  `crates/iroha/src/client.rs`
+  so the UAID portfolio query test no longer compares `Option<&str>` against
+  `Option<&String>`, and the exercised `asset_id` filter fixture now uses the
+  canonical owner-qualified balance-bucket literal that the client already
+  validates at runtime.
+- The shipped behavior in this slice:
+  - `get_uaid_portfolio_with_query_encodes_asset_id_filter` now compiles again;
+  - the test uses a valid `AssetId` literal with an account component instead
+    of a bare asset-definition id that the query parser rejects; and
+  - the assertion checks the decoded `asset_id` query pair, so URL
+    percent-encoding does not cause a false failure.
+- Validation:
+  - `cargo test -p iroha get_uaid_portfolio --lib` (pass; unrelated pre-existing `iroha_core` warnings remain)
+
 ## 2026-03-26 Follow-up: mochi multisig composer parsing is already fixed in-tree, and overlay tests no longer import stale `Account` symbols
 - Verified
   `mochi/mochi-ui-egui/src/main.rs`
