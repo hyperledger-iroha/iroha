@@ -2,6 +2,56 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: Torii account-alias selectors now resolve consistently to canonical Katakana i105 account ids across the remaining app-facing paths
+- Extended
+  `crates/iroha_core/src/state.rs`,
+  `crates/iroha_torii/src/app_auth.rs`,
+  `crates/iroha_torii/src/gov.rs`,
+  `crates/iroha_torii/src/lib.rs`,
+  `crates/iroha_torii/src/routing.rs`,
+  `crates/iroha_torii/src/soracloud.rs`,
+  `crates/iroha_torii/src/openapi.rs`,
+  `docs/portal/static/openapi/torii.json`,
+  `docs/portal/static/openapi/versions/current/torii.json`,
+  `status.md`,
+  and
+  `roadmap.md`
+  so the remaining Torii surfaces that still parsed strict account literals now
+  accept on-chain account aliases and resolve them back to canonical Katakana
+  i105 account ids.
+- The shipped behavior in this slice:
+  - canonical account ids remain strict Katakana `i105` literals, while
+    app-facing Torii selectors now resolve `name@domain.dataspace` /
+    `name@dataspace` account aliases through state-backed alias bindings before
+    emitting or authorizing against the canonical account id;
+  - the remaining app-facing paths covered here now behave consistently:
+    canonical-request auth headers, governance authority/candidate parsing,
+    push registration, Sorafs repair-worker auth, Soracloud status filters,
+    account list/query filters, asset-holder account filters, Nexus dataspace
+    account summaries, and subscription provider/subscriber filters;
+  - the generated OpenAPI snapshots now advertise the alias-capable contract
+    instead of the stale strict-i105-only wording on those endpoints; and
+  - Torii test fixtures no longer pretend `@sbp` is a built-in dataspace alias:
+    short-form account alias fixtures now use the reserved default dataspace
+    alias `@universal`, while stateful parser fixtures seed alias bindings
+    through new test-only `iroha_core::state` accessors instead of poking
+    private fields.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/state.rs crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/gov.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/soracloud.rs` (pass)
+  - `env CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --output docs/portal/static/openapi/versions/current/torii.json` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_core --lib parse_account_literal_resolves_aliases_in_non_default_dataspaces -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib verify_accepts_alias_account_header_and_returns_canonical_i105_account -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib ballot_plain_accepts_account_aliases -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib push_registration_accepts_account_alias_and_stores_canonical_i105 -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib sorafs_repair_worker_auth_accepts_alias_worker -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib asset_holders_get_filters_by_account_alias -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib asset_holders_query_filter_accepts_account_alias -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib accounts_query_filter_accepts_canonical_and_alias_and_rejects_non_canonical_i105_literals -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_nexus_dataspaces_account_summary_accepts_account_alias -- --nocapture` (pass)
+  - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_subscription_plans_filters_provider_alias -- --nocapture` (pass)
+  - `cargo fmt --all` is still blocked repo-wide by an unrelated syntax error in `mochi/mochi-ui-egui/src/main.rs:9920`
+
 ## 2026-03-26 Follow-up: zk confidential localnet test config matches the current client `Config`
 - Extended
   `integration_tests/tests/zk_confidential_localnet.rs`

@@ -2,6 +2,53 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 Torii account-alias selector consistency + OpenAPI refresh):
+`crates/iroha_core/src/state.rs`,
+`crates/iroha_torii/src/app_auth.rs`,
+`crates/iroha_torii/src/gov.rs`,
+`crates/iroha_torii/src/lib.rs`,
+`crates/iroha_torii/src/routing.rs`,
+`crates/iroha_torii/src/soracloud.rs`,
+`crates/iroha_torii/src/openapi.rs`,
+`docs/portal/static/openapi/torii.json`,
+and
+`docs/portal/static/openapi/versions/current/torii.json`
+now carry the remaining Torii alias follow-up:
+
+- app-facing Torii selectors now resolve account aliases to canonical Katakana
+  `i105` account ids consistently across app auth, governance, push,
+  repair-worker auth, account listing/query, asset-holder filters, Nexus
+  dataspace summaries, and subscription filters;
+- generated OpenAPI snapshots now describe that alias-capable contract instead
+  of the stale strict-i105-only wording; and
+- parser-focused Torii tests seed alias bindings through new test-only
+  `iroha_core::state` accessors, while short-form hardcoded account aliases now
+  use the reserved default dataspace alias `@universal` instead of assuming an
+  implicit `@sbp` dataspace.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/state.rs crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/gov.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/soracloud.rs`
+- `env CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --output docs/portal/static/openapi/versions/current/torii.json`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_core --lib parse_account_literal_resolves_aliases_in_non_default_dataspaces -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib verify_accepts_alias_account_header_and_returns_canonical_i105_account -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib ballot_plain_accepts_account_aliases -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib push_registration_accepts_account_alias_and_stores_canonical_i105 -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib sorafs_repair_worker_auth_accepts_alias_worker -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib asset_holders_get_filters_by_account_alias -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib asset_holders_query_filter_accepts_account_alias -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib accounts_query_filter_accepts_canonical_and_alias_and_rejects_non_canonical_i105_literals -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_nexus_dataspaces_account_summary_accepts_account_alias -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_subscription_plans_filters_provider_alias -- --nocapture`
+
+Open work for this slice now remains:
+- clear the unrelated syntax error at `mochi/mochi-ui-egui/src/main.rs:9920`
+  so `cargo fmt --all` works workspace-wide again;
+- rerun the broader workspace-wide `cargo test --workspace` / `cargo clippy
+  --workspace --all-targets -- -D warnings` sweeps once time allows; and
+- no additional Torii account-alias resolution drift is known after the focused
+  alias regression suite and regenerated OpenAPI snapshots.
+
 Latest sync (2026-03-26 zk confidential localnet `Config` literal compatibility):
 `integration_tests/tests/zk_confidential_localnet.rs`
 now carries the remaining test-side compatibility fix for the current client

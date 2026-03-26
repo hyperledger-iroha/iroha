@@ -122,8 +122,10 @@ const SAMPLE_ALICE_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const SAMPLE_OTHER_PUBLIC_KEY: &str =
     "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99";
-const SAMPLE_ALICE_ACCOUNT_ID: &str = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
-const SAMPLE_BOB_ACCOUNT_ID: &str = "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB";
+const SAMPLE_ALICE_ACCOUNT_ID: &str =
+    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+const SAMPLE_BOB_ACCOUNT_ID: &str =
+    "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB";
 
 static CLI_OVERRIDES: LazyLock<Mutex<CliOverrides>> =
     LazyLock::new(|| Mutex::new(CliOverrides::default()));
@@ -9917,7 +9919,9 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_instructions)
                     .desired_rows(6)
-                    .hint_text("[ { \"kind\": \"mint_asset\", \"asset\": \"62Fk4FPcMuLvW5QjDGNF2a4jAmjM", \"quantity\": \"1\" } ]"),
+                    .hint_text(
+                        r#"[ { "kind": "mint_asset", "asset": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "quantity": "1" } ]"#,
+                    ),
             );
             ui.horizontal(|ui| {
                 ui.checkbox(
@@ -13310,8 +13314,10 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
                 validator_ids: vec![
-                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".to_owned(),
-                    "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB".to_owned(),
+                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+                        .to_owned(),
+                    "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
+                        .to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -13463,15 +13469,11 @@ mod tests {
         assert_eq!(array.len(), 2, "expected two exported state entries");
         assert_eq!(
             array[0].get("title").and_then(Value::as_str),
-            Some(
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
-            )
+            Some("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
         );
         assert_eq!(
             array[1].get("title").and_then(Value::as_str),
-            Some(
-                "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
-            )
+            Some("sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB")
         );
     }
 
@@ -13520,7 +13522,8 @@ mod tests {
         );
         let written = std::fs::read_to_string(&path).expect("read exported state json");
         assert!(
-            written.contains("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
+            written
+                .contains("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
             "exported JSON should include entry identifier"
         );
     }
@@ -13550,7 +13553,8 @@ mod tests {
         );
         let written = std::fs::read_to_string(&path).expect("read exported state norito");
         assert!(
-            written.contains("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
+            written
+                .contains("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
             "exported Norito dump should include entry identifier"
         );
     }
@@ -13590,9 +13594,7 @@ mod tests {
         assert_eq!(tab.entries.len(), 1, "expected a single entry on page 0");
         assert_eq!(
             tab.entries.first().map(|entry| entry.title.as_str()),
-            Some(
-                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
-            ),
+            Some("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
             "selecting first page should surface corresponding entries"
         );
         assert_eq!(
@@ -13605,9 +13607,7 @@ mod tests {
         assert_eq!(tab.entries.len(), 1, "expected a single entry on page 1");
         assert_eq!(
             tab.entries.first().map(|entry| entry.title.as_str()),
-            Some(
-                "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
-            ),
+            Some("sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"),
             "switching pages should update visible entries"
         );
         assert_eq!(
@@ -13671,7 +13671,8 @@ mod tests {
         let mut filter = super::StateFilter {
             search: "peer".to_owned(),
             domain: "wonderland".to_owned(),
-            owner: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".to_owned(),
+            owner: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+                .to_owned(),
             asset_definition: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
         };
         filter.adapt_to_kind(StateQueryKind::Peers);

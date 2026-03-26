@@ -16127,10 +16127,7 @@ mod tests {
         let err = client
             .post_sorafs_repair_claim(&request)
             .expect_err("alias worker id must be rejected");
-        assert!(
-            err.to_string()
-                .contains("canonical I105 account id")
-        );
+        assert!(err.to_string().contains("canonical I105 account id"));
     }
 
     #[test]
@@ -16151,10 +16148,7 @@ mod tests {
         let err = client
             .post_sorafs_repair_slash(&proposal)
             .expect_err("alias auditor account must be rejected");
-        assert!(
-            err.to_string()
-                .contains("canonical I105 account id")
-        );
+        assert!(err.to_string().contains("canonical I105 account id"));
     }
 
     #[test]
