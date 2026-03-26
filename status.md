@@ -2,6 +2,25 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: mochi multisig composer parsing is already fixed in-tree, and overlay tests no longer import stale `Account` symbols
+- Verified
+  `mochi/mochi-ui-egui/src/main.rs`
+  already uses the raw-string `hint_text(...)` form for the multisig draft JSON
+  example, so the previously reported parse error at line 9920 is no longer
+  present in the current checkout.
+- Extended
+  `crates/iroha_core/src/pipeline/overlay.rs`
+  to drop two unused `iroha_data_model::account::Account` test imports from the
+  zk-STARK proved-overlay coverage.
+- The shipped behavior in this slice:
+  - `mochi-ui-egui` checks cleanly again with the current source for the
+    multisig proposal composer hint text; and
+  - `iroha_core` test compilation no longer emits the two stale unused-import
+    warnings from `pipeline::overlay`.
+- Validation:
+  - `cargo check -p mochi-ui-egui` (pass)
+  - `cargo test -p iroha_core --lib --tests --no-run` (pass; unrelated pre-existing warnings remain elsewhere in `iroha_core`)
+
 ## 2026-03-26 Follow-up: Torii account-alias selectors now resolve consistently to canonical Katakana i105 account ids across the remaining app-facing paths
 - Extended
   `crates/iroha_core/src/state.rs`,
@@ -50,7 +69,7 @@ Last updated: 2026-03-26
   - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids -- --nocapture` (pass)
   - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_nexus_dataspaces_account_summary_accepts_account_alias -- --nocapture` (pass)
   - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_subscription_plans_filters_provider_alias -- --nocapture` (pass)
-  - `cargo fmt --all` is still blocked repo-wide by an unrelated syntax error in `mochi/mochi-ui-egui/src/main.rs:9920`
+  - `cargo fmt --all` was blocked at that time by an unrelated syntax error in `mochi/mochi-ui-egui/src/main.rs:9920`; that parse error has since been cleared.
 
 ## 2026-03-26 Follow-up: mochi state batch labels now cover the current RWA query output variants
 - Extended
@@ -79,7 +98,7 @@ Last updated: 2026-03-26
 - Validation:
   - `rustfmt --edition 2024 integration_tests/tests/zk_confidential_localnet.rs` (pass)
   - `cargo test -p integration_tests --test zk_confidential_localnet pressure_submitter_clients_applies_short_timeouts -- --exact --nocapture` (pass)
-  - `cargo fmt --all` (blocked by an unrelated existing parse error in `mochi/mochi-ui-egui/src/main.rs:9920`)
+  - `cargo fmt --all` was not rerun in that slice; the previously blocking parse error in `mochi/mochi-ui-egui/src/main.rs:9920` has since been cleared.
 
 ## 2026-03-26 Follow-up: Swift account-address bridge-style APIs no longer depend on `NoritoBridge.xcframework` for parse/render coverage
 - Extended
