@@ -41,25 +41,34 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
 
     func testOfflineCashEndpointsUseExpectedRoutesAndPayloads() async throws {
         let client = makeClient()
-        let attestation = ToriiOfflineDeviceAttestation(
-            keyId: "attest-key",
-            counter: 7,
+        let deviceBinding = ToriiOfflineDeviceBinding(
+            platform: "ios",
+            attestationKeyId: "attest-key",
+            deviceId: "device-1",
+            offlinePublicKey: "offline-public-key",
+            attestationReportBase64: "YXR0ZXN0YXRpb24tcmVwb3J0",
+            iosTeamId: "TEAMID1234",
+            iosBundleId: "io.example.wallet",
+            iosEnvironment: "development"
+        )
+        let deviceProof = ToriiOfflineDeviceProof(
+            platform: "ios",
+            attestationKeyId: "attest-key",
+            challengeHashHex: "challenge-hash",
             assertionBase64: "YXNzZXJ0aW9u",
-            challengeHashHex: "challenge-hash"
+            counter: 7
         )
         let authorization = ToriiOfflineSpendAuthorization(
             authorizationId: "auth-1",
             lineageId: "lineage-1",
             accountId: "alice@hbl",
-            deviceId: "device-1",
-            offlinePublicKey: "offline-public-key",
             verdictId: "verdict-1",
             policyMaxBalance: "1000.00",
             policyMaxTxValue: "200.00",
             issuedAtMs: 1_700_000_000_000,
             refreshAtMs: 1_700_003_600_000,
             expiresAtMs: 1_700_086_400_000,
-            appAttestKeyId: "attest-key",
+            deviceBinding: deviceBinding,
             issuerSignatureBase64: "authorization-signature"
         )
         let lineageState = ToriiOfflineCashState(
@@ -124,7 +133,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             counterpartyOfflinePublicKey: "receiver-public-key",
             amount: "30.25",
             authorization: authorization,
-            attestation: attestation,
+            deviceProof: deviceProof,
             sourcePayload: nil,
             senderSignatureBase64: "sender-signature",
             createdAtMs: 1_700_000_123_456
@@ -138,10 +147,9 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                 assertBody: { body in
                     let request = try XCTUnwrap(body).decoded(ToriiOfflineCashSetupRequest.self)
                     XCTAssertEqual(request.accountId, "alice@hbl")
-                    XCTAssertEqual(request.deviceId, "device-1")
-                    XCTAssertEqual(request.offlinePublicKey, "offline-public-key")
                     XCTAssertEqual(request.assetDefinitionId, "xor#pk")
-                    XCTAssertEqual(request.appAttestKeyId, "attest-key")
+                    XCTAssertEqual(request.deviceBinding, deviceBinding)
+                    XCTAssertEqual(request.deviceProof, deviceProof)
                 }
             ),
             ExpectedRequest(
@@ -154,6 +162,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                     XCTAssertEqual(request.lineageId, "lineage-1")
                     XCTAssertEqual(request.assetDefinitionId, "xor#pk")
                     XCTAssertEqual(request.amount, "100.00")
+                    XCTAssertEqual(request.deviceBinding, deviceBinding)
+                    XCTAssertEqual(request.deviceProof, deviceProof)
                 }
             ),
             ExpectedRequest(
@@ -164,6 +174,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                     let request = try XCTUnwrap(body).decoded(ToriiOfflineCashRefreshRequest.self)
                     XCTAssertEqual(request.operationId, "refresh-1")
                     XCTAssertEqual(request.lineageId, "lineage-1")
+                    XCTAssertEqual(request.deviceBinding, deviceBinding)
+                    XCTAssertEqual(request.deviceProof, deviceProof)
                 }
             ),
             ExpectedRequest(
@@ -173,6 +185,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                 assertBody: { body in
                     let request = try XCTUnwrap(body).decoded(ToriiOfflineCashSyncRequest.self)
                     XCTAssertEqual(request.operationId, "sync-1")
+                    XCTAssertEqual(request.deviceBinding, deviceBinding)
+                    XCTAssertEqual(request.deviceProof, deviceProof)
                     XCTAssertEqual(request.receipts, [receipt])
                 }
             ),
@@ -183,6 +197,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                 assertBody: { body in
                     let request = try XCTUnwrap(body).decoded(ToriiOfflineCashRedeemRequest.self)
                     XCTAssertEqual(request.operationId, "redeem-1")
+                    XCTAssertEqual(request.deviceBinding, deviceBinding)
+                    XCTAssertEqual(request.deviceProof, deviceProof)
                     XCTAssertEqual(request.amount, "30.00")
                     XCTAssertEqual(request.receipts, [receipt])
                 }
@@ -209,6 +225,9 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             let expected = try XCTUnwrap(queue.isEmpty ? nil : queue.removeFirst())
             XCTAssertEqual(request.httpMethod, expected.method)
             XCTAssertEqual(request.url?.path, expected.path)
+            if expected.method != "GET" {
+                XCTAssertFalse((request.value(forHTTPHeaderField: "Idempotency-Key") ?? "").isEmpty)
+            }
             try expected.assertBody(try self.requestBody(from: request))
             let response = try XCTUnwrap(
                 HTTPURLResponse(
@@ -224,11 +243,9 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
         let setup = try await client.setupOfflineCash(
             ToriiOfflineCashSetupRequest(
                 accountId: "alice@hbl",
-                deviceId: "device-1",
-                offlinePublicKey: "offline-public-key",
                 assetDefinitionId: "xor#pk",
-                appAttestKeyId: "attest-key",
-                attestation: attestation
+                deviceBinding: deviceBinding,
+                deviceProof: deviceProof
             )
         )
         XCTAssertEqual(setup.lineageState.lineageId, "lineage-1")
@@ -238,12 +255,10 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                 operationId: "load-1",
                 lineageId: "lineage-1",
                 accountId: "alice@hbl",
-                deviceId: "device-1",
-                offlinePublicKey: "offline-public-key",
                 assetDefinitionId: "xor#pk",
-                appAttestKeyId: "attest-key",
                 amount: "100.00",
-                attestation: attestation
+                deviceBinding: deviceBinding,
+                deviceProof: deviceProof
             )
         )
         XCTAssertEqual(topUp.lineageState.balance, "97.50")
@@ -253,10 +268,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                 operationId: "refresh-1",
                 lineageId: "lineage-1",
                 accountId: "alice@hbl",
-                deviceId: "device-1",
-                offlinePublicKey: "offline-public-key",
-                appAttestKeyId: "attest-key",
-                attestation: attestation
+                deviceBinding: deviceBinding,
+                deviceProof: deviceProof
             )
         )
         XCTAssertEqual(renewed.lineageState.authorization.authorizationId, "auth-1")
@@ -266,8 +279,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                 operationId: "sync-1",
                 lineageId: "lineage-1",
                 accountId: "alice@hbl",
-                deviceId: "device-1",
-                offlinePublicKey: "offline-public-key",
+                deviceBinding: deviceBinding,
+                deviceProof: deviceProof,
                 receipts: [receipt]
             )
         )
@@ -278,8 +291,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                 operationId: "redeem-1",
                 lineageId: "lineage-1",
                 accountId: "alice@hbl",
-                deviceId: "device-1",
-                offlinePublicKey: "offline-public-key",
+                deviceBinding: deviceBinding,
+                deviceProof: deviceProof,
                 amount: "30.00",
                 receipts: [receipt]
             )

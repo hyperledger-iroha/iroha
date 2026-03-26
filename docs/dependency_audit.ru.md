@@ -54,7 +54,7 @@ translation_last_reviewed: 2025-11-14
   `secp256k1` поверх libsecp), чтобы уменьшить поверхность.
 - BLS12‑381/ZK: `blstrs`, семейство `halo2_*` — распространённые библиотеки в
   production‑ZK‑экосистемах; легитимны.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — легитимные референсные crates.
+- PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — легитимные референсные crates.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — современный каноничный TLS‑стек
   в Rust.
 - Noise: `snow` — каноничная реализация протокола Noise.

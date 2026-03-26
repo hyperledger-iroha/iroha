@@ -457,6 +457,11 @@ impl Actor {
             if !self.prepare_background_block_message(&mut msg) {
                 return;
             }
+            #[cfg(test)]
+            self.record_background_request(&BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: msg.clone(),
+            });
             self.dispatch_background_fallback(BackgroundRequest::Post { peer, msg });
             return;
         }
@@ -1199,6 +1204,9 @@ impl Actor {
             );
         }
         let block_known_locally = self.block_known_locally(block_hash);
+        let has_commit_votes = !commit_votes.is_empty();
+        let has_commit_evidence =
+            incoming_qc.is_some() || validator_checkpoint.is_some() || has_commit_votes;
         self.prune_frontier_slot_state();
         let frontier_lane_owned = (local_height.saturating_add(1)..=local_height.saturating_add(2))
             .contains(&block_height);
@@ -1210,7 +1218,11 @@ impl Actor {
                 .next_slot_prefetch
                 .as_ref()
                 .is_some_and(|slot| slot.height == local_height.saturating_add(2));
-        if frontier_lane_owned {
+        let frontier_lane_deep_catchup = block_height > local_height.saturating_add(1)
+            && frontier_lane_owned
+            && has_commit_evidence
+            && (requested_missing_block || block_known_locally);
+        if frontier_lane_owned && !frontier_lane_deep_catchup {
             let mut processed_votes = 0usize;
             let mut dropped_votes = 0usize;
             for vote in commit_votes {
@@ -1263,6 +1275,18 @@ impl Actor {
                 },
                 sender,
                 true,
+            );
+        }
+        if frontier_lane_deep_catchup {
+            info!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                block_known_locally,
+                has_commit_qc = incoming_qc.is_some(),
+                has_checkpoint = validator_checkpoint.is_some(),
+                has_commit_votes,
+                "processing contiguous frontier BlockSyncUpdate as deep catch-up"
             );
         }
         if !block_known_locally
@@ -1535,7 +1559,6 @@ impl Actor {
             // can be dropped before they revive the pending entry.
             requested_missing_block = true;
         }
-        let has_commit_votes = !commit_votes.is_empty();
         let mut commit_votes = Some(commit_votes);
         let mut process_commit_votes = |actor: &mut Actor| {
             let Some(commit_votes) = commit_votes.take() else {
@@ -3496,16 +3519,24 @@ impl Actor {
         response: super::message::BlockBodyResponse,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        let dedup_key = super::BlockPayloadDedupKey::BlockBodyResponse {
+            height: response.height,
+            view: response.view,
+            block_hash: response.block_hash,
+        };
         if !self.frontier_slot_is_exact_height(response.height) {
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
         let Some(slot) = self.frontier_slot.as_ref() else {
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         };
         if slot.block_hash != response.block_hash
             || slot.height != response.height
             || slot.view != response.view
         {
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
         let super::message::BlockBodyData::BlockCreated(block_created) = response.body;
@@ -3519,18 +3550,29 @@ impl Actor {
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::InvalidPayload,
             );
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
-        if let Some(slot) = self.frontier_slot.as_mut() {
-            if let Some(sender) = sender
-                .clone()
-                .filter(|peer| peer != self.common_config.peer.id())
+        let sender_for_slot = sender
+            .clone()
+            .filter(|peer| peer != self.common_config.peer.id());
+        let result = self.handle_block_created(block_created, sender);
+        let body_materialized = self.frontier_block_materialized_locally(response.block_hash);
+        if body_materialized {
+            if let Some(slot) = self.frontier_slot.as_mut()
+                && slot.block_hash == response.block_hash
+                && slot.height == response.height
+                && slot.view == response.view
             {
-                slot.voters.insert(sender);
+                if let Some(sender) = sender_for_slot {
+                    slot.voters.insert(sender);
+                }
+                slot.body_present = true;
             }
-            slot.body_present = true;
+        } else {
+            self.release_block_payload_dedup(&dedup_key);
         }
-        self.handle_block_created(block_created, sender)
+        result
     }
 
     fn prepare_known_block_qc_work(

@@ -862,16 +862,63 @@ pub fn lower(program: &TypedProgram) -> Result<Program, String> {
 
 /// Lower with a specific dynamic-iteration cap used for feature-gated dynamic bounds.
 pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Program, String> {
+    let call_renames = build_entrypoint_call_renames(program);
     let mut functions = Vec::new();
     for item in &program.items {
         let TypedItem::Function(f) = item;
-        functions.push(lower_function(f, dyn_iter_cap)?);
+        if needs_entrypoint_wrapper(f) {
+            let impl_name = entrypoint_impl_symbol(&f.name);
+            functions.push(lower_function_named(
+                f,
+                &impl_name,
+                dyn_iter_cap,
+                &call_renames,
+            )?);
+            functions.push(lower_entrypoint_wrapper(
+                f,
+                &impl_name,
+                dyn_iter_cap,
+                &call_renames,
+            )?);
+        } else {
+            functions.push(lower_function_named(
+                f,
+                &f.name,
+                dyn_iter_cap,
+                &call_renames,
+            )?);
+        }
     }
     Ok(Program { functions })
 }
 
-fn lower_function(func: &TypedFunction, dyn_iter_cap: usize) -> Result<Function, String> {
-    let mut ctx = LowerCtx::new(dyn_iter_cap);
+fn build_entrypoint_call_renames(program: &TypedProgram) -> HashMap<String, String> {
+    let mut renames = HashMap::new();
+    for item in &program.items {
+        let TypedItem::Function(func) = item;
+        if needs_entrypoint_wrapper(func) {
+            renames.insert(func.name.clone(), entrypoint_impl_symbol(&func.name));
+        }
+    }
+    renames
+}
+
+fn entrypoint_impl_symbol(name: &str) -> String {
+    format!("__entrypoint_impl__{name}")
+}
+
+fn needs_entrypoint_wrapper(func: &TypedFunction) -> bool {
+    matches!(func.modifiers.kind, super::ast::FunctionKind::View)
+        || func.modifiers.visibility == super::ast::FunctionVisibility::Public
+}
+
+fn lower_function_named(
+    func: &TypedFunction,
+    symbol_name: &str,
+    dyn_iter_cap: usize,
+    call_renames: &HashMap<String, String>,
+) -> Result<Function, String> {
+    let mut ctx = LowerCtx::new(dyn_iter_cap, call_renames.clone());
     let entry = ctx.new_label();
     ctx.start_block(entry);
     // Ephemeral state allocation for contract-level `state` declarations.
@@ -897,7 +944,7 @@ fn lower_function(func: &TypedFunction, dyn_iter_cap: usize) -> Result<Function,
     ctx.finish_current(Terminator::Return(None));
 
     let function = Function {
-        name: func.name.clone(),
+        name: symbol_name.to_string(),
         params: func.params.clone(),
         blocks: ctx.blocks,
         entry,
@@ -907,6 +954,148 @@ fn lower_function(func: &TypedFunction, dyn_iter_cap: usize) -> Result<Function,
     } else {
         Ok(function)
     }
+}
+
+fn lower_entrypoint_wrapper(
+    func: &TypedFunction,
+    impl_name: &str,
+    dyn_iter_cap: usize,
+    call_renames: &HashMap<String, String>,
+) -> Result<Function, String> {
+    let mut ctx = LowerCtx::new(dyn_iter_cap, call_renames.clone());
+    let entry = ctx.new_label();
+    ctx.start_block(entry);
+
+    let payload = if func.param_types.is_empty() {
+        None
+    } else {
+        let payload = ctx.new_temp();
+        ctx.current_instr(Instr::GetTriggerEvent { dest: payload });
+        Some(payload)
+    };
+
+    let mut args = Vec::with_capacity(func.param_types.len());
+    for (param_name, param_ty) in &func.param_types {
+        let payload = payload.ok_or_else(|| {
+            format!("internal error: missing payload for entrypoint parameter `{param_name}`")
+        })?;
+        let key = ctx.new_temp();
+        ctx.current_instr(Instr::DataRef {
+            dest: key,
+            kind: DataRefKind::Name,
+            value: param_name.clone(),
+        });
+        args.push(lower_entrypoint_param(
+            &mut ctx, payload, key, param_name, param_ty,
+        )?);
+    }
+
+    let term = match func.ret_ty.as_ref().unwrap_or(&Type::Unit) {
+        Type::Unit => {
+            ctx.current_instr(Instr::Call {
+                callee: impl_name.to_string(),
+                args,
+                dest: None,
+            });
+            Terminator::Return(None)
+        }
+        Type::Tuple(items) => {
+            let mut dests = Vec::with_capacity(items.len());
+            for _ in items {
+                dests.push(ctx.new_temp());
+            }
+            ctx.current_instr(Instr::CallMulti {
+                callee: impl_name.to_string(),
+                args,
+                dests: dests.clone(),
+            });
+            Terminator::ReturnN(dests)
+        }
+        _ => {
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::Call {
+                callee: impl_name.to_string(),
+                args,
+                dest: Some(dest),
+            });
+            Terminator::Return(Some(dest))
+        }
+    };
+    ctx.finish_current(term);
+
+    let function = Function {
+        name: func.name.clone(),
+        params: Vec::new(),
+        blocks: ctx.blocks,
+        entry,
+    };
+    if let Some(err) = ctx.error {
+        Err(err)
+    } else {
+        Ok(function)
+    }
+}
+
+fn lower_entrypoint_param(
+    ctx: &mut LowerCtx,
+    payload: Temp,
+    key: Temp,
+    param_name: &str,
+    ty: &Type,
+) -> Result<Temp, String> {
+    let resolved = semantic::resolve_struct_type(ty);
+    let dest = ctx.new_temp();
+    match resolved {
+        Type::Int => ctx.current_instr(Instr::JsonGetInt {
+            dest,
+            json: payload,
+            key,
+        }),
+        Type::FixedU128 | Type::Amount | Type::Balance => {
+            ctx.current_instr(Instr::JsonGetNumeric {
+                dest,
+                json: payload,
+                key,
+            })
+        }
+        Type::Json => ctx.current_instr(Instr::JsonGetJson {
+            dest,
+            json: payload,
+            key,
+        }),
+        Type::Name => ctx.current_instr(Instr::JsonGetName {
+            dest,
+            json: payload,
+            key,
+        }),
+        Type::AccountId => ctx.current_instr(Instr::JsonGetAccountId {
+            dest,
+            json: payload,
+            key,
+        }),
+        Type::AssetDefinitionId => ctx.current_instr(Instr::JsonGetAssetDefinitionId {
+            dest,
+            json: payload,
+            key,
+        }),
+        Type::NftId => ctx.current_instr(Instr::JsonGetNftId {
+            dest,
+            json: payload,
+            key,
+        }),
+        Type::Blob | Type::Bytes => ctx.current_instr(Instr::JsonGetBlobHex {
+            dest,
+            json: payload,
+            key,
+        }),
+        other => {
+            return Err(format!(
+                "entrypoint parameter `{param_name}` uses unsupported public type {:?}",
+                other
+            ));
+        }
+    }
+    Ok(dest)
 }
 
 fn allocate_state_value(
@@ -3438,7 +3627,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     match &expr.ty {
                         semantic::Type::Unit => {
                             ctx.current_instr(Instr::Call {
-                                callee: name.clone(),
+                                callee: ctx.call_target(name),
                                 args: arg_tmps,
                                 dest: None,
                             });
@@ -3453,7 +3642,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                                 items.push(ctx.new_temp());
                             }
                             ctx.current_instr(Instr::CallMulti {
-                                callee: name.clone(),
+                                callee: ctx.call_target(name),
                                 args: arg_tmps,
                                 dests: items.clone(),
                             });
@@ -3464,7 +3653,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         _ => {
                             let d = ctx.new_temp();
                             ctx.current_instr(Instr::Call {
-                                callee: name.clone(),
+                                callee: ctx.call_target(name),
                                 args: arg_tmps,
                                 dest: Some(d),
                             });
@@ -3705,11 +3894,12 @@ struct LowerCtx {
     loaded_state_fields: std::collections::HashSet<String>,
     /// Dynamic iteration cap for feature-gated dynamic bounds.
     _dyn_iter_cap: usize,
+    call_renames: HashMap<String, String>,
     error: Option<String>,
 }
 
 impl LowerCtx {
-    fn new(dyn_iter_cap: usize) -> Self {
+    fn new(dyn_iter_cap: usize, call_renames: HashMap<String, String>) -> Self {
         Self {
             next_temp: 0,
             next_label: 0,
@@ -3720,6 +3910,7 @@ impl LowerCtx {
             state_name_literals: Default::default(),
             loaded_state_fields: Default::default(),
             _dyn_iter_cap: dyn_iter_cap,
+            call_renames,
             error: None,
         }
     }
@@ -3779,6 +3970,13 @@ impl LowerCtx {
         if self.error.is_none() {
             self.error = Some(message);
         }
+    }
+
+    fn call_target(&self, name: &str) -> String {
+        self.call_renames
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| name.to_string())
     }
 
     fn loop_targets(&self) -> Option<(Label, Label)> {

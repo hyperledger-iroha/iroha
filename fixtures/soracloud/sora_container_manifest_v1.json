@@ -17,6 +17,7 @@
   },
   "required_config_names": [],
   "required_secret_names": [],
+  "config_exports": [],
   "capabilities": {
     "network": {
       "mode": "Allowlist",

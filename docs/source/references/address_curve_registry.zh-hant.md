@@ -100,7 +100,7 @@ payload. The steps below should be treated as mandatory validation logic:
    key. Reject any value that fails the length check to eliminate malformed
    inputs early.
 3. **Run algorithm-specific decoding:** Use the same canonical decoders as
-   `iroha_crypto` (`ed25519_dalek`, `pqcrypto_dilithium`, `w3f_bls`/`blstrs`,
+   `iroha_crypto` (`ed25519_dalek`, `pqcrypto_mldsa`, `w3f_bls`/`blstrs`,
    `sm2`, the TC26 helpers, etc.) so all implementations share the exact
    subgroup/point validation behaviour.
 4. **Verify signature sizes:** Admission and SDKs must enforce the signature
@@ -110,7 +110,7 @@ payload. The steps below should be treated as mandatory validation logic:
 | Algorithm | `curve_id` | Public Key Bytes | Signature Bytes | Critical Checks |
 |-----------|------------|------------------|-----------------|-----------------|
 | `ed25519` | `0x01` | 32 | 64 | Reject non-canonical compressed points, enforce cofactor clearing (no small-order points), and ensure `s < L` when validating signatures. |
-| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | Reject payloads that are not exactly 1952 bytes before decoding; parse the Dilithium3 public key and verify signatures using pqcrypto-dilithium with canonical byte lengths. |
+| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | Reject payloads that are not exactly 1952 bytes before decoding; parse the Dilithium3 public key and verify signatures using pqcrypto-mldsa with canonical byte lengths. |
 | `bls_normal` | `0x03` | 48 | 96 | Accept only canonical compressed G1 public keys and compressed G2 signatures; reject identity points and non-canonical encodings. |
 | `secp256k1` | `0x04` | 33 | 64 | Accept only SEC1-compressed points; decompress and reject non-canonical/invalid points, and verify signatures using the canonical 64-byte `r∥s` encoding (low-`s` normalisation enforced by the signer). |
 | `bls_small` | `0x05` | 96 | 48 | Accept only canonical compressed G2 public keys and compressed G1 signatures; reject identity points and non-canonical encodings. |

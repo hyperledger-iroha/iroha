@@ -40,8 +40,8 @@
         "signature_bytes": 3309,
         "checks": [
           "Reject payloads that are not exactly 1952 bytes before decoding.",
-          "Parse Dilithium3 public key bytes via pqcrypto_dilithium::dilithium3.",
-          "Enforce 3309-byte signatures and verify with pqcrypto_dilithium::dilithium3."
+          "Parse Dilithium3 public key bytes via pqcrypto_mldsa::mldsa65.",
+          "Enforce 3309-byte signatures and verify with pqcrypto_mldsa::mldsa65."
         ]
       }
     },

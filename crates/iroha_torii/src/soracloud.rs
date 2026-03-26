@@ -18,6 +18,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentExecutionRequest,
@@ -46,16 +47,16 @@ use iroha_data_model::{
         SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
         SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentRuntimeStatusV1,
-        SoraCertifiedResponsePolicyV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
-        SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
-        SoraHfPlacementRecordV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
-        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
-        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
-        SoraHfSourceStatusV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
-        SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1,
-        SoraModelProvenanceKindV1, SoraModelRegistryV1, SoraModelWeightActionV1,
-        SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1,
-        SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
+        SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerRuntimeV1,
+        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
+        SoraHfModelFormatV1, SoraHfPlacementRecordV1, SoraHfResourceProfileV1,
+        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
+        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
+        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraModelArtifactActionV1,
+        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
         SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRolloutStageV1,
         SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
         SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceLifecycleActionV1,
@@ -125,6 +126,7 @@ const TRAINING_MAX_WORKER_GROUP_SIZE: u16 = 1024;
 const TRAINING_MAX_REASON_BYTES: usize = 512;
 pub(crate) const VERIFIED_ACCOUNT_HEADER: &str = "x-iroha-internal-soracloud-account";
 pub(crate) const VERIFIED_SIGNER_HEADER: &str = "x-iroha-internal-soracloud-signer";
+pub(crate) const VERIFIED_SIGNERS_HEADER: &str = "x-iroha-internal-soracloud-signers";
 
 pub(crate) fn requires_signed_mutation_request(method: &axum::http::Method, path: &str) -> bool {
     method == axum::http::Method::POST && path.starts_with("/v1/soracloud/")
@@ -1958,6 +1960,15 @@ pub(crate) struct ControlPlaneServiceRevision {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub healthcheck_path: Option<String>,
+    /// Required service-scoped configs declared by the container manifest.
+    #[norito(default)]
+    pub required_config_names: Vec<String>,
+    /// Required service-scoped secrets declared by the container manifest.
+    #[norito(default)]
+    pub required_secret_names: Vec<String>,
+    /// Explicit config exports declared by the container manifest.
+    #[norito(default)]
+    pub config_exports: Vec<SoraConfigExportV1>,
     /// Deterministic hash of sandbox/capability/resource admission inputs.
     pub sandbox_profile_hash: Hash,
     /// Monotonic simulated SCR process generation.
@@ -5602,7 +5613,7 @@ impl IntoResponse for SoracloudMutationError {
 
 fn verified_soracloud_request_identity(
     headers: &HeaderMap,
-) -> Result<(AccountId, PublicKey), SoracloudError> {
+) -> Result<(AccountId, PublicKey, Vec<PublicKey>), SoracloudError> {
     let account = headers
         .get(VERIFIED_ACCOUNT_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -5635,7 +5646,38 @@ fn verified_soracloud_request_identity(
                 )
             })
         })?;
-    Ok((account, signer))
+    let verified_signers = match headers.get(VERIFIED_SIGNERS_HEADER) {
+        Some(value) => {
+            let literal = value.to_str().map(str::trim).map_err(|_| {
+                SoracloudError::internal(
+                    "failed to parse verified Soracloud signer-set header".to_owned(),
+                )
+            })?;
+            let decoded = BASE64_STANDARD.decode(literal).map_err(|_| {
+                SoracloudError::internal(
+                    "failed to decode verified Soracloud signer-set header".to_owned(),
+                )
+            })?;
+            let signers: Vec<PublicKey> = norito::decode_from_bytes(&decoded).map_err(|_| {
+                SoracloudError::internal(
+                    "failed to decode verified Soracloud signer-set payload".to_owned(),
+                )
+            })?;
+            if signers.is_empty() {
+                return Err(SoracloudError::internal(
+                    "verified Soracloud signer-set header must not be empty".to_owned(),
+                ));
+            }
+            signers
+        }
+        None => vec![signer.clone()],
+    };
+    if !verified_signers.iter().any(|verified| verified == &signer) {
+        return Err(SoracloudError::internal(
+            "verified Soracloud signer-set header does not include the primary signer".to_owned(),
+        ));
+    }
+    Ok((account, signer, verified_signers))
 }
 
 fn require_soracloud_mutation_signer(
@@ -5646,25 +5688,30 @@ fn require_soracloud_mutation_signer(
 ) -> Result<SoracloudMutationSigner, SoracloudError> {
     if authority.is_some() || private_key.is_some() {
         return Err(SoracloudError::bad_request(
-            "authority/private_key fields are no longer accepted; sign the HTTP request with X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce",
+            "authority/private_key fields are no longer accepted; sign the HTTP request with X-Iroha-Account plus X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce or X-Iroha-Witness",
         ));
     }
-    let (authority, request_signer) = verified_soracloud_request_identity(headers)?;
-    if provenance.signer != request_signer {
+    let (authority, _request_signer, verified_signers) =
+        verified_soracloud_request_identity(headers)?;
+    if !verified_signers
+        .iter()
+        .any(|verified_signer| verified_signer == &provenance.signer)
+    {
         return Err(SoracloudError::unauthorized(
-            "request signer must match mutation provenance signer",
+            "mutation provenance signer must match one of the verified request signers",
         ));
     }
     Ok(SoracloudMutationSigner {
         authority,
-        request_signer,
+        request_signer: provenance.signer.clone(),
     })
 }
 
 fn require_soracloud_request_signer(
     headers: &HeaderMap,
 ) -> Result<SoracloudMutationSigner, SoracloudError> {
-    let (authority, request_signer) = verified_soracloud_request_identity(headers)?;
+    let (authority, request_signer, _verified_signers) =
+        verified_soracloud_request_identity(headers)?;
     Ok(SoracloudMutationSigner {
         authority,
         request_signer,
@@ -8923,6 +8970,9 @@ fn deployment_bundle_to_control_plane_revision(
         start_grace_secs: bundle.container.lifecycle.start_grace_secs.get(),
         stop_grace_secs: bundle.container.lifecycle.stop_grace_secs.get(),
         healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
+        required_config_names: bundle.container.required_config_names.clone(),
+        required_secret_names: bundle.container.required_secret_names.clone(),
+        config_exports: bundle.container.config_exports.clone(),
         sandbox_profile_hash,
         process_generation: deployment.process_generation,
         process_started_sequence: deployment.process_started_sequence,
@@ -9142,9 +9192,13 @@ pub(crate) fn control_plane_snapshot(
 pub(crate) async fn handle_deploy(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedBundleRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/deploy").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/deploy").await
+    {
         return err.into_response();
     }
 
@@ -9193,9 +9247,13 @@ pub(crate) async fn handle_deploy(
 pub(crate) async fn handle_upgrade(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedBundleRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/upgrade").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/upgrade").await
+    {
         return err.into_response();
     }
 
@@ -9244,9 +9302,13 @@ pub(crate) async fn handle_upgrade(
 pub(crate) async fn handle_rollback(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedRollbackRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/rollback").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/rollback").await
+    {
         return err.into_response();
     }
 
@@ -9299,9 +9361,13 @@ pub(crate) async fn handle_rollback(
 pub(crate) async fn handle_rollout(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedRolloutAdvanceRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/rollout").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/rollout").await
+    {
         return err.into_response();
     }
 
@@ -9360,9 +9426,13 @@ pub(crate) async fn handle_rollout(
 pub(crate) async fn handle_state_mutation(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedStateMutationRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/state/mutate").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/state/mutate").await
+    {
         return err.into_response();
     }
 
@@ -9431,10 +9501,17 @@ pub(crate) async fn handle_state_mutation(
 pub(crate) async fn handle_service_config_set(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedServiceConfigSetRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/service/config/set").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/service/config/set",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9487,10 +9564,17 @@ pub(crate) async fn handle_service_config_set(
 pub(crate) async fn handle_service_config_delete(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedServiceConfigDeleteRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/service/config/delete").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/service/config/delete",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9542,10 +9626,17 @@ pub(crate) async fn handle_service_config_delete(
 pub(crate) async fn handle_service_config_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<ServiceConfigStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/service/config/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/service/config/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9567,10 +9658,17 @@ pub(crate) async fn handle_service_config_status(
 pub(crate) async fn handle_service_secret_set(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedServiceSecretSetRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/service/secret/set").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/service/secret/set",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9623,10 +9721,17 @@ pub(crate) async fn handle_service_secret_set(
 pub(crate) async fn handle_service_secret_delete(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedServiceSecretDeleteRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/service/secret/delete").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/service/secret/delete",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9678,10 +9783,17 @@ pub(crate) async fn handle_service_secret_delete(
 pub(crate) async fn handle_service_secret_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<ServiceSecretStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/service/secret/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/service/secret/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9703,9 +9815,13 @@ pub(crate) async fn handle_service_secret_status(
 pub(crate) async fn handle_fhe_job_run(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedFheJobRunRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/fhe/job/run").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/fhe/job/run").await
+    {
         return err.into_response();
     }
 
@@ -9773,10 +9889,17 @@ pub(crate) async fn handle_fhe_job_run(
 pub(crate) async fn handle_decryption_request(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedDecryptionRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/decrypt/request").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/decrypt/request",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9831,10 +9954,17 @@ pub(crate) async fn handle_decryption_request(
 pub(crate) async fn handle_health_access_request(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedDecryptionRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/health/access/request").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/health/access/request",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9889,10 +10019,17 @@ pub(crate) async fn handle_health_access_request(
 pub(crate) async fn handle_ciphertext_query(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedCiphertextQueryRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/ciphertext/query").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/ciphertext/query",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9906,10 +10043,17 @@ pub(crate) async fn handle_ciphertext_query(
 pub(crate) async fn handle_training_job_start(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedTrainingJobStartRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/training/job/start").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/training/job/start",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -9972,10 +10116,17 @@ pub(crate) async fn handle_training_job_start(
 pub(crate) async fn handle_training_job_checkpoint(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedTrainingJobCheckpointRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/training/job/checkpoint").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/training/job/checkpoint",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10033,10 +10184,17 @@ pub(crate) async fn handle_training_job_checkpoint(
 pub(crate) async fn handle_training_job_retry(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedTrainingJobRetryRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/training/job/retry").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/training/job/retry",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10092,10 +10250,17 @@ pub(crate) async fn handle_training_job_retry(
 pub(crate) async fn handle_training_job_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<TrainingJobStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/training/job/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/training/job/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10109,10 +10274,17 @@ pub(crate) async fn handle_training_job_status(
 pub(crate) async fn handle_model_weight_register(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedModelWeightRegisterRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/weight/register").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/weight/register",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10177,10 +10349,17 @@ pub(crate) async fn handle_model_weight_register(
 pub(crate) async fn handle_model_weight_promote(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedModelWeightPromoteRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/weight/promote").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/weight/promote",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10240,10 +10419,17 @@ pub(crate) async fn handle_model_weight_promote(
 pub(crate) async fn handle_model_weight_rollback(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedModelWeightRollbackRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/weight/rollback").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/weight/rollback",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10302,10 +10488,17 @@ pub(crate) async fn handle_model_weight_rollback(
 pub(crate) async fn handle_model_weight_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<ModelWeightStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/weight/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/weight/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10319,10 +10512,17 @@ pub(crate) async fn handle_model_weight_status(
 pub(crate) async fn handle_model_artifact_register(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedModelArtifactRegisterRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/artifact/register").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/artifact/register",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10382,10 +10582,17 @@ pub(crate) async fn handle_model_artifact_register(
 pub(crate) async fn handle_model_artifact_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<ModelArtifactStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/artifact/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/artifact/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10406,10 +10613,17 @@ pub(crate) async fn handle_model_artifact_status(
 pub(crate) async fn handle_uploaded_model_init(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedUploadedModelBundleInitRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/upload/init").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/upload/init",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10462,10 +10676,17 @@ pub(crate) async fn handle_uploaded_model_init(
 pub(crate) async fn handle_uploaded_model_chunk(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedUploadedModelChunkRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/upload/chunk").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/upload/chunk",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10518,10 +10739,17 @@ pub(crate) async fn handle_uploaded_model_chunk(
 pub(crate) async fn handle_uploaded_model_finalize(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedUploadedModelFinalizeRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/upload/finalize").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/upload/finalize",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10592,9 +10820,17 @@ pub(crate) async fn handle_uploaded_model_finalize(
 pub(crate) async fn handle_private_compile(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedPrivateCompileRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/model/compile").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/compile",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10658,9 +10894,13 @@ pub(crate) async fn handle_private_compile(
 pub(crate) async fn handle_uploaded_model_allow(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedUploadedModelAllowRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/model/allow").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/model/allow").await
+    {
         return err.into_response();
     }
 
@@ -10744,10 +10984,17 @@ pub(crate) async fn handle_uploaded_model_allow(
 pub(crate) async fn handle_private_inference_run(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedPrivateInferenceRunRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/run-private").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/run-private",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10792,10 +11039,17 @@ pub(crate) async fn handle_private_inference_run(
 pub(crate) async fn handle_private_inference_run_finalize(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<PrivateInferenceFinalizeRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/run-private").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/run-private",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10841,10 +11095,17 @@ pub(crate) async fn handle_private_inference_run_finalize(
 pub(crate) async fn handle_private_inference_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<PrivateInferenceStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/run-status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/run-status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10858,11 +11119,13 @@ pub(crate) async fn handle_private_inference_status(
 pub(crate) async fn handle_uploaded_model_encryption_recipient(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Response {
+    let remote_ip = remote.ip();
     if let Err(err) = crate::check_access(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/soracloud/model/upload/encryption-recipient",
     )
     .await
@@ -10888,10 +11151,17 @@ pub(crate) async fn handle_uploaded_model_encryption_recipient(
 pub(crate) async fn handle_uploaded_model_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<UploadedModelStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/upload/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/upload/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10905,10 +11175,17 @@ pub(crate) async fn handle_uploaded_model_status(
 pub(crate) async fn handle_private_compile_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<UploadedModelStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/compile/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/compile/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10922,10 +11199,17 @@ pub(crate) async fn handle_private_compile_status(
 pub(crate) async fn handle_private_inference_checkpoint(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedPrivateInferenceOutputReleaseRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model/decrypt-output").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model/decrypt-output",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -10976,9 +11260,13 @@ pub(crate) async fn handle_private_inference_checkpoint(
 pub(crate) async fn handle_hf_deploy(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedHfDeployRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/hf/deploy").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/hf/deploy").await
+    {
         return err.into_response();
     }
 
@@ -11120,9 +11408,13 @@ pub(crate) async fn handle_hf_deploy(
 pub(crate) async fn handle_hf_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<HfSharedLeaseStatusQuery>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/hf/status").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/hf/status").await
+    {
         return err.into_response();
     }
 
@@ -11159,9 +11451,17 @@ pub(crate) async fn handle_hf_status(
 pub(crate) async fn handle_hf_lease_leave(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedHfLeaseLeaveRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/hf/lease/leave").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/hf/lease/leave",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11246,9 +11546,17 @@ pub(crate) async fn handle_hf_lease_leave(
 pub(crate) async fn handle_hf_lease_renew(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedHfLeaseRenewRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/hf/lease/renew").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/hf/lease/renew",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11391,10 +11699,17 @@ pub(crate) async fn handle_hf_lease_renew(
 pub(crate) async fn handle_model_host_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<ModelHostStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model-host/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model-host/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11413,10 +11728,17 @@ pub(crate) async fn handle_model_host_status(
 pub(crate) async fn handle_model_host_advertise(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedModelHostAdvertiseRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model-host/advertise").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model-host/advertise",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11462,10 +11784,17 @@ pub(crate) async fn handle_model_host_advertise(
 pub(crate) async fn handle_model_host_heartbeat(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedModelHostHeartbeatRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model-host/heartbeat").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model-host/heartbeat",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11513,10 +11842,17 @@ pub(crate) async fn handle_model_host_heartbeat(
 pub(crate) async fn handle_model_host_withdraw(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedModelHostWithdrawRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/model-host/withdraw").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/model-host/withdraw",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11562,9 +11898,13 @@ pub(crate) async fn handle_model_host_withdraw(
 pub(crate) async fn handle_agent_deploy(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentDeployRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/agent/deploy").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/agent/deploy").await
+    {
         return err.into_response();
     }
 
@@ -11609,10 +11949,17 @@ pub(crate) async fn handle_agent_deploy(
 pub(crate) async fn handle_agent_lease_renew(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentLeaseRenewRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/lease/renew").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/lease/renew",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11660,9 +12007,17 @@ pub(crate) async fn handle_agent_lease_renew(
 pub(crate) async fn handle_agent_restart(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentRestartRequest>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/agent/restart").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/restart",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11710,9 +12065,13 @@ pub(crate) async fn handle_agent_restart(
 pub(crate) async fn handle_agent_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<AgentStatusQuery>,
 ) -> Response {
-    if let Err(err) = crate::check_access(&app, &headers, None, "v1/soracloud/agent/status").await {
+    let remote_ip = remote.ip();
+    if let Err(err) =
+        crate::check_access(&app, &headers, Some(remote_ip), "v1/soracloud/agent/status").await
+    {
         return err.into_response();
     }
 
@@ -11725,10 +12084,17 @@ pub(crate) async fn handle_agent_status(
 pub(crate) async fn handle_agent_wallet_spend(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentWalletSpendRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/wallet/spend").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/wallet/spend",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11785,10 +12151,17 @@ pub(crate) async fn handle_agent_wallet_spend(
 pub(crate) async fn handle_agent_wallet_approve(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentWalletApproveRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/wallet/approve").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/wallet/approve",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11842,10 +12215,17 @@ pub(crate) async fn handle_agent_wallet_approve(
 pub(crate) async fn handle_agent_policy_revoke(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentPolicyRevokeRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/policy/revoke").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/policy/revoke",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11900,10 +12280,17 @@ pub(crate) async fn handle_agent_policy_revoke(
 pub(crate) async fn handle_agent_message_send(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentMessageSendRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/message/send").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/message/send",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -11970,10 +12357,17 @@ pub(crate) async fn handle_agent_message_send(
 pub(crate) async fn handle_agent_message_ack(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentMessageAckRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/message/ack").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/message/ack",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -12027,10 +12421,17 @@ pub(crate) async fn handle_agent_message_ack(
 pub(crate) async fn handle_agent_mailbox_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<AgentMailboxStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/mailbox/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/mailbox/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -12044,10 +12445,17 @@ pub(crate) async fn handle_agent_mailbox_status(
 pub(crate) async fn handle_agent_autonomy_allow(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentArtifactAllowRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/autonomy/allow").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/autonomy/allow",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -12457,10 +12865,17 @@ fn build_authoritative_agent_autonomy_execution_audit_instruction(
 pub(crate) async fn handle_agent_autonomy_run(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<SignedAgentAutonomyRunRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/autonomy/run").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/autonomy/run",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -12513,10 +12928,17 @@ pub(crate) async fn handle_agent_autonomy_run(
 pub(crate) async fn handle_agent_autonomy_run_finalize(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<AgentAutonomyFinalizeRequest>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/autonomy/run").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/autonomy/run",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -12629,10 +13051,17 @@ pub(crate) async fn handle_agent_autonomy_run_finalize(
 pub(crate) async fn handle_agent_autonomy_status(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<AgentAutonomyStatusQuery>,
 ) -> Response {
-    if let Err(err) =
-        crate::check_access(&app, &headers, None, "v1/soracloud/agent/autonomy/status").await
+    let remote_ip = remote.ip();
+    if let Err(err) = crate::check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/soracloud/agent/autonomy/status",
+    )
+    .await
     {
         return err.into_response();
     }
@@ -12646,12 +13075,14 @@ pub(crate) async fn handle_agent_autonomy_status(
 pub(crate) async fn handle_health_compliance_report(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoQuery(query): NoritoQuery<HealthComplianceReportQuery>,
 ) -> Response {
+    let remote_ip = remote.ip();
     if let Err(err) = crate::check_access(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/soracloud/health/compliance/report",
     )
     .await
@@ -12701,9 +13132,11 @@ mod tests {
         asset::AssetDefinitionId,
         domain::Domain,
         isi::Grant,
+        metadata::Metadata,
         name::Name,
         permission::Permission,
         prelude::Register,
+        sns::{NameControllerV1, NameRecordV1},
         soracloud::{
             AgentApartmentManifestV1, CiphertextQueryMetadataLevelV1, CiphertextQuerySpecV1,
             DecryptionAuthorityPolicyV1, DecryptionRequestV1, FheExecutionPolicyV1, FheJobSpecV1,
@@ -12925,6 +13358,14 @@ mod tests {
     }
 
     fn verified_request_headers(account: &AccountId, signer: &PublicKey) -> axum::http::HeaderMap {
+        verified_request_headers_with_signers(account, signer, std::slice::from_ref(signer))
+    }
+
+    fn verified_request_headers_with_signers(
+        account: &AccountId,
+        signer: &PublicKey,
+        verified_signers: &[PublicKey],
+    ) -> axum::http::HeaderMap {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             VERIFIED_ACCOUNT_HEADER,
@@ -12933,6 +13374,13 @@ mod tests {
         headers.insert(
             VERIFIED_SIGNER_HEADER,
             signer.to_string().parse().expect("valid signer header"),
+        );
+        headers.insert(
+            VERIFIED_SIGNERS_HEADER,
+            BASE64_STANDARD
+                .encode(norito::to_bytes(&verified_signers.to_vec()).expect("encode signers"))
+                .parse()
+                .expect("valid signer-set header"),
         );
         headers
     }
@@ -13095,6 +13543,31 @@ mod tests {
         }));
     }
 
+    fn seed_domain_name_lease(
+        world: &mut iroha_core::state::World,
+        owner: &AccountId,
+        domain_id: &iroha_data_model::domain::DomainId,
+    ) {
+        let selector = iroha_core::sns::selector_for_domain(domain_id).expect("domain selector");
+        let address =
+            iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            iroha_core::sns::record_storage_key(&selector),
+            Encode::encode(&record),
+        );
+    }
+
     #[test]
     fn signed_mutation_request_matcher_targets_only_soracloud_posts() {
         assert!(requires_signed_mutation_request(
@@ -13159,6 +13632,30 @@ mod tests {
     }
 
     #[test]
+    fn require_soracloud_mutation_signer_accepts_multisig_member_provenance() {
+        let primary_request_keypair = KeyPair::random();
+        let provenance_keypair = KeyPair::random();
+        let account = AccountId::new(primary_request_keypair.public_key().clone());
+        let headers = verified_request_headers_with_signers(
+            &account,
+            primary_request_keypair.public_key(),
+            &[
+                primary_request_keypair.public_key().clone(),
+                provenance_keypair.public_key().clone(),
+            ],
+        );
+        let provenance = ManifestProvenance {
+            signer: provenance_keypair.public_key().clone(),
+            signature: Signature::new(provenance_keypair.private_key(), b"mutation"),
+        };
+
+        let signer = require_soracloud_mutation_signer(&headers, &provenance, None, None)
+            .expect("multisig member provenance must be accepted");
+        assert_eq!(signer.authority, account);
+        assert_eq!(signer.request_signer, provenance.signer);
+    }
+
+    #[test]
     fn control_plane_snapshot_uses_authoritative_soracloud_state() -> Result<(), eyre::Report> {
         use iroha_core::{smartcontracts::Execute, state::World};
         use iroha_data_model::block::BlockHeader;
@@ -13167,7 +13664,10 @@ mod tests {
             .build()?;
 
         runtime.block_on(async move {
-            let app = mk_app_state_for_tests_with_world(World::default());
+            let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
+            let mut world = World::default();
+            seed_domain_name_lease(&mut world, &SAMPLE_GENESIS_ACCOUNT_ID, &wonderland);
+            let app = mk_app_state_for_tests_with_world(world);
             let block_header = BlockHeader {
                 height: NonZeroU64::new(1).expect("non-zero block height"),
                 prev_block_hash: None,
@@ -13183,7 +13683,6 @@ mod tests {
             };
             let mut state_block = app.state.block(block_header);
             let mut stx = state_block.transaction();
-            let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
             Register::domain(Domain::new(wonderland.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::account(Account::new(ALICE_ID.clone().to_account_id(wonderland)))
@@ -13194,11 +13693,37 @@ mod tests {
             )
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
 
-            let bundle = fixture_bundle("1.0.0");
+            let mut bundle = fixture_bundle("1.0.0");
+            bundle.container.required_config_names = vec!["ui/theme".to_string()];
+            bundle.container.config_exports = vec![
+                SoraConfigExportV1 {
+                    config_name: "ui/theme".to_string(),
+                    target: iroha_data_model::soracloud::SoraConfigExportTargetV1::Env(
+                        "UI_THEME_JSON".to_string(),
+                    ),
+                },
+                SoraConfigExportV1 {
+                    config_name: "ui/theme".to_string(),
+                    target: iroha_data_model::soracloud::SoraConfigExportTargetV1::File(
+                        "runtime/ui/theme.json".to_string(),
+                    ),
+                },
+            ];
+            bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+            let initial_service_configs = BTreeMap::from([(
+                "ui/theme".to_string(),
+                Json::from(norito::json!({
+                    "accent": "citrus",
+                    "mode": "light",
+                })),
+            )]);
             let provenance = {
-                let payload =
-                    encode_bundle_signature_payload(&bundle, &BTreeMap::new(), &BTreeMap::new())
-                        .expect("encode bundle payload");
+                let payload = encode_bundle_signature_payload(
+                    &bundle,
+                    &initial_service_configs,
+                    &BTreeMap::new(),
+                )
+                .expect("encode bundle payload");
                 ManifestProvenance {
                     signer: ALICE_ID.signatory().clone(),
                     signature: Signature::new(
@@ -13209,7 +13734,7 @@ mod tests {
             };
             isi::soracloud::DeploySoracloudService {
                 bundle,
-                initial_service_configs: BTreeMap::new(),
+                initial_service_configs,
                 initial_service_secrets: BTreeMap::new(),
                 provenance,
             }
@@ -13228,6 +13753,15 @@ mod tests {
                     .expect("latest revision")
                     .signed_by,
                 ALICE_ID.signatory().to_string()
+            );
+            assert_eq!(
+                snapshot.services[0]
+                    .latest_revision
+                    .as_ref()
+                    .expect("latest revision")
+                    .config_exports
+                    .len(),
+                2
             );
             assert_eq!(snapshot.recent_audit_events.len(), 1);
             Ok(())
@@ -13566,6 +14100,33 @@ mod tests {
             );
             Ok(())
         })
+    }
+
+    #[tokio::test]
+    async fn health_compliance_report_rate_limit_keys_transport_remote_when_internal_header_missing()
+     {
+        let mut app = mk_app_state_for_tests_with_world(Default::default());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .rate_limiter = crate::limits::RateLimiter::new(Some(1), Some(1));
+
+        let first = handle_health_compliance_report(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::ConnectInfo(std::net::SocketAddr::from(([198, 51, 100, 20], 0))),
+            NoritoQuery(HealthComplianceReportQuery::default()),
+        )
+        .await;
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = handle_health_compliance_report(
+            State(app),
+            HeaderMap::new(),
+            axum::extract::ConnectInfo(std::net::SocketAddr::from(([198, 51, 100, 21], 0))),
+            NoritoQuery(HealthComplianceReportQuery::default()),
+        )
+        .await;
+        assert_eq!(second.status(), StatusCode::OK);
     }
 
     #[test]
@@ -16318,6 +16879,7 @@ mod tests {
             let response = handle_agent_autonomy_run_finalize(
                 State(app),
                 headers,
+                crate::loopback_connect_info(),
                 NoritoJson(AgentAutonomyFinalizeRequest {
                     apartment_name: apartment_name.to_owned(),
                     run_id: run.run_id.clone(),

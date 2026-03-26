@@ -30,7 +30,8 @@ use iroha_data_model::{
     query::{QueryRequest, SingularQueryBox},
     role::RoleId,
     smart_contract::manifest::{
-        AccessSetHints, EntryPointKind, TriggerCallback, TriggerDescriptor,
+        AccessSetHints, EntryPointKind, EntrypointParamDescriptor, TriggerCallback,
+        TriggerDescriptor,
     },
     trigger::{Trigger, TriggerId},
 };
@@ -599,6 +600,26 @@ mod tests {
     use crate::{ast::ContractMeta, ir, parser::parse, semantic::analyze};
     use crate::{encoding, instruction, metadata::ProgramMetadata, pointer_abi::PointerType};
 
+    fn sample_account_id() -> iroha_data_model::account::AccountId {
+        iroha_data_model::account::AccountId::new(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                .parse()
+                .expect("public key"),
+        )
+    }
+
+    fn sample_account_literal() -> String {
+        sample_account_id().to_string()
+    }
+
+    fn sample_account_id_alt() -> iroha_data_model::account::AccountId {
+        iroha_data_model::account::AccountId::new(
+            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+                .parse()
+                .expect("public key"),
+        )
+    }
+
     #[test]
     fn pointer_types_cover_all_data_ref_kinds() {
         use super::ir::DataRefKind::*;
@@ -830,7 +851,7 @@ seiyaku NegTest {
         let src = r#"
 seiyaku JsonNumericTest {
   meta { abi_version: 1; }
-  kotoage fn run() permission(Admin) {
+  fn run() {
     let ev = trigger_event();
     let _amount: Amount = json_get_numeric(ev, name("amount"));
   }
@@ -859,7 +880,7 @@ seiyaku JsonNumericTest {
         let src = r#"
 seiyaku JsonAssetDefinitionTest {
   meta { abi_version: 1; }
-  kotoage fn run() permission(Admin) {
+  fn run() {
     let ev = trigger_event();
     let _asset = json_get_asset_definition_id(ev, name("asset_definition_id"));
   }
@@ -1253,7 +1274,6 @@ seiyaku Test {
         use iroha_data_model::{
             account::AccountId,
             asset::id::{AssetDefinitionId, AssetId},
-            domain::DomainId,
             isi::{InstructionBox, Mint},
         };
 
@@ -1262,12 +1282,13 @@ seiyaku Test {
                 .parse()
                 .expect("public key"),
         );
-        let domain: DomainId = "wonderland".parse().expect("domain");
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
+        let canonical_asset = AssetId::parse_literal(&asset_id.canonical_literal())
+            .expect("parse canonical asset");
         let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id.clone()));
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
         let hex_payload = format!("0x{}", hex::encode(bytes));
@@ -1280,12 +1301,24 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&format!("account:{account}")));
-        assert!(hints.read_keys.contains(&format!("domain:{domain}")));
-        assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
-        assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
-        assert!(hints.write_keys.contains(&format!("asset_def:{asset_def}")));
-        assert!(hints.write_keys.contains(&format!("asset:{asset_id}")));
+        assert!(hints.read_keys.contains(&format!(
+            "account:{}",
+            canonical_asset.account()
+        )));
+        assert!(hints.read_keys.contains(&format!(
+            "domain:{}",
+            canonical_asset.definition().domain()
+        )));
+        assert!(hints.read_keys.contains(&format!(
+            "asset_def:{}",
+            canonical_asset.definition()
+        )));
+        assert!(hints.read_keys.contains(&format!("asset:{canonical_asset}")));
+        assert!(hints.write_keys.contains(&format!(
+            "asset_def:{}",
+            canonical_asset.definition()
+        )));
+        assert!(hints.write_keys.contains(&format!("asset:{canonical_asset}")));
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
@@ -1394,7 +1427,6 @@ seiyaku Test {
         use iroha_data_model::{
             account::AccountId,
             asset::id::{AssetDefinitionId, AssetId},
-            domain::DomainId,
             query::asset::FindAssetById,
             query::{QueryRequest, SingularQueryBox},
         };
@@ -1404,12 +1436,13 @@ seiyaku Test {
                 .parse()
                 .expect("public key"),
         );
-        let domain: DomainId = "wonderland".parse().expect("domain");
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
+        let canonical_asset = AssetId::parse_literal(&asset_id.canonical_literal())
+            .expect("parse canonical asset");
         let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
             asset_id.clone(),
         )));
@@ -1424,10 +1457,19 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&format!("account:{account}")));
-        assert!(hints.read_keys.contains(&format!("domain:{domain}")));
-        assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
-        assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
+        assert!(hints.read_keys.contains(&format!(
+            "account:{}",
+            canonical_asset.account()
+        )));
+        assert!(hints.read_keys.contains(&format!(
+            "domain:{}",
+            canonical_asset.definition().domain()
+        )));
+        assert!(hints.read_keys.contains(&format!(
+            "asset_def:{}",
+            canonical_asset.definition()
+        )));
+        assert!(hints.read_keys.contains(&format!("asset:{canonical_asset}")));
         assert!(hints.write_keys.is_empty());
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
@@ -1441,16 +1483,11 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_include_transfer_domain_literal() {
-        use iroha_data_model::{
-            account::{AccountId, ParsedAccountId},
-            domain::DomainId,
-        };
+        use iroha_data_model::domain::DomainId;
 
-        let from_literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-        let to_literal = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU";
-        let to = AccountId::parse_encoded(to_literal)
-            .map(ParsedAccountId::into_account_id)
-            .expect("recipient account literal");
+        let from_literal = sample_account_literal();
+        let to = sample_account_id_alt();
+        let to_literal = to.to_string();
         let domain: DomainId = "wonderland".parse().unwrap();
         let src = format!(
             "fn main() {{ transfer_domain(account_id(\"{from_literal}\"), domain(\"{domain}\"), account_id(\"{to_literal}\")); }}"
@@ -1538,19 +1575,22 @@ seiyaku Test {
     fn manifest_trigger_decl_sets_authority() {
         use iroha_data_model::account::{AccountId, ParsedAccountId};
 
-        let src = r#"
-seiyaku Test {
-  kotoage fn run() {}
-  register_trigger wake {
+        let authority_literal = sample_account_literal();
+        let src = format!(
+            r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
     call run;
     on time pre_commit;
-    authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-  }
-}
-"#;
+    authority "{authority_literal}";
+  }}
+}}
+"#
+        );
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
+            .compile_source_with_manifest(&src)
             .expect("compile manifest");
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let run = entrypoints
@@ -1563,7 +1603,7 @@ seiyaku Test {
         assert_eq!(
             trigger.authority,
             Some(
-                AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                AccountId::parse_encoded(authority_literal.as_str())
                     .map(ParsedAccountId::into_account_id)
                     .expect("authority literal"),
             )
@@ -1658,8 +1698,7 @@ seiyaku StagedMintRequest {
     MintRequestCanceledAt[sequence] = canceled_at_ms;
   }
 
-  #[access(read="*", write="*")]
-  kotoage fn run() {
+  fn run() {
     let ev = trigger_event();
     let action_key = name("action");
     let request_id_key = name("request_id");
@@ -1984,8 +2023,8 @@ seiyaku Test {{
             trigger::TriggerId,
         };
 
-        let account_literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-        let account = AccountId::parse_encoded(account_literal)
+        let account_literal = sample_account_literal();
+        let account = AccountId::parse_encoded(account_literal.as_str())
             .map(ParsedAccountId::into_account_id)
             .expect("account");
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
@@ -2262,31 +2301,34 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_include_explicit_access() {
-        const ACCOUNT_KEY: &str = "account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-        let src = r#"
-seiyaku Test {
-  #[access(read="account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", write="account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")]
-  kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
+        let account_literal = sample_account_literal();
+        let account_key = format!("account:{account_literal}");
+        let src = format!(
+            r#"
+seiyaku Test {{
+  #[access(read="{account_key}", write="{account_key}")]
+  kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {{
     transfer_asset(from, to, asset, amount);
-  }
-}
-"#;
+  }}
+}}
+"#
+        );
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
+            .compile_source_with_manifest(&src)
             .expect("compile manifest");
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&ACCOUNT_KEY.to_string()));
-        assert!(hints.write_keys.contains(&ACCOUNT_KEY.to_string()));
+        assert!(hints.read_keys.contains(&account_key));
+        assert!(hints.write_keys.contains(&account_key));
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
             .iter()
             .find(|e| e.name == "move")
             .expect("entrypoint present");
-        assert!(main.read_keys.contains(&ACCOUNT_KEY.to_string()));
-        assert!(main.write_keys.contains(&ACCOUNT_KEY.to_string()));
+        assert!(main.read_keys.contains(&account_key));
+        assert!(main.write_keys.contains(&account_key));
     }
 
     #[test]
@@ -2447,7 +2489,7 @@ seiyaku Test {
             .name("kotodama_entry_spills_use_stack_frame".to_owned())
             .stack_size(8 * 1024 * 1024)
             .spawn(|| {
-                let mut src = String::from("seiyaku SpillTest {\n  kotoage fn main() -> int {\n");
+                let mut src = String::from("seiyaku SpillTest {\n  fn main() -> int {\n");
                 let count = 32;
                 for i in 0..count {
                     let value = i + 1;
@@ -7564,6 +7606,15 @@ fn build_kotoba_entries(
         .collect()
 }
 
+fn entrypoint_ir_symbol_name(func: &semantic::TypedFunction) -> String {
+    match entrypoint_kind_from_modifiers(&func.modifiers) {
+        Some(EntryPointKind::Public | EntryPointKind::View) => {
+            format!("__entrypoint_impl__{}", func.name)
+        }
+        _ => func.name.clone(),
+    }
+}
+
 fn apply_explicit_access_hints(
     typed: &TypedProgram,
     fn_index_by_name: &HashMap<&str, usize>,
@@ -7577,7 +7628,8 @@ fn apply_explicit_access_hints(
             continue;
         }
         saw_hint = true;
-        if let Some(&idx) = fn_index_by_name.get(func.name.as_str()) {
+        let symbol_name = entrypoint_ir_symbol_name(func);
+        if let Some(&idx) = fn_index_by_name.get(symbol_name.as_str()) {
             if let Some(slot) = explicit_by_fn.get_mut(idx) {
                 *slot = true;
             }
@@ -8424,13 +8476,14 @@ fn build_entrypoint_descriptors(
     let build_descriptor = |func: &semantic::TypedFunction,
                             kind: EntryPointKind|
      -> Result<EmbeddedEntrypointDescriptor, String> {
+        let hint_name = entrypoint_ir_symbol_name(func);
         let include_hints = hintable_by_name
-            .get(func.name.as_str())
+            .get(hint_name.as_str())
             .copied()
             .unwrap_or(false);
         let (mut reads, mut writes): (Vec<String>, Vec<String>) = if include_hints {
             hints_by_name
-                .get(func.name.as_str())
+                .get(hint_name.as_str())
                 .map(|(r, w)| {
                     (
                         r.iter().cloned().collect::<Vec<_>>(),
@@ -8454,7 +8507,7 @@ fn build_entrypoint_descriptors(
             .get(func.name.as_str())
             .cloned()
             .unwrap_or_default();
-        let report = hint_report_by_name.get(func.name.as_str()).copied();
+        let report = hint_report_by_name.get(hint_name.as_str()).copied();
         let entry_pc = func_start_offsets
             .get(&func.name)
             .copied()
@@ -8462,6 +8515,15 @@ fn build_entrypoint_descriptors(
         Ok(EmbeddedEntrypointDescriptor {
             name: func.name.clone(),
             kind,
+            params: func
+                .param_types
+                .iter()
+                .map(|(name, ty)| EntrypointParamDescriptor {
+                    name: name.clone(),
+                    type_name: semantic::render_type_name(ty),
+                })
+                .collect(),
+            return_type: func.ret_ty.as_ref().map(semantic::render_type_name),
             permission: func.modifiers.permission.clone(),
             read_keys: reads,
             write_keys: writes,
@@ -8503,6 +8565,7 @@ fn build_entrypoint_descriptors(
 
 fn entrypoint_kind_from_modifiers(modifiers: &FunctionModifiers) -> Option<EntryPointKind> {
     match modifiers.kind {
+        FunctionKind::View => Some(EntryPointKind::View),
         FunctionKind::Hajimari => Some(EntryPointKind::Hajimari),
         FunctionKind::Kaizen => Some(EntryPointKind::Kaizen),
         _ if modifiers.visibility == FunctionVisibility::Public => Some(EntryPointKind::Public),

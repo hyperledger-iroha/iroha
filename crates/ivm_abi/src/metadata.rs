@@ -41,6 +41,8 @@ const CONTRACT_INTERFACE_SECTION_HEADER_SIZE: usize = 8;
 pub struct EmbeddedEntrypointDescriptor {
     pub name: String,
     pub kind: EntryPointKind,
+    pub params: Vec<iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor>,
+    pub return_type: Option<String>,
     pub permission: Option<String>,
     pub read_keys: Vec<String>,
     pub write_keys: Vec<String>,
@@ -57,6 +59,8 @@ impl EmbeddedEntrypointDescriptor {
         EntrypointDescriptor {
             name: self.name.clone(),
             kind: self.kind,
+            params: self.params.clone(),
+            return_type: self.return_type.clone(),
             permission: self.permission.clone(),
             read_keys: self.read_keys.clone(),
             write_keys: self.write_keys.clone(),

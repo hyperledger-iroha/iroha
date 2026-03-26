@@ -927,7 +927,7 @@ pub(super) struct RbcPlanInputs<'a> {
 }
 
 impl Actor {
-    fn release_block_payload_dedup(&self, key: &BlockPayloadDedupKey) {
+    pub(super) fn release_block_payload_dedup(&self, key: &BlockPayloadDedupKey) {
         let mut guard = self
             .block_payload_dedup
             .lock()

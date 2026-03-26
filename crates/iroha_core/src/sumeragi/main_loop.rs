@@ -300,6 +300,7 @@ fn bump_view_after_quorum_timeout(
 const PROPOSAL_CACHE_LIMIT: usize = 128;
 const PROPOSALS_SEEN_HEIGHT_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const PROPOSALS_SEEN_VIEW_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
+const AUTHORITATIVE_FRONTIER_WIRE_HEIGHT_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const VOTE_CACHE_HEIGHT_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const VOTE_CACHE_VIEW_WINDOW: u64 = PROPOSAL_CACHE_LIMIT as u64;
 const BLOCK_SYNC_ROSTER_CACHE_LIMIT: usize = 64;
@@ -5749,41 +5750,12 @@ impl Actor {
         &self,
         frontier_height: u64,
         view: u64,
-        now: Instant,
+        _now: Instant,
     ) -> bool {
         if frontier_height != self.committed_height_snapshot().saturating_add(1) {
             return false;
         }
-        if self.phase_tracker.current_view(frontier_height) != Some(view) {
-            return false;
-        }
-
-        let exact_frontier_owner_active = self.frontier_slot.as_ref().is_some_and(|slot| {
-            slot.height == frontier_height
-                && slot.view == view
-                && slot.block_created_seen
-                && slot.exact_fetch_armed
-                && !slot.body_present
-        });
-        let authoritative_owner_active = self
-            .authoritative_slot_owner_hash(frontier_height, view)
-            .is_some();
-        if !exact_frontier_owner_active && !authoritative_owner_active {
-            return false;
-        }
-
-        exact_frontier_owner_active
-            || self.slot_has_vote_backed_consensus_evidence(frontier_height, view)
-            || self.frontier_recovery_same_slot_vote_backed_recovery_active(
-                frontier_height,
-                view,
-                now,
-            )
-            || self.frontier_recovery_same_slot_missing_payload_recovery_active(
-                frontier_height,
-                view,
-                now,
-            )
+        self.phase_tracker.current_view(frontier_height) == Some(view)
     }
 
     fn suppress_quorum_view_change_while_frontier_repair_active(
@@ -5810,13 +5782,11 @@ impl Actor {
             return false;
         }
 
-        let exact_body_repair_active = self.frontier_slot.as_ref().is_some_and(|slot| {
-            slot.height == height
-                && slot.view == view
-                && slot.block_created_seen
-                && slot.exact_fetch_armed
-                && !slot.body_present
-        });
+        let exact_body_repair_active = self.exact_frontier_body_repair_active_at_height(height)
+            && self
+                .frontier_slot
+                .as_ref()
+                .is_some_and(|slot| slot.view == view);
         let repair_active = exact_body_repair_active
             || self.frontier_recovery_same_slot_missing_payload_recovery_active(height, view, now)
             || self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
@@ -12793,12 +12763,95 @@ impl Actor {
         (leader, voters)
     }
 
+    fn exact_frontier_body_repair_active_at_height(&self, height: u64) -> bool {
+        height == self.committed_height_snapshot().saturating_add(1)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height && slot.exact_fetch_armed && !slot.body_present
+            })
+    }
+
+    fn height_has_authoritative_payload(&self, height: u64) -> bool {
+        self.pending.pending_blocks.values().any(|pending| {
+            !pending.aborted
+                && pending.validation_status != ValidationStatus::Invalid
+                && pending.height == height
+        }) || self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                !inflight.pending.aborted
+                    && inflight.pending.validation_status != ValidationStatus::Invalid
+                    && inflight.pending.height == height
+            })
+            || usize::try_from(height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+                .and_then(|nz| self.kura.get_block(nz))
+                .is_some()
+    }
+
+    fn should_allow_contiguous_frontier_deep_catchup(
+        &self,
+        height: u64,
+        reason: &'static str,
+    ) -> bool {
+        let local_height = self.committed_height_snapshot();
+        if height != local_height.saturating_add(1) {
+            return false;
+        }
+
+        // The contiguous frontier is owned by the exact slot machine while the peer is still in
+        // healthy near-tip recovery. Re-open deterministic deep catch-up only after the shared
+        // lagging windows activate for the current frontier. This preserves exact body repair for
+        // healthy peers, but prevents a marooned `committed + 1` node from spinning forever once
+        // it has been deterministically classified as lagging.
+        let missing_qc_stall_active = self
+            .missing_qc_height_stall
+            .as_ref()
+            .is_some_and(|stall| stall.height == height && stall.mode_active);
+        if missing_qc_stall_active && Self::reason_is_missing_qc_stall_reanchor(reason) {
+            return true;
+        }
+
+        self.frontier_catchup_stall.as_ref().is_some_and(|stall| {
+            stall.frontier_height == height
+                && stall.local_height_at_entry == local_height
+                && stall.mode_active
+                && Self::reason_is_canonical_frontier_reanchor(reason)
+        })
+    }
+
+    fn populate_frontier_slot_targets_from_active_topology(&self, slot: &mut FrontierSlot) -> bool {
+        if slot.leader.is_some() || !slot.voters.is_empty() {
+            return true;
+        }
+        let roster = self.rbc_roster_for_session((slot.block_hash, slot.height, slot.view));
+        if roster.is_empty() {
+            return false;
+        }
+        let topology = super::network_topology::Topology::new(roster);
+        let (leader, voters) = self.frontier_slot_targets_from_topology(
+            slot.height,
+            slot.view,
+            &BTreeSet::new(),
+            &topology,
+        );
+        if let Some(leader) = leader {
+            slot.leader = Some(leader);
+        }
+        slot.voters.extend(voters);
+        slot.leader.is_some() || !slot.voters.is_empty()
+    }
+
     fn prune_frontier_slot_state(&mut self) {
         let committed_height = self.committed_height_snapshot();
-        if self.frontier_slot.as_ref().is_some_and(|slot| {
-            slot.height <= committed_height
-                || self.frontier_block_materialized_locally(slot.block_hash)
-        }) {
+        if self
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height <= committed_height)
+        {
             self.frontier_slot = None;
         }
         if self
@@ -13055,6 +13108,8 @@ impl Actor {
             return false;
         };
         if slot.body_present || self.frontier_block_materialized_locally(slot.block_hash) {
+            slot.body_present = true;
+            self.frontier_slot = Some(slot);
             return false;
         }
         if !slot.exact_fetch_armed {
@@ -13073,6 +13128,9 @@ impl Actor {
             return false;
         }
 
+        if Self::frontier_body_fetch_targets(&slot).is_empty() {
+            let _ = self.populate_frontier_slot_targets_from_active_topology(&mut slot);
+        }
         let mut targets = Self::frontier_body_fetch_targets(&slot);
         if targets.is_empty() && matches!(slot.fetch_stage, FrontierBodyFetchStage::Leader) {
             slot.fetch_stage = FrontierBodyFetchStage::Voters;
@@ -14928,11 +14986,7 @@ impl Actor {
             // Avoid scheduling idle view changes before the round tracker is seeded.
             return None;
         };
-        let proposal_seen = self
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, current_view));
+        let proposal_seen = self.slot_has_proposal_evidence(height, current_view);
         let timeout = idle_view_timeout(
             proposal_seen,
             self.commit_quorum_timeout(),
@@ -21864,6 +21918,8 @@ impl Actor {
                 | "missing_block_range_pull_no_progress"
                 | "missing_block_attempt_streak"
                 | "missing_block_hash_miss_streak"
+                | "no_roster_bootstrap"
+                | "no_roster_frontier_realign"
                 | "idle_missing_qc_reacquire"
                 | "qc_missing_payload_quorum_fast_recovery"
                 | "lock_lag_future_prune"
@@ -21897,6 +21953,9 @@ impl Actor {
                 | "lock_lag_future_prune"
                 | "sidecar_mismatch"
                 | "highest_qc_committed_conflict"
+                | "no_roster_bootstrap"
+                | "no_roster_frontier_realign"
+                | "no_roster_fail_closed"
         )
     }
 
@@ -21936,7 +21995,9 @@ impl Actor {
         let (lock_lag_frontier, lock_lag_active, lock_lag_far_future, canonical_height) =
             self.lock_lag_range_pull_scope_for_height(height);
         let local_height = self.committed_height_snapshot();
-        if height == local_height.saturating_add(1) {
+        if height == local_height.saturating_add(1)
+            && !self.should_allow_contiguous_frontier_deep_catchup(height, reason)
+        {
             let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
             debug!(
                 height,
@@ -25620,11 +25681,7 @@ impl Actor {
             return false;
         };
         let current_view = self.phase_tracker.current_view(height).unwrap_or(0);
-        let proposal_seen = self
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, current_view));
+        let proposal_seen = self.slot_has_proposal_evidence(height, current_view);
         let timeout = idle_view_timeout(
             proposal_seen,
             self.commit_quorum_timeout(),
@@ -25884,7 +25941,9 @@ impl Actor {
         all_peers: bool,
     ) -> bool {
         let local_height = self.committed_height_snapshot();
-        if frontier_height == local_height.saturating_add(1) {
+        if frontier_height == local_height.saturating_add(1)
+            && !self.should_allow_contiguous_frontier_deep_catchup(frontier_height, reason)
+        {
             let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
             debug!(
                 frontier_height,
@@ -26643,11 +26702,7 @@ impl Actor {
         source: &'static str,
     ) -> bool {
         if storm_count < NO_PROPOSAL_STORM_FORCE_BREAK_STREAK
-            || self
-                .subsystems
-                .propose
-                .proposals_seen
-                .contains(&(height, view))
+            || self.slot_has_proposal_evidence(height, view)
         {
             return false;
         }
@@ -27539,11 +27594,7 @@ impl Actor {
                 return false;
             }
         };
-        let proposal_seen = self
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, current_view));
+        let proposal_seen = self.slot_has_proposal_evidence(height, current_view);
         let frontier_pending_exists = height == committed_height.saturating_add(1)
             && self.pending.pending_blocks.values().any(|pending| {
                 !pending.aborted

@@ -1,6 +1,6 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use pqcrypto_dilithium::{dilithium2, dilithium3, dilithium5};
+use pqcrypto_mldsa::{mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5};
 use pqcrypto_traits::{
     Error as PqError,
     sign::{

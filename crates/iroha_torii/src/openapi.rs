@@ -1905,6 +1905,17 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/contracts/view".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Execute a read-only contract view.",
+            "Execute a manifest-validated read-only contract view entrypoint and return its decoded result.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/contracts/state".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",

@@ -23,6 +23,7 @@ iroha_genesis.workspace = true
 iroha_test_samples.workspace = true
 iroha_schema.workspace = true
 iroha_core.workspace = true
+iroha_config.workspace = true
 iroha_version.workspace = true
 
 iroha_swarm = { path = "../iroha_swarm" }
@@ -41,7 +42,6 @@ inquire = "0.9.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-iroha_config = { workspace = true }
 base64.workspace = true
 
 [features]

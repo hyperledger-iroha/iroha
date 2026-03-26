@@ -29,16 +29,12 @@ seiyaku ContractCallDispatchTest {{
 
   kotoage fn main() {{}}
 
-  kotoage fn credit_by_payload() {{
-    let ev = trigger_event();
-    let amount = json_get_int(ev, name("amount"));
+  kotoage fn credit_by_payload(amount: int) {{
     state_set(name("call_amount"), encode_int(amount));
   }}
 
-  kotoage fn record_asset_by_payload() {{
-    let ev = trigger_event();
-    let asset = json_get_asset_definition_id(ev, name("asset_definition_id"));
-    state_set(name("call_asset"), pointer_to_norito(asset));
+  kotoage fn record_asset_by_payload(asset_definition_id: AssetDefinitionId) {{
+    state_set(name("call_asset"), pointer_to_norito(asset_definition_id));
   }}
 }}
 "#
@@ -59,21 +55,16 @@ seiyaku ContractCallDeclaredStateTest {{
 
   kotoage fn main() {{}}
 
-  kotoage fn credit_by_payload() {{
-    let ev = trigger_event();
-    let amount = json_get_int(ev, name("amount"));
+  kotoage fn credit_by_payload(amount: int) {{
     CallAmount = amount;
   }}
 
-  kotoage fn record_asset_by_payload() {{
-    let ev = trigger_event();
-    let asset = json_get_asset_definition_id(ev, name("asset_definition_id"));
-    CallAsset = asset;
+  kotoage fn record_asset_by_payload(asset_definition_id: AssetDefinitionId) {{
+    CallAsset = asset_definition_id;
   }}
 
-  kotoage fn mirror_declared_state() {{
-    state_set(name("call_amount_readback"), encode_int(CallAmount));
-    state_set(name("call_asset_readback"), pointer_to_norito(CallAsset));
+  view fn declared_state() -> (int, AssetDefinitionId) {{
+    return (CallAmount, CallAsset);
   }}
 }}
 "#
@@ -93,15 +84,13 @@ seiyaku ContractCallDeclaredStateWithIsiTest {{
 
   kotoage fn main() {{}}
 
-  kotoage fn write_with_isi() permission(Admin) {{
-    let ev = trigger_event();
-    let amount = json_get_int(ev, name("amount"));
+  kotoage fn write_with_isi(amount: int) permission(Admin) {{
     set_account_detail(authority(), name("cursor"), json("{{\"phase\":\"write_with_isi\"}}"));
     CallAmount = amount;
   }}
 
-  kotoage fn mirror_declared_state() {{
-    state_set(name("call_amount_readback"), encode_int(CallAmount));
+  view fn declared_state() -> int {{
+    return CallAmount;
   }}
 }}
 "#
@@ -121,17 +110,15 @@ seiyaku ContractCallDeclaredStateWithMintTest {{
 
   kotoage fn main() {{}}
 
-  kotoage fn write_with_mint() permission(Admin) {{
-    let ev = trigger_event();
-    let amount = json_get_int(ev, name("amount"));
-    let user = json_get_account_id(ev, name("user"));
-    let asset = json_get_asset_definition_id(ev, name("asset_definition_id"));
-    mint_asset(user, asset, 1);
+  kotoage fn write_with_mint(amount: int,
+                             user: AccountId,
+                             asset_definition_id: AssetDefinitionId) permission(Admin) {{
+    mint_asset(user, asset_definition_id, 1);
     CallAmount = amount;
   }}
 
-  kotoage fn mirror_declared_state() {{
-    state_set(name("call_amount_readback"), encode_int(CallAmount));
+  view fn declared_state() -> int {{
+    return CallAmount;
   }}
 }}
 "#
@@ -181,22 +168,17 @@ seiyaku ContractCallN3xLikeTest {{
     TotalN3x = TotalN3x + minted;
   }}
 
-  kotoage fn deposit_like() permission(Admin) {{
-    let ev = trigger_event();
-    deposit_impl(
-      json_get_account_id(ev, name("user")),
-      json_get_asset_definition_id(ev, name("asset_definition_id")),
-      json_get_int(ev, name("usdt_in")),
-      json_get_int(ev, name("usdc_in")),
-      json_get_int(ev, name("kusd_in"))
-    );
+  kotoage fn deposit_like(user: AccountId,
+                          asset_definition_id: AssetDefinitionId,
+                          usdt_in: int,
+                          usdc_in: int,
+                          kusd_in: int) permission(Admin) {{
+    deposit_impl(user, asset_definition_id, usdt_in, usdc_in, kusd_in);
   }}
 
-  kotoage fn burn_like() permission(Admin) {{
-    let ev = trigger_event();
-    let user = json_get_account_id(ev, name("user"));
-    let asset = json_get_asset_definition_id(ev, name("asset_definition_id"));
-    let n3x_amount = json_get_int(ev, name("n3x_amount"));
+  kotoage fn burn_like(user: AccountId,
+                       asset_definition_id: AssetDefinitionId,
+                       n3x_amount: int) permission(Admin) {{
     let total = TotalN3x;
     assert(total > 0, "empty hub");
     assert(n3x_amount > 0, "invalid n3x_amount");
@@ -213,12 +195,8 @@ seiyaku ContractCallN3xLikeTest {{
     TotalN3x = total - n3x_amount;
   }}
 
-  kotoage fn mirror_state() {{
-    state_set(name("hub_initialized_readback"), encode_int(HubInitialized));
-    state_set(name("basket_usdt_readback"), encode_int(BasketUsdt));
-    state_set(name("basket_usdc_readback"), encode_int(BasketUsdc));
-    state_set(name("basket_kusd_readback"), encode_int(BasketKusd));
-    state_set(name("total_n3x_readback"), encode_int(TotalN3x));
+  view fn state_snapshot() -> (int, int, int, int, int) {{
+    return (HubInitialized, BasketUsdt, BasketUsdc, BasketKusd, TotalN3x);
   }}
 }}
 "#
@@ -228,32 +206,13 @@ seiyaku ContractCallN3xLikeTest {{
         .expect("compile contract call n3x-like test program")
 }
 
-#[tokio::test]
-async fn contracts_call_enqueues_transaction() {
-    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
-        eprintln!(
-            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
-        );
-        return;
-    }
-
-    let creds = iroha_torii::test_utils::random_authority();
-    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
-
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
-    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
-    #[cfg(feature = "telemetry")]
-    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
-    #[cfg(not(feature = "telemetry"))]
-    let telemetry = iroha_torii::MaybeTelemetry::disabled();
-
-    let app = Router::new()
+fn contract_test_app(
+    state: Arc<State>,
+    queue: Arc<Queue>,
+    chain_id: iroha_data_model::ChainId,
+    telemetry: iroha_torii::MaybeTelemetry,
+) -> Router {
+    Router::new()
         .route(
             "/v1/contracts/deploy",
             post({
@@ -316,7 +275,85 @@ async fn contracts_call_enqueues_transaction() {
                     .await
                 }
             }),
+        )
+        .route(
+            "/v1/contracts/view",
+            post({
+                let state = state.clone();
+                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
+                    iroha_torii::ContractViewDto,
+                >| async move {
+                    iroha_torii::handle_post_contract_view(
+                        state.clone(),
+                        iroha_torii::NoritoJson(req),
+                    )
+                    .await
+                }
+            }),
+        )
+}
+
+async fn run_contract_view(
+    app: &Router,
+    authority: &iroha_data_model::account::AccountId,
+    namespace: &str,
+    contract_id: &str,
+    entrypoint: &str,
+    payload: Option<&norito::json::Value>,
+) -> json::Value {
+    let body = iroha_torii::test_utils::contract_view_request_json(
+        authority,
+        namespace,
+        contract_id,
+        iroha_torii::test_utils::ContractViewOptions {
+            entrypoint: Some(entrypoint),
+            payload,
+            gas_limit: 10_000,
+        },
+    );
+    let req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/view")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), http::StatusCode::OK);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    json::from_slice(&bytes).expect("decode contract view response")
+}
+
+#[tokio::test]
+async fn contracts_call_enqueues_transaction() {
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+        eprintln!(
+            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
         );
+        return;
+    }
+
+    let creds = iroha_torii::test_utils::random_authority();
+    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
+
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(world, kura, query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let queue = Arc::new(Queue::from_config(queue_cfg, events));
+    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
+    #[cfg(feature = "telemetry")]
+    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
+    #[cfg(not(feature = "telemetry"))]
+    let telemetry = iroha_torii::MaybeTelemetry::disabled();
+
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
 
     let program = iroha_torii::test_utils::minimal_ivm_program(1);
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
@@ -618,70 +655,12 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     #[cfg(not(feature = "telemetry"))]
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
 
-    let app = Router::new()
-        .route(
-            "/v1/contracts/deploy",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::DeployContractDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_deploy(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/instance/activate",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ActivateInstanceDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_instance_activate(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/call",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ContractCallDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_call(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        );
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
 
     let program = contract_call_dispatch_program();
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
@@ -829,70 +808,12 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     #[cfg(not(feature = "telemetry"))]
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
 
-    let app = Router::new()
-        .route(
-            "/v1/contracts/deploy",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::DeployContractDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_deploy(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/instance/activate",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ActivateInstanceDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_instance_activate(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/call",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ContractCallDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_call(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        );
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
 
     let program = contract_call_declared_state_program();
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
@@ -985,37 +906,32 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
     assert_eq!(applied_asset, 1);
 
-    let mirror_body = iroha_torii::test_utils::contract_call_request_json(
+    let view_json = run_contract_view(
+        &app,
         &creds.account,
-        &creds.private_key,
         "apps",
         "declared.v1",
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("mirror_declared_state"),
-            payload: None,
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
+        "declared_state",
+        None,
+    )
+    .await;
+    let view_result = view_json
+        .get("result")
+        .and_then(json::Value::as_array)
+        .expect("view result array");
+    assert_eq!(
+        view_result.first().and_then(json::Value::as_i64),
+        Some(7),
+        "unexpected declared amount from view",
     );
-    let mirror_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(mirror_body))
-        .unwrap();
-    let mirror_resp = app.clone().oneshot(mirror_req).await.unwrap();
-    assert_eq!(mirror_resp.status(), http::StatusCode::OK);
-
-    let applied_mirror =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 5);
-    assert_eq!(applied_mirror, 1);
+    assert_eq!(
+        view_result.get(1).and_then(json::Value::as_str),
+        Some(asset_literal),
+        "unexpected declared asset from view",
+    );
 
     let call_amount_path: Name = "CallAmount".parse().expect("declared amount path");
     let call_asset_path: Name = "CallAsset".parse().expect("declared asset path");
-    let amount_readback_path: Name = "call_amount_readback"
-        .parse()
-        .expect("readback amount path");
-    let asset_readback_path: Name = "call_asset_readback".parse().expect("readback asset path");
 
     let view = state.view();
 
@@ -1045,38 +961,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         declared_asset,
         AssetDefinitionId::parse_address_literal(asset_literal).expect("asset definition literal")
     );
-
-    let amount_readback = view
-        .world
-        .smart_contract_state()
-        .get(&amount_readback_path)
-        .expect("stored amount readback");
-    let amount_readback_tlv =
-        ivm::pointer_abi::validate_tlv_bytes(amount_readback).expect("amount readback tlv");
-    let readback_amount: i64 =
-        norito::decode_from_bytes(amount_readback_tlv.payload).expect("decode readback amount");
-    assert_eq!(readback_amount, 7);
-
-    let asset_readback = view
-        .world
-        .smart_contract_state()
-        .get(&asset_readback_path)
-        .expect("stored asset readback");
-    let asset_readback_outer =
-        ivm::pointer_abi::validate_tlv_bytes(asset_readback).expect("asset readback tlv");
-    assert_eq!(asset_readback_outer.type_id, ivm::PointerType::NoritoBytes);
-    let asset_readback_inner = ivm::pointer_abi::validate_tlv_bytes(asset_readback_outer.payload)
-        .expect("inner asset readback tlv");
-    assert_eq!(
-        asset_readback_inner.type_id,
-        ivm::PointerType::AssetDefinitionId
-    );
-    let readback_asset: AssetDefinitionId =
-        norito::decode_from_bytes(asset_readback_inner.payload).expect("decode readback asset");
-    assert_eq!(
-        readback_asset,
-        AssetDefinitionId::parse_address_literal(asset_literal).expect("asset definition literal")
-    );
 }
 
 #[tokio::test]
@@ -1104,70 +988,12 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     #[cfg(not(feature = "telemetry"))]
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
 
-    let app = Router::new()
-        .route(
-            "/v1/contracts/deploy",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::DeployContractDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_deploy(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/instance/activate",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ActivateInstanceDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_instance_activate(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/call",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ContractCallDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_call(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        );
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
 
     let program = contract_call_declared_state_with_isi_program();
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
@@ -1233,35 +1059,24 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
     assert_eq!(applied_write, 1);
 
-    let mirror_body = iroha_torii::test_utils::contract_call_request_json(
+    let view_json = run_contract_view(
+        &app,
         &creds.account,
-        &creds.private_key,
         "apps",
         "declared_isi.v1",
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("mirror_declared_state"),
-            payload: None,
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
+        "declared_state",
+        None,
+    )
+    .await;
+    assert_eq!(
+        view_json
+            .get("result")
+            .and_then(json::Value::as_i64)
+            .expect("view int result"),
+        7
     );
-    let mirror_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(mirror_body))
-        .unwrap();
-    let mirror_resp = app.clone().oneshot(mirror_req).await.unwrap();
-    assert_eq!(mirror_resp.status(), http::StatusCode::OK);
-
-    let applied_mirror =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
-    assert_eq!(applied_mirror, 1);
 
     let declared_amount_path: Name = "CallAmount".parse().expect("declared amount path");
-    let readback_path: Name = "call_amount_readback"
-        .parse()
-        .expect("readback amount path");
     let view = state.view();
 
     let stored_amount = view
@@ -1273,17 +1088,6 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     let declared_amount: i64 =
         norito::decode_from_bytes(amount_tlv.payload).expect("decode declared amount");
     assert_eq!(declared_amount, 7);
-
-    let readback_amount = view
-        .world
-        .smart_contract_state()
-        .get(&readback_path)
-        .expect("stored readback amount");
-    let readback_tlv =
-        ivm::pointer_abi::validate_tlv_bytes(readback_amount).expect("readback amount tlv");
-    let mirrored_amount: i64 =
-        norito::decode_from_bytes(readback_tlv.payload).expect("decode mirrored amount");
-    assert_eq!(mirrored_amount, 7);
 }
 
 #[tokio::test]
@@ -1334,70 +1138,12 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     #[cfg(not(feature = "telemetry"))]
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
 
-    let app = Router::new()
-        .route(
-            "/v1/contracts/deploy",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::DeployContractDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_deploy(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/instance/activate",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ActivateInstanceDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_instance_activate(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/call",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ContractCallDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_call(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        );
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
 
     let program = contract_call_declared_state_with_mint_program();
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
@@ -1467,35 +1213,24 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
     assert_eq!(applied_write, 1);
 
-    let mirror_body = iroha_torii::test_utils::contract_call_request_json(
+    let view_json = run_contract_view(
+        &app,
         &creds.account,
-        &creds.private_key,
         "apps",
         "declared_mint.v1",
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("mirror_declared_state"),
-            payload: None,
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
+        "declared_state",
+        None,
+    )
+    .await;
+    assert_eq!(
+        view_json
+            .get("result")
+            .and_then(json::Value::as_i64)
+            .expect("view int result"),
+        7
     );
-    let mirror_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(mirror_body))
-        .unwrap();
-    let mirror_resp = app.clone().oneshot(mirror_req).await.unwrap();
-    assert_eq!(mirror_resp.status(), http::StatusCode::OK);
-
-    let applied_mirror =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
-    assert_eq!(applied_mirror, 1);
 
     let declared_amount_path: Name = "CallAmount".parse().expect("declared amount path");
-    let readback_path: Name = "call_amount_readback"
-        .parse()
-        .expect("readback amount path");
     let view = state.view();
 
     let stored_amount = view
@@ -1507,17 +1242,6 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     let declared_amount: i64 =
         norito::decode_from_bytes(amount_tlv.payload).expect("decode declared amount");
     assert_eq!(declared_amount, 7);
-
-    let readback_amount = view
-        .world
-        .smart_contract_state()
-        .get(&readback_path)
-        .expect("stored readback amount");
-    let readback_tlv =
-        ivm::pointer_abi::validate_tlv_bytes(readback_amount).expect("readback amount tlv");
-    let mirrored_amount: i64 =
-        norito::decode_from_bytes(readback_tlv.payload).expect("decode mirrored amount");
-    assert_eq!(mirrored_amount, 7);
 }
 
 #[tokio::test]
@@ -1568,70 +1292,12 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     #[cfg(not(feature = "telemetry"))]
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
 
-    let app = Router::new()
-        .route(
-            "/v1/contracts/deploy",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::DeployContractDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_deploy(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/instance/activate",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ActivateInstanceDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_instance_activate(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/call",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ContractCallDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_call(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        );
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
 
     let program = contract_call_n3x_like_program();
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
@@ -1728,49 +1394,24 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
     assert_eq!(applied_deposit, 1);
 
-    let mirror_body = iroha_torii::test_utils::contract_call_request_json(
+    let view_json = run_contract_view(
+        &app,
         &creds.account,
-        &creds.private_key,
         "apps",
         "n3x_like.v1",
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("mirror_state"),
-            payload: None,
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
-    );
-    let mirror_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(mirror_body))
-        .unwrap();
-    let mirror_resp = app.clone().oneshot(mirror_req).await.unwrap();
-    assert_eq!(mirror_resp.status(), http::StatusCode::OK);
-
-    let applied_mirror =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 5);
-    assert_eq!(applied_mirror, 1);
-
-    let view = state.view();
-    let check_readback = |path: &str, expected: i64| {
-        let state_path: Name = path.parse().expect("state path");
-        let stored = view
-            .world
-            .smart_contract_state()
-            .get(&state_path)
-            .expect("stored readback");
-        let tlv = ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored tlv");
-        let decoded: i64 = norito::decode_from_bytes(tlv.payload).expect("decode readback");
-        assert_eq!(decoded, expected, "unexpected value for {path}");
-    };
-
-    check_readback("hub_initialized_readback", 1);
-    check_readback("basket_usdt_readback", 1);
-    check_readback("basket_usdc_readback", 2);
-    check_readback("basket_kusd_readback", 3);
-    check_readback("total_n3x_readback", 6);
+        "state_snapshot",
+        None,
+    )
+    .await;
+    let snapshot = view_json
+        .get("result")
+        .and_then(json::Value::as_array)
+        .expect("state snapshot array");
+    assert_eq!(snapshot.first().and_then(json::Value::as_i64), Some(1));
+    assert_eq!(snapshot.get(1).and_then(json::Value::as_i64), Some(1));
+    assert_eq!(snapshot.get(2).and_then(json::Value::as_i64), Some(2));
+    assert_eq!(snapshot.get(3).and_then(json::Value::as_i64), Some(3));
+    assert_eq!(snapshot.get(4).and_then(json::Value::as_i64), Some(6));
 }
 
 #[tokio::test]
@@ -1821,70 +1462,12 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     #[cfg(not(feature = "telemetry"))]
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
 
-    let app = Router::new()
-        .route(
-            "/v1/contracts/deploy",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::DeployContractDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_deploy(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/instance/activate",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ActivateInstanceDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_instance_activate(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
-            "/v1/contracts/call",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ContractCallDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_call(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        );
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
 
     let program = contract_call_n3x_like_program();
     let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
@@ -2011,47 +1594,22 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 5);
     assert_eq!(applied_burn, 1);
 
-    let mirror_body = iroha_torii::test_utils::contract_call_request_json(
+    let view_json = run_contract_view(
+        &app,
         &creds.account,
-        &creds.private_key,
         "apps",
         "n3x_burn.v1",
-        iroha_torii::test_utils::ContractCallOptions {
-            entrypoint: Some("mirror_state"),
-            payload: None,
-            gas_asset_id: None,
-            gas_limit: 10_000,
-        },
-    );
-    let mirror_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/call")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(mirror_body))
-        .unwrap();
-    let mirror_resp = app.clone().oneshot(mirror_req).await.unwrap();
-    assert_eq!(mirror_resp.status(), http::StatusCode::OK);
-
-    let applied_mirror =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 6);
-    assert_eq!(applied_mirror, 1);
-
-    let view = state.view();
-    let check_readback = |path: &str, expected: i64| {
-        let state_path: Name = path.parse().expect("state path");
-        let stored = view
-            .world
-            .smart_contract_state()
-            .get(&state_path)
-            .expect("stored readback");
-        let tlv = ivm::pointer_abi::validate_tlv_bytes(stored).expect("stored tlv");
-        let decoded: i64 = norito::decode_from_bytes(tlv.payload).expect("decode readback");
-        assert_eq!(decoded, expected, "unexpected value for {path}");
-    };
-
-    check_readback("hub_initialized_readback", 1);
-    check_readback("basket_usdt_readback", 0);
-    check_readback("basket_usdc_readback", 0);
-    check_readback("basket_kusd_readback", 0);
-    check_readback("total_n3x_readback", 0);
+        "state_snapshot",
+        None,
+    )
+    .await;
+    let snapshot = view_json
+        .get("result")
+        .and_then(json::Value::as_array)
+        .expect("state snapshot array");
+    assert_eq!(snapshot.first().and_then(json::Value::as_i64), Some(1));
+    assert_eq!(snapshot.get(1).and_then(json::Value::as_i64), Some(0));
+    assert_eq!(snapshot.get(2).and_then(json::Value::as_i64), Some(0));
+    assert_eq!(snapshot.get(3).and_then(json::Value::as_i64), Some(0));
+    assert_eq!(snapshot.get(4).and_then(json::Value::as_i64), Some(0));
 }

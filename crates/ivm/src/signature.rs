@@ -5,7 +5,7 @@
 /// (Crystals Dilithium) verification.
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
 use iroha_crypto::{EcdsaSecp256k1Sha256, ed25519_verify_batch_deterministic};
-use pqcrypto_dilithium::dilithium3 as dilithium;
+use pqcrypto_mldsa::mldsa65 as dilithium;
 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 use sha2::{Digest as _, Sha512};
 

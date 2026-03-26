@@ -27,6 +27,7 @@ use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, init_instruction_registry,
 };
 use iroha_primitives::addr::{SocketAddr, SocketAddrHost};
+use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
 use iroha_version::BuildLine;
 
@@ -1745,6 +1746,59 @@ fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -
     requested.max(min_self_bond).max(1)
 }
 
+fn is_localnet_timing_parameter(parameter: &Parameter) -> bool {
+    matches!(
+        parameter,
+        Parameter::Sumeragi(
+            SumeragiParameter::MinFinalityMs(_)
+                | SumeragiParameter::BlockTimeMs(_)
+                | SumeragiParameter::CommitTimeMs(_)
+        )
+    )
+}
+
+fn ordered_localnet_parameters(previous: &Parameters, updated: &Parameters) -> Vec<Parameter> {
+    let previous_sumeragi = previous.sumeragi();
+    let updated_sumeragi = updated.sumeragi();
+    let min_finality = Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(
+        updated_sumeragi.min_finality_ms(),
+    ));
+    let block_time = Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(
+        updated_sumeragi.block_time_ms(),
+    ));
+    let commit_time = Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(
+        updated_sumeragi.commit_time_ms(),
+    ));
+
+    let mut ordered = Vec::new();
+
+    // These three parameters are validated incrementally during genesis parsing,
+    // so emit them in an order that preserves min_finality <= block_time <= commit_time
+    // throughout the transition from the previous snapshot to the updated one.
+    if updated_sumeragi.commit_time_ms() >= previous_sumeragi.commit_time_ms() {
+        ordered.push(commit_time.clone());
+    }
+    if updated_sumeragi.min_finality_ms() <= previous_sumeragi.min_finality_ms() {
+        ordered.push(min_finality.clone());
+    }
+
+    ordered.push(block_time);
+    ordered.extend(
+        updated
+            .parameters()
+            .filter(|parameter| !is_localnet_timing_parameter(parameter)),
+    );
+
+    if updated_sumeragi.min_finality_ms() > previous_sumeragi.min_finality_ms() {
+        ordered.push(min_finality);
+    }
+    if updated_sumeragi.commit_time_ms() < previous_sumeragi.commit_time_ms() {
+        ordered.push(commit_time);
+    }
+
+    ordered
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_parameter_overrides(
     genesis: RawGenesisTransaction,
@@ -1758,7 +1812,8 @@ fn apply_parameter_overrides(
 ) -> RawGenesisTransaction {
     let include_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
         || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
-    let mut parameters = genesis.effective_parameters();
+    let previous_parameters = genesis.effective_parameters();
+    let mut parameters = previous_parameters.clone();
     let block_max_transactions =
         NonZeroU64::new(block_max_transactions).expect("block_max_transactions must be non-zero");
     let should_update = block_time_ms.is_some()
@@ -1788,18 +1843,21 @@ fn apply_parameter_overrides(
         apply_localnet_npos_overrides(&mut parameters, redundant_send_r, collectors_k);
     }
 
-    // Use structured parameters so overrides land in the manifest parameters block.
-    let mut builder = genesis.into_builder().next_transaction();
-    for parameter in parameters.parameters() {
-        builder = builder.append_parameter(parameter);
-    }
+    let mut builder = genesis.into_builder();
+    let mut pending_parameters = ordered_localnet_parameters(&previous_parameters, &parameters);
     if let Some(mode) = parameters.sumeragi().next_mode() {
-        builder = builder.append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(mode)));
+        pending_parameters.push(Parameter::Sumeragi(SumeragiParameter::NextMode(mode)));
     }
     if let Some(height) = parameters.sumeragi().mode_activation_height() {
-        builder = builder.append_parameter(Parameter::Sumeragi(
+        pending_parameters.push(Parameter::Sumeragi(
             SumeragiParameter::ModeActivationHeight(height),
         ));
+    }
+    if !pending_parameters.is_empty() {
+        builder = builder.next_transaction();
+        for parameter in pending_parameters {
+            builder = builder.append_parameter(parameter);
+        }
     }
 
     builder.build_raw()
@@ -1859,11 +1917,15 @@ fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesis
 
 fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGenesisTransaction {
     let enact_governance: Permission = CanEnactGovernance.into();
+    let manage_offline_escrow = Permission::new("CanManageOfflineEscrow".into(), Json::new(()));
     genesis
         .into_builder()
-        .next_transaction()
         .append_instruction(Grant::account_permission(
             enact_governance,
+            ALICE_ID.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            manage_offline_escrow,
             ALICE_ID.clone(),
         ))
         .build_raw()
@@ -3625,6 +3687,89 @@ mod tests {
     }
 
     #[test]
+    fn npos_localnet_emits_timing_overrides_in_safe_batch_order() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(2).expect("non-zero"),
+            seed: Some("npos-timeouts".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 38080,
+            base_p2p_port: 38337,
+            out_dir: tempfile::tempdir().expect("tmp dir").path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: Some(1_200),
+            commit_time_ms: Some(1_600),
+            redundant_send_r: Some(3),
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let normalized = localnet_genesis_for_opts(&opts)
+            .normalize()
+            .expect("localnet manifest should normalize");
+        let ((commit_batch, commit_idx), (block_batch, block_idx)) = normalized
+            .transactions
+            .iter()
+            .enumerate()
+            .find_map(|(batch_idx, tx)| {
+                let mut commit = None;
+                let mut block = None;
+                for (idx, instruction) in tx.iter().enumerate() {
+                    let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                    else {
+                        continue;
+                    };
+                    match set_parameter.inner() {
+                        Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1_600)) => {
+                            commit = Some(idx);
+                        }
+                        Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1_200)) => {
+                            block = Some(idx);
+                        }
+                        _ => {}
+                    }
+                }
+                commit
+                    .map(|instr_idx| ((batch_idx, instr_idx), block.map(|b| (batch_idx, b))))
+                    .and_then(|(commit_pos, block_pos)| block_pos.map(|pos| (commit_pos, pos)))
+            })
+            .or_else(|| {
+                let mut commit_pos = None;
+                let mut block_pos = None;
+                for (batch_idx, tx) in normalized.transactions.iter().enumerate() {
+                    for (idx, instruction) in tx.iter().enumerate() {
+                        let Some(set_parameter) =
+                            instruction.as_any().downcast_ref::<SetParameter>()
+                        else {
+                            continue;
+                        };
+                        match set_parameter.inner() {
+                            Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(1_600)) => {
+                                commit_pos = Some((batch_idx, idx));
+                            }
+                            Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(1_200)) => {
+                                block_pos = Some((batch_idx, idx));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                commit_pos.zip(block_pos)
+            })
+            .expect("normalized localnet manifest should contain override timing parameters");
+
+        assert!(
+            commit_batch < block_batch || (commit_batch == block_batch && commit_idx < block_idx),
+            "commit_time_ms override must be applied before block_time_ms when raising both"
+        );
+    }
+
+    #[test]
     fn npos_localnet_keeps_payload_for_fast_block_time() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
@@ -3662,6 +3807,44 @@ mod tests {
             .expect("npos parameters must be present");
         assert_eq!(npos.seat_band_pct(), 100);
         assert_eq!(npos.min_self_bond(), 1);
+    }
+
+    #[test]
+    fn npos_localnet_keeps_genesis_under_transaction_cap() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(2).expect("non-zero"),
+            seed: Some("npos-genesis-cap".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 38280,
+            base_p2p_port: 38537,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: Some(333),
+            commit_time_ms: Some(667),
+            redundant_send_r: Some(3),
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let genesis_path = temp.path().join("genesis.json");
+        let manifest = genesis_json_from_path(&genesis_path);
+        let transactions = manifest
+            .get("transactions")
+            .and_then(json::Value::as_array)
+            .expect("genesis transactions");
+        assert!(
+            transactions.len() <= 16,
+            "localnet genesis must stay within the block validation transaction cap"
+        );
     }
 
     #[test]

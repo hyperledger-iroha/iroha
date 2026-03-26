@@ -1,7 +1,7 @@
 //! PQC (Dilithium3) deterministic batch verification tests.
 
 use iroha_crypto::{Algorithm, KeyPair, pqc_verify_batch_deterministic};
-use pqcrypto_dilithium::dilithium3 as dilithium;
+use pqcrypto_mldsa::mldsa65 as dilithium;
 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, SecretKey as _};
 
 #[test]

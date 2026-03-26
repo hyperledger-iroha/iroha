@@ -36,7 +36,7 @@ Qanunilik və "əsas qutu" qiymətləndirməsi (diqqət mərkəzində):
 - AEAD/Simmetrik: `aes-gcm`, `chacha20poly1305`, `aead` əlamətləri (RustCrypto) — kanonik.
 - İmzalar/ECC: `ed25519-dalek`, `x25519-dalek` (dalek layihəsi), `k256` (RustCrypto), `secp256k1` (libsecp bağlamaları) — hamısı qanunidir; səth sahəsini azaltmaq üçün tək secp256k1 yığınına (saf Rust üçün `k256` və ya libsecp üçün `secp256k1`) üstünlük verin.
 - BLS12-381/ZK: `blstrs`, `halo2_*` — istehsalatda geniş istifadə olunan ZK ekosistemləri; qanuni.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — qanuni istinad qutuları.
+- PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — qanuni istinad qutuları.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — kanonik müasir Rust TLS yığını.
 - Səs-küy: `snow` - kanonik tətbiq.
 - Serializasiya: `parity-scale-codec` SCALE üçün kanonikdir. Serde iş sahəsində istehsal asılılıqlarından silindi; Norito hər bir iş vaxtı yolunu əhatə edir/yazarlar. İstənilən qalıq Serde istinadları tarixi sənədlərdə, qoruyucu skriptlərdə və ya yalnız sınaq icazəli siyahılarda yaşayır.

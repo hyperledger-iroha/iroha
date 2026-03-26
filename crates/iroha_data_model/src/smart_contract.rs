@@ -594,6 +594,12 @@ pub mod manifest {
         pub name: String,
         /// Logical kind: `kotoage`, `hajimari`, or `kaizen`.
         pub kind: EntryPointKind,
+        /// Ordered public parameters advertised by the compiler.
+        #[norito(default)]
+        pub params: Vec<EntrypointParamDescriptor>,
+        /// Declared return type for this entrypoint, when present.
+        #[norito(default)]
+        pub return_type: Option<String>,
         /// Permission required by the dispatcher before invoking this entrypoint.
         #[norito(default)]
         pub permission: Option<String>,
@@ -612,6 +618,25 @@ pub mod manifest {
         /// Trigger declarations that call this entrypoint.
         #[norito(default)]
         pub triggers: Vec<TriggerDescriptor>,
+    }
+
+    /// Declarative parameter metadata for a public or view entrypoint.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct EntrypointParamDescriptor {
+        /// Stable parameter name as declared in the Kotodama source file.
+        pub name: String,
+        /// Canonical type name advertised to clients.
+        pub type_name: String,
     }
 
     /// Localized message text for a specific language tag.
@@ -717,6 +742,8 @@ pub mod manifest {
     pub enum EntryPointKind {
         /// Public dispatcher entrypoint (`kotoage fn`).
         Public,
+        /// Read-only query entrypoint (`view fn`).
+        View,
         /// Deployment initializer (`hajimari`).
         Hajimari,
         /// Upgrade hook (`kaizen`).
@@ -838,6 +865,11 @@ pub mod manifest {
             let entrypoint = EntrypointDescriptor {
                 name: "run".to_string(),
                 kind: EntryPointKind::Public,
+                params: vec![EntrypointParamDescriptor {
+                    name: "amount".to_string(),
+                    type_name: "Amount".to_string(),
+                }],
+                return_type: Some("int".to_string()),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),

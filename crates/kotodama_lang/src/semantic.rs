@@ -147,6 +147,7 @@ thread_local! {
     static STATE_ENV: RefCell<IndexMap<String, Type>> = RefCell::new(IndexMap::new());
     static FUNCTION_RETURNS: RefCell<HashMap<String, Type>> = RefCell::new(HashMap::new());
     static FUNCTION_SUMMARY: RefCell<HashMap<String, FunctionSummary>> = RefCell::new(HashMap::new());
+    static CURRENT_FUNCTION_MODIFIERS: RefCell<Option<FunctionModifiers>> = const { RefCell::new(None) };
 }
 
 const SENSITIVE_SYSCALLS: &[&str] = &[
@@ -190,6 +191,9 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     let mut fn_modifiers: HashMap<String, FunctionModifiers> = HashMap::new();
     let mut kotoba_entries: Vec<KotobaEntry> = Vec::new();
     FUNCTION_SUMMARY.with(|map| map.borrow_mut().clear());
+    CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+        mods.borrow_mut().take();
+    });
     for item in &program.items {
         match item {
             Item::Struct(def) => {
@@ -350,6 +354,10 @@ fn type_name(ty: &Type) -> String {
         Type::Struct { name, .. } => format!("struct {name}"),
         Type::Opaque(s) => s.clone(),
     }
+}
+
+pub fn render_type_name(ty: &Type) -> String {
+    type_name(ty)
 }
 
 fn trigger_data_family_name(family: TriggerDataFamily) -> &'static str {
@@ -991,6 +999,14 @@ fn analyze_trigger(
             ),
         });
     }
+    if modifiers.kind == FunctionKind::View {
+        return Err(SemanticError {
+            message: format!(
+                "trigger `{}` cannot target read-only view entrypoint `{entry}`",
+                trigger.name
+            ),
+        });
+    }
 
     let filter = match &trigger.filter {
         TriggerFilter::Time(time) => {
@@ -1512,6 +1528,7 @@ fn bind_tuple_fields_rec(
 fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
     let mut vars = HashMap::new();
     let mut param_names = Vec::new();
+    let mut param_types = Vec::new();
     // Seed variable environment with contract-level state declarations so
     // functions can reference `state` names directly.
     STATE_ENV.with(|env| {
@@ -1522,11 +1539,18 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
     for param in &func.params {
         ensure_not_state_shadow(&param.name)?;
         let ty = parse_declared_param_type(&param.ty, &param.name)?;
-        vars.insert(param.name.clone(), ty);
+        vars.insert(param.name.clone(), ty.clone());
         param_names.push(param.name.clone());
+        param_types.push((param.name.clone(), ty));
     }
     let expected_ret = parse_declared_type(&func.ret_ty)?;
-    let body = analyze_block(&func.body, &mut vars, expected_ret.as_ref(), 0)?;
+    let previous_modifiers =
+        CURRENT_FUNCTION_MODIFIERS.with(|mods| mods.borrow_mut().replace(func.modifiers.clone()));
+    let body_result = analyze_block(&func.body, &mut vars, expected_ret.as_ref(), 0);
+    CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+        *mods.borrow_mut() = previous_modifiers;
+    });
+    let body = body_result?;
     // Enforce declared return coverage and shape
     if let Some(t) = &expected_ret {
         if *t != Type::Unit && !block_returns_all_paths(&func.body) {
@@ -1552,10 +1576,28 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
     Ok(TypedFunction {
         name: func.name.clone(),
         params: param_names,
+        param_types,
         body,
         ret_ty: expected_ret,
         modifiers: func.modifiers.clone(),
     })
+}
+
+fn reject_legacy_public_payload_builtin(name: &str) -> Result<(), SemanticError> {
+    let forbidden = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+        mods.borrow().as_ref().is_some_and(|modifiers| {
+            modifiers.visibility == FunctionVisibility::Public
+                || modifiers.kind == FunctionKind::View
+        })
+    });
+    if forbidden {
+        return Err(SemanticError {
+            message: format!(
+                "public and view entrypoints cannot use legacy payload builtin `{name}`; declare typed parameters instead"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn analyze_block(
@@ -3404,6 +3446,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 // Current trigger event payload as Json (data/by-call triggers).
                 "trigger_event" => {
+                    reject_legacy_public_payload_builtin(name.as_str())?;
                     if !arg_typed.is_empty() {
                         return Err(SemanticError {
                             message: "trigger_event expects no arguments".into(),
@@ -3829,6 +3872,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "json_get_int" => {
+                    reject_legacy_public_payload_builtin(name.as_str())?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -3846,6 +3890,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "json_get_numeric" => {
+                    reject_legacy_public_payload_builtin(name.as_str())?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -3863,6 +3908,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "json_get_json" => {
+                    reject_legacy_public_payload_builtin(name.as_str())?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -3880,6 +3926,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "json_get_name" => {
+                    reject_legacy_public_payload_builtin(name.as_str())?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -3897,6 +3944,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "json_get_account_id" => {
+                    reject_legacy_public_payload_builtin(name.as_str())?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -3914,6 +3962,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "json_get_asset_definition_id" => {
+                    reject_legacy_public_payload_builtin(name.as_str())?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -3931,6 +3980,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "json_get_nft_id" => {
+                    reject_legacy_public_payload_builtin(name.as_str())?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -3948,6 +3998,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "json_get_blob_hex" => {
+                    reject_legacy_public_payload_builtin(name.as_str())?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -5130,6 +5181,7 @@ pub struct TypedTrigger {
 pub struct TypedFunction {
     pub name: String,
     pub params: Vec<String>,
+    pub param_types: Vec<(String, Type)>,
     pub body: TypedBlock,
     pub ret_ty: Option<Type>,
     pub modifiers: FunctionModifiers,
@@ -5555,16 +5607,23 @@ fn enforce_permission_requirements(items: &[TypedItem]) -> Result<(), SemanticEr
             .get(&func.name)
             .copied()
             .unwrap_or(false);
-        if needs_permission
-            && func.modifiers.visibility == FunctionVisibility::Public
-            && func.modifiers.permission.is_none()
-        {
-            return Err(SemanticError {
-                message: format!(
-                    "public function `{}` calls privileged operations but is missing `permission(...)`",
-                    func.name
-                ),
-            });
+        if needs_permission && func.modifiers.visibility == FunctionVisibility::Public {
+            if func.modifiers.kind == FunctionKind::View {
+                return Err(SemanticError {
+                    message: format!(
+                        "view function `{}` cannot call privileged operations",
+                        func.name
+                    ),
+                });
+            }
+            if func.modifiers.permission.is_none() {
+                return Err(SemanticError {
+                    message: format!(
+                        "public function `{}` calls privileged operations but is missing `permission(...)`",
+                        func.name
+                    ),
+                });
+            }
         }
     }
     Ok(())
@@ -5656,6 +5715,15 @@ fn expr_contains_sensitive_syscall(expr: &TypedExpr) -> bool {
 mod tests {
     use super::*;
     use crate::parser::parse;
+
+    fn sample_account_literal() -> String {
+        iroha_data_model::account::AccountId::new(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                .parse()
+                .expect("public key"),
+        )
+        .to_string()
+    }
 
     fn count_calls_expr(expr: &TypedExpr, name: &str) -> usize {
         match &expr.expr {
@@ -6230,6 +6298,36 @@ mod tests {
     }
 
     #[test]
+    fn public_entrypoints_reject_trigger_event() {
+        let program = parse(
+            "seiyaku Demo { #[access(read=\"*\", write=\"*\")] kotoage fn f() { let _ev = trigger_event(); } }",
+        )
+        .expect("parse public trigger_event");
+        let err = analyze(&program).expect_err("public trigger_event should fail");
+        assert!(
+            err.message
+                .contains("cannot use legacy payload builtin `trigger_event`"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_json_get_helpers() {
+        let program = parse(
+            "seiyaku Demo { #[access(read=\"*\", write=\"*\")] view fn f(ev: Json) -> int { return json_get_int(ev, name(\"n\")); } }",
+        )
+        .expect("parse view json_get");
+        let err = analyze(&program).expect_err("view json_get should fail");
+        assert!(
+            err.message
+                .contains("cannot use legacy payload builtin `json_get_int`"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn resolve_account_alias_accepts_canonical_string() {
         let program = parse("fn f() { let _acct = resolve_account_alias(\"banking@sbp\"); }")
             .expect("parse resolve_account_alias");
@@ -6325,20 +6423,21 @@ mod tests {
     fn trigger_decl_builds_typed_metadata() {
         use iroha_data_model::account::AccountId;
 
-        let program = parse(
+        let authority_literal = sample_account_literal();
+        let program = parse(&format!(
             r#"
-            seiyaku C {
-                kotoage fn run() {}
-                register_trigger wake {
+            seiyaku C {{
+                kotoage fn run() {{}}
+                register_trigger wake {{
                     call run;
                     on time pre_commit;
                     repeats 2;
-                    authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-                    metadata { tag: "alpha"; count: 1; enabled: true; }
-                }
-            }
+                    authority "{authority_literal}";
+                    metadata {{ tag: "alpha"; count: 1; enabled: true; }}
+                }}
+            }}
             "#,
-        )
+        ))
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
         assert_eq!(typed.triggers.len(), 1);
@@ -6349,7 +6448,7 @@ mod tests {
         assert_eq!(
             trigger.authority,
             Some(
-                AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                AccountId::parse_encoded(authority_literal.as_str())
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .expect("authority literal"),
             )
@@ -6436,8 +6535,8 @@ mod tests {
             trigger::TriggerId,
         };
 
-        let account_literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-        let account = AccountId::parse_encoded(account_literal)
+        let account_literal = sample_account_literal();
+        let account = AccountId::parse_encoded(account_literal.as_str())
             .map(ParsedAccountId::into_account_id)
             .expect("account");
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";

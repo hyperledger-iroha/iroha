@@ -1359,15 +1359,19 @@ impl Actor {
                     .propose
                     .proposal_cache
                     .insert_hint(proposal_hint);
-                let block_created = self.frontier_block_created_for_wire(&signed_block);
-                if block_created.frontier.is_none() {
+                let Some(block_created) =
+                    self.frontier_block_created_for_proposal_wire(&signed_block, &proposal)
+                else {
                     warn!(
                         height = proposal_height,
                         view,
                         block = %block_hash,
-                        "emitting BlockCreated without frontier metadata for active proposal"
+                        "aborting active proposal because frontier metadata could not be rebuilt"
                     );
-                }
+                    return Err(eyre!(
+                        "failed to rebuild authoritative frontier metadata for active proposal"
+                    ));
+                };
                 let block_created_msg = BlockMessage::BlockCreated(block_created);
                 let frame_len = super::consensus_block_wire_len(
                     self.common_config.peer.id(),
@@ -1927,16 +1931,17 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let block_created = self.frontier_block_created_for_wire(&pending_block);
-        if block_created.frontier.is_none() {
+        let Some(block_created) =
+            self.frontier_block_created_for_proposal_wire(&pending_block, &proposal)
+        else {
             warn!(
                 height,
                 view,
                 block = %block_hash,
-                "rebroadcasting BlockCreated without frontier metadata"
+                "skipping cached proposal rebroadcast because frontier metadata could not be rebuilt"
             );
-        }
-        let frontier_block_created_ready = block_created.frontier.is_some();
+            return;
+        };
         let block_msg = Arc::new(BlockMessage::BlockCreated(block_created));
         let block_encoded = Arc::new(BlockMessageWire::encode_message(block_msg.as_ref()));
         for peer in topology.iter() {
@@ -1951,24 +1956,6 @@ impl Actor {
                 ),
             });
         }
-        if !frontier_block_created_ready {
-            let proposal_msg = Arc::new(BlockMessage::Proposal(proposal));
-            let proposal_encoded =
-                Arc::new(BlockMessageWire::encode_message(proposal_msg.as_ref()));
-            for peer in topology.iter() {
-                if peer == &local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessageWire::with_encoded(
-                        Arc::clone(&proposal_msg),
-                        Arc::clone(&proposal_encoded),
-                    ),
-                });
-            }
-        }
-
         if pending_queue_len > 0 {
             iroha_logger::info!(
                 height,
@@ -2715,12 +2702,7 @@ impl Actor {
             return false;
         }
 
-        if self
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view_idx))
-        {
+        if self.slot_has_proposal_evidence(height, view_idx) {
             if pending_queue_len > 0 {
                 debug!(
                     height,

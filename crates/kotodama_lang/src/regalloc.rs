@@ -18,8 +18,8 @@ pub struct Allocation {
 pub const ARG_REGS: [usize; 13] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
 /// r10 also holds the first return value.
 pub const RET_REG: usize = 10;
-/// ABI limit for multi-value returns carried in r10..r17.
-pub const MAX_RETURN_VALUES: usize = 8;
+/// ABI limit for multi-value returns carried in r10..r22.
+pub const MAX_RETURN_VALUES: usize = ARG_REGS.len();
 /// r31 acts as the stack pointer.
 pub const SP_REG: usize = 31;
 /// r30 may be used as a frame pointer.

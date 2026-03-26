@@ -1023,16 +1023,51 @@ impl Actor {
     }
 
     pub(super) fn slot_has_proposal_evidence(&self, height: u64, view: u64) -> bool {
-        self.subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view))
+        self.slot_has_authoritative_payload(height, view)
+            || self
+                .subsystems
+                .propose
+                .proposals_seen
+                .contains(&(height, view))
             || self
                 .subsystems
                 .propose
                 .proposal_cache
                 .get_proposal(height, view)
                 .is_some()
+            || self
+                .authoritative_slot_owner_hash(height, view)
+                .and_then(|block_hash| {
+                    self.authoritative_slot_frontier_info(height, view, block_hash)
+                })
+                .is_some()
+            || self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height
+                    && slot.view == view
+                    && slot.block_created_seen
+                    && slot.frontier_info.is_some()
+            })
+    }
+
+    fn locally_authoritative_frontier_info_for_block(
+        &self,
+        block: &SignedBlock,
+    ) -> Option<super::message::BlockCreatedFrontierInfo> {
+        let header = block.header();
+        self.authoritative_slot_frontier_info(
+            header.height().get(),
+            header.view_change_index(),
+            block.hash(),
+        )
+        .or_else(|| {
+            self.frontier_slot.as_ref().and_then(|slot| {
+                (slot.block_hash == block.hash()
+                    && slot.height == header.height().get()
+                    && slot.view == header.view_change_index())
+                .then(|| slot.frontier_info.clone())
+                .flatten()
+            })
+        })
     }
 
     pub(super) fn frontier_block_created_from_proposal(
@@ -1060,42 +1095,49 @@ impl Actor {
             header.height().get(),
             header.view_change_index(),
         );
-        let roster = self.rbc_roster_for_session(key);
-        if roster.is_empty() {
-            debug!(
-                height = header.height().get(),
-                view = header.view_change_index(),
-                block = %block.hash(),
-                "skipping frontier BlockCreated manifest build: vote roster unavailable"
-            );
-            return None;
-        }
-        let session = match Self::build_rbc_session_from_payload(
-            &payload_bytes,
-            payload_hash,
-            self.config.rbc.chunk_max_bytes,
-            proposal.header.epoch,
-        ) {
-            Ok(session) => session,
-            Err(err) => {
+        let rebuilt_init = match self.rebuild_rbc_init_from_block(block, key) {
+            Some(init) => init,
+            None => {
                 debug!(
                     height = header.height().get(),
                     view = header.view_change_index(),
                     block = %block.hash(),
-                    error = %err,
-                    "skipping frontier BlockCreated manifest build: payload manifest unavailable"
+                    "skipping frontier BlockCreated manifest build: deterministic RBC INIT unavailable"
                 );
                 return None;
             }
         };
-        let chunk_digests = session.expected_chunk_digests.clone()?;
-        let chunk_root = session.expected_chunk_root?;
+        if rebuilt_init.payload_hash != payload_hash {
+            debug!(
+                height = header.height().get(),
+                view = header.view_change_index(),
+                block = %block.hash(),
+                expected = ?payload_hash,
+                observed = ?rebuilt_init.payload_hash,
+                "skipping frontier BlockCreated manifest build: rebuilt payload hash mismatches local block payload"
+            );
+            return None;
+        }
+        if rebuilt_init.epoch != proposal.header.epoch {
+            debug!(
+                height = header.height().get(),
+                view = header.view_change_index(),
+                block = %block.hash(),
+                expected_epoch = proposal.header.epoch,
+                observed_epoch = rebuilt_init.epoch,
+                "skipping frontier BlockCreated manifest build: rebuilt epoch mismatches proposal epoch"
+            );
+            return None;
+        }
         let leader_signature = block
             .signatures()
             .find(|signature| signature.index() == u64::from(proposal.header.proposer))
             .cloned()
             .or_else(|| {
-                let signature = block.signatures().next().cloned();
+                let signature = (rebuilt_init.leader_signature.index()
+                    == u64::from(proposal.header.proposer))
+                .then(|| rebuilt_init.leader_signature.clone())
+                .or_else(|| block.signatures().next().cloned());
                 if signature.is_some() {
                     debug!(
                         height = header.height().get(),
@@ -1112,16 +1154,36 @@ impl Actor {
             payload_hash,
             proposer: proposal.header.proposer,
             epoch: proposal.header.epoch,
-            roster_hash: super::rbc::rbc_roster_hash(&roster),
-            total_chunks: session.total_chunks(),
-            chunk_digests,
-            chunk_root,
+            roster_hash: rebuilt_init.roster_hash,
+            total_chunks: rebuilt_init.total_chunks,
+            chunk_digests: rebuilt_init.chunk_digests,
+            chunk_root: rebuilt_init.chunk_root,
             leader_signature,
         };
         Some(super::message::BlockCreated::with_frontier(
             block.clone(),
             frontier,
         ))
+    }
+
+    pub(super) fn frontier_block_created_for_proposal_wire(
+        &self,
+        block: &SignedBlock,
+        proposal: &crate::sumeragi::consensus::Proposal,
+    ) -> Option<super::message::BlockCreated> {
+        self.frontier_block_created_from_proposal(block, proposal)
+            .or_else(|| {
+                self.locally_authoritative_frontier_info_for_block(block)
+                    .filter(|frontier| {
+                        frontier.payload_hash == proposal.payload_hash
+                            && frontier.highest_qc == proposal.header.highest_qc
+                            && frontier.proposer == proposal.header.proposer
+                            && frontier.epoch == proposal.header.epoch
+                    })
+                    .map(|frontier| {
+                        super::message::BlockCreated::with_frontier(block.clone(), frontier)
+                    })
+            })
     }
 
     pub(super) fn frontier_block_created_for_wire(
@@ -1134,24 +1196,11 @@ impl Actor {
             .propose
             .proposal_cache
             .get_proposal(header.height().get(), header.view_change_index())
-            .and_then(|proposal| self.frontier_block_created_from_proposal(block, proposal))
+            .and_then(|proposal| self.frontier_block_created_for_proposal_wire(block, proposal))
         {
             return created;
         }
-        if let Some(frontier) = self.authoritative_slot_frontier_info(
-            header.height().get(),
-            header.view_change_index(),
-            block.hash(),
-        ) {
-            return super::message::BlockCreated::with_frontier(block.clone(), frontier);
-        }
-        if let Some(frontier) = self.frontier_slot.as_ref().and_then(|slot| {
-            (slot.block_hash == block.hash()
-                && slot.height == header.height().get()
-                && slot.view == header.view_change_index())
-            .then(|| slot.frontier_info.clone())
-            .flatten()
-        }) {
+        if let Some(frontier) = self.locally_authoritative_frontier_info_for_block(block) {
             return super::message::BlockCreated::with_frontier(block.clone(), frontier);
         }
         super::message::BlockCreated::from(block)
@@ -1196,11 +1245,19 @@ impl Actor {
         self.subsystems
             .propose
             .authoritative_block_slots
-            .retain(|(entry_height, _), _| *entry_height > committed_height);
+            .retain(|(entry_height, _), _| {
+                *entry_height
+                    >= active_height
+                        .saturating_sub(super::AUTHORITATIVE_FRONTIER_WIRE_HEIGHT_WINDOW)
+            });
         self.subsystems
             .propose
             .authoritative_block_frontiers
-            .retain(|(entry_height, _, _), _| *entry_height > committed_height);
+            .retain(|(entry_height, _, _), _| {
+                *entry_height
+                    >= active_height
+                        .saturating_sub(super::AUTHORITATIVE_FRONTIER_WIRE_HEIGHT_WINDOW)
+            });
     }
 
     pub(super) fn missing_proposal_context(
@@ -1256,33 +1313,26 @@ impl Actor {
         if height <= 1 {
             return;
         }
-        if self.slot_has_authoritative_payload(height, view) {
+        if self.slot_has_proposal_evidence(height, view) {
             return;
         }
-        if !self
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view))
-        {
-            let context = self.missing_proposal_context(height, view);
-            iroha_logger::error!(
-                height,
-                view,
-                trigger = reason,
-                hint_seen = context.hint_seen,
-                proposal_cached = context.proposal_cached,
-                pending_blocks = context.pending_blocks,
-                pending_match = context.pending_match,
-                pending_gate = ?context.pending_gate,
-                pending_validation = ?context.pending_validation,
-                pending_age_ms = ?context.pending_age_ms,
-                commit_inflight = ?context.commit_inflight,
-                forced_view_after_timeout = ?context.forced_view_after_timeout,
-                da_enabled = context.da_enabled,
-                "no proposal observed for view before changing view"
-            );
-        }
+        let context = self.missing_proposal_context(height, view);
+        iroha_logger::error!(
+            height,
+            view,
+            trigger = reason,
+            hint_seen = context.hint_seen,
+            proposal_cached = context.proposal_cached,
+            pending_blocks = context.pending_blocks,
+            pending_match = context.pending_match,
+            pending_gate = ?context.pending_gate,
+            pending_validation = ?context.pending_validation,
+            pending_age_ms = ?context.pending_age_ms,
+            commit_inflight = ?context.commit_inflight,
+            forced_view_after_timeout = ?context.forced_view_after_timeout,
+            da_enabled = context.da_enabled,
+            "no proposal observed for view before changing view"
+        );
     }
 
     /// Drop cached branch state at `height` that does not extend `locked_parent_hash`.

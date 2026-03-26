@@ -1043,6 +1043,7 @@ pub(crate) fn fallback_config() -> Config {
         torii_api_version: defaults::torii::API_DEFAULT_VERSION.to_string(),
         torii_api_min_proof_version: defaults::torii::API_MIN_PROOF_VERSION.to_string(),
         connect_queue_root: iroha::config::default_connect_queue_root(),
+        soracloud_http_witness_file: None,
         sorafs_alias_cache: alias_cache,
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: SorafsRolloutPhase::Default,
@@ -1083,6 +1084,10 @@ fn config_to_json(config: &Config) -> Result<norito::json::Value> {
         (
             "transaction_add_nonce",
             json_utils::json_value(&config.transaction_add_nonce)?,
+        ),
+        (
+            "soracloud_http_witness_file",
+            json_utils::json_value(&config.soracloud_http_witness_file)?,
         ),
     ])
 }
@@ -7689,6 +7694,7 @@ transaction_status_timeout = "77s"
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
                 connect_queue_root: iroha::config::default_connect_queue_root(),
+                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),

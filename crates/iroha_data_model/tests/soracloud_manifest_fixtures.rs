@@ -27,12 +27,12 @@ use iroha_data_model::{
         SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         SORA_SERVICE_MANIFEST_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
         SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
-        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1,
-        SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
-        SoraLifecycleHooksV1, SoraMailboxContractV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
-        SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceHandlerClassV1,
-        SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
-        SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
+        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportV1,
+        SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+        SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraMailboxContractV1, SoraNetworkPolicyV1,
+        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
     },
 };
 #[cfg(feature = "json")]
@@ -134,6 +134,7 @@ fn expected_container_manifest() -> SoraContainerManifestV1 {
         ]),
         required_config_names: Vec::new(),
         required_secret_names: Vec::new(),
+        config_exports: Vec::<SoraConfigExportV1>::new(),
         capabilities: SoraCapabilityPolicyV1 {
             network: SoraNetworkPolicyV1::Allowlist(vec![
                 "api.sora.internal".to_string(),

@@ -57,6 +57,9 @@ pub struct Root {
     #[config(nested)]
     /// SoraFS-specific configuration.
     pub sorafs: Sorafs,
+    #[config(nested)]
+    /// Soracloud-specific client behavior.
+    pub soracloud: Soracloud,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -131,6 +134,7 @@ impl Root {
                 },
             connect: Connect { queue_root },
             sorafs,
+            soracloud,
         } = self;
 
         let mut emitter = Emitter::new();
@@ -270,6 +274,7 @@ impl Root {
             rollout_phase,
             anonymity_policy,
         } = sorafs;
+        let Soracloud { http_witness_file } = soracloud;
 
         let alias_policy = alias_cache.into_policy();
         let rollout_phase_value =
@@ -317,6 +322,7 @@ impl Root {
             transaction_status_timeout: tx_timeout.into_value().get(),
             transaction_add_nonce: tx_add_nonce,
             connect_queue_root: queue_root_path,
+            soracloud_http_witness_file: http_witness_file,
             sorafs_alias_cache: alias_policy,
             sorafs_anonymity_policy: default_anonymity_policy,
             sorafs_rollout_phase: rollout_phase_value,
@@ -364,6 +370,21 @@ impl Default for Connect {
     fn default() -> Self {
         Self {
             queue_root: WithOrigin::inline(super::default_connect_queue_root()),
+        }
+    }
+}
+
+/// Soracloud-specific client settings.
+#[derive(Debug, Clone, ReadConfig)]
+pub struct Soracloud {
+    /// Optional path to a JSON canonical request witness used for multisig Soracloud HTTP.
+    pub http_witness_file: Option<PathBuf>,
+}
+
+impl Default for Soracloud {
+    fn default() -> Self {
+        Self {
+            http_witness_file: None,
         }
     }
 }
@@ -485,6 +506,7 @@ mod tests {
             },
             connect: Connect::default(),
             sorafs: Sorafs::default(),
+            soracloud: Soracloud::default(),
         }
     }
 
@@ -509,6 +531,17 @@ mod tests {
         let config = root.parse().expect("configuration should be valid");
 
         assert_eq!(config.torii_request_timeout, timeout);
+    }
+
+    #[test]
+    fn parse_preserves_soracloud_http_witness_file() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        let witness_file = PathBuf::from("/tmp/soracloud-witness.json");
+        root.soracloud.http_witness_file = Some(witness_file.clone());
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.soracloud_http_witness_file, Some(witness_file));
     }
 
     #[test]

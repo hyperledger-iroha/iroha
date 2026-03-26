@@ -11,6 +11,8 @@ fn entrypoint(
     ivm::EmbeddedEntrypointDescriptor {
         name: name.to_owned(),
         kind,
+        params: Vec::new(),
+        return_type: None,
         permission: None,
         read_keys: Vec::new(),
         write_keys: Vec::new(),

@@ -32,6 +32,8 @@ pub enum FunctionKind {
     Hajimari,
     /// Contract upgrade hook (`kaizen`).
     Kaizen,
+    /// Read-only public query entrypoint (`view fn`).
+    View,
 }
 
 /// Parsed modifiers associated with a function.

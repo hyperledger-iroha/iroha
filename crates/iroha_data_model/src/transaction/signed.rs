@@ -957,6 +957,8 @@ impl TransactionBuilder {
 
 #[cfg(test)]
 mod tests {
+    use norito::core::DecodeFromSlice;
+
     use super::*;
     use crate::{
         Domain, DomainId, Level,
@@ -1034,6 +1036,62 @@ mod tests {
         let decoded_inner: iroha_crypto::SignatureOf<TransactionPayload> =
             norito::core::decode_from_bytes(&inner_encoded).expect("decode inner signature");
         assert_eq!(decoded_inner, inner);
+    }
+
+    #[test]
+    fn signed_transaction_roundtrip_preserves_instruction_order() {
+        use crate::parameter::{Parameter, system::SumeragiParameter};
+
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let public_key: iroha_crypto::PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let authority = AccountId::new(public_key.clone());
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+
+        let ordered = vec![
+            InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::CommitTimeMs(667),
+            ))),
+            InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::MinFinalityMs(100),
+            ))),
+            InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::BlockTimeMs(333),
+            ))),
+            InstructionBox::from(crate::isi::SetParameter::new(Parameter::Block(
+                crate::parameter::BlockParameter::MaxTransactions(
+                    core::num::NonZeroU64::new(10_000).unwrap(),
+                ),
+            ))),
+        ];
+
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions(ordered.clone())
+            .sign(&private_key);
+
+        let bytes = norito::codec::encode_adaptive(&tx);
+        let (decoded, used): (SignedTransaction, usize) =
+            SignedTransaction::decode_from_slice(&bytes).expect("decode signed transaction");
+        assert_eq!(
+            used,
+            bytes.len(),
+            "signed transaction must consume full buffer"
+        );
+
+        let Executable::Instructions(actual) = decoded.instructions() else {
+            panic!("expected instruction executable after roundtrip");
+        };
+
+        let actual = actual.iter().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            actual, ordered,
+            "instruction order must survive signed transaction roundtrip"
+        );
     }
 
     #[test]

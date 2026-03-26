@@ -7,7 +7,7 @@ pub mod dilithium3 {
     };
 
     use hkdf::Hkdf;
-    use pqcrypto_dilithium::ffi;
+    use pqcrypto_mldsa::ffi;
     use sha2::Sha512;
     use zeroize::Zeroize;
 
@@ -72,11 +72,11 @@ pub mod dilithium3 {
 
     #[allow(unsafe_code)]
     pub fn public_key_from_secret(
-        secret_key: &pqcrypto_dilithium::dilithium3::SecretKey,
+        secret_key: &pqcrypto_mldsa::mldsa65::SecretKey,
     ) -> Result<PublicKey, Error> {
         use pqcrypto_traits::sign::SecretKey as _;
 
-        if secret_key.as_bytes().len() != ffi::PQCLEAN_DILITHIUM3_CLEAN_CRYPTO_SECRETKEYBYTES {
+        if secret_key.as_bytes().len() != ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES {
             return Err(Error::KeyGen(String::from(
                 "Invalid ML-DSA secret key length",
             )));
@@ -90,7 +90,7 @@ pub mod dilithium3 {
         let mut s2 = Polyveck::default();
 
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_unpack_sk(
+            PQCLEAN_MLDSA65_CLEAN_unpack_sk(
                 rho.as_mut_ptr(),
                 tr.as_mut_ptr(),
                 key.as_mut_ptr(),
@@ -103,31 +103,31 @@ pub mod dilithium3 {
 
         let mut mat = vec![Polyvecl::default(); K];
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyvec_matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
+            PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
         }
 
         let mut s1hat = s1;
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyvecl_ntt(addr_of_mut!(s1hat));
+            PQCLEAN_MLDSA65_CLEAN_polyvecl_ntt(addr_of_mut!(s1hat));
         }
 
         let mut t = Polyveck::default();
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyvec_matrix_pointwise_montgomery(
+            PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_pointwise_montgomery(
                 addr_of_mut!(t),
                 mat.as_ptr(),
                 addr_of!(s1hat),
             );
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_reduce(addr_of_mut!(t));
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_invntt_tomont(addr_of_mut!(t));
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_add(addr_of_mut!(t), addr_of!(t), addr_of!(s2));
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_caddq(addr_of_mut!(t));
+            PQCLEAN_MLDSA65_CLEAN_polyveck_reduce(addr_of_mut!(t));
+            PQCLEAN_MLDSA65_CLEAN_polyveck_invntt_tomont(addr_of_mut!(t));
+            PQCLEAN_MLDSA65_CLEAN_polyveck_add(addr_of_mut!(t), addr_of!(t), addr_of!(s2));
+            PQCLEAN_MLDSA65_CLEAN_polyveck_caddq(addr_of_mut!(t));
         }
 
         let mut t1 = Polyveck::default();
         let mut t0_check = Polyveck::default();
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_power2round(
+            PQCLEAN_MLDSA65_CLEAN_polyveck_power2round(
                 addr_of_mut!(t1),
                 addr_of_mut!(t0_check),
                 addr_of!(t),
@@ -143,9 +143,9 @@ pub mod dilithium3 {
             )));
         }
 
-        let mut pk_bytes = [0u8; ffi::PQCLEAN_DILITHIUM3_CLEAN_CRYPTO_PUBLICKEYBYTES];
+        let mut pk_bytes = [0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_PUBLICKEYBYTES];
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_pack_pk(pk_bytes.as_mut_ptr(), rho.as_ptr(), addr_of!(t1));
+            PQCLEAN_MLDSA65_CLEAN_pack_pk(pk_bytes.as_mut_ptr(), rho.as_ptr(), addr_of!(t1));
         }
 
         rho.zeroize();
@@ -183,17 +183,17 @@ pub mod dilithium3 {
 
         let mut mat = vec![Polyvecl::default(); K];
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyvec_matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
+            PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_expand(mat.as_mut_ptr(), rho.as_ptr());
         }
 
         let mut s1 = Polyvecl::default();
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyvecl_uniform_eta(addr_of_mut!(s1), rhoprime.as_ptr(), 0);
+            PQCLEAN_MLDSA65_CLEAN_polyvecl_uniform_eta(addr_of_mut!(s1), rhoprime.as_ptr(), 0);
         }
 
         let mut s2 = Polyveck::default();
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_uniform_eta(
+            PQCLEAN_MLDSA65_CLEAN_polyveck_uniform_eta(
                 addr_of_mut!(s2),
                 rhoprime.as_ptr(),
                 u16::try_from(L).expect("L fits into u16"),
@@ -202,35 +202,35 @@ pub mod dilithium3 {
 
         let mut s1hat = s1;
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyvecl_ntt(addr_of_mut!(s1hat));
+            PQCLEAN_MLDSA65_CLEAN_polyvecl_ntt(addr_of_mut!(s1hat));
         }
 
         let mut t1 = Polyveck::default();
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyvec_matrix_pointwise_montgomery(
+            PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_pointwise_montgomery(
                 addr_of_mut!(t1),
                 mat.as_ptr(),
                 addr_of!(s1hat),
             );
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_reduce(addr_of_mut!(t1));
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_invntt_tomont(addr_of_mut!(t1));
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_add(addr_of_mut!(t1), addr_of!(t1), addr_of!(s2));
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_caddq(addr_of_mut!(t1));
+            PQCLEAN_MLDSA65_CLEAN_polyveck_reduce(addr_of_mut!(t1));
+            PQCLEAN_MLDSA65_CLEAN_polyveck_invntt_tomont(addr_of_mut!(t1));
+            PQCLEAN_MLDSA65_CLEAN_polyveck_add(addr_of_mut!(t1), addr_of!(t1), addr_of!(s2));
+            PQCLEAN_MLDSA65_CLEAN_polyveck_caddq(addr_of_mut!(t1));
         }
 
         let mut t1_rounded = Polyveck::default();
         let mut t0 = Polyveck::default();
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_polyveck_power2round(
+            PQCLEAN_MLDSA65_CLEAN_polyveck_power2round(
                 addr_of_mut!(t1_rounded),
                 addr_of_mut!(t0),
                 addr_of!(t1),
             );
         }
 
-        let mut pk_bytes = [0u8; ffi::PQCLEAN_DILITHIUM3_CLEAN_CRYPTO_PUBLICKEYBYTES];
+        let mut pk_bytes = [0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_PUBLICKEYBYTES];
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_pack_pk(
+            PQCLEAN_MLDSA65_CLEAN_pack_pk(
                 pk_bytes.as_mut_ptr(),
                 rho.as_ptr(),
                 addr_of!(t1_rounded),
@@ -242,9 +242,9 @@ pub mod dilithium3 {
             shake256(tr.as_mut_ptr(), tr.len(), pk_bytes.as_ptr(), pk_bytes.len());
         }
 
-        let mut sk_bytes = [0u8; ffi::PQCLEAN_DILITHIUM3_CLEAN_CRYPTO_SECRETKEYBYTES];
+        let mut sk_bytes = [0u8; ffi::PQCLEAN_MLDSA65_CLEAN_CRYPTO_SECRETKEYBYTES];
         unsafe {
-            PQCLEAN_DILITHIUM3_CLEAN_pack_sk(
+            PQCLEAN_MLDSA65_CLEAN_pack_sk(
                 sk_bytes.as_mut_ptr(),
                 rho.as_ptr(),
                 tr.as_ptr(),
@@ -268,38 +268,38 @@ pub mod dilithium3 {
 
     #[allow(unsafe_code)]
     unsafe extern "C" {
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyvec_matrix_expand(mat: *mut Polyvecl, rho: *const u8);
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyvecl_uniform_eta(
+        fn PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_expand(mat: *mut Polyvecl, rho: *const u8);
+        fn PQCLEAN_MLDSA65_CLEAN_polyvecl_uniform_eta(
             v: *mut Polyvecl,
             seed: *const u8,
             nonce: u16,
         );
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyveck_uniform_eta(
+        fn PQCLEAN_MLDSA65_CLEAN_polyveck_uniform_eta(
             v: *mut Polyveck,
             seed: *const u8,
             nonce: u16,
         );
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyvecl_ntt(v: *mut Polyvecl);
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyvec_matrix_pointwise_montgomery(
+        fn PQCLEAN_MLDSA65_CLEAN_polyvecl_ntt(v: *mut Polyvecl);
+        fn PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_pointwise_montgomery(
             t: *mut Polyveck,
             mat: *const Polyvecl,
             v: *const Polyvecl,
         );
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyveck_reduce(v: *mut Polyveck);
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyveck_invntt_tomont(v: *mut Polyveck);
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyveck_add(
+        fn PQCLEAN_MLDSA65_CLEAN_polyveck_reduce(v: *mut Polyveck);
+        fn PQCLEAN_MLDSA65_CLEAN_polyveck_invntt_tomont(v: *mut Polyveck);
+        fn PQCLEAN_MLDSA65_CLEAN_polyveck_add(
             w: *mut Polyveck,
             u: *const Polyveck,
             v: *const Polyveck,
         );
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyveck_caddq(v: *mut Polyveck);
-        fn PQCLEAN_DILITHIUM3_CLEAN_polyveck_power2round(
+        fn PQCLEAN_MLDSA65_CLEAN_polyveck_caddq(v: *mut Polyveck);
+        fn PQCLEAN_MLDSA65_CLEAN_polyveck_power2round(
             v1: *mut Polyveck,
             v0: *mut Polyveck,
             v: *const Polyveck,
         );
-        fn PQCLEAN_DILITHIUM3_CLEAN_pack_pk(pk: *mut u8, rho: *const u8, t1: *const Polyveck);
-        fn PQCLEAN_DILITHIUM3_CLEAN_pack_sk(
+        fn PQCLEAN_MLDSA65_CLEAN_pack_pk(pk: *mut u8, rho: *const u8, t1: *const Polyveck);
+        fn PQCLEAN_MLDSA65_CLEAN_pack_sk(
             sk: *mut u8,
             rho: *const u8,
             tr: *const u8,
@@ -308,7 +308,7 @@ pub mod dilithium3 {
             s1: *const Polyvecl,
             s2: *const Polyveck,
         );
-        fn PQCLEAN_DILITHIUM3_CLEAN_unpack_sk(
+        fn PQCLEAN_MLDSA65_CLEAN_unpack_sk(
             rho: *mut u8,
             tr: *mut u8,
             key: *mut u8,

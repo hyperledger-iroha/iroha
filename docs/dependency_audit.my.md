@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - AEAD/Symmetric- `aes-gcm`, `chacha20poly1305`, `aead` စရိုက်များ (RustCrypto) — ကျမ်းဂန်ဆိုင်ရာ။
 - လက်မှတ်များ/ECC- `ed25519-dalek`, `x25519-dalek` (dalek ပရောဂျက်), `k256` (RustCrypto), `secp256k1` (libsecp bindings) — အားလုံးတရားဝင်; မျက်နှာပြင်ဧရိယာကိုလျှော့ချရန်အတွက် secp256k1 stack (`k256` for pure Rust သို့မဟုတ် `secp256k1` for libsecp) ကို နှစ်သက်သည်။
 - BLS12-381/ZK- `blstrs`, `halo2_*` — ထုတ်လုပ်မှု ZK ဂေဟစနစ်များတွင် တွင်ကျယ်စွာ အသုံးပြုသည်။ တရားဝင်
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — တရားဝင်ရည်ညွှန်းသေတ္တာများ။
+- PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — တရားဝင်ရည်ညွှန်းသေတ္တာများ။
 - TLS: `rustls`၊ `tokio-rustls`၊ `hyper-rustls` — canonical ခေတ်မီ Rust TLS စတက်။
 - ဆူညံသံ- `snow` — canonical အကောင်အထည်ဖော်မှု။
 - Serialization- `parity-scale-codec` သည် SCALE အတွက် canonical ဖြစ်သည်။ Serde ကို အလုပ်ခွင်အနှံ့ ထုတ်လုပ်မှု မှီခိုမှုမှ ဖယ်ရှားလိုက်သည် ။ Norito သည် runtime လမ်းကြောင်းတိုင်းကို ဆင်းသက်လာသည်/စာရေးသူများ။ ကျန်ရှိနေသည့် Serde ကိုးကားချက်များသည် သမိုင်းဆိုင်ရာ စာရွက်စာတမ်းများ၊ ကာရန်းစခရစ်များ သို့မဟုတ် စမ်းသပ်မှုသီးသန့်စာရင်းများတွင် နေထိုင်ပါသည်။

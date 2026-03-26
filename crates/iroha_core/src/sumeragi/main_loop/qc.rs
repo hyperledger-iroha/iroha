@@ -1720,6 +1720,9 @@ impl Actor {
             let local_height = self.committed_height_snapshot();
             let frontier_height = local_height.saturating_add(1);
             let keep_through_height = frontier_height.saturating_add(1);
+            let frontier_exact_owner_unresolved = self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height && slot.exact_fetch_armed && !slot.body_present
+            });
             if stats_snapshot.height > keep_through_height {
                 let (
                     pending_removed,
@@ -1747,11 +1750,20 @@ impl Actor {
                         u64::try_from(evicted_total).unwrap_or(u64::MAX),
                     );
                 }
-                let requested = self.request_range_pull_from_anchor(
-                    keep_through_height,
-                    "missing_block_far_ahead_retry",
-                    now,
-                );
+                let exact_retry_emitted = if frontier_exact_owner_unresolved {
+                    self.retry_frontier_block_body_fetch(now)
+                } else {
+                    false
+                };
+                let requested = if frontier_exact_owner_unresolved {
+                    false
+                } else {
+                    self.request_range_pull_from_anchor(
+                        keep_through_height,
+                        "missing_block_far_ahead_retry",
+                        now,
+                    )
+                };
                 if requested {
                     self.note_missing_block_height_attempt(
                         block_hash,
@@ -1784,8 +1796,10 @@ impl Actor {
                     hints_removed,
                     proposals_removed,
                     seen_removed,
+                    frontier_exact_owner_unresolved,
+                    exact_retry_emitted,
                     requested,
-                    "pruned far-ahead missing-block retry state and reanchored catch-up at the contiguous frontier"
+                    "pruned far-ahead missing-block retry state at the contiguous frontier"
                 );
                 progress = true;
                 continue;

@@ -180,7 +180,7 @@ impl KeyPair {
                 secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::Random).into()
             }
             Algorithm::MlDsa => {
-                use pqcrypto_dilithium::dilithium3 as dilithium;
+                use pqcrypto_mldsa::mldsa65 as dilithium;
                 use pqcrypto_traits::sign::PublicKey as _;
                 let (pk, sk) = dilithium::keypair();
                 let public_key = PublicKey::from_bytes(Algorithm::MlDsa, pk.as_bytes())
@@ -332,7 +332,7 @@ impl KeyPair {
         }
 
         if algorithm == Algorithm::MlDsa {
-            use pqcrypto_dilithium::dilithium3 as dilithium;
+            use pqcrypto_mldsa::mldsa65 as dilithium;
             use pqcrypto_traits::sign::PublicKey as _;
 
             use crate::secrecy::ExposeSecret;
@@ -497,7 +497,7 @@ impl PublicKeyFull {
             Algorithm::Secp256k1 => secp256k1::EcdsaSecp256k1Sha256::parse_public_key(payload)
                 .map(PublicKeyFull::Secp256k1),
             Algorithm::MlDsa => {
-                use pqcrypto_dilithium::dilithium3 as dilithium;
+                use pqcrypto_mldsa::mldsa65 as dilithium;
                 use pqcrypto_traits::sign::PublicKey as _;
                 if payload.len() != dilithium::public_key_bytes() {
                     return Err(ParseError("invalid ML-DSA public key length".to_string()));
@@ -659,7 +659,7 @@ pub fn pqc_verify_batch_deterministic(
     public_keys: &[&[u8]],
     _seed32: [u8; 32],
 ) -> Result<(), Error> {
-    use pqcrypto_dilithium::dilithium3 as dilithium;
+    use pqcrypto_mldsa::mldsa65 as dilithium;
     use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 
     if messages.is_empty()
@@ -1730,11 +1730,11 @@ struct MlDsaSecretKey {
 }
 
 struct MlDsaSecretKeyInner {
-    secret: pqcrypto_dilithium::dilithium3::SecretKey,
+    secret: pqcrypto_mldsa::mldsa65::SecretKey,
 }
 
 impl MlDsaSecretKey {
-    fn new(inner: &pqcrypto_dilithium::dilithium3::SecretKey) -> Self {
+    fn new(inner: &pqcrypto_mldsa::mldsa65::SecretKey) -> Self {
         Self {
             inner: Arc::new(MlDsaSecretKeyInner { secret: *inner }),
         }
@@ -1742,12 +1742,12 @@ impl MlDsaSecretKey {
 
     fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
         use pqcrypto_traits::sign::SecretKey as _;
-        let inner = pqcrypto_dilithium::dilithium3::SecretKey::from_bytes(bytes)
+        let inner = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(bytes)
             .map_err(|err| ParseError(err.to_string()))?;
         Ok(Self::new(&inner))
     }
 
-    fn as_secret(&self) -> &pqcrypto_dilithium::dilithium3::SecretKey {
+    fn as_secret(&self) -> &pqcrypto_mldsa::mldsa65::SecretKey {
         &self.inner.secret
     }
 
@@ -1757,7 +1757,7 @@ impl MlDsaSecretKey {
     }
 
     fn sign(&self, payload: &[u8]) -> Vec<u8> {
-        use pqcrypto_dilithium::dilithium3 as dilithium;
+        use pqcrypto_mldsa::mldsa65 as dilithium;
         use pqcrypto_traits::sign::DetachedSignature as _;
 
         let sig = dilithium::detached_sign(payload, self.as_secret());
@@ -1791,7 +1791,7 @@ impl Drop for MlDsaSecretKeyInner {
             ptr::write_bytes(
                 byte_ptr,
                 0,
-                mem::size_of::<pqcrypto_dilithium::dilithium3::SecretKey>(),
+                mem::size_of::<pqcrypto_mldsa::mldsa65::SecretKey>(),
             );
         }
     }
@@ -2572,9 +2572,8 @@ mod tests {
 
         let (_, private) =
             seeded::keypair_from_seed(b"iroha:ml-dsa:strong-count").expect("seeded ML-DSA keypair");
-        let raw_secret =
-            pqcrypto_dilithium::dilithium3::SecretKey::from_bytes(&private.to_bytes().1)
-                .expect("valid ML-DSA secret bytes");
+        let raw_secret = pqcrypto_mldsa::mldsa65::SecretKey::from_bytes(&private.to_bytes().1)
+            .expect("valid ML-DSA secret bytes");
         let key = MlDsaSecretKey::new(&raw_secret);
         assert_eq!(key.strong_count(), 1, "initial strong count must be 1");
 
@@ -2592,7 +2591,7 @@ mod tests {
 
     #[test]
     fn ml_dsa_public_key_parse_rejects_invalid_length() {
-        use pqcrypto_dilithium::dilithium3 as dilithium;
+        use pqcrypto_mldsa::mldsa65 as dilithium;
         use pqcrypto_traits::sign::PublicKey as _;
 
         let (pk, _) = dilithium::keypair();

@@ -329,6 +329,19 @@ impl<'a> Parser<'a> {
                         access_writes: access_hints.writes,
                     },
                 )?);
+            } else if self.peek(TokenKind::View) && self.peek_n(1, TokenKind::Fn) {
+                self.bump(); // view
+                self.bump(); // fn
+                items.push(self.parse_fn_loose(
+                    None,
+                    FunctionModifiers {
+                        visibility: FunctionVisibility::Public,
+                        kind: FunctionKind::View,
+                        permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
+                    },
+                )?);
             } else if self.peek(TokenKind::Hajimari) {
                 self.bump();
                 items.push(self.parse_fn_loose(
@@ -431,6 +444,19 @@ impl<'a> Parser<'a> {
                     FunctionModifiers {
                         visibility: FunctionVisibility::Public,
                         kind: FunctionKind::Contract,
+                        permission: None,
+                        access_reads: access_hints.reads,
+                        access_writes: access_hints.writes,
+                    },
+                )?);
+            } else if self.peek(TokenKind::View) && self.peek_n(1, TokenKind::Fn) {
+                self.bump(); // view
+                self.bump(); // fn
+                items.push(self.parse_fn_loose(
+                    None,
+                    FunctionModifiers {
+                        visibility: FunctionVisibility::Public,
+                        kind: FunctionKind::View,
                         permission: None,
                         access_reads: access_hints.reads,
                         access_writes: access_hints.writes,
@@ -1871,6 +1897,7 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(name) => Ok(name.clone()),
             TokenKind::Hajimari => Ok(String::from("hajimari")),
             TokenKind::Kaizen => Ok(String::from("kaizen")),
+            TokenKind::View => Ok(String::from("view")),
             _ => Err(self.error(tok, "identifier")),
         }
     }
@@ -2174,6 +2201,15 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_account_literal() -> String {
+        iroha_data_model::account::AccountId::new(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                .parse()
+                .expect("public key"),
+        )
+        .to_string()
+    }
 
     #[test]
     fn parse_return_statements() {
@@ -2498,19 +2534,22 @@ mod tests {
 
     #[test]
     fn parse_trigger_decl() {
-        let src = r#"
-        seiyaku C {
-            kotoage fn run() {}
-            register_trigger wake {
+        let authority = sample_account_literal();
+        let src = format!(
+            r#"
+        seiyaku C {{
+            kotoage fn run() {{}}
+            register_trigger wake {{
                 call run;
                 on time pre_commit;
                 repeats 3;
-                authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-                metadata { tag: "alpha"; count: 1; enabled: true; }
-            }
-        }
-        "#;
-        let prog = parse(src).expect("parse trigger decl");
+                authority "{authority}";
+                metadata {{ tag: "alpha"; count: 1; enabled: true; }}
+            }}
+        }}
+        "#
+        );
+        let prog = parse(&src).expect("parse trigger decl");
         let trigger = prog
             .items
             .iter()
@@ -2522,10 +2561,7 @@ mod tests {
         assert_eq!(trigger.name, "wake");
         assert_eq!(trigger.call.entrypoint, "run");
         assert!(matches!(trigger.filter, TriggerFilter::Time(_)));
-        assert_eq!(
-            trigger.authority.as_deref(),
-            Some("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-        );
+        assert_eq!(trigger.authority.as_deref(), Some(authority.as_str()));
         assert_eq!(trigger.metadata.len(), 3);
     }
 
@@ -2600,7 +2636,7 @@ mod tests {
 
     #[test]
     fn parse_trigger_decl_with_structured_data_filters_for_core_families() {
-        let account = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string();
+        let account = sample_account_literal();
         let peer =
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D".to_string();
         let domain = "wonderland".to_string();

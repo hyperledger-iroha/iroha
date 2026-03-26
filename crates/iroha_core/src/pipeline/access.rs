@@ -2079,6 +2079,8 @@ mod tests {
             EntrypointDescriptor {
                 name: "main".to_owned(),
                 kind: EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: vec!["state:alpha".to_owned()],
                 write_keys: vec!["state:beta".to_owned()],
@@ -2089,6 +2091,8 @@ mod tests {
             EntrypointDescriptor {
                 name: "run".to_owned(),
                 kind: EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: vec!["state:run-read".to_owned()],
                 write_keys: vec!["state:run-write".to_owned()],
@@ -2165,6 +2169,8 @@ mod tests {
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: vec!["state:alpha".to_owned()],
             write_keys: vec!["state:beta".to_owned()],
@@ -2242,6 +2248,8 @@ mod tests {
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],

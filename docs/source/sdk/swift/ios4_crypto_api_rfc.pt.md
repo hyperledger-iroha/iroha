@@ -153,12 +153,12 @@ the mapping Swift will reuse when serialising keys/signatures:
 |-----------------------|---------------------|---------------|-----------|------------------------|
 | `.ed25519` | `Algorithm::Ed25519` | `0` (default) | `ed25519` | CryptoKit-backed today; matches the default Norito layout |
 | `.secp256k1` | `Algorithm::Secp256k1` | `1` | `secp256k1` | Deterministic ECDSA signing via `signature::secp256k1` |
-| `.mlDsa44` (aka `.mlDsa`) | `Algorithm::MlDsa` | `4` | `ml-dsa` | `PublicKeyFull::MlDsa` uses `pqcrypto_dilithium::dilithium3`, i.e. NIST ML‑DSA‑65 (`crates/iroha_crypto/src/lib.rs`, `ml-dsa` feature) |
+| `.mlDsa44` (aka `.mlDsa`) | `Algorithm::MlDsa` | `4` | `ml-dsa` | `PublicKeyFull::MlDsa` uses `pqcrypto_mldsa::mldsa65`, i.e. NIST ML‑DSA‑65 (`crates/iroha_crypto/src/lib.rs`, `ml-dsa` feature) |
 | `.sm2` | `Algorithm::Sm2` | `10` | `sm2` | `Sm2PublicKey::from_sec1_bytes` enforces the canonical 65-byte SEC1 encoding; SM2 public key payloads prefix `distid_len (u16 BE) || distid bytes` ahead of the SEC1 bytes (`crates/iroha_crypto/src/lib.rs`). |
 
 Swift will keep these IDs in a small lookup so `SignatureEnvelope` encodes the
 same discriminants that `iroha_crypto` emits. ML‑DSA uses the Dilithium3 /
-ML‑DSA‑65 parameter set everywhere in the workspace (see the `pqcrypto_dilithium`
+ML‑DSA‑65 parameter set everywhere in the workspace (see the `pqcrypto_mldsa`
 usage inside `PublicKeyFull::MlDsa`), so the Swift SDK only needs to expose that
 single security level for IOS4; additional suites (e.g., ML‑DSA‑44/87) can be
 added later by extending both `Algorithm` and `SigningAlgorithm`.
