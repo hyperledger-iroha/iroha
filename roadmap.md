@@ -98,6 +98,54 @@ Open work for this CUDA review slice now remains:
   CUDA/Metal/determinism boundaries beyond the public helper and disable-path
   regressions closed in this pass.
 
+Latest sync (2026-03-26 `iroha_core` test-helper lifetime repair):
+`crates/iroha_core/src/state.rs`
+now carries the targeted compile fix:
+
+- the `WorldTransaction` test/API helper impl now declares the explicit
+  `<'block, 'world>` lifetimes required by its `StorageTransaction` return
+  values, which clears the `error[E0261]` failures in
+  `smart_contract_state_mut_for_testing`,
+  `account_aliases_mut_for_testing`, and
+  `account_rekey_records_mut_for_testing`; and
+- no behavioral change is intended beyond restoring the gated helper API to a
+  compilable state for `iroha-core-tests` consumers.
+
+Validation:
+- `cargo check -p iroha_core --message-format short`
+- `cargo check -p iroha_core --features iroha-core-tests --message-format short`
+- `cargo fmt --all`
+
+Open work for this slice now remains:
+- rerun a broader workspace validation sweep when runtime budget allows, since
+  this fix only exercised `iroha_core`; and
+- no additional regressions are known in this lifetime-helper slice after the
+  targeted feature-enabled compile check.
+
+Latest sync (2026-03-26 FASTPQ Stage 2 fixture refresh):
+`crates/fastpq_prover/tests/fixtures/stage2_balanced_1k.bin`
+and
+`crates/fastpq_prover/tests/fixtures/stage2_balanced_5k.bin`
+now match the current canonical CPU prover output again:
+
+- the Stage 2 backend regression fixtures were regenerated from the current
+  prover output, which clears the focused fixture parity failures in
+  `backend_regression` and `proof_fixture`; and
+- the focused `realistic_flows` suite still verifies regenerated proofs, so no
+  new proof-verification regression is known in this slice.
+
+Validation:
+- `cargo test -p fastpq_prover --test realistic_flows -- --nocapture`
+- `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture`
+- `cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture`
+- `cargo test -p fastpq_prover --test proof_fixture golden_stage2_proof_matches_fixture -- --nocapture`
+
+Open work for this slice now remains:
+- rerun a broader `cargo test -p fastpq_prover` sweep when runtime budget
+  allows; and
+- rerun the optional `fastpq-gpu` parity coverage once the required GPU/Metal
+  toolchain is available in the environment.
+
 Latest sync (2026-03-26 targeted warning cleanup):
 `crates/iroha_core/src/state.rs`
 and
