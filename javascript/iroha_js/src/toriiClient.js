@@ -2097,6 +2097,55 @@ export class ToriiClient {
   }
 
   /**
+   * List aliases bound to a canonical account id (`POST /v1/aliases/by_account`).
+   * Returns null when the account is unknown (404).
+   * @param {string} accountId
+   * @param {{dataspace?: string, domain?: string, signal?: AbortSignal}} [options]
+   * @returns {Promise<{account_id: string, total: number, items: Array<{alias: string, dataspace: string, domain: string | null, is_primary: boolean}>} | null>}
+   */
+  async lookupAliasesByAccount(accountId, options = {}) {
+    const normalizedAccountId = ToriiClient._requireAccountId(accountId, "accountId");
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "lookupAliasesByAccount",
+    );
+    assertSupportedOptionKeys(
+      rest,
+      new Set(["dataspace", "domain"]),
+      "lookupAliasesByAccount options",
+    );
+    const dataspace =
+      rest.dataspace === undefined
+        ? undefined
+        : requireNonEmptyString(rest.dataspace, "lookupAliasesByAccount.options.dataspace");
+    const domain =
+      rest.domain === undefined
+        ? undefined
+        : requireNonEmptyString(rest.domain, "lookupAliasesByAccount.options.domain");
+    const response = await this._request("POST", "/v1/aliases/by_account", {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        account_id: normalizedAccountId,
+        ...(dataspace ? { dataspace } : {}),
+        ...(domain ? { domain } : {}),
+      }),
+      signal,
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("alias by-account endpoint returned no payload");
+    }
+    return normalizeAliasLookupByAccountResponse(body, "alias by-account response");
+  }
+
+  /**
    * List globally registered identifier policies (`GET /v1/identifier-policies`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<{total: number, items: Array<Record<string, unknown>>}>}
@@ -18076,6 +18125,49 @@ function normalizeAliasResolutionResponse(
     result.source = requireNonEmptyString(sourceValue, `${context}.source`);
   }
   return result;
+}
+
+function normalizeAliasLookupByAccountResponse(
+  payload,
+  context = "alias by-account response",
+) {
+  const record = ensureRecord(payload ?? {}, context);
+  const accountId = ToriiClient._requireAccountId(record.account_id, `${context}.account_id`);
+  const rawItems = Array.isArray(record.items) ? record.items : [];
+  const items = rawItems.map((item, index) => {
+    const aliasRecord = ensureRecord(item, `${context}.items[${index}]`);
+    const alias = requireNonEmptyString(aliasRecord.alias, `${context}.items[${index}].alias`);
+    const dataspace = requireNonEmptyString(
+      aliasRecord.dataspace,
+      `${context}.items[${index}].dataspace`,
+    );
+    const rawDomain = aliasRecord.domain;
+    const domain =
+      rawDomain == null
+        ? null
+        : requireNonEmptyString(rawDomain, `${context}.items[${index}].domain`);
+    const rawIsPrimary = aliasRecord.is_primary ?? aliasRecord.isPrimary;
+    if (typeof rawIsPrimary !== "boolean") {
+      throw new TypeError(`${context}.items[${index}].is_primary must be a boolean`);
+    }
+    return {
+      alias,
+      dataspace,
+      domain,
+      is_primary: rawIsPrimary,
+    };
+  });
+  const total =
+    record.total === undefined
+      ? items.length
+      : ToriiClient._normalizeUnsignedInteger(record.total, `${context}.total`, {
+          allowZero: true,
+        });
+  return {
+    account_id: accountId,
+    total,
+    items,
+  };
 }
 
 function buildIdentifierResolveRequest(options, context) {

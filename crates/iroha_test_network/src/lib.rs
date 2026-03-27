@@ -71,7 +71,7 @@ use iroha_primitives::{
 };
 use iroha_telemetry::metrics::Status;
 use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR, REAL_GENESIS_ACCOUNT_KEYPAIR,
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, CARPENTER_ID, PEER_KEYPAIR, REAL_GENESIS_ACCOUNT_KEYPAIR,
     SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
 };
 use iroha_version::codec::EncodeVersioned;
@@ -607,6 +607,17 @@ fn default_build_profile() -> String {
         return profile;
     }
     std::env::var("PROFILE").unwrap_or_else(|_| "release".to_string())
+}
+
+fn first_existing_candidate<'a>(
+    candidates: impl IntoIterator<Item = Cow<'a, Path>>,
+) -> Option<PathBuf> {
+    for candidate in candidates {
+        if let Ok(resolved) = candidate.as_ref().canonicalize() {
+            return Some(resolved);
+        }
+    }
+    None
 }
 
 fn build_cache_dir(target_dir: &Path) -> PathBuf {
@@ -1331,17 +1342,6 @@ impl Program {
             }
         }
 
-        fn try_candidates<'a>(
-            candidates: impl IntoIterator<Item = Cow<'a, Path>>,
-        ) -> Option<PathBuf> {
-            for candidate in candidates {
-                if let Ok(resolved) = candidate.as_ref().canonicalize() {
-                    return Some(resolved);
-                }
-            }
-            None
-        }
-
         let ProgramSpec {
             name,
             env,
@@ -1412,7 +1412,7 @@ impl Program {
         push_candidate(default_target.join(format!("release/{bin}")));
 
         let prebuild_candidate =
-            try_candidates(candidates.iter().map(|p| Cow::Borrowed(p.as_path())));
+            first_existing_candidate(candidates.iter().map(|p| Cow::Borrowed(p.as_path())));
 
         // 4) Decide whether to (re)build.
         //    We default to building to avoid using stale binaries across source changes.
@@ -1458,7 +1458,15 @@ impl Program {
         }
 
         // 5) Return the best candidate after the (optional) build
-        if let Some(found) = try_candidates(candidates.iter().map(|p| Cow::Borrowed(p.as_path()))) {
+        let post_build_candidates = if skip_build {
+            first_existing_candidate(candidates.iter().map(|p| Cow::Borrowed(p.as_path())))
+        } else {
+            first_existing_candidate(
+                iter::once(Cow::Borrowed(primary_binary.as_path()))
+                    .chain(candidates.iter().map(|p| Cow::Borrowed(p.as_path()))),
+            )
+        };
+        if let Some(found) = post_build_candidates {
             match self {
                 Program::Irohad => {
                     let _ = IROHAD_BIN.set(found.clone());
@@ -4784,10 +4792,15 @@ impl NetworkBuilder {
             let stake_amount = resolve_npos_bootstrap_stake(&genesis_isi, stake_amount);
             let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
             let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+            let universal_domain: DomainId = "universal".parse().expect("universal domain");
             let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
                 "nexus".parse().unwrap(),
                 "xor".parse().unwrap(),
             );
+            let fee_asset_id: AssetDefinitionId =
+                iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                    .parse()
+                    .expect("default nexus fee asset id");
             let bootstrap_gas_keypair = KeyPair::from_seed(
                 b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
                 Algorithm::Ed25519,
@@ -4799,6 +4812,7 @@ impl NetworkBuilder {
             let mut writer = TomlWriter::new(&mut bootstrap_layer);
             writer
                 .write(["nexus", "enabled"], true)
+                .write(["nexus", "fees", "fee_asset_id"], fee_asset_id.to_string())
                 .write(
                     ["nexus", "staking", "stake_asset_id"],
                     stake_asset_id.to_string(),
@@ -4816,15 +4830,21 @@ impl NetworkBuilder {
             let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
                 .with_name("NPOS Stake".to_owned())
                 .with_metadata(Metadata::default());
+            let fee_definition = AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
+                .with_name("Nexus Fee".to_owned())
+                .with_metadata(Metadata::default());
+            let fee_seed_amount = 1_000_000_u32;
 
             let mut bootstrap_tx = vec![
                 Register::domain(Domain::new(nexus_domain.clone())).into(),
                 Register::domain(Domain::new(ivm_domain.clone())).into(),
+                Register::domain(Domain::new(universal_domain)).into(),
                 Register::account(Account::new(
                     gas_account_id.to_account_id(nexus_domain.clone()),
                 ))
                 .into(),
                 Register::asset_definition(definition).into(),
+                Register::asset_definition(fee_definition).into(),
             ];
 
             for peer in &peer_ids {
@@ -4839,6 +4859,27 @@ impl NetworkBuilder {
                     Mint::asset_numeric(
                         stake_amount,
                         AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+                    )
+                    .into(),
+                );
+                bootstrap_tx.push(
+                    Mint::asset_numeric(
+                        fee_seed_amount,
+                        AssetId::new(fee_asset_id.clone(), validator_id),
+                    )
+                    .into(),
+                );
+            }
+            for account_id in [
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+                CARPENTER_ID.clone(),
+                gas_account_id,
+            ] {
+                bootstrap_tx.push(
+                    Mint::asset_numeric(
+                        fee_seed_amount,
+                        AssetId::new(fee_asset_id.clone(), account_id),
                     )
                     .into(),
                 );
@@ -9432,6 +9473,42 @@ exit 0
     }
 
     #[test]
+    fn first_existing_candidate_prefers_earlier_existing_path() {
+        let temp = tempdir().expect("temporary workspace");
+        let primary = temp.path().join("primary-bin");
+        let fallback = temp.path().join("fallback-bin");
+        fs::write(&primary, b"primary").expect("write primary candidate");
+        fs::write(&fallback, b"fallback").expect("write fallback candidate");
+
+        let resolved = first_existing_candidate([
+            Cow::Borrowed(primary.as_path()),
+            Cow::Borrowed(fallback.as_path()),
+        ])
+        .expect("first existing candidate should resolve");
+
+        assert_eq!(resolved, primary.canonicalize().expect("canonical primary"));
+    }
+
+    #[test]
+    fn first_existing_candidate_skips_missing_paths() {
+        let temp = tempdir().expect("temporary workspace");
+        let missing = temp.path().join("missing-bin");
+        let fallback = temp.path().join("fallback-bin");
+        fs::write(&fallback, b"fallback").expect("write fallback candidate");
+
+        let resolved = first_existing_candidate([
+            Cow::Borrowed(missing.as_path()),
+            Cow::Borrowed(fallback.as_path()),
+        ])
+        .expect("fallback candidate should resolve");
+
+        assert_eq!(
+            resolved,
+            fallback.canonicalize().expect("canonical fallback")
+        );
+    }
+
+    #[test]
     fn reentrant_builds_enabled_under_cargo_by_default() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
@@ -10860,6 +10937,75 @@ exit 0
         assert!(
             AccountId::parse_encoded(slash_sink).is_ok(),
             "slash_sink_account_id must parse as AccountId; got {slash_sink}"
+        );
+    }
+
+    #[test]
+    fn npos_bootstrap_seeds_default_fee_asset_for_runtime_signers() {
+        init_instruction_registry();
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_auto_populated_trusted_peers()
+            .with_config_layer(|layer| {
+                layer.write(["sumeragi", "consensus_mode"], "npos");
+            })
+            .build();
+        let genesis = network.genesis();
+        let fee_asset_definition_id: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .expect("default nexus fee asset id");
+        let first_validator_id = AccountId::new(
+            network
+                .peers()
+                .first()
+                .expect("validator peer")
+                .public_key()
+                .clone(),
+        );
+        let mut saw_definition = false;
+        let mut saw_alice_mint = false;
+        let mut saw_validator_mint = false;
+
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if let Some(register) = instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+                        && let iroha_data_model::isi::RegisterBox::AssetDefinition(register) =
+                            register
+                        && register.object.id == fee_asset_definition_id
+                    {
+                        saw_definition = true;
+                    }
+                    if let Some(mint) = instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::MintBox>()
+                        && let iroha_data_model::isi::MintBox::Asset(mint) = mint
+                        && mint.destination.definition() == &fee_asset_definition_id
+                    {
+                        if mint.destination.account() == &*ALICE_ID {
+                            saw_alice_mint = true;
+                        }
+                        if mint.destination.account() == &first_validator_id {
+                            saw_validator_mint = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            saw_definition,
+            "npos bootstrap should register the default nexus fee asset definition"
+        );
+        assert!(
+            saw_alice_mint,
+            "npos bootstrap should fund ALICE with the default nexus fee asset"
+        );
+        assert!(
+            saw_validator_mint,
+            "npos bootstrap should fund validators with the default nexus fee asset"
         );
     }
 

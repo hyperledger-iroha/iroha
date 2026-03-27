@@ -6282,6 +6282,7 @@ where
                 matrix_manifest,
                 label_max_operation_ms: BTreeMap::new(),
                 label_min_operation_speedup: BTreeMap::new(),
+                label_operation_filters: BTreeMap::new(),
             };
             if options.benches.is_empty() {
                 return Err(
@@ -6424,6 +6425,20 @@ where
                             .parse::<usize>()
                             .map_err(|err| format!("invalid --columns `{value}`: {err}"))?;
                     }
+                    "--operation" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --operation".into());
+                        };
+                        options.operation = if value.eq_ignore_ascii_case("all") {
+                            None
+                        } else {
+                            Some(fastpq::StageKind::from_str(&value).ok_or_else(|| {
+                                format!(
+                                    "invalid --operation `{value}`: expected fft, ifft, lde, poseidon_hash_columns, poseidon, poseidon-hash, or all"
+                                )
+                            })?)
+                        };
+                    }
                     "-o" | "--out" | "--output" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --output".into());
@@ -6526,7 +6541,11 @@ where
                     }
                 }
             }
-            if output_overridden && !raw_overridden {
+            if !output_overridden {
+                options.output =
+                    fastpq::default_cuda_bench_output_path_for_operation(options.operation);
+            }
+            if !raw_overridden {
                 options.raw_output = fastpq::default_cuda_raw_output(&options.output);
             }
             Ok(CommandKind::FastpqCudaSuite {
@@ -10383,6 +10402,40 @@ mod acceleration_state_tests {
     }
 
     #[test]
+    fn parse_fastpq_cuda_suite_operation_updates_default_artifact_names() {
+        let args = ["xtask", "fastpq-cuda-suite", "--operation", "lde"];
+        let iter = args.into_iter().map(String::from);
+        let command = parse_command(iter).expect("parse fastpq-cuda-suite");
+        match command {
+            CommandKind::FastpqCudaSuite { options } => {
+                let output = options
+                    .output
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("output filename");
+                let raw_output = options
+                    .raw_output
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("raw output filename");
+                assert!(
+                    output.starts_with("fastpq_cuda_bench_lde_"),
+                    "unexpected output filename: {output}"
+                );
+                assert!(
+                    raw_output.starts_with("fastpq_cuda_bench_lde_"),
+                    "unexpected raw output filename: {raw_output}"
+                );
+                assert!(
+                    raw_output.ends_with("_raw.json"),
+                    "unexpected raw output filename: {raw_output}"
+                );
+            }
+            _ => panic!("expected fastpq-cuda-suite command"),
+        }
+    }
+
+    #[test]
     fn render_outputs_include_last_error() {
         let config = ivm::AccelerationConfig {
             enable_simd: true,
@@ -11957,10 +12010,10 @@ fn print_usage() {
         "    Run the Metal bench across selected stages, capture optional traces, and emit per-stage summaries for local profiling."
     );
     eprintln!(
-        "  cargo xtask fastpq-cuda-suite [--rows <count>] [--warmups <count>] [--iterations <count>] [--columns <count>] [--output <path>] [--raw-output <path>] [--row-usage <path>] [--label key=value]... [--device <label>] [--notes <text>] [--require-gpu] [--sign-output] [--gpg-key <id>] [--accel-instance <label>] [--accel-state-json <path>] [--accel-state-prom <path>] [--no-wrap] [--dry-run]"
+        "  cargo xtask fastpq-cuda-suite [--rows <count>] [--warmups <count>] [--iterations <count>] [--columns <count>] [--operation <fft|ifft|lde|poseidon_hash_columns|all>] [--output <path>] [--raw-output <path>] [--row-usage <path>] [--label key=value]... [--device <label>] [--notes <text>] [--require-gpu] [--sign-output] [--gpg-key <id>] [--accel-instance <label>] [--accel-state-json <path>] [--accel-state-prom <path>] [--no-wrap] [--dry-run]"
     );
     eprintln!(
-        "    Drive the CUDA bench harness, optionally wrap/sign the bundle with row-usage/acceleration-state metadata, and record a plan JSON so GPU runners produce reproducible Stage7 evidence."
+        "    Drive the CUDA bench harness, optionally wrap/sign the bundle with row-usage/acceleration-state metadata, and record a plan JSON so GPU runners produce reproducible Stage7 evidence. Filtered runs only enforce wrap thresholds for the selected operation."
     );
     eprintln!(
         "  cargo xtask soranet-rollout-plan --regions <r1,r2,...> --start <RFC3339> [--window <dur>] [--spacing <dur>] [--client-offset <dur>] [--phase <label>] [--environment <name>] [--out <path>] [--markdown-out <path>]"

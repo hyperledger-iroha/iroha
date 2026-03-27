@@ -1,7 +1,7 @@
 //! Stage 4 transcript replay regression fixtures.
 
 #[cfg(feature = "fastpq-gpu")]
-use std::{convert::TryFrom, env, fs, path::Path};
+use std::{env, fs, path::Path};
 
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_prover::{

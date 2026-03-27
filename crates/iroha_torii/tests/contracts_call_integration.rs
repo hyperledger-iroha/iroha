@@ -8,7 +8,6 @@ use std::sync::Arc;
 use axum::{Router, routing::post};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
-use ivm::kotodama::compiler::CompilerOptions;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -18,6 +17,7 @@ use iroha_core::{
 };
 use iroha_crypto::Signature;
 use iroha_data_model::{asset::AssetDefinitionId, name::Name};
+use ivm::kotodama::compiler::CompilerOptions;
 use mv::storage::StorageReadOnly;
 use norito::json;
 use tower::ServiceExt as _;
@@ -747,16 +747,14 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
     assert_eq!(resp.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let value: json::Value = json::from_slice(&bytes).expect("decode contract view error");
-    assert_eq!(
-        value.get("ok").and_then(json::Value::as_bool),
-        Some(false)
-    );
+    assert_eq!(value.get("ok").and_then(json::Value::as_bool), Some(false));
     assert_eq!(
         value.get("entrypoint").and_then(json::Value::as_str),
         Some("explode")
     );
     assert_eq!(
-        value.get("vm_diagnostic")
+        value
+            .get("vm_diagnostic")
             .and_then(json::Value::as_object)
             .and_then(|diag| diag.get("source_path"))
             .and_then(json::Value::as_str),

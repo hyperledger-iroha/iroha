@@ -3805,6 +3805,47 @@ fn resolve_fee_asset_definition_id(
     })
 }
 
+fn resolve_agent_asset_definition_literal(
+    state_transaction: &StateTransaction<'_, '_>,
+    literal: &str,
+) -> Result<AssetDefinitionId, InstructionExecutionError> {
+    crate::block::parse_asset_definition_literal_with_world(
+        &state_transaction.world,
+        literal,
+        state_transaction.block_unix_timestamp_ms(),
+    )
+    .ok_or_else(|| {
+        invalid_parameter(
+            "asset_definition must be a canonical Base58 asset definition id or active asset alias",
+        )
+    })
+}
+
+fn agent_spend_limit_for_asset_definition<'a>(
+    state_transaction: &StateTransaction<'_, '_>,
+    record: &'a SoraAgentApartmentRecordV1,
+    canonical_asset_definition: &str,
+) -> Result<&'a iroha_data_model::soracloud::AgentSpendLimitV1, InstructionExecutionError> {
+    record
+        .manifest
+        .spend_limits
+        .iter()
+        .find(|limit| {
+            resolve_agent_asset_definition_literal(state_transaction, &limit.asset_definition)
+                .ok()
+                .is_some_and(|definition_id| definition_id.to_string() == canonical_asset_definition)
+        })
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!(
+                    "apartment `{}` has no spend limit configured for asset `{canonical_asset_definition}`",
+                    record.manifest.apartment_name
+                )
+                .into(),
+            )
+        })
+}
+
 fn transfer_uploaded_model_amount(
     authority: &AccountId,
     amount_nanos: u128,
@@ -6723,6 +6764,11 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
         if amount_nanos == 0 {
             return Err(invalid_parameter("amount_nanos must be greater than zero"));
         }
+        let canonical_asset_definition = resolve_agent_asset_definition_literal(
+            state_transaction,
+            &normalized_asset_definition,
+        )?
+        .to_string();
 
         let apartment_key = apartment_name.to_string();
         let sequence = next_soracloud_audit_sequence(state_transaction);
@@ -6755,23 +6801,15 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
                 .into(),
             ));
         }
-        let spend_limit = record
-            .manifest
-            .spend_limits
-            .iter()
-            .find(|limit| limit.asset_definition == normalized_asset_definition)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "apartment `{apartment_name}` has no spend limit configured for asset `{normalized_asset_definition}`"
-                    )
-                    .into(),
-                )
-            })?;
+        let spend_limit = agent_spend_limit_for_asset_definition(
+            state_transaction,
+            &record,
+            &canonical_asset_definition,
+        )?;
         if amount_nanos > spend_limit.max_per_tx_nanos.get() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "requested amount {amount_nanos} exceeds max_per_tx_nanos {} for asset `{normalized_asset_definition}`",
+                    "requested amount {amount_nanos} exceeds max_per_tx_nanos {} for asset `{canonical_asset_definition}`",
                     spend_limit.max_per_tx_nanos.get()
                 )
                 .into(),
@@ -6779,7 +6817,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
         }
 
         let day_bucket = wallet_day_bucket(sequence);
-        let current_day_spent = wallet_day_spent(&record, &normalized_asset_definition, day_bucket);
+        let current_day_spent = wallet_day_spent(&record, &canonical_asset_definition, day_bucket);
         let projected_day_spent = current_day_spent.checked_add(amount_nanos).ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 format!("wallet daily spend overflow for apartment `{apartment_name}`").into(),
@@ -6788,7 +6826,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
         if projected_day_spent > spend_limit.max_per_day_nanos.get() {
             return Err(InstructionExecutionError::InvariantViolation(
                 format!(
-                    "projected daily spend {projected_day_spent} exceeds max_per_day_nanos {} for asset `{normalized_asset_definition}`",
+                    "projected daily spend {projected_day_spent} exceeds max_per_day_nanos {} for asset `{canonical_asset_definition}`",
                     spend_limit.max_per_day_nanos.get()
                 )
                 .into(),
@@ -6799,7 +6837,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
         let action = if agent_policy_capability_active(&record, "wallet.auto_approve") {
             wallet_record_spend(
                 &mut record,
-                &normalized_asset_definition,
+                &canonical_asset_definition,
                 day_bucket,
                 projected_day_spent,
             );
@@ -6809,7 +6847,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
                 request_id.clone(),
                 SoraAgentWalletSpendRequestV1 {
                     request_id: request_id.clone(),
-                    asset_definition: normalized_asset_definition.clone(),
+                    asset_definition: canonical_asset_definition.clone(),
                     amount_nanos,
                     created_sequence: sequence,
                 },
@@ -6832,7 +6870,7 @@ impl Execute for isi::RequestSoracloudAgentWalletSpend {
                 restart_count: record.restart_count,
                 signer: provenance.signer,
                 request_id: Some(request_id),
-                asset_definition: Some(normalized_asset_definition),
+                asset_definition: Some(canonical_asset_definition),
                 amount_nanos: Some(amount_nanos),
                 capability: None,
                 reason: None,
@@ -6933,20 +6971,11 @@ impl Execute for isi::ApproveSoracloudAgentWalletSpend {
                     .into(),
                 )
             })?;
-        let spend_limit = record
-            .manifest
-            .spend_limits
-            .iter()
-            .find(|limit| limit.asset_definition == pending.asset_definition)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "apartment `{apartment_name}` has no spend limit configured for asset `{}`",
-                        pending.asset_definition
-                    )
-                    .into(),
-                )
-            })?;
+        let spend_limit = agent_spend_limit_for_asset_definition(
+            state_transaction,
+            &record,
+            &pending.asset_definition,
+        )?;
         let day_bucket = wallet_day_bucket(sequence);
         let current_day_spent = wallet_day_spent(&record, &pending.asset_definition, day_bucket);
         let projected_day_spent = current_day_spent

@@ -16,19 +16,29 @@ use super::prelude::*;
 /// - update metadata
 /// - transfer, etc.
 pub mod isi {
-    use std::{collections::BTreeSet, sync::LazyLock};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::LazyLock,
+    };
 
     use iroha_data_model::{
         asset::{
-            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, AssetIssuerUsagePolicyV1,
-            AssetSubjectBindingV1, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
+            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            AssetIssuerUsagePolicyV1, AssetSubjectBindingV1, AssetTransferControlRecord,
+            AssetTransferControlStoreV1, AssetTransferControlWindow, AssetTransferLimit,
+            AssetTransferUsageBucket, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
         },
         events::data::prelude::{AccountEvent, AssetEvent, MetadataChanged},
-        isi::{RemoveAssetKeyValue, SetAssetKeyValue, error::MintabilityError},
+        isi::{
+            RemoveAssetKeyValue, SetAssetKeyValue, SetAssetTransferBlacklist,
+            SetAssetTransferControl, SetAssetTransferFreeze, error::MintabilityError,
+        },
         nexus::{CapabilityRequest, ManifestVerdict},
     };
     use iroha_primitives::numeric::NumericSpec;
+    use iroha_primitives::{json::Json, numeric::Numeric};
+    use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time as WallClockTime};
 
     use super::*;
     use crate::{
@@ -154,6 +164,263 @@ pub mod isi {
             .parse()
             .expect("domain asset usage policy metadata key must be a valid Name")
     });
+
+    static ASSET_TRANSFER_CONTROL_KEY: LazyLock<Name> = LazyLock::new(|| {
+        ASSET_TRANSFER_CONTROL_METADATA_KEY
+            .parse()
+            .expect("asset transfer control metadata key must be a valid Name")
+    });
+
+    fn load_asset_transfer_control_store_from_account(
+        account_id: &AccountId,
+        metadata: &Metadata,
+    ) -> Result<AssetTransferControlStoreV1, Error> {
+        let Some(raw) = metadata.get(&*ASSET_TRANSFER_CONTROL_KEY) else {
+            return Ok(AssetTransferControlStoreV1::default());
+        };
+        raw.try_into_any_norito::<AssetTransferControlStoreV1>()
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "invalid account metadata `{}` on {}: {err}",
+                        ASSET_TRANSFER_CONTROL_METADATA_KEY, account_id
+                    )
+                    .into(),
+                )
+            })
+    }
+
+    fn load_asset_transfer_control_store(
+        state_transaction: &StateTransaction<'_, '_>,
+        account_id: &AccountId,
+    ) -> Result<AssetTransferControlStoreV1, Error> {
+        let account = state_transaction.world.account(account_id)?;
+        load_asset_transfer_control_store_from_account(account.id(), account.metadata())
+    }
+
+    fn persist_asset_transfer_control_store(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        account_id: &AccountId,
+        store: &AssetTransferControlStoreV1,
+    ) -> Result<(), Error> {
+        let account = state_transaction.world.account_mut(account_id)?;
+        if store.controls.is_empty() {
+            if let Some(value) = account.remove(&*ASSET_TRANSFER_CONTROL_KEY) {
+                state_transaction
+                    .world
+                    .emit_events(Some(AccountEvent::MetadataRemoved(MetadataChanged {
+                        target: account_id.clone(),
+                        key: ASSET_TRANSFER_CONTROL_KEY.clone(),
+                        value,
+                    })));
+            }
+            return Ok(());
+        }
+
+        let value = Json::new(store.clone());
+        account.insert(ASSET_TRANSFER_CONTROL_KEY.clone(), value.clone());
+        state_transaction
+            .world
+            .emit_events(Some(AccountEvent::MetadataInserted(MetadataChanged {
+                target: account_id.clone(),
+                key: ASSET_TRANSFER_CONTROL_KEY.clone(),
+                value,
+            })));
+        Ok(())
+    }
+
+    fn ensure_asset_transfer_control_owner(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> Result<(), Error> {
+        let owner = state_transaction
+            .world
+            .asset_definition(asset_definition_id)?
+            .owned_by()
+            .clone();
+        if owner == *authority {
+            return Ok(());
+        }
+        Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "account {authority} cannot manage transfer controls for asset definition {asset_definition_id}; owner is {owner}"
+            )
+            .into(),
+        ))
+    }
+
+    fn canonicalize_asset_transfer_limits(
+        limits: Vec<AssetTransferLimit>,
+    ) -> Result<Vec<AssetTransferLimit>, Error> {
+        let mut by_window = BTreeMap::<AssetTransferControlWindow, Option<Numeric>>::new();
+        for limit in limits {
+            if let Some(cap) = &limit.cap_amount {
+                ensure_non_negative(cap)?;
+            }
+            by_window.insert(limit.window, limit.cap_amount);
+        }
+        Ok(by_window
+            .into_iter()
+            .filter_map(|(window, cap_amount)| {
+                cap_amount.map(|cap_amount| AssetTransferLimit {
+                    window,
+                    cap_amount: Some(cap_amount),
+                })
+            })
+            .collect())
+    }
+
+    fn bucket_start_ms(window: AssetTransferControlWindow, now_ms: u64) -> Result<u64, Error> {
+        let now = OffsetDateTime::from_unix_timestamp_nanos(i128::from(now_ms) * 1_000_000)
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid block timestamp for asset transfer controls: {err}").into(),
+                )
+            })?;
+        let date = now.date();
+        let start_date = match window {
+            AssetTransferControlWindow::Day => date,
+            AssetTransferControlWindow::Week => {
+                let offset = i64::from(date.weekday().number_days_from_monday());
+                date.checked_sub(time::Duration::days(offset))
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "failed to compute UTC week bucket start".into(),
+                        )
+                    })?
+            }
+            AssetTransferControlWindow::Month => Date::from_calendar_date(
+                date.year(),
+                Month::try_from(u8::from(date.month())).map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("failed to compute UTC month bucket start: {err}").into(),
+                    )
+                })?,
+                1,
+            )
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("failed to compute UTC month bucket start: {err}").into(),
+                )
+            })?,
+        };
+        let start = PrimitiveDateTime::new(start_date, WallClockTime::MIDNIGHT).assume_utc();
+        u64::try_from(start.unix_timestamp_nanos() / 1_000_000).map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "bucket start timestamp exceeds supported range".into(),
+            )
+        })
+    }
+
+    fn active_control_record(
+        state_transaction: &StateTransaction<'_, '_>,
+        account_id: &AccountId,
+        asset_definition_id: &AssetDefinitionId,
+    ) -> Result<Option<AssetTransferControlRecord>, Error> {
+        let store = load_asset_transfer_control_store(state_transaction, account_id)?;
+        Ok(store.find(asset_definition_id).cloned())
+    }
+
+    fn update_control_record(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        account_id: &AccountId,
+        record: AssetTransferControlRecord,
+    ) -> Result<(), Error> {
+        let mut store = load_asset_transfer_control_store(state_transaction, account_id)?;
+        if record.is_empty() {
+            store.remove(&record.asset_definition_id);
+        } else {
+            store.upsert(record);
+        }
+        persist_asset_transfer_control_store(state_transaction, account_id, &store)
+    }
+
+    fn prepare_outbound_asset_transfer_control_update(
+        state_transaction: &StateTransaction<'_, '_>,
+        source_id: &AssetId,
+        amount: &Numeric,
+    ) -> Result<Option<AssetTransferControlRecord>, Error> {
+        let Some(mut record) = active_control_record(
+            state_transaction,
+            source_id.account(),
+            source_id.definition(),
+        )?
+        else {
+            return Ok(None);
+        };
+
+        if record.outgoing_frozen {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "outbound transfers for account {} are frozen on asset definition {}",
+                    source_id.account(),
+                    source_id.definition()
+                )
+                .into(),
+            ));
+        }
+        if record.blacklisted {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "account {} is blacklisted for outbound transfers on asset definition {}",
+                    source_id.account(),
+                    source_id.definition()
+                )
+                .into(),
+            ));
+        }
+
+        let now_ms = state_transaction.block_unix_timestamp_ms();
+        let mut current_usages =
+            BTreeMap::<AssetTransferControlWindow, AssetTransferUsageBucket>::new();
+        for usage in record.usages.iter().cloned() {
+            current_usages.insert(usage.window, usage);
+        }
+
+        let mut next_usages = Vec::new();
+        for limit in record.limits.iter().filter_map(|limit| {
+            limit
+                .cap_amount
+                .clone()
+                .map(|cap_amount| (limit.window, cap_amount))
+        }) {
+            let (window, cap_amount) = limit;
+            let bucket_start = bucket_start_ms(window, now_ms)?;
+            let spent_before = current_usages
+                .remove(&window)
+                .filter(|usage| usage.bucket_start_ms == bucket_start)
+                .map(|usage| usage.spent_amount)
+                .unwrap_or_else(Numeric::zero);
+            let spent_after = spent_before
+                .clone()
+                .checked_add(amount.clone())
+                .ok_or(MathError::Overflow)?;
+            if spent_after > cap_amount {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "outbound transfer cap exceeded for {} on {} {} bucket: {} + {} > {}",
+                        source_id.account(),
+                        source_id.definition(),
+                        window.as_str(),
+                        spent_before,
+                        amount,
+                        cap_amount
+                    )
+                    .into(),
+                ));
+            }
+            next_usages.push(AssetTransferUsageBucket {
+                window,
+                bucket_start_ms: bucket_start,
+                spent_amount: spent_after,
+            });
+        }
+
+        record.usages = next_usages;
+        record.updated_at_ms = Some(now_ms);
+        Ok(Some(record))
+    }
 
     fn load_issuer_usage_policy(
         definition: &AssetDefinition,
@@ -639,6 +906,11 @@ pub mod isi {
             let destination_id =
                 AssetId::new(source_id.definition().clone(), self.destination().clone());
             let amount = self.object().clone();
+            let control_update = prepare_outbound_asset_transfer_control_update(
+                state_transaction,
+                &source_id,
+                &amount,
+            )?;
             let _created = ensure_receiving_account(
                 authority,
                 destination_id.account(),
@@ -647,6 +919,9 @@ pub mod isi {
             )?;
             let delta =
                 apply_transfer_delta(state_transaction, &source_id, &destination_id, &amount)?;
+            if let Some(record) = control_update {
+                update_control_record(state_transaction, source_id.account(), record)?;
+            }
             state_transaction.record_transfer_transcript(authority, delta);
 
             #[allow(clippy::float_arithmetic)]
@@ -670,6 +945,114 @@ pub mod isi {
         }
     }
 
+    impl Execute for SetAssetTransferFreeze {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_asset_transfer_control_owner(
+                state_transaction,
+                authority,
+                &self.asset_definition_id,
+            )?;
+            state_transaction.world.account(&self.account_id)?;
+
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            let mut record = active_control_record(
+                state_transaction,
+                &self.account_id,
+                &self.asset_definition_id,
+            )?
+            .unwrap_or(AssetTransferControlRecord {
+                asset_definition_id: self.asset_definition_id.clone(),
+                outgoing_frozen: false,
+                blacklisted: false,
+                limits: Vec::new(),
+                usages: Vec::new(),
+                updated_at_ms: None,
+            });
+            record.outgoing_frozen = self.outgoing_frozen;
+            record.updated_at_ms = Some(now_ms);
+            update_control_record(state_transaction, &self.account_id, record)
+        }
+    }
+
+    impl Execute for SetAssetTransferBlacklist {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_asset_transfer_control_owner(
+                state_transaction,
+                authority,
+                &self.asset_definition_id,
+            )?;
+            state_transaction.world.account(&self.account_id)?;
+
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            let mut record = active_control_record(
+                state_transaction,
+                &self.account_id,
+                &self.asset_definition_id,
+            )?
+            .unwrap_or(AssetTransferControlRecord {
+                asset_definition_id: self.asset_definition_id.clone(),
+                outgoing_frozen: false,
+                blacklisted: false,
+                limits: Vec::new(),
+                usages: Vec::new(),
+                updated_at_ms: None,
+            });
+            record.blacklisted = self.blacklisted;
+            record.updated_at_ms = Some(now_ms);
+            update_control_record(state_transaction, &self.account_id, record)
+        }
+    }
+
+    impl Execute for SetAssetTransferControl {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_asset_transfer_control_owner(
+                state_transaction,
+                authority,
+                &self.asset_definition_id,
+            )?;
+            state_transaction.world.account(&self.account_id)?;
+
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            let mut record = active_control_record(
+                state_transaction,
+                &self.account_id,
+                &self.asset_definition_id,
+            )?
+            .unwrap_or(AssetTransferControlRecord {
+                asset_definition_id: self.asset_definition_id.clone(),
+                outgoing_frozen: false,
+                blacklisted: false,
+                limits: Vec::new(),
+                usages: Vec::new(),
+                updated_at_ms: None,
+            });
+
+            let next_limits = canonicalize_asset_transfer_limits(self.limits)?;
+            let active_windows = next_limits
+                .iter()
+                .map(|limit| limit.window)
+                .collect::<BTreeSet<_>>();
+            record.limits = next_limits;
+            record
+                .usages
+                .retain(|usage| active_windows.contains(&usage.window));
+            record.updated_at_ms = Some(now_ms);
+            update_control_record(state_transaction, &self.account_id, record)
+        }
+    }
+
     impl Execute for TransferAssetBatch {
         fn execute(
             self,
@@ -688,6 +1071,11 @@ pub mod isi {
                 let destination_id =
                     AssetId::new(entry.asset_definition().clone(), entry.to().clone());
                 let amount = entry.amount().clone();
+                let control_update = prepare_outbound_asset_transfer_control_update(
+                    state_transaction,
+                    &source_id,
+                    &amount,
+                )?;
                 let _created = ensure_receiving_account(
                     authority,
                     destination_id.account(),
@@ -696,6 +1084,9 @@ pub mod isi {
                 )?;
                 let delta =
                     apply_transfer_delta(state_transaction, &source_id, &destination_id, &amount)?;
+                if let Some(record) = control_update {
+                    update_control_record(state_transaction, source_id.account(), record)?;
+                }
                 deltas.push(delta);
                 #[allow(clippy::float_arithmetic)]
                 #[cfg(feature = "telemetry")]
@@ -1535,8 +1926,9 @@ pub mod query {
 
         use iroha_data_model::account::NewAccount;
         use iroha_data_model::asset::{
-            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, AssetIssuerUsagePolicyV1,
-            AssetSubjectBindingV1, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
+            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            AssetIssuerUsagePolicyV1, AssetSubjectBindingV1, AssetTransferControlStoreV1,
+            AssetTransferControlWindow, AssetTransferLimit, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
         };
         use iroha_data_model::nexus::{
@@ -1559,6 +1951,81 @@ pub mod query {
 
         fn build_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> Account {
             Account::new(account_id.clone().to_account_id(domain_id.clone())).build(account_id)
+        }
+
+        fn build_numeric_asset_definition(
+            asset_definition_id: &AssetDefinitionId,
+            owner: &AccountId,
+        ) -> AssetDefinition {
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+                .build(owner)
+        }
+
+        fn build_asset_transfer_control_test_state(
+            source_balance: u32,
+        ) -> (State, AssetDefinitionId, AssetId) {
+            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
+            let asset_definition_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_definition = build_numeric_asset_definition(&asset_definition_id, &ALICE_ID);
+            let source_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+            let source_asset = Asset::new(
+                source_asset_id.clone(),
+                Numeric::new(i128::from(source_balance), 0),
+            );
+
+            let world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_definition],
+                [source_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            (state, asset_definition_id, source_asset_id)
+        }
+
+        fn asset_balance_or_zero(
+            state_transaction: &crate::state::StateTransaction<'_, '_>,
+            asset_id: &AssetId,
+        ) -> Numeric {
+            state_transaction
+                .world
+                .assets
+                .get(asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero)
+        }
+
+        fn load_asset_transfer_control_store(
+            state_transaction: &crate::state::StateTransaction<'_, '_>,
+            account_id: &AccountId,
+        ) -> AssetTransferControlStoreV1 {
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("metadata key");
+            let account = state_transaction
+                .world
+                .account(account_id)
+                .expect("controlled account exists");
+            let raw = account
+                .metadata()
+                .get(&metadata_key)
+                .cloned()
+                .expect("asset transfer control metadata stored");
+            raw.try_into_any_norito::<AssetTransferControlStoreV1>()
+                .expect("stored control metadata decodes")
         }
 
         #[test]
@@ -1860,6 +2327,199 @@ pub mod query {
 
             assert!(stx.world.assets.get(&alice_asset_id).is_none());
             assert!(stx.world.asset_metadata.get(&alice_asset_id).is_none());
+        }
+
+        #[test]
+        fn asset_transfer_controls_require_asset_owner_authority() {
+            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            let err = SetAssetTransferFreeze::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                true,
+                Some("operator freeze".to_owned()),
+            )
+            .execute(&BOB_ID, &mut stx)
+            .expect_err("non-owner must be rejected");
+            assert!(
+                err.to_string().contains("owner is"),
+                "unexpected error: {err}"
+            );
+
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("metadata key");
+            let account = stx
+                .world
+                .account(&ALICE_ID)
+                .expect("controlled account exists");
+            assert!(
+                account.metadata().get(&metadata_key).is_none(),
+                "rejected control instruction must not persist metadata"
+            );
+        }
+
+        #[test]
+        fn transfer_rejects_when_outbound_asset_is_frozen() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            SetAssetTransferFreeze::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                true,
+                Some("compliance hold".to_owned()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("freeze succeeds");
+
+            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("frozen outbound transfer must be rejected");
+            assert!(
+                err.to_string().contains("frozen"),
+                "unexpected error: {err}"
+            );
+
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Numeric::new(10, 0)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Numeric::zero()
+            );
+
+            let store = load_asset_transfer_control_store(&stx, &ALICE_ID);
+            let record = store
+                .find(&asset_definition_id)
+                .expect("frozen record stored");
+            assert!(record.outgoing_frozen);
+            assert!(!record.blacklisted);
+            assert!(record.usages.is_empty());
+        }
+
+        #[test]
+        fn transfer_rejects_when_account_is_blacklisted_for_asset() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            SetAssetTransferBlacklist::new(ALICE_ID.clone(), asset_definition_id.clone(), true)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("blacklist succeeds");
+
+            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("blacklisted outbound transfer must be rejected");
+            assert!(
+                err.to_string().contains("blacklisted"),
+                "unexpected error: {err}"
+            );
+
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Numeric::new(10, 0)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Numeric::zero()
+            );
+
+            let store = load_asset_transfer_control_store(&stx, &ALICE_ID);
+            let record = store
+                .find(&asset_definition_id)
+                .expect("blacklist record stored");
+            assert!(record.blacklisted);
+            assert!(!record.outgoing_frozen);
+            assert!(record.usages.is_empty());
+        }
+
+        #[test]
+        fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            SetAssetTransferControl::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                vec![AssetTransferLimit {
+                    window: AssetTransferControlWindow::Day,
+                    cap_amount: Some(Numeric::new(5, 0)),
+                }],
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("limit update succeeds");
+
+            Transfer::asset_numeric(source_asset_id.clone(), 5_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact-cap transfer must succeed");
+
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Numeric::new(5, 0)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Numeric::new(5, 0)
+            );
+
+            let store_after_success = load_asset_transfer_control_store(&stx, &ALICE_ID);
+            let record_after_success = store_after_success
+                .find(&asset_definition_id)
+                .expect("limit record stored after successful transfer");
+            assert_eq!(record_after_success.limits.len(), 1);
+            assert_eq!(record_after_success.usages.len(), 1);
+            let usage = &record_after_success.usages[0];
+            assert_eq!(usage.window, AssetTransferControlWindow::Day);
+            assert_eq!(usage.bucket_start_ms, 86_400_000);
+            assert_eq!(usage.spent_amount, Numeric::new(5, 0));
+
+            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("over-cap transfer must be rejected");
+            assert!(
+                err.to_string().contains("cap exceeded"),
+                "unexpected error: {err}"
+            );
+
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Numeric::new(5, 0)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Numeric::new(5, 0)
+            );
+
+            let store_after_rejection = load_asset_transfer_control_store(&stx, &ALICE_ID);
+            let record_after_rejection = store_after_rejection
+                .find(&asset_definition_id)
+                .expect("limit record retained after rejected transfer");
+            assert_eq!(record_after_rejection.usages.len(), 1);
+            assert_eq!(
+                record_after_rejection.usages[0].spent_amount,
+                Numeric::new(5, 0)
+            );
+            assert_eq!(record_after_rejection.usages[0].bucket_start_ms, 86_400_000);
         }
 
         #[test]

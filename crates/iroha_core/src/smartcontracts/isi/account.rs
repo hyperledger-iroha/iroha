@@ -499,6 +499,116 @@ pub mod query {
         }
     }
 
+    #[cfg(test)]
+    fn seed_domain_name_lease(
+        world: &mut crate::state::World,
+        owner: &AccountId,
+        domain_id: &DomainId,
+    ) {
+        let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+        let address =
+            iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
+    #[cfg(test)]
+    fn seed_manage_account_alias_dataspace_permission(
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+        authority: &AccountId,
+        dataspace: iroha_data_model::nexus::DataSpaceId,
+    ) {
+        state_transaction.world.add_account_permission(
+            authority,
+            Permission::from(
+                iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                    scope:
+                        iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                            dataspace,
+                        ),
+                },
+            ),
+        );
+    }
+
+    #[cfg(test)]
+    fn seed_manage_account_alias_permissions(
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+        authority: &AccountId,
+        domain: &DomainId,
+        dataspace: iroha_data_model::nexus::DataSpaceId,
+    ) {
+        seed_manage_account_alias_dataspace_permission(state_transaction, authority, dataspace);
+        state_transaction.world.add_account_permission(
+            authority,
+            Permission::from(
+                iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                    scope:
+                        iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                            domain.clone(),
+                        ),
+                },
+            ),
+        );
+    }
+
+    #[cfg(test)]
+    fn seed_authority_account(world: &mut crate::state::World, authority: &AccountId) {
+        let account = Account {
+            id: authority.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
+        };
+        let (account_id, account_value) = iroha_data_model::IntoKeyValue::into_key_value(account);
+        world.accounts.insert(account_id, account_value);
+    }
+
+    #[cfg(test)]
+    fn seed_account_alias_lease(
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+        owner: &AccountId,
+        label: &AccountLabel,
+    ) {
+        let selector = crate::sns::selector_for_account_alias(
+            label,
+            &state_transaction.nexus.dataspace_catalog,
+        )
+        .expect("selector");
+        let address =
+            iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            1_000,
+            2_000,
+            3_000,
+            Metadata::default(),
+        );
+        state_transaction.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
     fn account_alias_value(
         account_id: &AccountId,
         account_value: &AccountValue,
@@ -967,6 +1077,85 @@ pub mod query {
             Ok(state_ro
                 .world()
                 .domains_for_subject(&self.account_id().subject_id()))
+        }
+    }
+
+    impl ValidSingularQuery for FindAliasesByAccountId {
+        #[metrics(+"find_aliases_by_account_id")]
+        fn execute(
+            &self,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<Vec<AccountAliasBindingRecord>, Error> {
+            let dataspace_filter = self
+                .dataspace()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|dataspace| {
+                    state_ro
+                        .nexus()
+                        .dataspace_catalog
+                        .by_alias(dataspace)
+                        .map(|entry| entry.id)
+                        .ok_or_else(|| {
+                            Error::Conversion(format!("unknown dataspace alias: {dataspace}"))
+                        })
+                })
+                .transpose()?;
+            let domain_filter = self
+                .domain()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|domain| {
+                    domain
+                        .parse::<DomainId>()
+                        .map_err(|err| Error::Conversion(format!("invalid domain: {err}")))
+                })
+                .transpose()?;
+
+            let account_id = self.account_id();
+            let Some(account) = state_ro.world().accounts().get(account_id) else {
+                return Err(Error::NotFound);
+            };
+
+            let labels = state_ro
+                .world()
+                .account_aliases_by_account()
+                .get(account_id)
+                .cloned()
+                .unwrap_or_default();
+            labels
+                .into_iter()
+                .filter(|label| {
+                    !dataspace_filter.is_some_and(|dataspace| label.dataspace != dataspace)
+                        && !domain_filter
+                            .as_ref()
+                            .is_some_and(|domain| label.domain.as_ref() != Some(domain))
+                })
+                .map(|label| {
+                    let alias = label
+                        .to_literal(&state_ro.nexus().dataspace_catalog)
+                        .map_err(|err| {
+                            Error::Conversion(format!("invalid account alias binding: {err}"))
+                        })?;
+                    let dataspace = state_ro
+                        .nexus()
+                        .dataspace_catalog
+                        .by_id(label.dataspace)
+                        .ok_or_else(|| {
+                            Error::Conversion(
+                                "account alias dataspace is missing from the catalog".to_owned(),
+                            )
+                        })?
+                        .alias
+                        .clone();
+                    Ok(AccountAliasBindingRecord {
+                        alias,
+                        dataspace,
+                        domain: label.domain.as_ref().map(ToString::to_string),
+                        is_primary: account.as_ref().label() == Some(&label),
+                    })
+                })
+                .collect()
         }
     }
 
@@ -1615,6 +1804,192 @@ pub mod query {
                 .execute(&view)
                 .unwrap();
             assert_eq!(domains, vec![acme, wonderland]);
+        }
+
+        #[test]
+        fn find_aliases_by_account_id_returns_primary_alias_bindings() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let linked_domain: DomainId = "hbl".parse().unwrap();
+            let mut world = World::default();
+            seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
+            seed_authority_account(&mut world, &ALICE_ID);
+            let state = State::new(world, kura, query_handle);
+            state.nexus.write().dataspace_catalog =
+                iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                    iroha_data_model::nexus::DataSpaceMetadata::default(),
+                    iroha_data_model::nexus::DataSpaceMetadata {
+                        id: iroha_data_model::nexus::DataSpaceId::new(9),
+                        alias: "sbp".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("catalog");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(linked_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            seed_manage_account_alias_permissions(
+                &mut stx,
+                &ALICE_ID,
+                &linked_domain,
+                iroha_data_model::nexus::DataSpaceId::new(9),
+            );
+
+            let (account_id, _) = gen_account_in("hbl");
+            let primary_label = AccountLabel::new_in_dataspace(
+                "merchant".parse().expect("label"),
+                Some(linked_domain.clone()),
+                iroha_data_model::nexus::DataSpaceId::new(9),
+            );
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
+            Register::account(
+                Account::new(account_id.clone().to_account_id(linked_domain.clone()))
+                    .with_label(Some(primary_label)),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let aliases = FindAliasesByAccountId::new(
+                account_id.clone(),
+                Some("sbp".to_owned()),
+                Some("hbl".to_owned()),
+            )
+            .execute(&view)
+            .unwrap();
+            assert_eq!(aliases.len(), 1);
+            assert_eq!(aliases[0].alias, "merchant@hbl.sbp");
+            assert_eq!(aliases[0].dataspace, "sbp");
+            assert_eq!(aliases[0].domain.as_deref(), Some("hbl"));
+            assert!(aliases[0].is_primary);
+        }
+
+        #[test]
+        fn find_aliases_by_account_id_returns_empty_when_filters_do_not_match() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let linked_domain: DomainId = "hbl".parse().unwrap();
+            let mut world = World::default();
+            seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
+            seed_authority_account(&mut world, &ALICE_ID);
+            let state = State::new(world, kura, query_handle);
+            state.nexus.write().dataspace_catalog =
+                iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                    iroha_data_model::nexus::DataSpaceMetadata::default(),
+                    iroha_data_model::nexus::DataSpaceMetadata {
+                        id: iroha_data_model::nexus::DataSpaceId::new(9),
+                        alias: "sbp".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("catalog");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(linked_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            seed_manage_account_alias_permissions(
+                &mut stx,
+                &ALICE_ID,
+                &linked_domain,
+                iroha_data_model::nexus::DataSpaceId::new(9),
+            );
+
+            let (account_id, _) = gen_account_in("hbl");
+            let primary_label = AccountLabel::new_in_dataspace(
+                "merchant".parse().expect("label"),
+                Some(linked_domain.clone()),
+                iroha_data_model::nexus::DataSpaceId::new(9),
+            );
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
+            Register::account(
+                Account::new(account_id.clone().to_account_id(linked_domain))
+                    .with_label(Some(primary_label)),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let aliases = FindAliasesByAccountId::new(
+                account_id,
+                Some("sbp".to_owned()),
+                Some("ubl".to_owned()),
+            )
+            .execute(&view)
+            .unwrap();
+            assert!(aliases.is_empty());
+        }
+
+        #[test]
+        fn find_aliases_by_account_id_returns_root_dataspace_alias_without_domain() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut world = World::default();
+            seed_authority_account(&mut world, &ALICE_ID);
+            let state = State::new(world, kura, query_handle);
+            state.nexus.write().dataspace_catalog =
+                iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                    iroha_data_model::nexus::DataSpaceMetadata::default(),
+                    iroha_data_model::nexus::DataSpaceMetadata {
+                        id: iroha_data_model::nexus::DataSpaceId::new(9),
+                        alias: "sbp".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("catalog");
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            seed_manage_account_alias_dataspace_permission(
+                &mut stx,
+                &ALICE_ID,
+                iroha_data_model::nexus::DataSpaceId::new(9),
+            );
+
+            let (account_id, _) = gen_account_in("wonderland");
+            let root_label = AccountLabel::new_in_dataspace(
+                "merchant".parse().expect("label"),
+                None,
+                iroha_data_model::nexus::DataSpaceId::new(9),
+            );
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &root_label);
+            Register::account(
+                Account::new_domainless(account_id.clone()).with_label(Some(root_label)),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let view = state.view();
+            let aliases = FindAliasesByAccountId::new(account_id, Some("sbp".to_owned()), None)
+                .execute(&view)
+                .unwrap();
+            assert_eq!(aliases.len(), 1);
+            assert_eq!(aliases[0].alias, "merchant@sbp");
+            assert_eq!(aliases[0].dataspace, "sbp");
+            assert_eq!(aliases[0].domain, None);
+            assert!(aliases[0].is_primary);
         }
 
         #[test]

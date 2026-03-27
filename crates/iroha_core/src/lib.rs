@@ -146,6 +146,8 @@ pub mod telemetry;
 pub mod time;
 /// Shared Torii helpers (query surfaces, filters).
 pub mod torii;
+/// Peer-to-peer Torii ingress proxy envelopes.
+pub mod torii_proxy;
 pub mod tx;
 /// Zero-knowledge verification helpers (backend dispatch + envelope validation).
 pub mod zk;
@@ -250,6 +252,10 @@ pub enum NetworkMessage {
     SoracloudLocalReadProxyRequest(Box<soracloud_runtime::SoracloudLocalReadProxyRequestV1>),
     /// Soracloud local-read proxy response returned to the ingress node.
     SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
+    /// Torii proxy request routed to the authoritative ingress peer.
+    ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV1>),
+    /// Torii proxy response returned to the ingress node.
+    ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
     /// Norito Streaming control-plane frame.
     StreamingControl(Box<ControlFrame>),
     /// Gossip for `SoraNet` `PoW`/puzzle runtime configuration (Norito-encoded bytes).
@@ -308,6 +314,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             | NetworkMessage::MergeCommitteeSignature(_)
             | NetworkMessage::SoracloudLocalReadProxyRequest(_)
             | NetworkMessage::SoracloudLocalReadProxyResponse(_)
+            | NetworkMessage::ToriiProxyRequest(_)
+            | NetworkMessage::ToriiProxyResponse(_)
             | NetworkMessage::StreamingControl(_)
             | NetworkMessage::GenesisRequest(_)
             | NetworkMessage::GenesisResponse(_) => T::Control,

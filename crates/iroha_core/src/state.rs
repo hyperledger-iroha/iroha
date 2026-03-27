@@ -357,6 +357,7 @@ macro_rules! build_world_block {
             domain_account_subjects: $state.domain_account_subjects.$method(),
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
+            account_aliases_by_account: $state.account_aliases_by_account.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
@@ -540,6 +541,7 @@ macro_rules! build_world_transaction {
             domain_account_subjects: $state.domain_account_subjects.transaction(),
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
+            account_aliases_by_account: $state.account_aliases_by_account.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
@@ -1419,6 +1421,9 @@ pub struct World {
     /// Index from account alias to canonical I105 account id.
     #[norito(skip)]
     pub(crate) account_aliases: Storage<AccountLabel, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    #[norito(skip)]
+    pub(crate) account_aliases_by_account: Storage<AccountId, BTreeSet<AccountLabel>>,
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
@@ -1832,6 +1837,8 @@ pub struct WorldBlock<'world> {
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountLabel>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -2380,6 +2387,9 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountLabel, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    pub(crate) account_aliases_by_account:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountLabel>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
@@ -2405,8 +2415,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_definition_alias_bindings:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
     /// Index mapping contract alias literals to canonical contract addresses.
-    pub(crate) contract_aliases:
-        StorageTransaction<'block, 'world, ContractAlias, ContractAddress>,
+    pub(crate) contract_aliases: StorageTransaction<'block, 'world, ContractAlias, ContractAddress>,
     /// Alias lease metadata keyed by canonical contract address.
     pub(crate) contract_alias_bindings:
         StorageTransaction<'block, 'world, ContractAddress, ContractAliasBindingRecord>,
@@ -2811,6 +2820,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) internal_event_buf: Vec<Arc<DataEvent>>,
 }
 
+#[allow(single_use_lifetimes)]
 impl<'block, 'world> WorldTransaction<'block, 'world> {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
@@ -2831,6 +2841,19 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         iroha_data_model::account::AccountId,
     > {
         &mut self.account_aliases
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to reverse account-alias bindings for tests and API scaffolding.
+    pub fn account_aliases_by_account_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::AccountId,
+        BTreeSet<iroha_data_model::account::rekey::AccountLabel>,
+    > {
+        &mut self.account_aliases_by_account
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -3067,10 +3090,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             ));
         }
 
-        if let Some(existing_binding) = self
-            .contract_alias_bindings
-            .get(contract_address)
-            .cloned()
+        if let Some(existing_binding) = self.contract_alias_bindings.get(contract_address).cloned()
             && existing_binding.alias != alias
         {
             self.contract_aliases.remove(existing_binding.alias.clone());
@@ -3092,7 +3112,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
     /// Remove the alias binding for a contract and keep indexes consistent.
     pub fn clear_contract_alias(&mut self, contract_address: &ContractAddress) {
-        if let Some(existing) = self.contract_alias_bindings.remove(contract_address.clone()) {
+        if let Some(existing) = self
+            .contract_alias_bindings
+            .remove(contract_address.clone())
+        {
             self.contract_aliases.remove(existing.alias);
         }
     }
@@ -3100,10 +3123,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Remove contract aliases whose grace window has elapsed.
     ///
     /// Returns canonical contract addresses that were unbound.
-    pub fn sweep_expired_contract_aliases(
-        &mut self,
-        now_ms: u64,
-    ) -> Vec<ContractAddress> {
+    pub fn sweep_expired_contract_aliases(&mut self, now_ms: u64) -> Vec<ContractAddress> {
         let expired: Vec<ContractAddress> = self
             .contract_alias_bindings
             .iter()
@@ -3142,6 +3162,8 @@ pub struct WorldView<'world> {
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    pub(crate) account_aliases_by_account: StorageView<'world, AccountId, BTreeSet<AccountLabel>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -8231,6 +8253,17 @@ mod storage_migration_tests {
             Some(&account_id),
             "additional bound alias should survive rebuild"
         );
+        let reverse = world
+            .account_aliases_by_account
+            .view()
+            .get(&account_id)
+            .cloned()
+            .expect("reverse alias index should exist");
+        assert_eq!(
+            reverse,
+            BTreeSet::from([bound_label, primary_label]),
+            "reverse alias index should include both primary and bound aliases"
+        );
     }
 
     #[test]
@@ -10812,6 +10845,7 @@ impl World {
 
     fn rebuild_account_alias_index(&mut self) -> Result<(), String> {
         let mut index = BTreeMap::new();
+        let mut reverse = BTreeMap::<AccountId, BTreeSet<AccountLabel>>::new();
         let existing_bindings: Vec<_> = self
             .account_aliases
             .view()
@@ -10845,6 +10879,10 @@ impl World {
                 }
                 continue;
             }
+            reverse
+                .entry(account_id.clone())
+                .or_default()
+                .insert(label.clone());
             index.insert(label, account_id);
         }
         for (account_id, value) in view.iter() {
@@ -10871,9 +10909,14 @@ impl World {
                 }
                 continue;
             }
+            reverse
+                .entry(account_id.clone())
+                .or_default()
+                .insert(label.clone());
             index.insert(label.clone(), account_id.clone());
         }
         self.account_aliases = index.into_iter().collect();
+        self.account_aliases_by_account = reverse.into_iter().collect();
         Ok(())
     }
 
@@ -11227,6 +11270,7 @@ impl World {
             domain_account_subjects: self.domain_account_subjects.view(),
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
+            account_aliases_by_account: self.account_aliases_by_account.view(),
             opaque_uaids: self.opaque_uaids.view(),
             ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
@@ -11422,6 +11466,10 @@ pub trait WorldReadOnly {
     fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId>;
     /// Account alias index (read-only).
     fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId>;
+    /// Reverse account alias index (read-only).
+    fn account_aliases_by_account(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountLabel>>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
     /// Global RAM-LFE program policy registry (read-only).
@@ -12406,6 +12454,11 @@ macro_rules! impl_world_ro {
             fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId> {
                 &self.account_aliases
             }
+            fn account_aliases_by_account(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountLabel>> {
+                &self.account_aliases_by_account
+            }
             fn opaque_uaids(
                 &self,
             ) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId> {
@@ -13156,6 +13209,7 @@ impl<'world> WorldBlock<'world> {
             domain_account_subjects,
             uaid_accounts,
             account_aliases,
+            account_aliases_by_account,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -13451,6 +13505,7 @@ impl<'world> WorldBlock<'world> {
         domain_account_subjects.commit();
         uaid_accounts.commit();
         account_aliases.commit();
+        account_aliases_by_account.commit();
         opaque_uaids.commit();
         domains.commit();
         domain_selectors.commit();
@@ -13476,6 +13531,71 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     > {
         &mut self.runtime_upgrades
+    }
+
+    fn add_account_alias_to_reverse_index(&mut self, account_id: &AccountId, label: &AccountLabel) {
+        if self.account_aliases_by_account.get(account_id).is_none() {
+            self.account_aliases_by_account
+                .insert(account_id.clone(), BTreeSet::new());
+        }
+        if let Some(labels) = self.account_aliases_by_account.get_mut(account_id) {
+            labels.insert(label.clone());
+        }
+    }
+
+    fn remove_account_alias_from_reverse_index(
+        &mut self,
+        account_id: &AccountId,
+        label: &AccountLabel,
+    ) {
+        let mut remove_entry = false;
+        if let Some(labels) = self.account_aliases_by_account.get_mut(account_id) {
+            labels.remove(label);
+            remove_entry = labels.is_empty();
+        }
+        if remove_entry {
+            self.account_aliases_by_account.remove(account_id.clone());
+        }
+    }
+
+    pub(crate) fn insert_account_alias_binding(
+        &mut self,
+        label: AccountLabel,
+        account_id: AccountId,
+    ) -> Option<AccountId> {
+        let previous = self
+            .account_aliases
+            .insert(label.clone(), account_id.clone());
+        if let Some(previous_account) = previous.as_ref() {
+            self.remove_account_alias_from_reverse_index(previous_account, &label);
+        }
+        self.add_account_alias_to_reverse_index(&account_id, &label);
+        previous
+    }
+
+    pub(crate) fn remove_account_alias_binding(
+        &mut self,
+        label: &AccountLabel,
+    ) -> Option<AccountId> {
+        let removed = self.account_aliases.remove(label.clone());
+        if let Some(account_id) = removed.as_ref() {
+            self.remove_account_alias_from_reverse_index(account_id, label);
+        }
+        removed
+    }
+
+    pub(crate) fn remove_account_alias_bindings_for_account(
+        &mut self,
+        account_id: &AccountId,
+    ) -> BTreeSet<AccountLabel> {
+        let labels = self
+            .account_aliases_by_account
+            .remove(account_id.clone())
+            .unwrap_or_default();
+        for label in &labels {
+            self.account_aliases.remove(label.clone());
+        }
+        labels
     }
 
     fn update_parameters_from_executor(&mut self, prev_executor_data_model: &ExecutorDataModel) {
@@ -14212,6 +14332,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domain_account_subjects,
             uaid_accounts,
             account_aliases,
+            account_aliases_by_account,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -14483,6 +14604,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         domain_account_subjects.apply();
         uaid_accounts.apply();
         account_aliases.apply();
+        account_aliases_by_account.apply();
         opaque_uaids.apply();
         domains.apply();
         domain_selectors.apply();
@@ -21910,7 +22032,8 @@ impl<'state> StateBlock<'state> {
             let removed_asset_aliases = maintenance_tx
                 .world
                 .sweep_expired_asset_definition_aliases(now_ms);
-            let removed_contract_aliases = maintenance_tx.world.sweep_expired_contract_aliases(now_ms);
+            let removed_contract_aliases =
+                maintenance_tx.world.sweep_expired_contract_aliases(now_ms);
             if !removed_asset_aliases.is_empty() || !removed_contract_aliases.is_empty() {
                 iroha_logger::info!(
                     removed_asset_aliases = removed_asset_aliases.len(),
@@ -26056,7 +26179,7 @@ impl StateTransaction<'_, '_> {
                     }
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
-                    let artifacts = host.into_execution_artifacts()?;
+                    let artifacts = host.into_execution_artifacts(None)?;
                     iroha_logger::info!(
                         trigger_id = %id,
                         authority = %authority,
@@ -26695,6 +26818,8 @@ pub(crate) mod deserialize {
         let account_subject_domains = take_optional_default(&mut map, "account_subject_domains")?;
         let domain_account_subjects = take_optional_default(&mut map, "domain_account_subjects")?;
         let account_aliases = take_optional_default(&mut map, "account_aliases")?;
+        let account_aliases_by_account =
+            take_optional_default(&mut map, "account_aliases_by_account")?;
         let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
@@ -26851,6 +26976,7 @@ pub(crate) mod deserialize {
             domain_account_subjects,
             uaid_accounts: Storage::default(),
             account_aliases,
+            account_aliases_by_account,
             opaque_uaids: Storage::default(),
             ram_lfe_program_policies,
             identifier_policies,

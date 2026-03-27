@@ -22,6 +22,8 @@ pub enum Command {
     Resolve(ResolveArgs),
     /// Resolve an alias by Merkle index (placeholder).
     ResolveIndex(ResolveIndexArgs),
+    /// List aliases bound to a canonical account id.
+    ByAccount(ByAccountArgs),
 }
 
 impl Run for Command {
@@ -30,6 +32,7 @@ impl Run for Command {
             Command::VoprfEvaluate(args) => args.run(context),
             Command::Resolve(args) => args.run(context),
             Command::ResolveIndex(args) => args.run(context),
+            Command::ByAccount(args) => args.run(context),
         }
     }
 }
@@ -82,6 +85,31 @@ pub struct ResolveIndexArgs {
 impl Run for ResolveIndexArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         alias_resolve_index_with(context, self.index, Client::post_alias_resolve_index)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ByAccountArgs {
+    /// Canonical I105 account id.
+    #[arg(long)]
+    pub account_id: String,
+    /// Optional dataspace alias filter such as `sbp`.
+    #[arg(long)]
+    pub dataspace: Option<String>,
+    /// Optional exact domain filter such as `hbl`.
+    #[arg(long)]
+    pub domain: Option<String>,
+}
+
+impl Run for ByAccountArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        alias_by_account_with(
+            context,
+            &self.account_id,
+            self.dataspace.as_deref(),
+            self.domain.as_deref(),
+            Client::post_alias_lookup_by_account,
+        )
     }
 }
 
@@ -200,6 +228,25 @@ fn validate_account_alias_literal(alias: &str) -> Result<()> {
     }
 }
 
+fn validate_account_id_literal(account_id: &str) -> Result<()> {
+    iroha::data_model::account::AccountId::parse_encoded(account_id.trim())
+        .map(|_| ())
+        .map_err(|err| eyre!("invalid account_id: {err}"))
+}
+
+fn validate_alias_scope_component(name: &str, value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("{name} must not be empty"));
+    }
+    if trimmed != value {
+        return Err(eyre!(
+            "{name} must not contain leading or trailing whitespace"
+        ));
+    }
+    Ok(())
+}
+
 fn alias_resolve_index_with<C, F>(context: &mut C, index: u64, call: F) -> Result<()>
 where
     C: RunContext,
@@ -223,6 +270,47 @@ where
         )),
         status => Err(eyre!(
             "alias resolve-index failed with status {status}: {}",
+            format_alias_error("server response", &body)
+        )),
+    }
+}
+
+fn alias_by_account_with<C, F>(
+    context: &mut C,
+    account_id: &str,
+    dataspace: Option<&str>,
+    domain: Option<&str>,
+    call: F,
+) -> Result<()>
+where
+    C: RunContext,
+    F: FnOnce(&Client, &str, Option<&str>, Option<&str>) -> Result<Response<Vec<u8>>>,
+{
+    validate_account_id_literal(account_id)?;
+    if let Some(dataspace) = dataspace {
+        validate_alias_scope_component("dataspace", dataspace)?;
+    }
+    if let Some(domain) = domain {
+        validate_alias_scope_component("domain", domain)?;
+    }
+
+    let client = context.client_from_config();
+    let response = call(&client, account_id, dataspace, domain)?;
+    let status = response.status();
+    let body = response.into_body();
+
+    match status {
+        StatusCode::OK => {
+            let dto: AliasLookupByAccountResponse = norito::json::from_slice(&body)?;
+            let text = render_alias_by_account_text(&dto);
+            print_with_optional_text(context, Some(text), &dto)
+        }
+        StatusCode::NOT_FOUND => Err(eyre!(
+            "{}",
+            format_alias_error(&format!("account `{account_id}` not found"), &body)
+        )),
+        status => Err(eyre!(
+            "alias by-account lookup failed with status {status}: {}",
             format_alias_error("server response", &body)
         )),
     }
@@ -286,6 +374,27 @@ fn render_alias_resolve_index_text(dto: &AliasResolveIndexResponse) -> String {
     out
 }
 
+fn render_alias_by_account_text(dto: &AliasLookupByAccountResponse) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "account `{}` has {} matching alias(es)",
+        dto.account_id, dto.total
+    );
+    for item in &dto.items {
+        let _ = writeln!(out, "alias: {}", item.alias);
+        let _ = writeln!(out, "dataspace: {}", item.dataspace);
+        if let Some(domain) = item.domain.as_deref() {
+            let _ = writeln!(out, "domain: {domain}");
+        }
+        let _ = writeln!(out, "is_primary: {}", item.is_primary);
+    }
+    if let Some(source) = dto.source.as_deref() {
+        let _ = writeln!(out, "source: {source}");
+    }
+    out
+}
+
 #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct AliasResolveResponse {
     alias: String,
@@ -299,6 +408,24 @@ struct AliasResolveIndexResponse {
     index: u64,
     alias: String,
     account_id: String,
+    #[norito(default)]
+    source: Option<String>,
+}
+
+#[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+struct AliasLookupByAccountItem {
+    alias: String,
+    dataspace: String,
+    #[norito(default)]
+    domain: Option<String>,
+    is_primary: bool,
+}
+
+#[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+struct AliasLookupByAccountResponse {
+    account_id: String,
+    total: u64,
+    items: Vec<AliasLookupByAccountItem>,
     #[norito(default)]
     source: Option<String>,
 }
@@ -331,7 +458,8 @@ mod tests {
         command: Command,
     }
 
-    const SAMPLE_ACCOUNT_ID: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const SAMPLE_ACCOUNT_ID: &str =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
     #[test]
     fn parse_voprf_args() {
@@ -340,6 +468,28 @@ mod tests {
         match wrapper.command {
             Command::VoprfEvaluate(args) => {
                 assert_eq!(args.blinded_element_hex, "00");
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_by_account_args() {
+        let wrapper = Wrapper::parse_from([
+            "iroha",
+            "by-account",
+            "--account-id",
+            SAMPLE_ACCOUNT_ID,
+            "--dataspace",
+            "sbp",
+            "--domain",
+            "hbl",
+        ]);
+        match wrapper.command {
+            Command::ByAccount(args) => {
+                assert_eq!(args.account_id, SAMPLE_ACCOUNT_ID);
+                assert_eq!(args.dataspace.as_deref(), Some("sbp"));
+                assert_eq!(args.domain.as_deref(), Some("hbl"));
             }
             _ => panic!("unexpected command"),
         }
@@ -560,6 +710,55 @@ mod tests {
         };
         let text = render_alias_resolve_index_text(&dto);
         assert!(text.contains(&format!("account_id: {SAMPLE_ACCOUNT_ID}")));
+    }
+
+    #[test]
+    fn alias_by_account_helper_prints_result() {
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
+        alias_by_account_with(
+            &mut ctx,
+            SAMPLE_ACCOUNT_ID,
+            Some("sbp"),
+            Some("hbl"),
+            |_, _, _, _| {
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({
+                        "account_id": SAMPLE_ACCOUNT_ID,
+                        "total": 1,
+                        "items": [{
+                            "alias": "merchant@hbl.sbp",
+                            "dataspace": "sbp",
+                            "domain": "hbl",
+                            "is_primary": true
+                        }],
+                        "source": "on_chain"
+                    }))?)
+                    .unwrap())
+            },
+        )
+        .expect("helper should succeed");
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("merchant@hbl.sbp"));
+    }
+
+    #[test]
+    fn alias_by_account_text_mentions_total() {
+        let dto = AliasLookupByAccountResponse {
+            account_id: SAMPLE_ACCOUNT_ID.to_string(),
+            total: 1,
+            items: vec![AliasLookupByAccountItem {
+                alias: "merchant@hbl.sbp".to_string(),
+                dataspace: "sbp".to_string(),
+                domain: Some("hbl".to_string()),
+                is_primary: true,
+            }],
+            source: Some("on_chain".to_string()),
+        };
+        let text = render_alias_by_account_text(&dto);
+        assert!(text.contains("has 1 matching alias(es)"));
+        assert!(text.contains("merchant@hbl.sbp"));
     }
 
     #[test]

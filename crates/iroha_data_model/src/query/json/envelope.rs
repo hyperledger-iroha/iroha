@@ -162,6 +162,15 @@ pub enum SingularQueryJson {
         /// Account identifier used to resolve the subject.
         account_id: String,
     },
+    /// Lists aliases bound to an account subject.
+    FindAliasesByAccountId {
+        /// Account identifier used to resolve the subject.
+        account_id: String,
+        /// Optional dataspace alias filter such as `sbp`.
+        dataspace: Option<String>,
+        /// Optional exact domain filter such as `hbl`.
+        domain: Option<String>,
+    },
     /// Lists account identifiers linked to a domain.
     FindAccountIdsByDomainId {
         /// Domain identifier used to resolve linked subjects.
@@ -229,6 +238,21 @@ impl SingularQueryJson {
                 payload.insert("account_id".to_owned(), Value::String(account_id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
+            Self::FindAliasesByAccountId {
+                account_id,
+                dataspace,
+                domain,
+            } => {
+                let mut payload = Map::new();
+                payload.insert("account_id".to_owned(), Value::String(account_id.clone()));
+                if let Some(dataspace) = dataspace {
+                    payload.insert("dataspace".to_owned(), Value::String(dataspace.clone()));
+                }
+                if let Some(domain) = domain {
+                    payload.insert("domain".to_owned(), Value::String(domain.clone()));
+                }
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
             Self::FindAccountIdsByDomainId { domain_id } => {
                 let mut payload = Map::new();
                 payload.insert("domain_id".to_owned(), Value::String(domain_id.clone()));
@@ -270,6 +294,39 @@ impl SingularQueryJson {
                     .ok_or(QueryJsonError::MissingField("payload", "account_id"))?;
                 Ok(SingularQueryJson::FindDomainsByAccountId {
                     account_id: account_id.to_owned(),
+                })
+            }
+            "FindAliasesByAccountId" => {
+                let payload = map
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
+                let account_id = payload
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .ok_or(QueryJsonError::MissingField("payload", "account_id"))?;
+                let dataspace = payload
+                    .get("dataspace")
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .ok_or(QueryJsonError::InvalidField("payload", "dataspace"))
+                            .map(str::to_owned)
+                    })
+                    .transpose()?;
+                let domain = payload
+                    .get("domain")
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .ok_or(QueryJsonError::InvalidField("payload", "domain"))
+                            .map(str::to_owned)
+                    })
+                    .transpose()?;
+                Ok(SingularQueryJson::FindAliasesByAccountId {
+                    account_id: account_id.to_owned(),
+                    dataspace,
+                    domain,
                 })
             }
             "FindAccountIdsByDomainId" => {
@@ -353,6 +410,7 @@ impl SingularQueryJson {
             SingularQueryJson::FindExecutorDataModel => "FindExecutorDataModel",
             SingularQueryJson::FindParameters => "FindParameters",
             SingularQueryJson::FindDomainsByAccountId { .. } => "FindDomainsByAccountId",
+            SingularQueryJson::FindAliasesByAccountId { .. } => "FindAliasesByAccountId",
             SingularQueryJson::FindAccountIdsByDomainId { .. } => "FindAccountIdsByDomainId",
             SingularQueryJson::FindAssetById { .. } => "FindAssetById",
             SingularQueryJson::FindAssetDefinitionById { .. } => "FindAssetDefinitionById",
@@ -382,6 +440,20 @@ impl SingularQueryJson {
                     .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))?;
                 Ok(SingularQueryBox::FindDomainsByAccountId(
                     crate::query::account::prelude::FindDomainsByAccountId::new(id),
+                ))
+            }
+            SingularQueryJson::FindAliasesByAccountId {
+                account_id,
+                dataspace,
+                domain,
+            } => {
+                let id = crate::account::AccountId::parse_encoded(&account_id)
+                    .map(crate::account::ParsedAccountId::into_account_id)
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))?;
+                Ok(SingularQueryBox::FindAliasesByAccountId(
+                    crate::query::account::prelude::FindAliasesByAccountId::new(
+                        id, dataspace, domain,
+                    ),
                 ))
             }
             SingularQueryJson::FindAccountIdsByDomainId { domain_id } => {
@@ -1070,6 +1142,33 @@ mod tests {
                 .canonical_i105()
                 .expect("source account id should emit canonical literal")
         );
+    }
+
+    #[test]
+    fn find_aliases_by_account_id_roundtrip_with_filters() {
+        let keypair = KeyPair::from_seed(vec![0xAC; 32], Algorithm::Ed25519);
+        let account_id = crate::account::AccountId::new(keypair.public_key().clone());
+        let singular = SingularQueryJson::FindAliasesByAccountId {
+            account_id: account_id.to_string(),
+            dataspace: Some("sbp".to_owned()),
+            domain: Some("hbl".to_owned()),
+        };
+        let envelope = QueryEnvelopeJson::Singular(singular.clone());
+        let json = norito::json::to_json(&envelope).expect("serialize");
+        let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, envelope);
+        let query = match parsed {
+            QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
+            _ => unreachable!(),
+        };
+        match query {
+            SingularQueryBox::FindAliasesByAccountId(q) => {
+                assert_eq!(q.account_id(), &account_id);
+                assert_eq!(q.dataspace(), Some("sbp"));
+                assert_eq!(q.domain(), Some("hbl"));
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
     }
 
     #[test]

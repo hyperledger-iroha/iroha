@@ -140,6 +140,26 @@ impl From<crate::isi::bridge::RecordBridgeReceipt> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
+    fn from(i: crate::isi::asset_alias::SetAssetDefinitionAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::asset_transfer_control::SetAssetTransferFreeze> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferFreeze) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::asset_transfer_control::SetAssetTransferBlacklist> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferBlacklist) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::asset_transfer_control::SetAssetTransferControl> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferControl) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 // Allow direct boxing of ZK asset and voting instructions
 impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {
@@ -1146,18 +1166,188 @@ impl norito::json::FastJsonWrite for InstructionBox {
     }
 }
 
+#[cfg(feature = "json")]
+fn instruction_box_from_base64_literal(
+    encoded: &str,
+) -> Result<InstructionBox, norito::json::Error> {
+    let bytes = STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    let archived = norito::from_bytes::<InstructionBox>(&bytes)
+        .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    norito::core::NoritoDeserialize::try_deserialize(archived)
+        .map_err(|err| norito::json::Error::Message(err.to_string()))
+}
+
+#[cfg(feature = "json")]
+fn json_required_string(map: &norito::json::Map, key: &str) -> Result<String, norito::json::Error> {
+    map.get(key)
+        .and_then(norito::json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` is required")))
+}
+
+#[cfg(feature = "json")]
+fn json_optional_string(map: &norito::json::Map, key: &str) -> Option<String> {
+    map.get(key)
+        .and_then(norito::json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+#[cfg(feature = "json")]
+fn json_required_bool(map: &norito::json::Map, key: &str) -> Result<bool, norito::json::Error> {
+    map.get(key)
+        .and_then(norito::json::Value::as_bool)
+        .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` must be a bool")))
+}
+
+#[cfg(feature = "json")]
+fn json_numeric_opt(
+    value: Option<&norito::json::Value>,
+) -> Result<Option<iroha_primitives::numeric::Numeric>, norito::json::Error> {
+    use std::str::FromStr as _;
+
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(value) = value.as_u64() {
+        return Ok(Some(iroha_primitives::numeric::Numeric::from(value)));
+    }
+    if let Some(value) = value.as_i64() {
+        if value < 0 {
+            return Err(norito::json::Error::Message(
+                "asset transfer cap_amount must be non-negative".to_owned(),
+            ));
+        }
+        return Ok(Some(iroha_primitives::numeric::Numeric::from(value as u64)));
+    }
+    if let Some(value) = value.as_str() {
+        let parsed = iroha_primitives::numeric::Numeric::from_str(value.trim())
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        return Ok(Some(parsed));
+    }
+    Err(norito::json::Error::Message(
+        "asset transfer cap_amount must be a string, number, or null".to_owned(),
+    ))
+}
+
+#[cfg(feature = "json")]
+fn instruction_box_from_object(
+    map: norito::json::Map,
+) -> Result<InstructionBox, norito::json::Error> {
+    use std::str::FromStr as _;
+
+    let name = json_required_string(&map, "name")?;
+    let params = map
+        .get("params")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| {
+            norito::json::Error::Message("instruction `params` must be an object".to_owned())
+        })?;
+    match name.as_str() {
+        "SetAssetTransferFreeze" => {
+            let account_id = crate::account::AccountId::parse_encoded(
+                json_required_string(params, "account_id")?.as_str(),
+            )
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+                json_required_string(params, "asset_definition_id")?.as_str(),
+            )
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            Ok(
+                crate::isi::asset_transfer_control::SetAssetTransferFreeze::new(
+                    account_id,
+                    asset_definition_id,
+                    json_required_bool(params, "outgoing_frozen")?,
+                    json_optional_string(params, "reason"),
+                )
+                .into(),
+            )
+        }
+        "SetAssetTransferBlacklist" => {
+            let account_id = crate::account::AccountId::parse_encoded(
+                json_required_string(params, "account_id")?.as_str(),
+            )
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+                json_required_string(params, "asset_definition_id")?.as_str(),
+            )
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            Ok(
+                crate::isi::asset_transfer_control::SetAssetTransferBlacklist::new(
+                    account_id,
+                    asset_definition_id,
+                    json_required_bool(params, "blacklisted")?,
+                )
+                .into(),
+            )
+        }
+        "SetAssetTransferControl" => {
+            let account_id = crate::account::AccountId::parse_encoded(
+                json_required_string(params, "account_id")?.as_str(),
+            )
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+                json_required_string(params, "asset_definition_id")?.as_str(),
+            )
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let limits = params
+                .get("limits")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| {
+                    norito::json::Error::Message("instruction `limits` must be an array".to_owned())
+                })?
+                .iter()
+                .map(|entry| {
+                    let entry = entry.as_object().ok_or_else(|| {
+                        norito::json::Error::Message(
+                            "each asset transfer limit must be an object".to_owned(),
+                        )
+                    })?;
+                    let window = crate::asset::AssetTransferControlWindow::from_str(
+                        json_required_string(entry, "window")?.as_str(),
+                    )
+                    .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+                    Ok(crate::asset::AssetTransferLimit {
+                        window,
+                        cap_amount: json_numeric_opt(entry.get("cap_amount"))?,
+                    })
+                })
+                .collect::<Result<Vec<_>, norito::json::Error>>()?;
+            Ok(
+                crate::isi::asset_transfer_control::SetAssetTransferControl::new(
+                    account_id,
+                    asset_definition_id,
+                    limits,
+                )
+                .into(),
+            )
+        }
+        other => Err(norito::json::Error::Message(format!(
+            "unsupported structured instruction `{other}`"
+        ))),
+    }
+}
+
 impl norito::json::JsonDeserialize for InstructionBox {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        let encoded = parser.parse_string()?;
-        let bytes = STANDARD
-            .decode(encoded.as_str())
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        let archived = norito::from_bytes::<InstructionBox>(&bytes)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        norito::core::NoritoDeserialize::try_deserialize(archived)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))
+        match norito::json::Value::json_deserialize(parser)? {
+            norito::json::Value::String(encoded) => instruction_box_from_base64_literal(&encoded),
+            norito::json::Value::Object(map) => instruction_box_from_object(map),
+            other => Err(norito::json::Error::Message(format!(
+                "instruction JSON must be either a base64 string or an object, found {other:?}"
+            ))),
+        }
     }
 }
 
@@ -1521,15 +1711,15 @@ fn instruction_registry() -> InstructionRegistryReadGuard {
 }
 
 macro_rules! isi {
-    ($($meta:meta)* $item:item) => {
+    ($(#[$meta:meta])* pub struct $name:ident $($rest:tt)*) => {
         iroha_data_model_derive::model_single! {
             #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
             #[derive(getset::Getters)]
             #[derive(Decode, Encode)]
             #[derive(iroha_schema::IntoSchema)]
             #[getset(get = "pub")]
-            $($meta)*
-            $item
+            $(#[$meta])*
+            pub struct $name $($rest)*
         }
     };
 }
@@ -1661,6 +1851,8 @@ macro_rules! enum_type {
 
 /// Asset-definition alias binding instructions.
 pub mod asset_alias;
+/// Asset-scoped outbound transfer control instructions.
+pub mod asset_transfer_control;
 /// Confidential registry management instructions.
 /// Bridge proof ingestion instructions.
 pub mod bridge;
@@ -1721,8 +1913,9 @@ pub mod verifying_keys;
 pub mod zk;
 
 pub use asset_alias::*;
-pub use contract_alias::*;
+pub use asset_transfer_control::*;
 pub use confidential::*;
+pub use contract_alias::*;
 pub use domain_link::*;
 pub use identifier::*;
 pub use kaigi::*;
@@ -2496,6 +2689,9 @@ pub mod prelude {
         RollbackOracleChange, SetKeyValue, SetKeyValueBox, SetParameter, SubmitOracleObservation,
         Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister,
         UnregisterBox, Upgrade, VoteOracleChangeStage,
+        asset_transfer_control::{
+            SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
+        },
         bridge::{RecordBridgeReceipt, SubmitBridgeProof},
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,

@@ -317,6 +317,15 @@ batch metadata is reserved for entry hash/transcript count bookkeeping.
   - The `FASTPQ Acceleration Overview` Grafana board (`dashboards/grafana/fastpq_acceleration.json`) visualises the Metal adoption rate and links back to the benchmark artefacts, while the paired alert rules (`dashboards/alerts/fastpq_acceleration_rules.yml`) gate rollouts on sustained downgrades.
   - `FASTPQ_GPU={auto,cpu,gpu}` overrides remain supported; unknown values raise warnings but still propagate to telemetry for auditing.【crates/fastpq_prover/src/backend.rs:308】【crates/fastpq_prover/src/backend.rs:349】
   - GPU parity tests (`cargo test -p fastpq_prover --features fastpq_prover/fastpq-gpu`) must pass for CUDA and Metal; CI skips gracefully when the metallib is absent or detection fails.【crates/fastpq_prover/src/gpu.rs:49】【crates/fastpq_prover/src/backend.rs:346】
+  - CUDA now also has focused low-level BN254 FFT/LDE parity coverage via
+    `fastpq_bn254_fft(...)` and `fastpq_bn254_lde(...)`, and
+    `fastpq_cuda_bench` now promotes those timings into a raw
+    `bn254_metrics` block so wrapped CUDA evidence can carry
+    `acceleration.bn254_{fft,lde}_ms` directly. When the local BN254 CUDA path
+    downgrades at runtime, the bench now keeps the CPU timings and emits
+    `bn254_warnings` instead of aborting the capture. The remaining work is the
+    lab rerun / higher-level integration side, not the basic bench/report
+    wiring.
   - Metal readiness evidence (archive the artefacts below with every rollout so the roadmap audit can prove determinism, telemetry coverage, and fallback behaviour):
 
     | Step | Goal | Command / Evidence |
@@ -407,7 +416,21 @@ benchmark bundles
 `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json`,
 `fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json`) are now checked
 in, so every release enforces the same cross-device medians before the manifest
-is signed.【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-metal.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】【artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】【artifacts/fastpq_benchmarks/fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json:1】【artifacts/fastpq_benchmarks/fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json:1】
+is signed. The matrix manifest now also records the `operation_filters` seen
+for each device label, so a device backed only by focused FFT/LDE/Poseidon CUDA
+captures cannot be mistaken for a full `all`-operations evidence set when the
+same manifest is fed back into release gating or dashboards. Signed bench
+manifests produced by `cargo xtask fastpq-bench-manifest` now carry those
+matrix-derived filter lists per bench as `matrix_operation_filters`, so
+downstream release review can tell whether a device label was gated from full
+captures or only from focused reruns without reopening the matrix JSON. The
+release pipeline now turns that same manifest into
+`fastpq_rollout_summary.{json,md}` whenever it archives a rollout bundle, so
+release tickets can attach a compact reviewer view of each archived Metal/CUDA
+lane without losing the underlying manifest as the source of truth. That same
+archive step now also records the copied rollout bundle roots and summary paths
+under `release_manifest.json.evidence.fastpq`, closing the machine-readable
+link from the release manifest back to the Stage 7 rollout evidence.【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-metal.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】【artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】【artifacts/fastpq_benchmarks/fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json:1】【artifacts/fastpq_benchmarks/fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json:1】
 
 ---
 

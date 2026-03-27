@@ -299,6 +299,14 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 items.push(self.parse_struct_def()?);
+            } else if self.peek(TokenKind::Const) {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
+                items.push(self.parse_const_decl()?);
             } else if self.peek(TokenKind::Seiyaku) {
                 if !access_hints.is_empty() {
                     return Err(self.error(
@@ -408,6 +416,14 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 items.push(self.parse_struct_def()?);
+            } else if self.peek(TokenKind::Const) {
+                if !access_hints.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "access attributes must precede a function",
+                    ));
+                }
+                items.push(self.parse_const_decl()?);
             } else if self.peek(TokenKind::State) {
                 if !access_hints.is_empty() {
                     return Err(self.error(
@@ -496,7 +512,7 @@ impl<'a> Parser<'a> {
                 items.push(self.parse_kotoba_block()?);
             } else {
                 let tok = self.bump();
-                return Err(self.error(tok, "contract item (fn, struct, state, meta)"));
+                return Err(self.error(tok, "contract item (fn, struct, const, state, meta)"));
             }
         }
         self.expect(TokenKind::RBrace)?;
@@ -1181,6 +1197,23 @@ impl<'a> Parser<'a> {
             self.bump();
         }
         Ok(Item::State(super::ast::StateDecl { name, ty }))
+    }
+
+    fn parse_const_decl(&mut self) -> ParseResult<Item> {
+        self.expect(TokenKind::Const)?;
+        let name = self.expect_ident()?;
+        let ty = if self.peek(TokenKind::Colon) {
+            self.bump();
+            Some(self.parse_type_expr()?)
+        } else {
+            None
+        };
+        self.expect(TokenKind::Equal)?;
+        let value = self.parse_expr()?;
+        if self.peek(TokenKind::Semicolon) {
+            self.bump();
+        }
+        Ok(Item::Const(super::ast::ConstDecl { name, ty, value }))
     }
 
     fn parse_fn_loose(

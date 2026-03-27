@@ -24,6 +24,11 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   - Clarification: Kotodama targets the Iroha Virtual Machine (IVM) and produces IVM bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone architecture. Where RISC‑V–like encodings appear in the repository, they are implementation details of IVM’s instruction formats and must not change observable behavior across hardware.
 - Norito is the data serialization codec for Iroha
 - The entire workspace targets the Rust standard library (`std`). WASM/no-std builds are no longer supported and should not be considered when making changes.
+- Universal-account model:
+  - `AccountId` is the canonical account identity and is always domainless.
+  - `ScopedAccountId { account, domain }` is only explicit domain context for operations or views that require a linked domain; it is not the canonical identity.
+  - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` bind to the same canonical `AccountId`.
+  - In tests and fixtures, seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately. Use `Account::new_domainless(...)` for dataspace-root aliases and `Account::new(scoped_id)` only when the behavior under test truly requires a domain-linked registration/materialization.
 
 ## Repository structure
 - `Cargo.toml` at the repository root defines the workspace and lists all member crates.

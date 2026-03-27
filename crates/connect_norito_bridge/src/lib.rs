@@ -9889,6 +9889,31 @@ fn convert_field_elem<L: Into<String>>(
     Some(limbs)
 }
 
+fn convert_field_elems<L: Into<String>>(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JLongArray<'_>,
+    context: L,
+) -> Option<Vec<[u64; 4]>> {
+    let context = context.into();
+    let buf = read_long_array(env, array, &context)?;
+    if buf.len() % 4 != 0 {
+        throw_java_illegal_argument(
+            env,
+            format!("{context} expects a flattened array with a length multiple of 4"),
+        );
+        return None;
+    }
+    let mut elems = Vec::with_capacity(buf.len() / 4);
+    for chunk in buf.chunks_exact(4) {
+        let mut limbs = [0u64; 4];
+        for (dst, src) in limbs.iter_mut().zip(chunk.iter()) {
+            *dst = *src as u64;
+        }
+        elems.push(limbs);
+    }
+    Some(elems)
+}
+
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -10412,6 +10437,204 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     if let Some(field) = result {
         let values: Vec<i64> = field.into_iter().map(|limb| limb as i64).collect();
         if write_long_array(&mut env, &out, &values, "bn254Mul") {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    } else {
+        JNI_FALSE
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254AddBatch(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    lhs: jni::objects::JLongArray<'_>,
+    rhs: jni::objects::JLongArray<'_>,
+    out: jni::objects::JLongArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    let lhs = match convert_field_elems(&mut env, &lhs, "bn254AddBatch lhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    let rhs = match convert_field_elems(&mut env, &rhs, "bn254AddBatch rhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if lhs.len() != rhs.len() {
+        throw_java_illegal_argument(
+            &mut env,
+            "bn254AddBatch expects matching batch lengths".into(),
+        );
+        return JNI_FALSE;
+    }
+    let out_len = match i32::try_from(lhs.len().saturating_mul(4)) {
+        Ok(value) => value,
+        Err(_) => {
+            throw_java_illegal_argument(
+                &mut env,
+                "bn254AddBatch output exceeds Java array limits".into(),
+            );
+            return JNI_FALSE;
+        }
+    };
+    if !ensure_min_array_length(&mut env, &out, out_len, "bn254AddBatch") {
+        return JNI_FALSE;
+    }
+    let result = match catch_unwind_to_java(&mut env, "bn254_add_batch_cuda", || {
+        ivm::bn254_add_batch_cuda(&lhs, &rhs)
+    }) {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if let Some(fields) = result {
+        let values: Vec<i64> = fields
+            .into_iter()
+            .flat_map(|field| field.into_iter().map(|limb| limb as i64))
+            .collect();
+        if write_long_array(&mut env, &out, &values, "bn254AddBatch") {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    } else {
+        JNI_FALSE
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254SubBatch(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    lhs: jni::objects::JLongArray<'_>,
+    rhs: jni::objects::JLongArray<'_>,
+    out: jni::objects::JLongArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    let lhs = match convert_field_elems(&mut env, &lhs, "bn254SubBatch lhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    let rhs = match convert_field_elems(&mut env, &rhs, "bn254SubBatch rhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if lhs.len() != rhs.len() {
+        throw_java_illegal_argument(
+            &mut env,
+            "bn254SubBatch expects matching batch lengths".into(),
+        );
+        return JNI_FALSE;
+    }
+    let out_len = match i32::try_from(lhs.len().saturating_mul(4)) {
+        Ok(value) => value,
+        Err(_) => {
+            throw_java_illegal_argument(
+                &mut env,
+                "bn254SubBatch output exceeds Java array limits".into(),
+            );
+            return JNI_FALSE;
+        }
+    };
+    if !ensure_min_array_length(&mut env, &out, out_len, "bn254SubBatch") {
+        return JNI_FALSE;
+    }
+    let result = match catch_unwind_to_java(&mut env, "bn254_sub_batch_cuda", || {
+        ivm::bn254_sub_batch_cuda(&lhs, &rhs)
+    }) {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if let Some(fields) = result {
+        let values: Vec<i64> = fields
+            .into_iter()
+            .flat_map(|field| field.into_iter().map(|limb| limb as i64))
+            .collect();
+        if write_long_array(&mut env, &out, &values, "bn254SubBatch") {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    } else {
+        JNI_FALSE
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254MulBatch(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    lhs: jni::objects::JLongArray<'_>,
+    rhs: jni::objects::JLongArray<'_>,
+    out: jni::objects::JLongArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    let lhs = match convert_field_elems(&mut env, &lhs, "bn254MulBatch lhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    let rhs = match convert_field_elems(&mut env, &rhs, "bn254MulBatch rhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if lhs.len() != rhs.len() {
+        throw_java_illegal_argument(
+            &mut env,
+            "bn254MulBatch expects matching batch lengths".into(),
+        );
+        return JNI_FALSE;
+    }
+    let out_len = match i32::try_from(lhs.len().saturating_mul(4)) {
+        Ok(value) => value,
+        Err(_) => {
+            throw_java_illegal_argument(
+                &mut env,
+                "bn254MulBatch output exceeds Java array limits".into(),
+            );
+            return JNI_FALSE;
+        }
+    };
+    if !ensure_min_array_length(&mut env, &out, out_len, "bn254MulBatch") {
+        return JNI_FALSE;
+    }
+    let result = match catch_unwind_to_java(&mut env, "bn254_mul_batch_cuda", || {
+        ivm::bn254_mul_batch_cuda(&lhs, &rhs)
+    }) {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if let Some(fields) = result {
+        let values: Vec<i64> = fields
+            .into_iter()
+            .flat_map(|field| field.into_iter().map(|limb| limb as i64))
+            .collect();
+        if write_long_array(&mut env, &out, &values, "bn254MulBatch") {
             JNI_TRUE
         } else {
             JNI_FALSE

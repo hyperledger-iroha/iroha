@@ -423,6 +423,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindDomainsByAccountId(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindAliasesByAccountId(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindAccountIdsByDomainId(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }

@@ -65,6 +65,7 @@ fn main() {
 
     let mut build = cc::Build::new();
     build.cuda(true);
+    build.debug(false);
     build
         .file("cuda/fastpq_cuda.cu")
         .flag("-std=c++17")
@@ -81,6 +82,13 @@ fn main() {
         if include_dir.exists() {
             build.include(include_dir);
         }
+    }
+
+    if let Some(host_compiler) = select_cuda_host_compiler(&target_os) {
+        build.ccbin(false);
+        build.flag(&format!("-ccbin={}", host_compiler.display()));
+    } else if target_os == "linux" && !explicit_cxx_configured() {
+        build.ccbin(false);
     }
 
     build.compile("fastpq_cuda");
@@ -222,4 +230,28 @@ fn cuda_lib_dir(root: &Path) -> Option<PathBuf> {
         let alt = root.join("lib");
         alt.exists().then_some(alt)
     }
+}
+
+fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
+    if target_os != "linux" || explicit_cxx_configured() {
+        return None;
+    }
+
+    for candidate in [
+        Path::new("/usr/bin/g++-12"),
+        Path::new("/usr/local/bin/g++-12"),
+        Path::new("/bin/g++-12"),
+    ] {
+        if candidate.exists() {
+            return Some(candidate.to_path_buf());
+        }
+    }
+
+    None
+}
+
+fn explicit_cxx_configured() -> bool {
+    env::var_os("CXX").is_some()
+        || env::var_os("HOST_CXX").is_some()
+        || env::vars_os().any(|(key, _)| key.to_string_lossy().starts_with("CXX_"))
 }

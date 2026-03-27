@@ -24,30 +24,34 @@ bundle lands or telemetry needs fresh evidence.
 
 ## FASTPQ Stage 7 GPU Benchmarks
 
-| Bundle | Backend | Mode | GPU backend | GPU available | Device class | GPU | LDE ms (CPU/GPU/SU) | Poseidon ms (CPU/GPU/SU) |
-|-------|---------|------|-------------|---------------|--------------|-----|----------------------|---------------------------|
-| `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json` | cuda | gpu | cuda-sm80 | yes | xeon-rtx | NVIDIA RTX 6000 Ada | 1512.9/880.7/1.72 | —/—/— |
-| `fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json` | metal | gpu | none | yes | apple-m4 | Apple GPU 40-core | 785.6/735.6/1.07 | 1803.8/1897.5/0.95 |
-| `fastpq_metal_bench_20251108T192645Z_macos14_arm64.json` | metal | gpu | metal | yes | apple-m2-ultra | Apple M2 Ultra | 1581.1/1604.5/0.98 | 3589.9/3697.3/0.97 |
-| `fastpq_metal_bench_20251108T225946_macos_arm64.json` | metal | gpu | metal | yes | apple-m2-ultra | Apple M2 Ultra | 1804.5/1666.4/1.08 | 3939.5/4083.3/0.96 |
-| `fastpq_metal_bench_20251108T231910_macos_arm64_withtrace.json` | metal | gpu | metal | yes | apple-m2-ultra | Apple M2 Ultra | 1804.5/1666.4/1.08 | 3939.5/4083.3/0.96 |
-| `fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json` | opencl | gpu | opencl | yes | neoverse-mi300 | AMD Instinct MI300A | 4518.5/688.9/6.56 | 2780.4/905.6/3.07 |
+| Bundle | Backend | Mode | GPU backend | GPU available | Filter | Device class | GPU | LDE ms (CPU/GPU/SU) | Poseidon ms (CPU/GPU/SU) |
+|-------|---------|------|-------------|---------------|--------|--------------|-----|----------------------|---------------------------|
+| `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json` | cuda | gpu | cuda-sm80 | yes | all | xeon-rtx | NVIDIA RTX 6000 Ada | 1512.9/880.7/1.72 | —/—/— |
+| `fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json` | metal | gpu | none | yes | all | apple-m4 | Apple GPU 40-core | 785.6/735.6/1.07 | 1803.8/1897.5/0.95 |
+| `fastpq_metal_bench_20251108T192645Z_macos14_arm64.json` | metal | gpu | metal | yes | all | apple-m2-ultra | Apple M2 Ultra | 1581.1/1604.5/0.98 | 3589.9/3697.3/0.97 |
+| `fastpq_metal_bench_20251108T225946_macos_arm64.json` | metal | gpu | metal | yes | all | apple-m2-ultra | Apple M2 Ultra | 1804.5/1666.4/1.08 | 3939.5/4083.3/0.96 |
+| `fastpq_metal_bench_20251108T231910_macos_arm64_withtrace.json` | metal | gpu | metal | yes | all | apple-m2-ultra | Apple M2 Ultra | 1804.5/1666.4/1.08 | 3939.5/4083.3/0.96 |
+| `fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json` | opencl | gpu | opencl | yes | all | neoverse-mi300 | AMD Instinct MI300A | 4518.5/688.9/6.56 | 2780.4/905.6/3.07 |
 
 > Columns: `Backend` is derived from the bundle name; `Mode`/`GPU backend`/`GPU available`
-> are copied from the wrapped `benchmarks` block to expose CPU fallbacks or missing GPU
-> discovery (for example, `gpu_backend=none` despite `Mode=gpu`). SU = speedup ratio (CPU/GPU).
+> come from the wrapped `benchmarks` block to expose CPU fallbacks or missing GPU discovery.
+> `Filter` records the selected operation filter (`all` for full bundles, otherwise the
+> focused stage name), falling back to the lone operation name for older single-op captures.
+> SU = speedup ratio (CPU/GPU).
 
 ## Poseidon Microbench Snapshots
 
 `benchmarks/poseidon/manifest.json` aggregates the default-vs-scalar Poseidon
 microbench runs exported from each Metal bundle. The table below is refreshed by
 the generator script, so CI and governance reviews can diff historical speedups
-without unpacking the wrapped FASTPQ reports.
+without unpacking the wrapped FASTPQ reports. `Filter`/`Columns` come from the
+standalone export metadata and fall back to `all` / `—` for older captures that
+predate the focused-capture bookkeeping.
 
-| Summary | Bundle | Timestamp | Default ms | Scalar ms | Speedup |
-|---------|--------|-----------|------------|-----------|---------|
-| `benchmarks/poseidon/poseidon_microbench_debug.json` | `fastpq_metal_bench_debug.json` | 2025-11-09T06:11:01Z | 2167.7 | 2152.2 | 0.99 |
-| `benchmarks/poseidon/poseidon_microbench_full.json` | `fastpq_metal_bench_full.json` | 2025-11-09T06:04:07Z | 1990.5 | 1994.5 | 1.00 |
+| Summary | Bundle | Timestamp | Filter | Columns | Default ms | Scalar ms | Speedup |
+|---------|--------|-----------|--------|---------|------------|-----------|---------|
+| `benchmarks/poseidon/poseidon_microbench_debug.json` | `fastpq_metal_bench_debug.json` | 2025-11-09T06:11:01Z | all | — | 2167.7 | 2152.2 | 0.99 |
+| `benchmarks/poseidon/poseidon_microbench_full.json` | `fastpq_metal_bench_full.json` | 2025-11-09T06:04:07Z | all | — | 1990.5 | 1994.5 | 1.00 |
 
 ## Merkle Threshold Sweeps
 

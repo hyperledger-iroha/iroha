@@ -8739,6 +8739,7 @@ mod tests {
                 .iter()
                 .map(|name| soracloud_entrypoint(name, 0))
                 .collect(),
+            states: Vec::new(),
         };
         let mut bytes = metadata.encode();
         bytes.extend_from_slice(&contract_interface.encode_section());

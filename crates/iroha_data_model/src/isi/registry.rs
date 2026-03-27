@@ -2,10 +2,11 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys, domain_link,
-        contract_alias, endorsement, identifier, kaigi, nexus, offline, oracle, ram_lfe, repo,
-        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, sorafs,
-        space_directory, transparent::{
+        InstructionRegistry, RegisterPeerWithPop, asset_alias, asset_transfer_control, bridge,
+        consensus_keys, contract_alias, domain_link, endorsement, identifier, kaigi, nexus,
+        offline, oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code,
+        social, soracloud, sorafs, space_directory,
+        transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
         },
@@ -47,6 +48,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<Transfer<Account, NftId, Account>>,
     InstructionRegistry::register::<TransferAssetBatch>,
     InstructionRegistry::register::<TransferBox>,
+    InstructionRegistry::register::<asset_transfer_control::SetAssetTransferFreeze>,
+    InstructionRegistry::register::<asset_transfer_control::SetAssetTransferBlacklist>,
+    InstructionRegistry::register::<asset_transfer_control::SetAssetTransferControl>,
     InstructionRegistry::register::<rwa::RwaInstructionBox>,
     InstructionRegistry::register::<repo::RepoInstructionBox>,
     InstructionRegistry::register::<repo::RepoIsi>,
@@ -486,6 +490,15 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
         registry.register_with_id::<identifier::RevokeIdentifier>("identity::RevokeIdentifier");
     registry = registry.register_with_id::<asset_alias::SetAssetDefinitionAlias>(
         asset_alias::SetAssetDefinitionAlias::WIRE_ID,
+    );
+    registry = registry.register_with_id::<asset_transfer_control::SetAssetTransferFreeze>(
+        asset_transfer_control::SetAssetTransferFreeze::WIRE_ID,
+    );
+    registry = registry.register_with_id::<asset_transfer_control::SetAssetTransferBlacklist>(
+        asset_transfer_control::SetAssetTransferBlacklist::WIRE_ID,
+    );
+    registry = registry.register_with_id::<asset_transfer_control::SetAssetTransferControl>(
+        asset_transfer_control::SetAssetTransferControl::WIRE_ID,
     );
     registry = registry.register_with_id::<contract_alias::SetContractAlias>(
         contract_alias::SetContractAlias::WIRE_ID,

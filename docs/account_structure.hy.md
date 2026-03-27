@@ -176,6 +176,24 @@ into a scoped account therefore requires the caller to supply the domain
 explicitly. The public subject-identity surface is just `AccountId`;
 `AccountSubjectId` is not part of the public API.
 
+Account aliases are a separate binding layer on top of that canonical subject:
+
+- `merchant@hbl.sbp` means the alias binding carries both `domain = hbl` and
+  `dataspace = sbp`, while the bound account is still the same canonical
+  domainless `AccountId`.
+- `merchant@sbp` is a dataspace-root alias with no domain segment at all; it
+  still resolves to a canonical `AccountId` and should not force a synthetic
+  domain-scoped account identity.
+- `linked_domains` on stored `Account` values is derived index state that
+  reflects which explicit domain links are currently materialized for the
+  subject. It is not part of the canonical account identity.
+
+Implementation rule for tests and fixtures: seed the universal `AccountId`
+first, then add explicit domain links, alias leases, and alias permissions as
+separate state. Use a domainless registration when testing dataspace-root
+aliases, and use a scoped registration only when the behavior under test
+actually depends on an explicit domain-linked materialization.
+
 #### 2.3 Controller payload encodings (ADDR-1a)
 
 The controller payload is a tagged union appended immediately after the header in

@@ -840,6 +840,166 @@ fn value_codec_for_type(ty: &Type) -> Option<ValueCodec> {
     }
 }
 
+fn register_state_map_value_literals(ctx: &mut LowerCtx, name: &str, ty: &Type, literal: &str) {
+    let resolved = semantic::resolve_struct_type(ty);
+    match &resolved {
+        Type::Struct { fields, .. } => {
+            for (index, (field_name, field_ty)) in fields.iter().enumerate() {
+                let child = format!("{name}#{index}");
+                let child_literal = format!("{literal}_{field_name}");
+                ctx.state_name_literals
+                    .insert(child.clone(), child_literal.clone());
+                register_state_map_value_literals(ctx, &child, field_ty, &child_literal);
+            }
+        }
+        Type::Tuple(items) => {
+            for (index, field_ty) in items.iter().enumerate() {
+                let child = format!("{name}#{index}");
+                let child_literal = format!("{literal}_{index}");
+                ctx.state_name_literals
+                    .insert(child.clone(), child_literal.clone());
+                register_state_map_value_literals(ctx, &child, field_ty, &child_literal);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn state_map_anchor_base_name(name: &str, ty: &Type) -> String {
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } if !fields.is_empty() => {
+            state_map_anchor_base_name(&format!("{name}#0"), &fields[0].1)
+        }
+        Type::Tuple(items) if !items.is_empty() => {
+            state_map_anchor_base_name(&format!("{name}#0"), &items[0])
+        }
+        _ => name.to_string(),
+    }
+}
+
+fn lower_state_map_get_value(
+    ctx: &mut LowerCtx,
+    base_name: &str,
+    key_tmp: Temp,
+    key_ty: &Type,
+    value_ty: &Type,
+) -> Option<Temp> {
+    let resolved = semantic::resolve_struct_type(value_ty);
+    match &resolved {
+        Type::Struct { fields, .. } => {
+            let mut items = Vec::with_capacity(fields.len());
+            for (index, (_, field_ty)) in fields.iter().enumerate() {
+                items.push(lower_state_map_get_value(
+                    ctx,
+                    &format!("{base_name}#{index}"),
+                    key_tmp,
+                    key_ty,
+                    field_ty,
+                )?);
+            }
+            let tuple = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest: tuple, items });
+            Some(tuple)
+        }
+        Type::Tuple(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for (index, item_ty) in items.iter().enumerate() {
+                values.push(lower_state_map_get_value(
+                    ctx,
+                    &format!("{base_name}#{index}"),
+                    key_tmp,
+                    key_ty,
+                    item_ty,
+                )?);
+            }
+            let tuple = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest: tuple,
+                items: values,
+            });
+            Some(tuple)
+        }
+        _ => {
+            let key_codec = key_codec_for_type(key_ty)?;
+            let value_codec = value_codec_for_type(&resolved)?;
+            let path = build_state_path(ctx, base_name, key_tmp, &key_codec);
+            let blob = ctx.new_temp();
+            ctx.current_instr(Instr::StateGet { dest: blob, path });
+            Some(decode_value_from_norito(ctx, blob, &value_codec))
+        }
+    }
+}
+
+fn lower_state_map_set_value(
+    ctx: &mut LowerCtx,
+    base_name: &str,
+    key_tmp: Temp,
+    key_ty: &Type,
+    value_ty: &Type,
+    value_tmp: Temp,
+) -> bool {
+    let resolved = semantic::resolve_struct_type(value_ty);
+    match &resolved {
+        Type::Struct { fields, .. } => {
+            for (index, (_, field_ty)) in fields.iter().enumerate() {
+                let field_value = ctx.new_temp();
+                ctx.current_instr(Instr::TupleGet {
+                    dest: field_value,
+                    tuple: value_tmp,
+                    index,
+                });
+                if !lower_state_map_set_value(
+                    ctx,
+                    &format!("{base_name}#{index}"),
+                    key_tmp,
+                    key_ty,
+                    field_ty,
+                    field_value,
+                ) {
+                    return false;
+                }
+            }
+            true
+        }
+        Type::Tuple(items) => {
+            for (index, item_ty) in items.iter().enumerate() {
+                let field_value = ctx.new_temp();
+                ctx.current_instr(Instr::TupleGet {
+                    dest: field_value,
+                    tuple: value_tmp,
+                    index,
+                });
+                if !lower_state_map_set_value(
+                    ctx,
+                    &format!("{base_name}#{index}"),
+                    key_tmp,
+                    key_ty,
+                    item_ty,
+                    field_value,
+                ) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => {
+            let Some(key_codec) = key_codec_for_type(key_ty) else {
+                return false;
+            };
+            let Some(value_codec) = value_codec_for_type(&resolved) else {
+                return false;
+            };
+            let path = build_state_path(ctx, base_name, key_tmp, &key_codec);
+            let encoded = encode_value_to_norito(ctx, value_tmp, &value_codec);
+            ctx.current_instr(Instr::StateSet {
+                path,
+                value: encoded,
+            });
+            true
+        }
+    }
+}
+
 /// Control-flow terminators for a block.
 #[derive(Debug, PartialEq)]
 pub enum Terminator {
@@ -1118,6 +1278,7 @@ fn allocate_state_value(
             vars.insert(name.to_string(), t);
             let key_ty = semantic::resolve_struct_type(k);
             let value_ty = semantic::resolve_struct_type(v);
+            register_state_map_value_literals(ctx, name, &value_ty, literal);
             ctx.state_map_configs.insert(
                 name.to_string(),
                 StateMapSpec {
@@ -1629,18 +1790,10 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             let key_tmp = lower_expr(ctx, key, vars);
             let value_tmp = lower_expr(ctx, value, vars);
             if let Some(bn) = state_map_base_name(map)
-                && let Some(spec) = ctx.state_map_configs.get(&bn)
-                && let (Some(key_codec), Some(value_codec)) = (
-                    key_codec_for_type(&spec.key),
-                    value_codec_for_type(&spec.value),
-                )
+                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
             {
-                let path = build_state_path(ctx, &bn, key_tmp, &key_codec);
-                let encoded = encode_value_to_norito(ctx, value_tmp, &value_codec);
-                ctx.current_instr(Instr::StateSet {
-                    path,
-                    value: encoded,
-                });
+                let _ =
+                    lower_state_map_set_value(ctx, &bn, key_tmp, &spec.key, &spec.value, value_tmp);
             }
             // Always keep ephemeral path for within-run semantics
             let m = lower_expr(ctx, map, vars);
@@ -2663,11 +2816,12 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let key_tmp = lower_expr(ctx, kexpr, vars);
                     // Durable path when map is a tracked state map name
                     if let Some(bn) = state_map_base_name(mexpr)
-                        && let Some(spec) = ctx.state_map_configs.get(&bn)
+                        && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
                         && let Some(key_codec) = key_codec_for_type(&spec.key)
                     {
+                        let anchor = state_map_anchor_base_name(&bn, &spec.value);
                         // Durable check: build path and STATE_GET; return (r10 != 0)
-                        let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                        let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
                         let t_blob = ctx.new_temp();
                         ctx.current_instr(Instr::StateGet {
                             dest: t_blob,
@@ -2706,10 +2860,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let key_tmp = lower_expr(ctx, kexpr, vars);
                     // Durable path when map is a tracked state map name
                     if let Some(bn) = state_map_base_name(mexpr)
-                        && let Some(spec) = ctx.state_map_configs.get(&bn)
+                        && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
                         && let Some(key_codec) = key_codec_for_type(&spec.key)
                     {
-                        let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                        let anchor = state_map_anchor_base_name(&bn, &spec.value);
+                        let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
                         let t_blob = ctx.new_temp();
                         ctx.current_instr(Instr::StateGet {
                             dest: t_blob,
@@ -2748,14 +2903,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let key_tmp = lower_expr(ctx, kexpr, vars);
                     // Durable path
                     if let Some(bn) = state_map_base_name(mexpr)
-                        && let Some(spec) = ctx.state_map_configs.get(&bn)
-                        && let (Some(key_codec), Some(value_codec)) = (
-                            key_codec_for_type(&spec.key),
-                            value_codec_for_type(&spec.value),
-                        )
+                        && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
+                        && let Some(key_codec) = key_codec_for_type(&spec.key)
                     {
-                        // path -> STATE_GET -> branch on blob != 0
-                        let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                        let anchor = state_map_anchor_base_name(&bn, &spec.value);
+                        let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
                         let t_blob = ctx.new_temp();
                         ctx.current_instr(Instr::StateGet {
                             dest: t_blob,
@@ -2785,22 +2937,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         });
                         // Then: decode stored value and return it
                         ctx.start_block(then_bb);
-                        let decoded = decode_value_from_norito(ctx, t_blob, &value_codec);
-                        ctx.current_instr(Instr::Binary {
+                        let decoded =
+                            lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
+                                .expect("durable map value should decode");
+                        ctx.current_instr(Instr::Copy {
                             dest: result,
-                            op: BinaryOp::Add,
-                            left: decoded,
-                            right: zero,
+                            src: decoded,
                         });
                         ctx.finish_current(Terminator::Jump(end_bb));
                         // Else: return default expression
                         ctx.start_block(else_bb);
                         let def = lower_expr(ctx, dexpr, vars);
-                        ctx.current_instr(Instr::Binary {
+                        ctx.current_instr(Instr::Copy {
                             dest: result,
-                            op: BinaryOp::Add,
-                            left: def,
-                            right: zero,
+                            src: def,
                         });
                         ctx.finish_current(Terminator::Jump(end_bb));
                         // End
@@ -2976,13 +3126,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let key_tmp = lower_expr(ctx, kexpr, vars);
                     // Durable path
                     if let Some(bn) = state_map_base_name(mexpr)
-                        && let Some(spec) = ctx.state_map_configs.get(&bn)
-                        && let (Some(key_codec), Some(value_codec)) = (
-                            key_codec_for_type(&spec.key),
-                            value_codec_for_type(&spec.value),
-                        )
+                        && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
+                        && let Some(key_codec) = key_codec_for_type(&spec.key)
                     {
-                        let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                        let anchor = state_map_anchor_base_name(&bn, &spec.value);
+                        let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
                         let t_blob = ctx.new_temp();
                         ctx.current_instr(Instr::StateGet {
                             dest: t_blob,
@@ -3011,27 +3159,28 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         });
                         // Then: decode existing value and return it
                         ctx.start_block(then_bb);
-                        let existing = decode_value_from_norito(ctx, t_blob, &value_codec);
-                        ctx.current_instr(Instr::Binary {
+                        let existing =
+                            lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
+                                .expect("durable map value should decode");
+                        ctx.current_instr(Instr::Copy {
                             dest: result,
-                            op: BinaryOp::Add,
-                            left: existing,
-                            right: zero,
+                            src: existing,
                         });
                         ctx.finish_current(Terminator::Jump(end_bb));
                         // Else: encode default, persist, and return default
                         ctx.start_block(else_bb);
                         let def = lower_expr(ctx, dexpr, vars);
-                        let encoded = encode_value_to_norito(ctx, def, &value_codec);
-                        ctx.current_instr(Instr::StateSet {
-                            path: t_path,
-                            value: encoded,
-                        });
-                        ctx.current_instr(Instr::Binary {
+                        let _ = lower_state_map_set_value(
+                            ctx,
+                            &bn,
+                            key_tmp,
+                            &spec.key,
+                            &spec.value,
+                            def,
+                        );
+                        ctx.current_instr(Instr::Copy {
                             dest: result,
-                            op: BinaryOp::Add,
-                            left: def,
-                            right: zero,
+                            src: def,
                         });
                         ctx.finish_current(Terminator::Jump(end_bb));
                         // End and return result
@@ -3783,19 +3932,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             let key_tmp = lower_expr(ctx, index, vars);
             // Durable read path for tracked state maps when target matches tracked map names.
             if let Some(bn) = state_map_base_name(target)
-                && let Some(spec) = ctx.state_map_configs.get(&bn)
-                && let (Some(key_codec), Some(value_codec)) = (
-                    key_codec_for_type(&spec.key),
-                    value_codec_for_type(&spec.value),
-                )
+                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
+                && key_codec_for_type(&spec.key).is_some()
+                && let Some(decoded) =
+                    lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
             {
-                let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
-                let t_blob = ctx.new_temp();
-                ctx.current_instr(Instr::StateGet {
-                    dest: t_blob,
-                    path: t_path,
-                });
-                let decoded = decode_value_from_norito(ctx, t_blob, &value_codec);
                 return decoded;
             }
             // Fallback to ephemeral map get

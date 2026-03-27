@@ -175,6 +175,7 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        states: Vec::new(),
     };
     let mut out = meta.encode();
     out.extend_from_slice(&interface.encode_section());

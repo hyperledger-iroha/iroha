@@ -41,6 +41,7 @@ fn contract_artifact(
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints,
+        states: Vec::new(),
     };
     let mut bytes = meta.encode();
     bytes.extend_from_slice(&interface.encode_section());

@@ -14,6 +14,8 @@
 #![allow(semicolon_in_expressions_from_macros)]
 
 #[allow(unused_extern_crates)]
+extern crate bech32;
+#[allow(unused_extern_crates)]
 extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary

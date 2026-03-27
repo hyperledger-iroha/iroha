@@ -117,6 +117,57 @@ Stage 7 captures stay reproducible across GPU runners. Add `--sign-output` and
 `--gpg-key <id>` when signatures are required; use `--dry-run` to emit only the
 plan/paths without executing the bench.
 
+With `fastpq-gpu` enabled, the raw CUDA bench now records `fft`, `ifft`, `lde`,
+and `poseidon_hash_columns` operations. Each entry includes explicit
+`input_len`/`output_len`, `input_bytes`/`output_bytes`, and
+`estimated_gpu_transfer_bytes` fields, and the wrapper preserves those fields
+in the signed bundle so lab captures can separate copy-dominated workloads from
+kernel-dominated ones before digging into lower-level profiler output. Use
+`--operation <fft|ifft|lde|poseidon_hash_columns|all>` when you need a focused
+capture for a single CUDA stage; both the raw bench and
+`cargo xtask fastpq-cuda-suite` now forward that selector, and the suite only
+passes `--require-lde-mean-ms` / `--require-poseidon-mean-ms` to the wrapper
+when the chosen operation actually includes those metrics. When you keep the
+default output paths, focused suite runs also suffix the wrapped/raw artifact
+names with the selected operation so isolated FFT/IFFT/LDE/Poseidon reruns do
+not masquerade as full-bundle captures. The raw CUDA bundle now also stamps the
+selected `operation_filter` into the JSON itself, and `wrap_benchmark.py`
+normalizes the nested `fastpq_cuda_bench` payload shape before summarizing it,
+backfilling fields like `column_count`, per-operation `columns`, and the source
+benchmark command from the nested raw metadata so focused CUDA captures stay
+self-describing even after re-wrapping. The default remains `all`.
+Downstream provenance tooling now keeps that filter visible too:
+`cargo xtask fastpq-bench-manifest` records `operation_filter` in each bench
+entry, `python3 scripts/fastpq/update_benchmark_history.py` surfaces it in the
+generated history table, and `python3 scripts/fastpq/aggregate_stage_timings.py`
+accepts wrapped bundle shapes directly instead of only flat raw reports. The
+Grafana panel helper `python3 scripts/fastpq/update_dashboard_panel.py` now
+quotes the selected filter and backend-specific rerun hint too, so focused CUDA
+captures no longer render as generic full-bundle evidence inside the rollout
+dashboard. When it loads a matrix manifest, `cargo xtask fastpq-bench-manifest`
+now also records `matrix_operation_filters` per bench, so signed release
+manifests keep the distinction between full-bundle and focused-only device
+baselines. When those signed manifests are archived via
+`scripts/run_release_pipeline.py --fastpq-rollout-bundle ...`, the release
+pipeline now emits `fastpq_rollout_summary.{json,md}` beside each copied
+manifest, carrying the selected `operation_filter`, any
+`matrix_operation_filters`, the resolved wrapped bench filenames, and the
+wrapped `metadata.labels` device tags so reviewers do not need to reopen the
+raw JSON just to confirm whether a CUDA capture was focused or full-bundle.
+The same archive step now also appends those copied bundle roots and summary
+paths into `release_manifest.json.evidence.fastpq`, so machine consumers can
+follow the release-to-rollout evidence link without scraping `SUMMARY.txt`.
+The CUDA bench now also emits a `bn254_metrics` block under both `benchmarks`
+and `report`, exposing `acceleration.bn254_{fft,lde}_ms` for the deterministic
+BN254 helper timings. `wrap_benchmark.py` already promotes that map into the
+wrapped bundle, so CUDA rollout evidence can now carry BN254 FFT/LDE latencies
+without a separate exporter. When general GPU auto-detection succeeds but the
+BN254 helper itself is unavailable or errors at runtime, the raw bench now
+keeps the block with CPU-only values and records explicit `bn254_warnings`
+instead of aborting the capture. The wrapper now preserves those warnings too,
+and it no longer rejects CUDA Poseidon captures for missing Metal-only
+`metal_dispatch_queue` / `column_staging` telemetry blocks.
+
 ### GA release capture (macOS 14 arm64, lane-balanced)
 
 To satisfy WP2-D we also recorded a release build on the same host with GA-ready
@@ -148,15 +199,16 @@ Keep the wrapped JSON and `FASTPQ_METAL_TRACE_CHILD=1` traces checked in under
 `artifacts/fastpq_benchmarks/` so subsequent WP2-D/WP2-E reviews can diff the GA
 capture against earlier refresh runs without rerunning the workload.
 
-Each fresh `fastpq_metal_bench` capture now also writes a `bn254_metrics` block,
-which exposes `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` entries for the CPU
-baseline and whichever GPU backend (Metal/CUDA) was active, **and** a
-`bn254_dispatch` block that records the observed threadgroup widths, logical thread
-counts, and pipeline limits for the single-column BN254 FFT/LDE dispatches. The
-benchmark wrapper copies both maps into `benchmarks.bn254_*`, so dashboards and
-Prometheus exporters can scrape labelled latencies and geometry without re-parsing
-the raw operations array. The `FASTPQ_METAL_THREADGROUP` override now applies to
-BN254 kernels as well, making threadgroup sweeps reproducible from one knob.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_benchmark.py:1037】
+Each fresh `fastpq_metal_bench` capture now also writes a richer `bn254_metrics`
+block, which exposes `acceleration.bn254_{fft,ifft,lde,poseidon}_ms` entries for
+the CPU baseline and whichever GPU backend (Metal/CUDA) was active, **and** a
+`bn254_dispatch` block that records the observed threadgroup widths, logical
+thread counts, and pipeline limits for the single-column BN254 FFT/LDE
+dispatches. The benchmark wrapper copies both maps into `benchmarks.bn254_*`, so
+dashboards and Prometheus exporters can scrape labelled latencies and geometry
+without re-parsing the raw operations array. The `FASTPQ_METAL_THREADGROUP`
+override now applies to BN254 kernels as well, making threadgroup sweeps
+reproducible from one knob.【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:1448】【crates/fastpq_prover/src/bin/fastpq_metal_bench.rs:3155】【scripts/fastpq/wrap_benchmark.py:1037】
 
 To keep downstream dashboards simple, run `python3 scripts/benchmarks/export_csv.py`
 after capturing a bundle. The helper flattens `poseidon_microbench_*.json` into
@@ -165,7 +217,7 @@ custom parsers.
 
 ## Poseidon microbench (Metal)
 
-`fastpq_metal_bench` now re-executes itself under `FASTPQ_METAL_POSEIDON_MICRO_MODE={default,scalar}` and promotes the timings into `benchmarks.poseidon_microbench`. We exported the latest Metal captures with `python3 scripts/fastpq/export_poseidon_microbench.py --bundle <wrapped_json>` and aggregated them via `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json`. The summaries below live under `benchmarks/poseidon/`:
+`fastpq_metal_bench` now re-executes itself under `FASTPQ_METAL_POSEIDON_MICRO_MODE={default,scalar}` and promotes the timings into `benchmarks.poseidon_microbench`. We exported the latest Metal captures with `python3 scripts/fastpq/export_poseidon_microbench.py --bundle <wrapped_json>` and aggregated them via `python3 scripts/fastpq/aggregate_poseidon_microbench.py --input benchmarks/poseidon --output benchmarks/poseidon/manifest.json`. The standalone export now preserves `operation_filter`, `column_count`, and the source benchmark command too, so focused Poseidon reruns stay attributable after they leave the wrapped bundle. The summaries below live under `benchmarks/poseidon/`:
 
 | Summary | Wrapped bundle | Default mean (ms) | Scalar mean (ms) | Speedup vs scalar | Columns x states | Iterations |
 |---------|----------------|-------------------|------------------|-------------------|------------------|------------|

@@ -166,14 +166,22 @@ pub struct SemanticError {
 #[derive(Debug, PartialEq)]
 pub struct TypedProgram {
     pub items: Vec<TypedItem>,
+    pub states: Vec<TypedStateDecl>,
     pub triggers: Vec<TypedTrigger>,
     pub contract_meta: Option<ContractMeta>,
     pub kotoba_entries: Vec<KotobaEntry>,
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct TypedStateDecl {
+    pub name: String,
+    pub ty: Type,
+}
+
 thread_local! {
     static STRUCT_ENV: RefCell<HashMap<String, Vec<(String, Type)>>> = RefCell::new(HashMap::new());
     static STATE_ENV: RefCell<IndexMap<String, Type>> = RefCell::new(IndexMap::new());
+    static CONST_ENV: RefCell<IndexMap<String, TypedExpr>> = RefCell::new(IndexMap::new());
     static FUNCTION_RETURNS: RefCell<HashMap<String, Type>> = RefCell::new(HashMap::new());
     static FUNCTION_SUMMARY: RefCell<HashMap<String, FunctionSummary>> = RefCell::new(HashMap::new());
     static CURRENT_FUNCTION_MODIFIERS: RefCell<Option<FunctionModifiers>> = const { RefCell::new(None) };
@@ -224,10 +232,12 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     // Collect struct definitions up front and publish to thread-local env for this analysis pass.
     let mut structs: HashMap<String, Vec<(String, Type)>> = HashMap::new();
     let mut state_decls: Vec<(String, TypeExpr)> = Vec::new();
+    let mut const_decls: Vec<ConstDecl> = Vec::new();
     let mut fn_returns: HashMap<String, Type> = HashMap::new();
     let mut fn_modifiers: HashMap<String, FunctionModifiers> = HashMap::new();
     let mut kotoba_entries: Vec<KotobaEntry> = Vec::new();
     FUNCTION_SUMMARY.with(|map| map.borrow_mut().clear());
+    CONST_ENV.with(|env| env.borrow_mut().clear());
     CURRENT_FUNCTION_MODIFIERS.with(|mods| {
         mods.borrow_mut().take();
     });
@@ -242,6 +252,9 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
             }
             Item::State(st) => {
                 state_decls.push((st.name.clone(), st.ty.clone()));
+            }
+            Item::Const(decl) => {
+                const_decls.push(decl.clone());
             }
             Item::Function(f) => {
                 let ret = if let Some(ret_ty) = &f.ret_ty {
@@ -259,6 +272,15 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
         }
     }
     STRUCT_ENV.with(|env| env.replace(structs));
+    let mut resolved_consts: IndexMap<String, TypedExpr> = IndexMap::new();
+    for decl in const_decls {
+        let mut value = analyze_const_expr(&decl.value, &resolved_consts)?;
+        if let Some(expected) = parse_declared_type(&decl.ty)? {
+            ensure_assignable_and_coerce(&expected, &mut value)?;
+        }
+        resolved_consts.insert(decl.name, value);
+    }
+    CONST_ENV.with(|env| env.replace(resolved_consts));
     let mut state: IndexMap<String, Type> = IndexMap::new();
     for (name, ty_expr) in state_decls {
         let ty = convert_type_expr(&ty_expr)?;
@@ -273,6 +295,15 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     FUNCTION_RETURNS.with(|env| env.replace(fn_returns));
 
     let mut items = Vec::new();
+    let states = STATE_ENV.with(|env| {
+        env.borrow()
+            .iter()
+            .map(|(name, ty)| TypedStateDecl {
+                name: name.clone(),
+                ty: ty.clone(),
+            })
+            .collect::<Vec<_>>()
+    });
     let mut triggers = Vec::new();
     let mut trigger_names: HashSet<String> = HashSet::new();
     for item in &program.items {
@@ -286,13 +317,14 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
                 }
                 triggers.push(analyze_trigger(trigger, &fn_modifiers)?);
             }
-            Item::Struct(_) | Item::State(_) | Item::Kotoba(_) => {}
+            Item::Struct(_) | Item::Const(_) | Item::State(_) | Item::Kotoba(_) => {}
         }
     }
     enforce_permission_requirements(&items)?;
     let kotoba_entries = normalize_kotoba_entries(kotoba_entries)?;
     Ok(TypedProgram {
         items,
+        states,
         triggers,
         contract_meta: program.contract_meta.clone(),
         kotoba_entries,
@@ -1394,6 +1426,10 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
         ty if is_numeric_type(&ty) => true,
         Type::Bool | Type::Json | Type::Blob | Type::Bytes => true,
         other if is_pointer_type(&other) => true,
+        Type::Struct { fields, .. } => fields
+            .iter()
+            .all(|(_, field_ty)| is_supported_durable_value_type(field_ty)),
+        Type::Tuple(items) => items.iter().all(is_supported_durable_value_type),
         _ => false,
     }
 }
@@ -2638,12 +2674,17 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             ty: Type::Bytes,
         }),
         Expr::Ident(name) => {
-            let ty = vars.get(name).cloned().ok_or_else(|| SemanticError {
+            if let Some(ty) = vars.get(name).cloned() {
+                return Ok(TypedExpr {
+                    expr: ExprKind::Ident(name.clone()),
+                    ty,
+                });
+            }
+            if let Some(value) = CONST_ENV.with(|env| env.borrow().get(name).cloned()) {
+                return Ok(value);
+            }
+            Err(SemanticError {
                 message: format!("undefined variable {name}"),
-            })?;
-            Ok(TypedExpr {
-                expr: ExprKind::Ident(name.clone()),
-                ty,
             })
         }
         Expr::Unary { op, expr: inner } => {
@@ -5017,6 +5058,58 @@ fn parse_declared_type(ty: &Option<TypeExpr>) -> Result<Option<Type>, SemanticEr
     convert_type_expr(t).map(Some)
 }
 
+fn analyze_const_expr(
+    expr: &Expr,
+    consts: &IndexMap<String, TypedExpr>,
+) -> Result<TypedExpr, SemanticError> {
+    match expr {
+        Expr::Number(n) => Ok(TypedExpr {
+            expr: ExprKind::Number(*n),
+            ty: Type::Int,
+        }),
+        Expr::Decimal(raw) => Ok(TypedExpr {
+            expr: ExprKind::Decimal(raw.clone()),
+            ty: Type::FixedU128,
+        }),
+        Expr::Bool(value) => Ok(TypedExpr {
+            expr: ExprKind::Bool(*value),
+            ty: Type::Bool,
+        }),
+        Expr::String(value) => Ok(TypedExpr {
+            expr: ExprKind::String(value.clone()),
+            ty: Type::String,
+        }),
+        Expr::Bytes(value) => Ok(TypedExpr {
+            expr: ExprKind::Bytes(value.clone()),
+            ty: Type::Bytes,
+        }),
+        Expr::Ident(name) => consts.get(name).cloned().ok_or_else(|| SemanticError {
+            message: format!(
+                "const `{name}` is undefined or not yet declared; constants must be declared before use"
+            ),
+        }),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+        } => {
+            let inner = analyze_const_expr(inner, consts)?;
+            match inner.expr {
+                ExprKind::Number(value) => Ok(TypedExpr {
+                    expr: ExprKind::Number(-value),
+                    ty: Type::Int,
+                }),
+                _ => Err(SemanticError {
+                    message: "const unary '-' expects an integer literal or integer const".into(),
+                }),
+            }
+        }
+        _ => Err(SemanticError {
+            message:
+                "const initializers must be literal values or previously declared constants".into(),
+        }),
+    }
+}
+
 fn parse_declared_param_type(ty: &Option<TypeExpr>, _name: &str) -> Result<Type, SemanticError> {
     if let Some(t) = ty {
         convert_type_expr(t)
@@ -5198,18 +5291,34 @@ fn bind_internal_temp(
 }
 
 pub(crate) fn resolve_struct_type(ty: &Type) -> Type {
-    if let Type::Opaque(name) = ty {
-        STRUCT_ENV.with(|env| {
+    match ty {
+        Type::Opaque(name) => STRUCT_ENV.with(|env| {
             env.borrow()
                 .get(name)
                 .map(|fields| Type::Struct {
                     name: name.clone(),
-                    fields: fields.clone(),
+                    fields: fields
+                        .iter()
+                        .map(|(field_name, field_ty)| {
+                            (field_name.clone(), resolve_struct_type(field_ty))
+                        })
+                        .collect(),
                 })
                 .unwrap_or_else(|| ty.clone())
-        })
-    } else {
-        ty.clone()
+        }),
+        Type::Map(key, value) => Type::Map(
+            Box::new(resolve_struct_type(key)),
+            Box::new(resolve_struct_type(value)),
+        ),
+        Type::Tuple(items) => Type::Tuple(items.iter().map(resolve_struct_type).collect()),
+        Type::Struct { name, fields } => Type::Struct {
+            name: name.clone(),
+            fields: fields
+                .iter()
+                .map(|(field_name, field_ty)| (field_name.clone(), resolve_struct_type(field_ty)))
+                .collect(),
+        },
+        _ => ty.clone(),
     }
 }
 
@@ -6865,6 +6974,34 @@ mod tests {
         )
         .expect("parse resolve_account_alias blob");
         analyze(&program).expect("resolve_account_alias blob should type-check");
+    }
+
+    #[test]
+    fn durable_state_maps_accept_struct_values_via_opaque_type_names() {
+        let program = parse(
+            "seiyaku Demo {
+                struct Request {
+                    status: int,
+                    alias_blob: Blob,
+                    requested_by_actor_id: Blob,
+                    requested_by_actor: Json
+                }
+                state Requests: Map<Name, Request>;
+                kotoage fn create_request(proposal_id: Name,
+                                          alias_literal: Blob,
+                                          requested_by_actor_id: Blob,
+                                          requested_by_actor: Json) {
+                    Requests[proposal_id] = Request(
+                        1,
+                        alias_literal,
+                        requested_by_actor_id,
+                        requested_by_actor
+                    );
+                }
+            }",
+        )
+        .expect("parse durable struct map");
+        analyze(&program).expect("durable struct-valued state map should type-check");
     }
 
     #[test]

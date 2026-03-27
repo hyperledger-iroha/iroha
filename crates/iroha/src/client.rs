@@ -6524,6 +6524,30 @@ impl Client {
             .send()
     }
 
+    /// Convenience: POST `/v1/aliases/by_account` with a canonical account id and optional
+    /// alias-scope filters.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
+    pub fn post_alias_lookup_by_account(
+        &self,
+        account_id: &str,
+        dataspace: Option<&str>,
+        domain: Option<&str>,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/aliases/by_account");
+        let body = norito::json::to_vec(&norito::json!({
+            "account_id": account_id,
+            "dataspace": dataspace,
+            "domain": domain,
+        }))?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
     /// Convenience: POST `/v1/assets/aliases/resolve` with an asset alias literal.
     ///
     /// # Errors
@@ -8631,7 +8655,10 @@ impl Client {
             );
         }
         if let Some(contract_alias) = contract_alias {
-            body.insert("contract_alias".into(), norito::json::to_value(contract_alias)?);
+            body.insert(
+                "contract_alias".into(),
+                norito::json::to_value(contract_alias)?,
+            );
         }
         if let Some(entrypoint) = entrypoint {
             body.insert("entrypoint".into(), entrypoint.into());
@@ -8682,7 +8709,10 @@ impl Client {
             );
         }
         if let Some(contract_alias) = contract_alias {
-            body.insert("contract_alias".into(), norito::json::to_value(contract_alias)?);
+            body.insert(
+                "contract_alias".into(),
+                norito::json::to_value(contract_alias)?,
+            );
         }
         if let Some(entrypoint) = entrypoint {
             body.insert("entrypoint".into(), entrypoint.into());

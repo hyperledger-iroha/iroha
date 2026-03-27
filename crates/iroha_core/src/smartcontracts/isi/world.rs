@@ -10329,15 +10329,10 @@ pub mod isi {
                 .account_subjects_in_domain(&domain_id)
                 .into_iter()
                 .collect();
-            let relabeled_accounts: Vec<(AccountId, AccountLabel)> = state_transaction
+            let relabeled_accounts: Vec<AccountId> = state_transaction
                 .world
                 .accounts_in_domain_iter(&domain_id)
-                .filter_map(|account| {
-                    account
-                        .label()
-                        .cloned()
-                        .map(|label| (account.id().clone(), label))
-                })
+                .map(|account| account.id().clone())
                 .collect();
             let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
                 .world
@@ -10672,15 +10667,30 @@ pub mod isi {
                     .remove(asset_definition_id.clone());
             }
 
-            for (account_id, label) in relabeled_accounts {
-                if let Some(account) = state_transaction.world.accounts.get_mut(&account_id) {
+            for account_id in relabeled_accounts {
+                let labels: Vec<_> = state_transaction
+                    .world
+                    .account_aliases_by_account
+                    .get(&account_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|label| label.domain.as_ref() == Some(&domain_id))
+                    .collect();
+                if let Some(account) = state_transaction.world.accounts.get_mut(&account_id)
+                    && account
+                        .label()
+                        .is_some_and(|label| label.domain.as_ref() == Some(&domain_id))
+                {
                     account.set_label(None);
                 }
-                state_transaction
-                    .world
-                    .account_rekey_records
-                    .remove(label.clone());
-                state_transaction.world.account_aliases.remove(label);
+                for label in labels {
+                    state_transaction
+                        .world
+                        .account_rekey_records
+                        .remove(label.clone());
+                    state_transaction.world.remove_account_alias_binding(&label);
+                }
             }
             for subject in unlink_subjects {
                 state_transaction

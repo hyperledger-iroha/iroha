@@ -578,9 +578,7 @@ impl ByteMerkleTree {
                 block[56..64].copy_from_slice(&bit_len_be);
                 blocks.push(block);
             }
-            if let Some(root) = crate::cuda::sha256_leaves_cuda(&blocks)
-                .and_then(|digests| crate::cuda::sha256_pairs_reduce_cuda(&digests))
-            {
+            if let Some(root) = crate::cuda::sha256_merkle_root_cuda(&blocks) {
                 let metrics = iroha_telemetry::metrics::global_or_default();
                 metrics.merkle_root_gpu_total.inc();
                 return root;

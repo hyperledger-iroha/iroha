@@ -64,6 +64,7 @@ class DeviceSummary:
     rows_seen: list[int]
     padded_rows: set[int]
     bench_files: list[Path]
+    operation_filters: set[str]
     operations: dict[str, OperationSummary]
     acceleration_state: dict | None
 
@@ -114,6 +115,7 @@ class DeviceSummary:
             "machines": sorted(self.machines),
             "rows": rows_block,
             "bench_files": [rel(path) for path in sorted(self.bench_files)],
+            "operation_filters": sorted(self.operation_filters),
             "operations": op_entries,
             "max_operation_ms": max_operation_ms,
             "min_operation_speedup": min_operation_speedup,
@@ -218,12 +220,34 @@ def load_acceleration_state_from_bench(bench_path: Path, data: dict) -> dict | N
     return None
 
 
+def format_operation_filter(benchmarks: dict) -> str | None:
+    raw = benchmarks.get("operation_filter")
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    operations = benchmarks.get("operations")
+    if not isinstance(operations, list):
+        return None
+    names = sorted(
+        {
+            entry.get("operation")
+            for entry in operations
+            if isinstance(entry, dict) and isinstance(entry.get("operation"), str)
+        }
+    )
+    if len(names) == 1:
+        return names[0]
+    if names:
+        return "all"
+    return None
+
+
 def summarize_device(label: str, bench_paths: Sequence[Path]) -> DeviceSummary:
     backend = None
     platforms: set[str] = set()
     machines: set[str] = set()
     rows_seen: list[int] = []
     padded_rows: set[int] = set()
+    operation_filters: set[str] = set()
     operations: dict[str, OperationSummary] = {}
     accel_state: dict | None = None
 
@@ -246,6 +270,9 @@ def summarize_device(label: str, bench_paths: Sequence[Path]) -> DeviceSummary:
         padded = benchmarks.get("padded_rows")
         if isinstance(padded, int):
             padded_rows.add(padded)
+        operation_filter = format_operation_filter(benchmarks)
+        if operation_filter:
+            operation_filters.add(operation_filter)
         for entry in benchmarks.get("operations", []):
             name = entry.get("operation")
             if not isinstance(name, str):
@@ -271,6 +298,7 @@ def summarize_device(label: str, bench_paths: Sequence[Path]) -> DeviceSummary:
         rows_seen=rows_seen,
         padded_rows=padded_rows,
         bench_files=list(bench_paths),
+        operation_filters=operation_filters,
         operations=operations,
         acceleration_state=accel_state,
     )

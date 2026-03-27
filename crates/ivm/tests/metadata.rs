@@ -34,6 +34,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        states: Vec::new(),
     };
     let mut bytes = meta.encode();
     bytes.extend_from_slice(&interface.encode_section());
@@ -68,6 +69,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        states: Vec::new(),
     };
     let debug = ivm::EmbeddedContractDebugInfoV1 {
         source_map: vec![ivm::EmbeddedSourceMapEntryV1 {

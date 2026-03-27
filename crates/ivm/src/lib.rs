@@ -109,7 +109,8 @@ pub use crate::metadata::{
     CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
     CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
     EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
-    EmbeddedSourceMapEntryV1, MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
+    EmbeddedSourceMapEntryV1, EmbeddedStateFieldDescriptor, EmbeddedStateType,
+    MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
 };
 pub use crate::{
     aes::{
@@ -120,12 +121,13 @@ pub use crate::{
     byte_merkle_tree::ByteMerkleTree,
     cuda::{
         aesdec_batch_cuda, aesdec_cuda, aesdec_rounds_batch_cuda, aesenc_batch_cuda, aesenc_cuda,
-        aesenc_rounds_batch_cuda, bitonic_sort_pairs, bn254_add_cuda, bn254_mul_cuda,
-        bn254_sub_cuda, cuda_available, cuda_disabled, cuda_last_error_message,
-        ed25519_verify_batch_cuda, ed25519_verify_cuda, keccak_f1600_cuda, poseidon2_cuda,
-        poseidon2_cuda_many, poseidon6_cuda, poseidon6_cuda_many, reset_cuda_backend_for_tests,
-        sha256_compress_cuda, sha256_leaves_cuda, sha256_pairs_reduce_cuda, vadd32_cuda,
-        vadd64_cuda, vand_cuda, vector_add_f32, vor_cuda, vxor_cuda,
+        aesenc_rounds_batch_cuda, bitonic_sort_pairs, bn254_add_batch_cuda, bn254_add_cuda,
+        bn254_mul_batch_cuda, bn254_mul_cuda, bn254_sub_batch_cuda, bn254_sub_cuda, cuda_available,
+        cuda_disabled, cuda_last_error_message, ed25519_verify_batch_cuda, ed25519_verify_cuda,
+        keccak_f1600_cuda, poseidon2_cuda, poseidon2_cuda_many, poseidon6_cuda,
+        poseidon6_cuda_many, reset_cuda_backend_for_tests, sha256_compress_cuda,
+        sha256_leaves_cuda, sha256_pairs_reduce_cuda, vadd32_cuda, vadd64_cuda, vand_cuda,
+        vector_add_f32, vor_cuda, vxor_cuda,
     },
     decoder::decode,
     ec::{
@@ -156,7 +158,6 @@ pub use crate::{
     sha3::{keccak_f1600, sha3_absorb_block},
     zk_poseidon::{pair_hash_bytes, pair_hash_u64},
 };
-
 pub use iroha_crypto::{MerkleProof, MerkleTree};
 /// Syscall policy determined by `ProgramMetadata.abi_version`.
 pub use ivm_abi::SyscallPolicy;
