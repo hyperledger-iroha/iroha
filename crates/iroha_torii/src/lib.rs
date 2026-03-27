@@ -369,7 +369,8 @@ pub use routing::handle_get_proof_tags;
 pub use routing::handle_p2p_ws;
 pub use routing::{
     ActivateInstanceDto, ActivateInstanceResponseDto, ContractCallDto, ContractCallResponseDto,
-    ContractViewDto, ContractViewResponseDto, DeployAndActivateInstanceDto,
+    ContractAliasResolveRequestDto, ContractAliasResolveResponseDto, ContractViewDto,
+    ContractViewResponseDto, DeployAndActivateInstanceDto,
     DeployAndActivateInstanceResponseDto, DeployContractDto, DeployContractResponseDto,
     EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
     KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
@@ -579,6 +580,23 @@ fn asset_alias_resolve_ok(
     alias_json_response(StatusCode::OK, payload)
 }
 
+fn contract_alias_resolve_ok(
+    contract_alias: &str,
+    contract_address: &str,
+    dataspace: &str,
+    contract_alias_binding: Option<routing::ContractAliasBindingDto>,
+    source: &'static str,
+) -> Result<AxResponse, Error> {
+    let payload = routing::ContractAliasResolveResponseDto {
+        contract_alias: contract_alias.to_owned(),
+        contract_address: contract_address.to_owned(),
+        dataspace: dataspace.to_owned(),
+        contract_alias_binding,
+        source: Some(source.to_owned()),
+    };
+    alias_json_response(StatusCode::OK, payload)
+}
+
 fn alias_error_response(status: StatusCode, message: &str) -> Result<AxResponse, Error> {
     let payload = routing::AliasErrorResponseDto {
         error: message.to_owned(),
@@ -723,6 +741,70 @@ fn resolve_alias_index_on_chain(
             },
         )
         .transpose()
+}
+
+fn resolve_contract_alias_on_chain(
+    app: &SharedAppState,
+    alias_input: &str,
+) -> Result<
+    Option<(
+        iroha_data_model::smart_contract::ContractAlias,
+        iroha_data_model::smart_contract::ContractAddress,
+        Option<iroha_core::state::ContractAliasBindingRecord>,
+        String,
+    )>,
+    Error,
+> {
+    let trimmed = alias_input.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "contract alias must not be empty".to_string(),
+            ),
+        )));
+    }
+
+    let nexus = app.state.nexus_snapshot();
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_str(trimmed)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    contract_alias
+        .resolve_components(&nexus.dataspace_catalog)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let world = app.state.world_view();
+    let Some(contract_address) = world.contract_address_by_alias_at(&contract_alias, now_ms) else {
+        return Ok(None);
+    };
+    let binding = world.contract_alias_bindings().get(&contract_address).cloned();
+    let dataspace_alias = contract_address
+        .dataspace_id()
+        .ok()
+        .and_then(|dataspace_id| nexus.dataspace_catalog.by_id(dataspace_id))
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+
+    Ok(Some((
+        contract_alias,
+        contract_address,
+        binding,
+        dataspace_alias,
+    )))
 }
 
 fn resolve_alias_index_via_service(
@@ -16723,6 +16805,31 @@ async fn handler_asset_alias_resolve(
     )
 }
 
+async fn handler_contract_alias_resolve(
+    State(app): State<SharedAppState>,
+    NoritoJson(request): NoritoJson<routing::ContractAliasResolveRequestDto>,
+) -> Result<AxResponse, Error> {
+    let Some((contract_alias, contract_address, binding, dataspace_alias)) =
+        resolve_contract_alias_on_chain(&app, &request.contract_alias)?
+    else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    contract_alias_resolve_ok(
+        contract_alias.as_ref(),
+        contract_address.as_ref(),
+        &dataspace_alias,
+        binding
+            .as_ref()
+            .map(|record| routing::contract_alias_binding_dto(record, now_ms)),
+        "world_state",
+    )
+}
+
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_program_policies(
     State(app): State<SharedAppState>,
@@ -18634,6 +18741,10 @@ impl Torii {
             #[cfg(feature = "app_api")]
             let group = group
                 .route("/v1/contracts/deploy", post(handler_post_contract_deploy))
+                .route(
+                    "/v1/contracts/aliases/resolve",
+                    post(handler_contract_alias_resolve),
+                )
                 .route(
                     "/v1/contracts/instance",
                     post(handler_post_contract_instance),
@@ -22495,6 +22606,31 @@ pub(crate) mod tests_runtime_handlers {
         );
         tx.apply();
         block.commit().expect("commit account alias for test");
+    }
+
+    #[cfg(feature = "app_api")]
+    pub(crate) fn bind_contract_alias_for_test(
+        app: &SharedAppState,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        alias: &str,
+    ) {
+        let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_str(alias)
+            .expect("valid contract alias");
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        tx.world_mut_for_testing()
+            .bind_contract_alias(contract_address, contract_alias, None, None, 0)
+            .expect("bind contract alias");
+        tx.apply();
+        block.commit().expect("commit contract alias for test");
     }
 
     pub(crate) fn signed_app_headers(
@@ -28323,7 +28459,7 @@ mod tests {
 
     use super::*;
     #[cfg(feature = "app_api")]
-    use crate::tests_runtime_handlers::bind_account_alias_for_test;
+    use crate::tests_runtime_handlers::{bind_account_alias_for_test, bind_contract_alias_for_test};
     #[cfg(feature = "telemetry")]
     use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
     use crate::{
@@ -29351,6 +29487,72 @@ mod tests {
         assert_eq!(dto.alias, alias);
         assert_eq!(dto.account_id, authority.to_string());
         assert_eq!(dto.source.as_deref(), Some("on_chain"));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+        let request = routing::ContractAliasResolveRequestDto {
+            contract_alias: "router::universal".to_string(),
+        };
+
+        let response = handler_contract_alias_resolve(
+            State(app),
+            crate::utils::extractors::NoritoJson(request),
+        )
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn contract_alias_resolve_returns_bound_contract() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        bind_contract_alias_for_test(&app, &contract_address, "router::dex.universal");
+        let request = routing::ContractAliasResolveRequestDto {
+            contract_alias: "router::dex.universal".to_string(),
+        };
+
+        let response = handler_contract_alias_resolve(
+            State(app),
+            crate::utils::extractors::NoritoJson(request),
+        )
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("body")
+            .to_bytes();
+        let dto: routing::ContractAliasResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.contract_alias, "router::dex.universal");
+        assert_eq!(dto.contract_address, contract_address.to_string());
+        assert_eq!(dto.dataspace, "universal");
+        assert_eq!(
+            dto.contract_alias_binding
+                .as_ref()
+                .map(|binding| binding.status.as_str()),
+            Some("permanent")
+        );
+        assert_eq!(dto.source.as_deref(), Some("world_state"));
     }
 
     #[cfg(feature = "app_api")]

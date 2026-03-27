@@ -2,6 +2,39 @@
 
 Last updated: 2026-03-27
 
+Latest sync (2026-03-27 full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but NPoS is still contaminated by one repeated missing-asset failure):
+the rebuilt 4-peer preserved-peer stable envelopes on
+`/tmp/izanami_permissioned_workloadfix_20260327T155302Z.log`
+and
+`/tmp/izanami_npos_workloadfix_20260327T163042Z.log`
+both reached target height and failed only the p95 latency gate, but the
+workload verdict split by mode:
+
+- permissioned is clean except for latency:
+  `strict/quorum=2007`, `interval_p50_ms=1112`, `interval_p95_ms=1668`,
+  `successes=11097`, `failures=1`, and zero workload submission failures;
+- NPoS also stays live through target height:
+  `strict/quorum=2007`, `interval_p50_ms=1112`, `interval_p95_ms=1680`,
+  but still records `successes=10261`, `failures=1351`; and
+- all `1351` NPoS failures are still the same
+  `mint_trigger_repetitions` / `Failed to find asset` rejection for one
+  recurring phantom asset ID, so the recent asset-tracking fix did not remove
+  the real stable-soak contamination path.
+
+Open work from this soak result:
+- treat consensus liveness as fixed on this cut and keep performance work
+  focused on reducing p95 from `1668ms` / `1680ms` toward the `1000ms` gate
+  without reopening frontier ownership churn;
+- re-investigate the Izanami workload state machine, because the NPoS stable
+  envelope still replays one phantom asset ID despite the recent
+  `TrackAssetInstance` change;
+- identify which local tracker is still poisoning
+  `mint_trigger_repetitions` with a nonexistent asset target in NPoS, then add
+  a regression that reproduces the exact stable-soak failure shape; and
+- once the NPoS workload storm is actually gone, rerun the full preserved-peer
+  stable envelope again before using its p95 number as a clean consensus-only
+  performance signal.
+
 Latest sync (2026-03-27 Izanami workload-side stale asset tracking is fixed, pending full-soak confirmation):
 `crates/izanami/src/instructions.rs`
 now stops publishing asset IDs into workload state before the corresponding

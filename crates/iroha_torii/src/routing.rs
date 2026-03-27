@@ -49,8 +49,9 @@ use iroha_core::{
     query::store::LiveQueryStoreHandle,
     queue::RoutingDecision,
     state::{
-        AssetDefinitionAliasBindingRecord, AssetDefinitionAliasLeaseStatus, State as CoreState,
-        StateReadOnly, WorldReadOnly,
+        AssetDefinitionAliasBindingRecord, AssetDefinitionAliasLeaseStatus,
+        ContractAliasBindingRecord, ContractAliasLeaseStatus, State as CoreState, StateReadOnly,
+        WorldReadOnly,
     },
     sumeragi::{
         self, SumeragiHandle,
@@ -1291,6 +1292,13 @@ pub struct AssetAliasResolveRequestDto {
     pub alias: String,
 }
 
+#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+/// Request payload accepted by `/v1/contracts/aliases/resolve`.
+pub struct ContractAliasResolveRequestDto {
+    /// Contract alias literal in `name::domain.dataspace` or `name::dataspace` form.
+    pub contract_alias: String,
+}
+
 #[cfg(feature = "app_api")]
 #[derive(
     Clone,
@@ -1715,6 +1723,51 @@ pub(crate) fn asset_alias_binding_dto(
 }
 
 #[derive(
+    Clone,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Current on-chain lease metadata for a contract alias binding.
+pub struct ContractAliasBindingDto {
+    /// Canonical contract alias literal.
+    pub alias: String,
+    /// Lease state label (`permanent`, `leased_active`, `leased_grace`, `expired_pending_cleanup`).
+    pub status: String,
+    /// Lease expiry timestamp in unix milliseconds, when applicable.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lease_expiry_ms: Option<u64>,
+    /// Grace-window end timestamp in unix milliseconds, when applicable.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub grace_until_ms: Option<u64>,
+    /// Initial bind timestamp in unix milliseconds.
+    pub bound_at_ms: u64,
+}
+
+fn contract_alias_binding_status_label(status: ContractAliasLeaseStatus) -> &'static str {
+    match status {
+        ContractAliasLeaseStatus::Permanent => "permanent",
+        ContractAliasLeaseStatus::LeasedActive => "leased_active",
+        ContractAliasLeaseStatus::LeasedGrace => "leased_grace",
+        ContractAliasLeaseStatus::ExpiredPendingCleanup => "expired_pending_cleanup",
+    }
+}
+
+pub(crate) fn contract_alias_binding_dto(
+    binding: &ContractAliasBindingRecord,
+    now_ms: u64,
+) -> ContractAliasBindingDto {
+    ContractAliasBindingDto {
+        alias: binding.alias.to_string(),
+        status: contract_alias_binding_status_label(binding.status_at(now_ms)).to_owned(),
+        lease_expiry_ms: binding.lease_expiry_ms,
+        grace_until_ms: binding.grace_until_ms,
+        bound_at_ms: binding.bound_at_ms,
+    }
+}
+
+#[derive(
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
     crate::json_macros::JsonDeserialize,
@@ -1730,6 +1783,28 @@ pub struct AssetAliasResolveResponseDto {
     pub description: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub logo: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Response payload returned by `/v1/contracts/aliases/resolve`.
+pub struct ContractAliasResolveResponseDto {
+    /// Canonical contract alias literal that was resolved.
+    pub contract_alias: String,
+    /// Canonical Bech32m contract address currently bound to the alias.
+    pub contract_address: String,
+    /// Dataspace alias hosting the resolved contract.
+    pub dataspace: String,
+    /// Current alias lease metadata, when available.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias_binding: Option<ContractAliasBindingDto>,
+    /// Resolution backend source.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
@@ -6817,8 +6892,6 @@ pub async fn handle_post_contract_call(
         signature_b64,
         contract_address,
         contract_alias,
-        namespace,
-        contract_id,
         entrypoint,
         payload,
         creation_time_ms,
@@ -6831,29 +6904,20 @@ pub async fn handle_post_contract_call(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
 
-    let prepared = match (
-        contract_address.as_ref(),
-        contract_alias.as_ref(),
-        namespace.as_deref(),
-        contract_id.as_deref(),
-    ) {
-        (Some(_), Some(_), _, _) => {
+    let prepared = match (contract_address.as_ref(), contract_alias.as_ref()) {
+        (Some(_), Some(_)) => {
             return Err(conversion_error(
                 "exactly one of contract_address or contract_alias must be provided".to_owned(),
             ));
         }
-        (Some(contract_address), None, None, None) => {
-            prepare_contract_call_by_address(&state, contract_address)?
-        }
-        (None, Some(contract_alias), None, None) => {
+        (Some(contract_address), None) => prepare_contract_call_by_address(&state, contract_address)?,
+        (None, Some(contract_alias)) => {
             prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
-        }
-        (None, None, Some(namespace), Some(contract_id)) => {
-            prepare_contract_call(&state, namespace, contract_id)?
         }
         _ => {
             return Err(conversion_error(
-                "provide exactly one contract target via contract_address, contract_alias, or namespace+contract_id".to_owned(),
+                "provide exactly one contract target via contract_address or contract_alias"
+                    .to_owned(),
             ));
         }
     };
@@ -7037,8 +7101,6 @@ pub async fn handle_post_contract_view(
         authority,
         contract_address,
         contract_alias,
-        namespace,
-        contract_id,
         entrypoint,
         payload,
         gas_limit,
@@ -7048,29 +7110,20 @@ pub async fn handle_post_contract_view(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
 
-    let prepared = match (
-        contract_address.as_ref(),
-        contract_alias.as_ref(),
-        namespace.as_deref(),
-        contract_id.as_deref(),
-    ) {
-        (Some(_), Some(_), _, _) => {
+    let prepared = match (contract_address.as_ref(), contract_alias.as_ref()) {
+        (Some(_), Some(_)) => {
             return Err(conversion_error(
                 "exactly one of contract_address or contract_alias must be provided".to_owned(),
             ));
         }
-        (Some(contract_address), None, None, None) => {
-            prepare_contract_call_by_address(&state, contract_address)?
-        }
-        (None, Some(contract_alias), None, None) => {
+        (Some(contract_address), None) => prepare_contract_call_by_address(&state, contract_address)?,
+        (None, Some(contract_alias)) => {
             prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
-        }
-        (None, None, Some(namespace), Some(contract_id)) => {
-            prepare_contract_call(&state, namespace, contract_id)?
         }
         _ => {
             return Err(conversion_error(
-                "provide exactly one contract target via contract_address, contract_alias, or namespace+contract_id".to_owned(),
+                "provide exactly one contract target via contract_address or contract_alias"
+                    .to_owned(),
             ));
         }
     };
@@ -12664,12 +12717,6 @@ pub struct ContractCallDto {
     /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
     #[norito(default)]
     pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-    /// Internal legacy namespace binding path.
-    #[norito(default)]
-    pub namespace: Option<String>,
-    /// Internal legacy contract identifier within the namespace binding path.
-    #[norito(default)]
-    pub contract_id: Option<String>,
     /// Optional entrypoint selector; defaults to `main`.
     #[norito(default)]
     pub entrypoint: Option<String>,
@@ -12745,12 +12792,6 @@ pub struct ContractViewDto {
     /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
     #[norito(default)]
     pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-    /// Internal legacy namespace binding path.
-    #[norito(default)]
-    pub namespace: Option<String>,
-    /// Internal legacy contract identifier within the namespace binding path.
-    #[norito(default)]
-    pub contract_id: Option<String>,
     /// Optional entrypoint selector; defaults to `main`.
     #[norito(default)]
     pub entrypoint: Option<String>,

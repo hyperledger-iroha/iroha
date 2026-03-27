@@ -270,9 +270,15 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha app contracts`↴](#iroha-app-contracts)
 * [`iroha app contracts code`↴](#iroha-app-contracts-code)
 * [`iroha app contracts code get`↴](#iroha-app-contracts-code-get)
+* [`iroha app contracts alias`↴](#iroha-app-contracts-alias)
+* [`iroha app contracts alias lease`↴](#iroha-app-contracts-alias-lease)
+* [`iroha app contracts alias release`↴](#iroha-app-contracts-alias-release)
+* [`iroha app contracts alias resolve`↴](#iroha-app-contracts-alias-resolve)
 * [`iroha app contracts deploy`↴](#iroha-app-contracts-deploy)
 * [`iroha app contracts call`↴](#iroha-app-contracts-call)
 * [`iroha app contracts view`↴](#iroha-app-contracts-view)
+* [`iroha app contracts debug-view`↴](#iroha-app-contracts-debug-view)
+* [`iroha app contracts debug-call`↴](#iroha-app-contracts-debug-call)
 * [`iroha app contracts deploy-activate`↴](#iroha-app-contracts-deploy-activate)
 * [`iroha app contracts manifest`↴](#iroha-app-contracts-manifest)
 * [`iroha app contracts manifest get`↴](#iroha-app-contracts-manifest-get)
@@ -5033,9 +5039,12 @@ Contracts helpers (code storage)
 ###### **Subcommands:**
 
 * `code` — Contract code helpers
+* `alias` — Contract alias helpers
 * `deploy` — Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 * `call` — Submit a contract call through Torii (POST /v1/contracts/call)
 * `view` — Execute a read-only contract view through Torii (POST /v1/contracts/view)
+* `debug-view` — Execute a read-only contract view locally against compiled bytecode and optional fixtures
+* `debug-call` — Execute a public contract entrypoint locally against compiled bytecode and optional fixtures
 * `deploy-activate` — Deploy bytecode, register manifest, and activate a namespace binding in one transaction
 * `manifest` — Contract manifest helpers
 * `simulate` — Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
@@ -5068,6 +5077,58 @@ Fetch on-chain contract code bytes by code hash and write to a file
 
 
 
+## `iroha app contracts alias`
+
+Contract alias helpers
+
+**Usage:** `iroha app contracts alias <COMMAND>`
+
+###### **Subcommands:**
+
+* `lease` — Lease or renew an on-chain contract alias for a contract address
+* `release` — Release the current on-chain alias binding for a contract address
+* `resolve` — Resolve an on-chain contract alias to its current canonical contract address
+
+
+
+## `iroha app contracts alias lease`
+
+Lease or renew an on-chain contract alias for a contract address
+
+**Usage:** `iroha app contracts alias lease [OPTIONS] --contract-address <CONTRACT_ADDRESS> --contract-alias <CONTRACT_ALIAS>`
+
+###### **Options:**
+
+* `--contract-address <CONTRACT_ADDRESS>` — Canonical contract address to bind
+* `--contract-alias <CONTRACT_ALIAS>` — Alias literal in `name::domain.dataspace` or `name::dataspace` format
+* `--lease-expiry-ms <LEASE_EXPIRY_MS>` — Optional lease expiry timestamp in unix milliseconds. Omit for a permanent binding
+
+
+
+## `iroha app contracts alias release`
+
+Release the current on-chain alias binding for a contract address
+
+**Usage:** `iroha app contracts alias release --contract-address <CONTRACT_ADDRESS>`
+
+###### **Options:**
+
+* `--contract-address <CONTRACT_ADDRESS>` — Canonical contract address whose alias binding should be cleared
+
+
+
+## `iroha app contracts alias resolve`
+
+Resolve an on-chain contract alias to its current canonical contract address
+
+**Usage:** `iroha app contracts alias resolve <CONTRACT_ALIAS>`
+
+###### **Arguments:**
+
+* `<CONTRACT_ALIAS>` — Alias literal in `name::domain.dataspace` or `name::dataspace` format
+
+
+
 ## `iroha app contracts deploy`
 
 Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
@@ -5088,7 +5149,11 @@ Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 
 Submit a contract call through Torii (POST /v1/contracts/call)
 
-**Usage:** `iroha app contracts call [OPTIONS]`
+**Usage:** `iroha app contracts call [OPTIONS] [SELECTOR]`
+
+###### **Arguments:**
+
+* `<SELECTOR>` — Optional shorthand selector. Supports `entrypoint:alias`, plain alias, or contract address
 
 ###### **Options:**
 
@@ -5101,9 +5166,8 @@ Submit a contract call through Torii (POST /v1/contracts/call)
 * `--gas-limit <GAS_LIMIT>` — Gas limit metadata forwarded to the contract call
 
   Default value: `100000`
-* `--contract-address <CONTRACT_ADDRESS>` — Canonical contract address. When provided it takes precedence over namespace/id
-* `--namespace <NAMESPACE>` — Namespace hosting the contract when using the legacy binding path
-* `--contract-id <CONTRACT_ID>` — Contract id within the namespace when using the legacy binding path
+* `--contract-address <CONTRACT_ADDRESS>` — Canonical contract address
+* `--contract-alias <CONTRACT_ALIAS>` — On-chain contract alias (`name::domain.dataspace` or `name::dataspace`)
 * `--payload-json <JSON>` — Inline Norito JSON payload object or value
 * `--payload-file <PATH>` — File containing a Norito JSON payload object or value
 
@@ -5113,7 +5177,11 @@ Submit a contract call through Torii (POST /v1/contracts/call)
 
 Execute a read-only contract view through Torii (POST /v1/contracts/view)
 
-**Usage:** `iroha app contracts view [OPTIONS]`
+**Usage:** `iroha app contracts view [OPTIONS] [SELECTOR]`
+
+###### **Arguments:**
+
+* `<SELECTOR>` — Optional shorthand selector. Supports `entrypoint:alias`, plain alias, or contract address
 
 ###### **Options:**
 
@@ -5122,9 +5190,58 @@ Execute a read-only contract view through Torii (POST /v1/contracts/view)
 * `--gas-limit <GAS_LIMIT>` — Gas limit applied to the local view execution
 
   Default value: `100000`
-* `--contract-address <CONTRACT_ADDRESS>` — Canonical contract address. When provided it takes precedence over namespace/id
-* `--namespace <NAMESPACE>` — Namespace hosting the contract when using the legacy binding path
-* `--contract-id <CONTRACT_ID>` — Contract id within the namespace when using the legacy binding path
+* `--contract-address <CONTRACT_ADDRESS>` — Canonical contract address
+* `--contract-alias <CONTRACT_ALIAS>` — On-chain contract alias (`name::domain.dataspace` or `name::dataspace`)
+* `--payload-json <JSON>` — Inline Norito JSON payload object or value
+* `--payload-file <PATH>` — File containing a Norito JSON payload object or value
+
+
+
+## `iroha app contracts debug-view`
+
+Execute a read-only contract view locally against compiled bytecode and optional fixtures
+
+**Usage:** `iroha app contracts debug-view [OPTIONS]`
+
+###### **Options:**
+
+* `--authority <AUTHORITY>` — Authority account identifier used as the local read context. Defaults to the configured client authority
+* `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
+* `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
+* `--entrypoint <ENTRYPOINT>` — Optional contract entrypoint selector (defaults to `main`)
+* `--gas-limit <GAS_LIMIT>` — Gas limit applied to the local view execution
+
+  Default value: `100000`
+* `--source-file <PATH>` — Optional source file used to render snippet context for trapped debug locations
+* `--accounts-json <JSON>` — Optional JSON array of canonical account ids available to iterator helpers
+* `--accounts-file <PATH>` — File containing a JSON array of canonical account ids available to iterator helpers
+* `--durable-state-json <JSON>` — Optional JSON object mapping durable state keys to encoded values (`0x...` hex or base64)
+* `--durable-state-file <PATH>` — File containing a JSON object mapping durable state keys to encoded values (`0x...` hex or base64)
+* `--payload-json <JSON>` — Inline Norito JSON payload object or value
+* `--payload-file <PATH>` — File containing a Norito JSON payload object or value
+
+
+
+## `iroha app contracts debug-call`
+
+Execute a public contract entrypoint locally against compiled bytecode and optional fixtures
+
+**Usage:** `iroha app contracts debug-call [OPTIONS]`
+
+###### **Options:**
+
+* `--authority <AUTHORITY>` — Authority account identifier used as the local call context. Defaults to the configured client authority
+* `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
+* `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
+* `--entrypoint <ENTRYPOINT>` — Optional contract entrypoint selector (defaults to `main`)
+* `--gas-limit <GAS_LIMIT>` — Gas limit applied to the local call execution
+
+  Default value: `100000`
+* `--source-file <PATH>` — Optional source file used to render snippet context for trapped debug locations
+* `--accounts-json <JSON>` — Optional JSON array of canonical account ids available to iterator helpers
+* `--accounts-file <PATH>` — File containing a JSON array of canonical account ids available to iterator helpers
+* `--durable-state-json <JSON>` — Optional JSON object mapping durable state keys to encoded values (`0x...` hex or base64)
+* `--durable-state-file <PATH>` — File containing a JSON object mapping durable state keys to encoded values (`0x...` hex or base64)
 * `--payload-json <JSON>` — Inline Norito JSON payload object or value
 * `--payload-file <PATH>` — File containing a Norito JSON payload object or value
 

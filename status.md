@@ -2,6 +2,58 @@
 
 Last updated: 2026-03-27
 
+## 2026-03-27 Full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but the NPoS missing-asset storm is still present
+- Rebuilt `iroha3d` and `izanami` and reran the full 4-peer preserved-peer
+  stable envelopes on the current tree:
+  - build:
+    `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  - permissioned log:
+    `/tmp/izanami_permissioned_workloadfix_20260327T155302Z.log`
+    with preserved peers under
+    `/tmp/iroha-soak-permissioned-workloadfix-NaPyYv/irohad_test_network_pIyxKW`
+  - NPoS log:
+    `/tmp/izanami_npos_workloadfix_20260327T163042Z.log`
+    with preserved peers under
+    `/tmp/iroha-soak-npos-workloadfix-jMkGwz/irohad_test_network_hfeOfk`
+- Permissioned remains liveness-clean and workload-clean on this cut:
+  - reached target height with
+    `quorum_min_height=2007 strict_min_height=2007`
+  - target metrics:
+    `interval_p50_ms=1112`, `interval_p95_ms=1668`
+  - final summary:
+    `successes=11097`, `failures=1`
+  - no workload submission failures at all:
+    `plan submission failed=0`,
+    `transaction queued for too long=0`,
+    `haven't got tx confirmation within 20s=0`
+  - still failed only because Izanami enforces
+    `quorum p95 block interval <= 1000ms`
+- NPoS also remains consensus-liveness clean, but the workload contamination is
+  still real:
+  - reached target height with
+    `quorum_min_height=2007 strict_min_height=2007`
+  - target metrics:
+    `interval_p50_ms=1112`, `interval_p95_ms=1680`
+  - final summary:
+    `successes=10261`, `failures=1351`
+  - every recorded workload failure was the same repeated rejection:
+    `plan submission failed=1351`,
+    `Failed to find asset=1351`,
+    all for one recurring `mint_trigger_repetitions` phantom asset ID
+  - despite that noise, the cluster still stayed aligned and crossed target
+- Preserved-peer frontier/liveness signals on this cut:
+  - `no strict block height progress=0` in both runs
+  - `sharing from fallback anchor=0` in both runs
+  - `requested missing BlockCreated while awaiting RBC INIT=0` in both runs
+  - `requested block-sync range pull from committed anchor=0` in both runs
+  - `FetchBlockBody=0` and `BlockBodyResponse=0` in both runs
+- Net result:
+  - the frontier FSM repair still looks good;
+  - permissioned is now mostly a pure latency-tuning problem; but
+  - the recent Izanami asset-tracking fix did not eliminate the NPoS
+    missing-asset workload storm in the real stable envelope, so the harness
+    contamination root cause is still unresolved.
+
 ## 2026-03-27 Izanami workload asset tracking no longer publishes unconfirmed asset IDs
 - Closed the workload-side stale-asset poisoning path in
   `crates/izanami/src/instructions.rs` that was driving repeated

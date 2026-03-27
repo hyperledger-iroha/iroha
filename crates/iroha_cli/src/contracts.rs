@@ -23,6 +23,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use ivm::{PointerType, host::IVMHost};
+use reqwest::StatusCode;
 
 use crate::{Run, RunContext};
 
@@ -85,6 +86,8 @@ pub enum AliasCommand {
     Lease(ContractAliasLeaseArgs),
     /// Release the current on-chain alias binding for a contract address
     Release(ContractAliasReleaseArgs),
+    /// Resolve an on-chain contract alias to its current canonical contract address
+    Resolve(ContractAliasResolveArgs),
 }
 
 impl Run for AliasCommand {
@@ -92,6 +95,7 @@ impl Run for AliasCommand {
         match self {
             AliasCommand::Lease(args) => args.run(context),
             AliasCommand::Release(args) => args.run(context),
+            AliasCommand::Resolve(args) => args.run(context),
         }
     }
 }
@@ -193,6 +197,43 @@ impl Run for ContractAliasReleaseArgs {
         context.submit(vec![InstructionBox::from(SetContractAlias::clear(
             contract_address,
         ))])
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ContractAliasResolveArgs {
+    /// Alias literal in `name::domain.dataspace` or `name::dataspace` format.
+    pub contract_alias: String,
+}
+
+impl Run for ContractAliasResolveArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let contract_alias: iroha::data_model::smart_contract::ContractAlias = self
+            .contract_alias
+            .parse()
+            .wrap_err("invalid contract alias")?;
+        let client: Client = context.client_from_config();
+        let response = client
+            .post_contract_alias_resolve(&contract_alias)
+            .wrap_err("failed to call `/v1/contracts/aliases/resolve`")?;
+        let status = response.status();
+        let body = response.into_body();
+
+        match status {
+            StatusCode::OK => {
+                let value: norito::json::Value =
+                    norito::json::from_slice(&body).wrap_err("decode contract alias response")?;
+                context.print_data(&value)
+            }
+            StatusCode::NOT_FOUND => {
+                Err(eyre!("contract alias `{contract_alias}` not found"))
+            }
+            status => Err(eyre!(
+                "contract alias resolve request failed with HTTP {}: {}",
+                status,
+                std::str::from_utf8(&body).unwrap_or("")
+            )),
+        }
     }
 }
 
