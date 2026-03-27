@@ -227,7 +227,7 @@ SPDX-License-Identifier: Apache-2.0
 - ہر اکاؤنٹ کے لئے کلیدی مشتق ترتیب:
   - `sk_spend` → `nk` (nullifier KEY) ، `ivk` (آنے والی دیکھنے کی کلید) ، `ovk` (سبکدوش ہونے والی دیکھنے کی کلید) ، `fvk`۔
 - پے لوڈز AEAD انکرپٹڈ نوٹ کا استعمال ECDH سے ماخوذ مشترکہ چابیاں کے ساتھ کرتے ہیں۔ اختیاری آڈیٹر ویو کیز کو اصل پالیسی کے مطابق آؤٹ پٹ کے ساتھ منسلک کیا جاسکتا ہے۔
-- سی ایل آئی ایڈونس: `confidential create-keys` ، `confidential send` ، `confidential export-view-key` ، آڈیٹرز کو میمو کو ڈی کوڈ کرنے کے لئے ٹولز ، اور `iroha app zk envelope` مددگار Norito لفافوں کو آف لائن تیار/معائنہ کرنے کے لئے۔ Torii اسی مشتق بہاؤ کو بے نقاب کرتا ہے جیسے `POST /v1/confidential/derive-keyset` اور ہیکس اور بیس 64 فارمیٹس کو لوٹاتا ہے تاکہ بٹوے کلیدی ڈھانچے کو پروگرام میں لایا جاسکے۔
+- سی ایل آئی ایڈونس: `confidential create-keys` ، `confidential send` ، `confidential export-view-key` ، آڈیٹرز کو میمو کو ڈی کوڈ کرنے کے لئے ٹولز ، اور `iroha app zk envelope` مددگار Norito لفافوں کو آف لائن تیار/معائنہ کرنے کے لئے۔
 
 ## گیس ، بارڈرز ، اور ڈاس کنٹرول
 - گیس ٹیبل لازمی ہے:

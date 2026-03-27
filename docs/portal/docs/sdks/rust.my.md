@@ -150,7 +150,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -159,8 +159,8 @@ fn download_qr() -> eyre::Result<()> {
 ```
 
 `ExplorerAccountQrSnapshot` သည် `/v1/explorer/accounts/{id}/qr` JSON ကို မှန်သည်
-မျက်နှာပြင်- ၎င်းတွင် canonical account id ပါ၀င်သည်၊ ပကတိနှင့်ပြန်ဆိုထားသော
-စံ I105 literal၊ ကွန်ရက်ရှေ့ဆက်/အမှား-ပြင်ပေးသည့် မက်တာဒေတာ၊ QR အတိုင်းအတာနှင့်
+မျက်နှာပြင်- ၎င်းတွင် canonical I105 account id ပါ၀င်သည်၊ ပကတိနှင့်ပြန်ဆိုထားသော
+စံ i105 literal၊ ကွန်ရက်ရှေ့ဆက်/အမှား-ပြင်ပေးသည့် မက်တာဒေတာ၊ QR အတိုင်းအတာနှင့်
 ပိုက်ဆံအိတ်/ရှာဖွေသူများ တိုက်ရိုက်ထည့်သွင်းနိုင်သော အတွင်းလိုင်း SVG ပေးဆောင်မှု။ ချန်လှပ်ပါ။
 
 ## 7. ပွဲများကို စာရင်းသွင်းပါ။

@@ -239,7 +239,7 @@ SPDX-License-Identifier: Apache-2.0
 - اشتقاق المفاتيح الأساسية للحساب:
   - `sk_spend` → `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - تستخدم ملاحظات الحمولات الصافية EAAD مع المفاتيح المشتركة المشتقة من ECDH؛ يمكن لمفاتيح عرض المدقق الاختيارية أن تكون قابلة للتنفيذ من خلال المخرجات ذات الصلة بالنشاط السياسي.
-- إضافة CLI: `confidential create-keys`، `confidential send`، `confidential export-view-key`، أدوات التدقيق للمذكرة والمساعد `iroha app zk envelope` التأسيس/التفتيش Norito مغلفات المذكرات دون اتصال بالإنترنت. يوفر Torii اشتقاق التدفق من خلال `POST /v1/confidential/derive-keyset`، ونماذج سداسي عشرية متجددة وbase64 يمكن الحصول عليها من خلال البرنامج الكلمات المفتاحية.
+- إضافة CLI: `confidential create-keys`، `confidential send`، `confidential export-view-key`، أدوات التدقيق للمذكرة والمساعد `iroha app zk envelope` التأسيس/التفتيش Norito مغلفات المذكرات دون اتصال بالإنترنت. يوفر
 
 ## التحكم في الغاز والحدود وDoS
 - تحديد جدول الغاز:

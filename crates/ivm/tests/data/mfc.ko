@@ -30,6 +30,6 @@ fn main(from: AccountId, to: AccountId) { // `to` is optional and defaults to `f
 }
 
 fn mfc_asset() -> AssetDefinitionId {
-    let mfc = asset_definition!("mfc#wonderland");
+    let mfc = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     return mfc;
 }

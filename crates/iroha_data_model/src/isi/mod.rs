@@ -140,6 +140,11 @@ impl From<crate::isi::bridge::RecordBridgeReceipt> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
+    fn from(i: crate::isi::asset_alias::SetAssetDefinitionAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 // Allow direct boxing of ZK asset and voting instructions
 impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {
@@ -681,6 +686,11 @@ impl From<crate::isi::domain_link::SetAccountLabel> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::contract_alias::SetContractAlias> for InstructionBox {
+    fn from(i: crate::isi::contract_alias::SetContractAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
     fn from(i: crate::isi::domain_link::UnlinkAccountDomain) -> Self {
         InstructionBox(Box::new(i))
@@ -688,14 +698,14 @@ impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
 }
 
 // Allow direct boxing of offline allowance instructions.
-impl From<crate::isi::offline::RegisterOfflineReserve> for InstructionBox {
-    fn from(i: crate::isi::offline::RegisterOfflineReserve) -> Self {
+impl From<crate::isi::offline::RegisterOfflineLineage> for InstructionBox {
+    fn from(i: crate::isi::offline::RegisterOfflineLineage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::CommitOfflineReserveOperation> for InstructionBox {
-    fn from(i: crate::isi::offline::CommitOfflineReserveOperation) -> Self {
+impl From<crate::isi::offline::CommitOfflineLineageOperation> for InstructionBox {
+    fn from(i: crate::isi::offline::CommitOfflineLineageOperation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -724,14 +734,14 @@ impl From<crate::isi::offline::ReclaimExpiredOfflineAllowance> for InstructionBo
     }
 }
 
-impl From<crate::isi::offline::ReserveOfflineEscrowBalance> for InstructionBox {
-    fn from(i: crate::isi::offline::ReserveOfflineEscrowBalance) -> Self {
+impl From<crate::isi::offline::LoadOfflineEscrowBalance> for InstructionBox {
+    fn from(i: crate::isi::offline::LoadOfflineEscrowBalance) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::RefundOfflineEscrowBalance> for InstructionBox {
-    fn from(i: crate::isi::offline::RefundOfflineEscrowBalance) -> Self {
+impl From<crate::isi::offline::RedeemOfflineEscrowBalance> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemOfflineEscrowBalance) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1663,6 +1673,8 @@ pub mod bridge;
 pub mod confidential;
 /// Content lane instructions.
 pub mod content;
+/// Contract alias binding instructions.
+pub mod contract_alias;
 /// Account subject and domain link instructions.
 pub mod domain_link;
 /// Hidden-function-backed identifier policy instructions.
@@ -1687,6 +1699,8 @@ pub mod registry;
 pub mod repo;
 /// Runtime upgrade instructions and payloads.
 pub mod runtime_upgrade;
+/// Real-world asset lot instructions.
+pub mod rwa;
 /// DvP/PvP settlement instructions.
 pub mod settlement;
 /// Smart contract code management instructions.
@@ -1713,6 +1727,7 @@ pub mod zk;
 
 pub use asset_alias::*;
 pub use confidential::*;
+pub use contract_alias::*;
 pub use domain_link::*;
 pub use identifier::*;
 pub use kaigi::*;
@@ -2493,6 +2508,7 @@ pub mod prelude {
         },
         consensus_keys::{DisableConsensusKey, RegisterConsensusKey, RotateConsensusKey},
         content::{PublishContentBundle, RetireContentBundle},
+        contract_alias::SetContractAlias,
         domain_link::{BindAccountAlias, LinkAccountDomain, SetAccountLabel, UnlinkAccountDomain},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
@@ -2505,6 +2521,10 @@ pub mod prelude {
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
+        rwa::{
+            ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
+            RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
+        },
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementFailureRecord,
             SettlementInstructionBox, SettlementKind, SettlementLedger, SettlementLedgerEntry,

@@ -1730,12 +1730,14 @@ pub(crate) struct HfSharedLeaseStatusQuery {
     pub storage_class: String,
     pub lease_term_ms: u64,
     #[norito(default)]
+    /// Optional account filter as canonical I105 or on-chain account alias.
     pub account_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, JsonDeserialize)]
 pub(crate) struct ModelHostStatusQuery {
     #[norito(default)]
+    /// Optional validator filter as canonical I105 or on-chain account alias.
     pub account_id: Option<String>,
 }
 
@@ -3129,13 +3131,21 @@ fn parse_hf_model_name(model_name: &str) -> Result<String, SoracloudError> {
 }
 
 fn parse_optional_account_id(
+    state: &iroha_core::state::State,
+    telemetry: &crate::routing::MaybeTelemetry,
+    context: &'static str,
     account_id: Option<&str>,
 ) -> Result<Option<AccountId>, SoracloudError> {
     account_id
         .map(|literal| {
-            AccountId::parse_encoded(literal.trim())
-                .map(|parsed| parsed.into_account_id())
-                .map_err(|err| SoracloudError::bad_request(format!("invalid account_id: {err}")))
+            crate::routing::parse_account_literal_with_state(
+                state,
+                literal.trim(),
+                telemetry,
+                context,
+            )
+            .map(|(account_id, _)| account_id)
+            .map_err(|err| SoracloudError::bad_request(format!("invalid account_id: {err}")))
         })
         .transpose()
 }
@@ -5616,11 +5626,17 @@ fn verified_soracloud_request_identity(
 ) -> Result<(AccountId, PublicKey, Vec<PublicKey>), SoracloudError> {
     let account = headers
         .get(VERIFIED_ACCOUNT_HEADER)
-        .and_then(|value| value.to_str().ok())
         .ok_or_else(|| {
             SoracloudError::unauthorized(
                 "signed request headers are required for Soracloud mutation endpoints",
             )
+        })
+        .and_then(|value| {
+            std::str::from_utf8(value.as_bytes()).map_err(|_| {
+                SoracloudError::internal(
+                    "failed to decode verified Soracloud account header".to_owned(),
+                )
+            })
         })
         .and_then(|literal| {
             AccountId::parse_encoded(literal.trim())
@@ -11430,7 +11446,12 @@ pub(crate) async fn handle_hf_status(
         Ok(storage_class) => storage_class,
         Err(err) => return err.into_response(),
     };
-    let account_id = match parse_optional_account_id(query.account_id.as_deref()) {
+    let account_id = match parse_optional_account_id(
+        app.state.as_ref(),
+        &app.telemetry,
+        "/v1/soracloud/hf/status#account_id",
+        query.account_id.as_deref(),
+    ) {
         Ok(account_id) => account_id,
         Err(err) => return err.into_response(),
     };
@@ -11714,7 +11735,12 @@ pub(crate) async fn handle_model_host_status(
         return err.into_response();
     }
 
-    let validator_account_id = match parse_optional_account_id(query.account_id.as_deref()) {
+    let validator_account_id = match parse_optional_account_id(
+        app.state.as_ref(),
+        &app.telemetry,
+        "/v1/soracloud/model-host/status#account_id",
+        query.account_id.as_deref(),
+    ) {
         Ok(account_id) => account_id,
         Err(err) => return err.into_response(),
     };
@@ -13369,7 +13395,8 @@ mod tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             VERIFIED_ACCOUNT_HEADER,
-            account.to_string().parse().expect("valid account header"),
+            axum::http::HeaderValue::from_bytes(account.to_string().as_bytes())
+                .expect("valid utf-8 account header"),
         );
         headers.insert(
             VERIFIED_SIGNER_HEADER,

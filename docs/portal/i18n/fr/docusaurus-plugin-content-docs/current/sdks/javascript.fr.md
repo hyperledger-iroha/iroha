@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -163,11 +163,11 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 5,
   assetId,
 });
@@ -271,7 +271,7 @@ La télémétrie Explorer fournit des aides typées pour le `/v1/explorer/metric
 Points de terminaison `/v1/explorer/accounts/{account_id}/qr` pour que les tableaux de bord puissent rejouer les
 mêmes instantanés qui alimentent le portail. `getExplorerMetrics()` normalise le
 charge utile et renvoie `null` lorsque la route est désactivée. Associez-le à
-`getExplorerAccountQr()` chaque fois que vous avez besoin des littéraux I105 (préféré)/sora (deuxième meilleur) plus en ligne
+`getExplorerAccountQr()` chaque fois que vous avez besoin des littéraux i105 (préféré)/sora (deuxième meilleur) plus en ligne
 SVG pour les boutons de partage.
 
 ```ts
@@ -286,7 +286,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -294,8 +294,8 @@ console.log(
 );
 ```
 
-Passer `I105` reflète la compression par défaut de l'Explorateur
-sélecteurs; omettez le remplacement de la sortie I105 préférée ou demandez `i105_qr`
+Passer `i105` reflète la compression par défaut de l'Explorateur
+sélecteurs; omettez le remplacement de la sortie i105 préférée ou demandez `i105_qr`
 lorsque vous avez besoin de la variante QR-safe. Le littéral compressé est le deuxième meilleur
 Option Sora uniquement pour l'UX. L'assistant renvoie toujours l'identifiant canonique,
 le littéral sélectionné et les métadonnées (préfixe réseau, version/modules QR, erreur
@@ -506,7 +506,7 @@ canonisez-les avant de soumettre des demandes :- `getUaidPortfolio(uaid, { asse
   regrouper les avoirs par identifiants de compte canoniques ; passer `assetId` pour filtrer le
   portefeuille jusqu’à une seule instance d’actif.
 - `getUaidBindings(uaid)` énumère chaque espace de données ↔ compte
-  liaison (`I105` renvoie les littéraux `i105`).
+  liaison (`i105` renvoie les littéraux `i105`).
 - `getUaidManifests(uaid, { dataspaceId })` renvoie chaque manifeste de capacité,
   l'état du cycle de vie et les comptes liés pour l'audit.
 
@@ -551,7 +551,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -561,7 +561,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

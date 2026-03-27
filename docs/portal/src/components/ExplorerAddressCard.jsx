@@ -1,9 +1,7 @@
 import React, {useState} from 'react';
 
 const SAMPLE_ADDRESS = {
-  i105: '6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw',
-  i105Default: 'sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE',
-  i105Warning: 'i105-default literals are Sora-only compatibility output; prefer canonical I105.',
+  i105: 'sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE',
 };
 
 export default function ExplorerAddressCard() {
@@ -35,19 +33,14 @@ export default function ExplorerAddressCard() {
       <div className="card__header">
         <h3>Explorer copy instrumentation</h3>
         <p id={domainHelperId}>
-          I105 literals are global and selector-free. Domain/dataspace access is granted on-chain.
+          i105 literals are global and selector-free. Domain/dataspace access is granted on-chain.
         </p>
       </div>
       <div className="card__body" aria-describedby={domainHelperId}>
         <dl>
-          <dt>I105 literal (preferred)</dt>
+          <dt>i105 account ID</dt>
           <dd>
             <code>{SAMPLE_ADDRESS.i105}</code>
-          </dd>
-          <dt>i105-default Sora-only literal</dt>
-          <dd>
-            <code>{SAMPLE_ADDRESS.i105Default}</code>
-            <div className="text--warning">{SAMPLE_ADDRESS.i105Warning}</div>
           </dd>
         </dl>
 
@@ -56,23 +49,15 @@ export default function ExplorerAddressCard() {
             className="button button--primary"
             data-copy-mode="i105"
             aria-pressed="false"
-            aria-label="Copy I105 address (preferred, safe to share)"
+            aria-label="Copy i105 account ID"
             onClick={() => handleCopy('i105', SAMPLE_ADDRESS.i105, null)}>
-            Copy I105 (preferred)
-          </button>
-          <button
-            className="button button--secondary"
-            data-copy-mode="i105_default"
-            aria-pressed="false"
-            aria-label="Copy i105-default Sora-only address (warn recipients)"
-            onClick={() => handleCopy('i105_default', SAMPLE_ADDRESS.i105Default, SAMPLE_ADDRESS.i105Warning)}>
-            Copy i105-default
+            Copy i105
           </button>
         </div>
 
-        <figure className="margin-top--md" role="img" aria-label={`I105 QR for ${SAMPLE_ADDRESS.i105}`}>
-          <img src="/img/sns/address_copy_ios.svg" alt="I105 QR reference" />
-          <figcaption>QR payloads must encode I105 strings (preferred).</figcaption>
+        <figure className="margin-top--md" role="img" aria-label={`i105 QR for ${SAMPLE_ADDRESS.i105}`}>
+          <img src="/img/sns/address_copy_ios.svg" alt="i105 QR reference" />
+          <figcaption>QR payloads must encode i105 account IDs.</figcaption>
         </figure>
         <output
           aria-live="polite"

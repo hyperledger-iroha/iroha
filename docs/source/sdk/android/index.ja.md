@@ -70,7 +70,7 @@ TransactionBuilder builder = new TransactionBuilder(codec, keyManager);
 
 TransactionPayload payload = TransactionPayload.builder()
     .setChainId("00000000")
-    .setAuthority("i105...")
+    .setAuthority("<i105-account-id>")
     .setCreationTimeMs(System.currentTimeMillis())
     .setExecutable(Executable.ivm(new byte[] { /* Kotodama bytecode */ }))
     .build();
@@ -136,7 +136,7 @@ import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 
 String uaid = UaidLiteral.canonicalize("  UAID:DEADBEEF...  ", "lookup uaid");
 UaidPortfolioQuery portfolioQuery =
-    UaidPortfolioQuery.builder().setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw").build();
+    UaidPortfolioQuery.builder().setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc").build();
 UaidPortfolioResponse portfolio = transport.getUaidPortfolio(uaid, portfolioQuery).join();
 portfolio.dataspaces().forEach(ds -> {
     String alias = ds.dataspaceAlias();

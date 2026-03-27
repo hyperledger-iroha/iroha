@@ -66,8 +66,10 @@ public final class TransferWirePayloadEncoder {
   /**
    * Encodes an asset transfer instruction as a wire-framed InstructionBox.
    *
-   * @param assetId The full asset ID as {@code <asset-definition-address>#<account-id>} with an
-   *     optional {@code #dataspace:<id>} suffix
+   * @param assetId The internal asset balance-bucket literal as
+   *     {@code <base58-asset-definition-id>#<i105-account-id>} with an optional
+   *     {@code #dataspace:<id>} suffix. Public asset ids remain bare Base58
+   *     asset-definition ids.
    * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
    * @param destinationAccountId The recipient's canonical I105 account ID
    * @return InstructionBox with wire payload ready for Norito encoding
@@ -334,7 +336,7 @@ public final class TransferWirePayloadEncoder {
     }
 
     /**
-     * Parse from {@code <asset-definition-address>#<account-id>} with an optional
+     * Parse from {@code <base58-asset-definition-id>#<i105-account-id>} with an optional
      * {@code #dataspace:<id>} suffix.
      */
     static AssetId parse(String assetIdStr) {
@@ -342,7 +344,7 @@ public final class TransferWirePayloadEncoder {
       final String[] parts = trimmed.split("#", -1);
       if (parts.length < 2 || parts.length > 3) {
         throw new IllegalArgumentException(
-            "Invalid AssetId format: expected <asset-definition-address>#<account-id> with optional #dataspace:<id>");
+            "Invalid AssetId format: expected <base58-asset-definition-id>#<i105-account-id> with optional #dataspace:<id>");
       }
       final String assetDefPart = parts[0];
       final String accountIdPart = parts[1];
@@ -350,7 +352,7 @@ public final class TransferWirePayloadEncoder {
 
       if (!AssetDefinitionIdEncoder.isCanonicalAddress(assetDefPart)) {
         throw new IllegalArgumentException(
-            "Invalid AssetId format: expected canonical <asset-definition-address>#<account-id>");
+            "Invalid AssetId format: expected canonical <base58-asset-definition-id>#<i105-account-id>");
       }
       final AssetDefinitionId assetDef = AssetDefinitionId.fromAddress(assetDefPart);
       final byte[] scopePayload;

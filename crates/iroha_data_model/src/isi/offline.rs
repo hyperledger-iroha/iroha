@@ -1,30 +1,30 @@
 use super::*;
 use crate::offline::{
-    OfflineReserveOperationResult, OfflineReserveRecord, OfflineToOnlineTransfer,
+    OfflineLineageOperationResult, OfflineLineageRecord, OfflineToOnlineTransfer,
     OfflineVerdictRevocation, OfflineWalletCertificate,
 };
 use crate::{asset::AssetId, prelude::Numeric};
 use iroha_crypto::Hash;
 
 isi! {
-    /// Register a zero-balance offline reserve lineage in shared Iroha state.
-    pub struct RegisterOfflineReserve {
-        /// Shared reserve record to persist.
-        pub reserve: OfflineReserveRecord,
+    /// Register a zero-balance offline lineage in shared Iroha state.
+    pub struct RegisterOfflineLineage {
+        /// Shared lineage record to persist.
+        pub lineage: OfflineLineageRecord,
     }
 }
 
 isi! {
-    /// Commit a reserve mutation and its replay result into shared Iroha state.
-    pub struct CommitOfflineReserveOperation {
+    /// Commit a lineage mutation and its replay result into shared Iroha state.
+    pub struct CommitOfflineLineageOperation {
         /// Expected authoritative server revision before applying the mutation.
         pub expected_server_revision: u64,
         /// Expected authoritative state hash before applying the mutation.
         pub expected_state_hash: String,
-        /// Updated shared reserve record to persist.
-        pub reserve: OfflineReserveRecord,
+        /// Updated shared lineage record to persist.
+        pub lineage: OfflineLineageRecord,
         /// Replayable result snapshot keyed by `kind:operation_id`.
-        pub result: OfflineReserveOperationResult,
+        pub result: OfflineLineageOperationResult,
     }
 }
 
@@ -62,8 +62,8 @@ isi! {
 
 isi! {
     /// Move online balance from the controller account into the configured offline escrow.
-    pub struct ReserveOfflineEscrowBalance {
-        /// Controller-owned asset to reserve into offline escrow.
+    pub struct LoadOfflineEscrowBalance {
+        /// Controller-owned asset to load into offline escrow.
         pub asset: AssetId,
         /// Amount to move into offline escrow.
         pub amount: Numeric,
@@ -72,7 +72,7 @@ isi! {
 
 isi! {
     /// Move balance from the configured offline escrow back to the controller account.
-    pub struct RefundOfflineEscrowBalance {
+    pub struct RedeemOfflineEscrowBalance {
         /// Controller-owned asset to credit from offline escrow.
         pub asset: AssetId,
         /// Amount to return from offline escrow.
@@ -80,36 +80,36 @@ isi! {
     }
 }
 
-impl crate::seal::Instruction for RegisterOfflineReserve {}
-impl crate::seal::Instruction for CommitOfflineReserveOperation {}
+impl crate::seal::Instruction for RegisterOfflineLineage {}
+impl crate::seal::Instruction for CommitOfflineLineageOperation {}
 impl crate::seal::Instruction for RegisterOfflineAllowance {}
 impl crate::seal::Instruction for SubmitOfflineToOnlineTransfer {}
 impl crate::seal::Instruction for RegisterOfflineVerdictRevocation {}
 impl crate::seal::Instruction for ReclaimExpiredOfflineAllowance {}
-impl crate::seal::Instruction for ReserveOfflineEscrowBalance {}
-impl crate::seal::Instruction for RefundOfflineEscrowBalance {}
+impl crate::seal::Instruction for LoadOfflineEscrowBalance {}
+impl crate::seal::Instruction for RedeemOfflineEscrowBalance {}
 
-impl RegisterOfflineReserve {
-    /// Construct a reserve-registration instruction for the supplied lineage record.
+impl RegisterOfflineLineage {
+    /// Construct a lineage-registration instruction for the supplied lineage record.
     #[must_use]
-    pub fn new(reserve: OfflineReserveRecord) -> Self {
-        Self { reserve }
+    pub fn new(lineage: OfflineLineageRecord) -> Self {
+        Self { lineage }
     }
 }
 
-impl CommitOfflineReserveOperation {
-    /// Construct a reserve-mutation instruction for the supplied authoritative result.
+impl CommitOfflineLineageOperation {
+    /// Construct a lineage-mutation instruction for the supplied authoritative result.
     #[must_use]
     pub fn new(
         expected_server_revision: u64,
         expected_state_hash: String,
-        reserve: OfflineReserveRecord,
-        result: OfflineReserveOperationResult,
+        lineage: OfflineLineageRecord,
+        result: OfflineLineageOperationResult,
     ) -> Self {
         Self {
             expected_server_revision,
             expected_state_hash,
-            reserve,
+            lineage,
             result,
         }
     }
@@ -131,16 +131,16 @@ impl ReclaimExpiredOfflineAllowance {
     }
 }
 
-impl ReserveOfflineEscrowBalance {
-    /// Construct a reserve-to-escrow instruction.
+impl LoadOfflineEscrowBalance {
+    /// Construct a load-to-escrow instruction.
     #[must_use]
     pub fn new(asset: AssetId, amount: Numeric) -> Self {
         Self { asset, amount }
     }
 }
 
-impl RefundOfflineEscrowBalance {
-    /// Construct an escrow refund instruction.
+impl RedeemOfflineEscrowBalance {
+    /// Construct an escrow redeem instruction.
     #[must_use]
     pub fn new(asset: AssetId, amount: Numeric) -> Self {
         Self { asset, amount }

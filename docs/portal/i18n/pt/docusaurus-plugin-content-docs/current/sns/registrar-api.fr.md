@@ -116,7 +116,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/names/{namespace}/{literal}/freeze` | EXCLUIR | `GovernanceHookV1` | Descongelar apres remediação; certifique-se de que a substituição do conselho esteja registrada. |
 | `/v1/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | Afetação de noms reservas por administrador/conselho. |
 | `/v1/sns/policies/{suffix_id}` | OBTER | -- | Recupere o corrente `SuffixPolicyV1` (armazenável em cache). |
-| `/v1/sns/names/{namespace}/{literal}` | OBTER | -- | Retourne le `NameRecordV1` courant + etat effectif (Active, Grace, etc.). |**Codificação do seletor:** o segmento `{selector}` aceita I105, comprimido ou hexadecimal canônico conforme ADDR-5; Torii normaliza via `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | OBTER | -- | Retourne le `NameRecordV1` courant + etat effectif (Active, Grace, etc.). |**Codificação do seletor:** o segmento `{selector}` aceita i105, comprimido ou hexadecimal canônico conforme ADDR-5; Torii normaliza via `NameSelectorV1`.
 
 **Modelos de erros:** todos os endpoints retornam Norito JSON com `code`, `message`, `details`. Os códigos incluem `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -162,7 +162,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -222,7 +222,7 @@ Os controles enviados por echec `sns_err_governance_missing`.
 
 1. O cliente interroga `/v1/sns/policies/{suffix_id}` para recuperar o preço, a graça e os níveis disponíveis.
 2. O cliente constrói `RegisterNameRequestV1`:
-   - `selector` deriva do rótulo I105 (preferir) ou compresse (segunda escolha).
+   - `selector` deriva do rótulo i105 (preferir) ou compresse (segunda escolha).
    - `term_years` nos limites da política.
    - `payment` refere-se à transferência do divisor de tesouraria/administrador.
 3. Torii válido:

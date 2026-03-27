@@ -6,16 +6,16 @@ pub fn display_literal(account_id: &AccountId) -> String {
 }
 
 /// Render a canonical literal string for display.
-pub fn display_from_literal(literal: &str) -> String {
+pub fn display_from_literal(literal: &str) -> Option<String> {
     match AccountId::parse_encoded(literal) {
-        Ok(parsed) => parsed.canonical().to_owned(),
+        Ok(parsed) => Some(parsed.canonical().to_owned()),
         Err(err) => {
             iroha_logger::warn!(
                 %literal,
                 %err,
-                "failed to parse account literal while normalizing display literal; returning original literal"
+                "failed to parse account literal while normalizing display literal; omitting invalid value"
             );
-            literal.to_string()
+            None
         }
     }
 }
@@ -41,13 +41,16 @@ mod tests {
 
         assert_eq!(display_literal(&ALICE_ID), canonical_literal);
 
-        assert_eq!(display_from_literal(&canonical_literal), canonical_literal);
+        assert_eq!(
+            display_from_literal(&canonical_literal),
+            Some(canonical_literal)
+        );
     }
 
     #[test]
-    fn display_from_literal_falls_back_on_invalid_input() {
-        let invalid_literal = "not-an-account@wonderland";
-        assert_eq!(display_from_literal(invalid_literal), invalid_literal);
+    fn display_from_literal_omits_invalid_input() {
+        let invalid_literal = "not-an-account@hbl.dataspace";
+        assert_eq!(display_from_literal(invalid_literal), None);
     }
 
     #[test]
@@ -57,7 +60,7 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let literal = ALICE_ID.to_string();
-        let parsed = AccountId::parse_encoded(&literal).expect("I105 literal should parse");
+        let parsed = AccountId::parse_encoded(&literal).expect("i105 literal should parse");
         assert_eq!(parsed.canonical(), literal);
         assert_eq!(parsed.account_id().controller(), ALICE_ID.controller());
 

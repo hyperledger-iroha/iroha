@@ -22,10 +22,11 @@ use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, ne
 mod model {
     use super::*;
 
-    /// Canonical asset definition identifier.
+    /// Canonical public asset identifier.
     ///
     /// Textual form is an unprefixed Base58 address over canonical `UUIDv4` bytes
-    /// plus a version byte and checksum.
+    /// plus a version byte and checksum. On-chain asset aliases resolve to this
+    /// identifier only.
     #[derive(Debug, Clone, Getters, IntoSchema)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -68,7 +69,7 @@ mod model {
         Dataspace(DataSpaceId),
     }
 
-    /// Identification of an asset combines the entity identifier ([`AssetId`]) with the owner [`AccountId`].
+    /// Internal balance-bucket identifier for a concrete owner/scope bucket.
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -189,9 +190,10 @@ impl AssetId {
         }
     }
 
-    /// Render this identifier in the canonical public literal form.
+    /// Render this identifier in the canonical internal balance-bucket literal form.
     ///
-    /// Global balances use `<asset-definition-id>#<account-id>`.
+    /// Public asset ids remain bare Base58 asset-definition ids. Global balance
+    /// buckets use `<base58-asset-definition-id>#<i105-account-id>`.
     /// Dataspace-scoped balances append `#dataspace:<id>`.
     #[must_use]
     pub fn canonical_literal(&self) -> String {
@@ -204,30 +206,32 @@ impl AssetId {
         }
     }
 
-    /// Parse the canonical public asset identifier literal.
+    /// Parse the canonical internal balance-bucket literal.
     ///
     /// # Errors
     ///
-    /// Returns [`ParseError`] when the literal is empty, not in
-    /// `<asset-definition-id>#<account-id>` form, or uses an invalid
+    /// Returns [`ParseError`] when the literal is empty, not in internal
+    /// `<base58-asset-definition-id>#<i105-account-id>` form, or uses an invalid
     /// dataspace scope suffix.
     pub fn parse_literal(input: &str) -> Result<Self, ParseError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
-            return Err(ParseError::new("Asset ID must not be empty"));
+            return Err(ParseError::new(
+                "Asset balance bucket literal must not be empty",
+            ));
         }
 
         let mut parts = trimmed.split('#');
-        let definition_literal = parts
-            .next()
-            .ok_or_else(|| ParseError::new("Asset ID must include an asset definition id"))?;
-        let account_literal = parts
-            .next()
-            .ok_or_else(|| ParseError::new("Asset ID must include an account id"))?;
+        let definition_literal = parts.next().ok_or_else(|| {
+            ParseError::new("Asset balance bucket literal must include an asset definition id")
+        })?;
+        let account_literal = parts.next().ok_or_else(|| {
+            ParseError::new("Asset balance bucket literal must include an account id")
+        })?;
         let scope_literal = parts.next();
         if parts.next().is_some() {
             return Err(ParseError::new(
-                "Asset ID must use `<asset-definition-id>#<account-id>` with optional `#dataspace:<id>` suffix",
+                "Asset balance bucket literal must use `<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` suffix; canonical asset-definition ids are Base58",
             ));
         }
 
@@ -286,6 +290,9 @@ impl AssetDefinitionId {
     }
 
     /// Deterministically derive canonical UUID bytes from component labels.
+    ///
+    /// This is an internal construction helper. Public textual identifiers remain the
+    /// Base58 address returned by [`Self::canonical_address`].
     #[must_use]
     pub fn new(domain: DomainId, name: Name) -> Self {
         let literal = format!("{name}#{domain}");

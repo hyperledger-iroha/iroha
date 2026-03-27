@@ -69,6 +69,25 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha ledger nft meta get`↴](#iroha-ledger-nft-meta-get)
 * [`iroha ledger nft meta set`↴](#iroha-ledger-nft-meta-set)
 * [`iroha ledger nft meta remove`↴](#iroha-ledger-nft-meta-remove)
+* [`iroha ledger rwa`↴](#iroha-ledger-rwa)
+* [`iroha ledger rwa get`↴](#iroha-ledger-rwa-get)
+* [`iroha ledger rwa list`↴](#iroha-ledger-rwa-list)
+* [`iroha ledger rwa list all`↴](#iroha-ledger-rwa-list-all)
+* [`iroha ledger rwa list filter`↴](#iroha-ledger-rwa-list-filter)
+* [`iroha ledger rwa register`↴](#iroha-ledger-rwa-register)
+* [`iroha ledger rwa transfer`↴](#iroha-ledger-rwa-transfer)
+* [`iroha ledger rwa merge`↴](#iroha-ledger-rwa-merge)
+* [`iroha ledger rwa redeem`↴](#iroha-ledger-rwa-redeem)
+* [`iroha ledger rwa freeze`↴](#iroha-ledger-rwa-freeze)
+* [`iroha ledger rwa unfreeze`↴](#iroha-ledger-rwa-unfreeze)
+* [`iroha ledger rwa hold`↴](#iroha-ledger-rwa-hold)
+* [`iroha ledger rwa release`↴](#iroha-ledger-rwa-release)
+* [`iroha ledger rwa force-transfer`↴](#iroha-ledger-rwa-force-transfer)
+* [`iroha ledger rwa set-controls`↴](#iroha-ledger-rwa-set-controls)
+* [`iroha ledger rwa meta`↴](#iroha-ledger-rwa-meta)
+* [`iroha ledger rwa meta get`↴](#iroha-ledger-rwa-meta-get)
+* [`iroha ledger rwa meta set`↴](#iroha-ledger-rwa-meta-set)
+* [`iroha ledger rwa meta remove`↴](#iroha-ledger-rwa-meta-remove)
 * [`iroha ledger peer`↴](#iroha-ledger-peer)
 * [`iroha ledger peer list`↴](#iroha-ledger-peer-list)
 * [`iroha ledger peer list all`↴](#iroha-ledger-peer-list-all)
@@ -113,6 +132,7 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha ledger multisig register`↴](#iroha-ledger-multisig-register)
 * [`iroha ledger multisig propose`↴](#iroha-ledger-multisig-propose)
 * [`iroha ledger multisig approve`↴](#iroha-ledger-multisig-approve)
+* [`iroha ledger multisig cancel`↴](#iroha-ledger-multisig-cancel)
 * [`iroha ledger multisig inspect`↴](#iroha-ledger-multisig-inspect)
 * [`iroha ledger events`↴](#iroha-ledger-events)
 * [`iroha ledger events state`↴](#iroha-ledger-events-state)
@@ -251,6 +271,8 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha app contracts code`↴](#iroha-app-contracts-code)
 * [`iroha app contracts code get`↴](#iroha-app-contracts-code-get)
 * [`iroha app contracts deploy`↴](#iroha-app-contracts-deploy)
+* [`iroha app contracts call`↴](#iroha-app-contracts-call)
+* [`iroha app contracts view`↴](#iroha-app-contracts-view)
 * [`iroha app contracts deploy-activate`↴](#iroha-app-contracts-deploy-activate)
 * [`iroha app contracts manifest`↴](#iroha-app-contracts-manifest)
 * [`iroha app contracts manifest get`↴](#iroha-app-contracts-manifest-get)
@@ -372,6 +394,12 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha app soracloud init`↴](#iroha-app-soracloud-init)
 * [`iroha app soracloud deploy`↴](#iroha-app-soracloud-deploy)
 * [`iroha app soracloud status`↴](#iroha-app-soracloud-status)
+* [`iroha app soracloud config-set`↴](#iroha-app-soracloud-config-set)
+* [`iroha app soracloud config-delete`↴](#iroha-app-soracloud-config-delete)
+* [`iroha app soracloud config-status`↴](#iroha-app-soracloud-config-status)
+* [`iroha app soracloud secret-set`↴](#iroha-app-soracloud-secret-set)
+* [`iroha app soracloud secret-delete`↴](#iroha-app-soracloud-secret-delete)
+* [`iroha app soracloud secret-status`↴](#iroha-app-soracloud-secret-status)
 * [`iroha app soracloud upgrade`↴](#iroha-app-soracloud-upgrade)
 * [`iroha app soracloud rollback`↴](#iroha-app-soracloud-rollback)
 * [`iroha app soracloud rollout`↴](#iroha-app-soracloud-rollout)
@@ -398,6 +426,26 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha app soracloud model-weight-promote`↴](#iroha-app-soracloud-model-weight-promote)
 * [`iroha app soracloud model-weight-rollback`↴](#iroha-app-soracloud-model-weight-rollback)
 * [`iroha app soracloud model-weight-status`↴](#iroha-app-soracloud-model-weight-status)
+* [`iroha app soracloud model-upload-encryption-recipient`↴](#iroha-app-soracloud-model-upload-encryption-recipient)
+* [`iroha app soracloud model-upload-init`↴](#iroha-app-soracloud-model-upload-init)
+* [`iroha app soracloud model-upload-chunk`↴](#iroha-app-soracloud-model-upload-chunk)
+* [`iroha app soracloud model-upload-finalize`↴](#iroha-app-soracloud-model-upload-finalize)
+* [`iroha app soracloud model-upload-status`↴](#iroha-app-soracloud-model-upload-status)
+* [`iroha app soracloud model-compile`↴](#iroha-app-soracloud-model-compile)
+* [`iroha app soracloud model-compile-status`↴](#iroha-app-soracloud-model-compile-status)
+* [`iroha app soracloud model-allow`↴](#iroha-app-soracloud-model-allow)
+* [`iroha app soracloud model-run-private`↴](#iroha-app-soracloud-model-run-private)
+* [`iroha app soracloud model-run-status`↴](#iroha-app-soracloud-model-run-status)
+* [`iroha app soracloud model-decrypt-output`↴](#iroha-app-soracloud-model-decrypt-output)
+* [`iroha app soracloud model-publish-private`↴](#iroha-app-soracloud-model-publish-private)
+* [`iroha app soracloud hf-deploy`↴](#iroha-app-soracloud-hf-deploy)
+* [`iroha app soracloud hf-status`↴](#iroha-app-soracloud-hf-status)
+* [`iroha app soracloud hf-lease-leave`↴](#iroha-app-soracloud-hf-lease-leave)
+* [`iroha app soracloud hf-lease-renew`↴](#iroha-app-soracloud-hf-lease-renew)
+* [`iroha app soracloud model-host-advertise`↴](#iroha-app-soracloud-model-host-advertise)
+* [`iroha app soracloud model-host-heartbeat`↴](#iroha-app-soracloud-model-host-heartbeat)
+* [`iroha app soracloud model-host-withdraw`↴](#iroha-app-soracloud-model-host-withdraw)
+* [`iroha app soracloud model-host-status`↴](#iroha-app-soracloud-model-host-status)
 * [`iroha app social`↴](#iroha-app-social)
 * [`iroha app social claim-twitter-follow-reward`↴](#iroha-app-social-claim-twitter-follow-reward)
 * [`iroha app social send-to-twitter`↴](#iroha-app-social-send-to-twitter)
@@ -530,7 +578,6 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha tools address convert`↴](#iroha-tools-address-convert)
 * [`iroha tools address audit`↴](#iroha-tools-address-audit)
 * [`iroha tools address normalize`↴](#iroha-tools-address-normalize)
-* [`iroha tools encode`↴](#iroha-tools-encode)
 * [`iroha tools crypto`↴](#iroha-tools-crypto)
 * [`iroha tools crypto sm2`↴](#iroha-tools-crypto-sm2)
 * [`iroha tools crypto sm2 keygen`↴](#iroha-tools-crypto-sm2-keygen)
@@ -575,12 +622,12 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
    Example usage:
 
-   `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "<base58-asset-definition-id>" --name "USD" --scale 0`
+   `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0`
 * `-o`, `--output` — Outputs instructions to stdout without submitting them.
 
    Example usage:
 
-   `iroha -o domain register --id "domain" | iroha -io asset definition register --id "<base58-asset-definition-id>" --name "USD" --scale 0 | iroha transaction stdin`
+   `iroha -o domain register --id "domain" | iroha -io asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha transaction stdin`
 * `--output-format <OUTPUT_FORMAT>` — Output format for command responses
 
   Default value: `json`
@@ -608,6 +655,7 @@ Ledger data and transaction helpers
 * `account` — Read and write accounts
 * `asset` — Read and write assets
 * `nft` — Read and write NFTs
+* `rwa` — Read and write RWA lots
 * `peer` — Read and write peers
 * `role` — Read and write roles
 * `parameter` — Read and write system parameters
@@ -1010,12 +1058,15 @@ Retrieve details of a specific account
 
 Register an account
 
-**Usage:** `iroha ledger account register --id <ID> --domain <DOMAIN>`
+**Usage:** `iroha ledger account register [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Canonical domainless account identifier for registration (canonical I105 literal)
 * `-d`, `--domain <DOMAIN>` — Domain in which to materialize the account link
+* `--domainless` — Register the canonical domainless account directly
+
+  Default value: `false`
 
 
 
@@ -1188,7 +1239,7 @@ Retrieve details of a specific asset definition
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition identifier (canonical unprefixed Base58)
+* `-i`, `--id <ID>` — Asset definition identifier (unprefixed Base58 address)
 * `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
 
 
@@ -1201,7 +1252,7 @@ Register an asset definition
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition identifier (canonical unprefixed Base58)
+* `-i`, `--id <ID>` — Asset definition identifier (unprefixed Base58 address)
 * `--name <NAME>` — Human-readable asset name
 * `--description <DESCRIPTION>` — Optional human-readable description
 * `--alias <ALIAS>` — Optional explicit alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
@@ -1230,7 +1281,7 @@ Unregister an asset definition
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition identifier (canonical unprefixed Base58)
+* `-i`, `--id <ID>` — Asset definition identifier (unprefixed Base58 address)
 * `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
 
 
@@ -1243,7 +1294,7 @@ Transfer ownership of an asset definition
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition identifier (canonical unprefixed Base58)
+* `-i`, `--id <ID>` — Asset definition identifier (unprefixed Base58 address)
 * `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
 * `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
 * `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
@@ -1313,7 +1364,7 @@ Retrieve details of a specific asset
 
 * `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58 address) used with `--account`
 * `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
-* `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
+* `--account <ACCOUNT>` — Account identifier (canonical I105), required with asset selectors
 * `--scope <SCOPE>` — Optional balance scope (`global` or `dataspace:<id>`)
 
 
@@ -1390,7 +1441,7 @@ Increase the quantity of an asset
 
 * `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58 address) used with `--account`
 * `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
-* `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
+* `--account <ACCOUNT>` — Account identifier (canonical I105), required with asset selectors
 * `--scope <SCOPE>` — Optional balance scope (`global` or `dataspace:<id>`)
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
@@ -1406,7 +1457,7 @@ Decrease the quantity of an asset
 
 * `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58 address) used with `--account`
 * `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
-* `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
+* `--account <ACCOUNT>` — Account identifier (canonical I105), required with asset selectors
 * `--scope <SCOPE>` — Optional balance scope (`global` or `dataspace:<id>`)
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
@@ -1422,7 +1473,7 @@ Transfer an asset between accounts
 
 * `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58 address) used with `--account`
 * `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
-* `--account <ACCOUNT>` — Source account identifier (canonical I105), required with `--definition-alias`
+* `--account <ACCOUNT>` — Source account identifier (canonical I105), required with asset selectors
 * `--scope <SCOPE>` — Optional balance scope (`global` or `dataspace:<id>`)
 * `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 * `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
@@ -1604,6 +1655,277 @@ Create or update an entry in the key-value store using JSON input from stdin
 Delete an entry from the key-value store
 
 **Usage:** `iroha ledger nft meta remove --id <ID> --key <KEY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>`
+* `-k`, `--key <KEY>`
+
+
+
+## `iroha ledger rwa`
+
+Read and write RWA lots
+
+**Usage:** `iroha ledger rwa <COMMAND>`
+
+###### **Subcommands:**
+
+* `get` — Retrieve details of a specific RWA lot
+* `list` — List RWA lots
+* `register` — Register an RWA lot using `NewRwa` JSON from stdin
+* `transfer` — Transfer quantity from an existing lot
+* `merge` — Merge parent lots using `MergeRwas` JSON from stdin
+* `redeem` — Redeem quantity from an existing lot
+* `freeze` — Freeze an existing lot
+* `unfreeze` — Unfreeze an existing lot
+* `hold` — Hold quantity on an existing lot
+* `release` — Release held quantity from an existing lot
+* `force-transfer` — Force-transfer quantity from an existing lot
+* `set-controls` — Replace the lot control policy using `RwaControlPolicy` JSON from stdin
+* `meta` — Read and write metadata
+
+
+
+## `iroha ledger rwa get`
+
+Retrieve details of a specific RWA lot
+
+**Usage:** `iroha ledger rwa get --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — RWA identifier in the format `hash$domain`
+
+
+
+## `iroha ledger rwa list`
+
+List RWA lots
+
+**Usage:** `iroha ledger rwa list <COMMAND>`
+
+###### **Subcommands:**
+
+* `all` — List all IDs, or full entries when `--verbose` is specified
+* `filter` — Filter by a given predicate
+
+
+
+## `iroha ledger rwa list all`
+
+List all IDs, or full entries when `--verbose` is specified
+
+**Usage:** `iroha ledger rwa list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs (when supported)
+* `--sort-by-metadata-key <SORT_BY_METADATA_KEY>` — Sort by metadata key
+* `--order <ORDER>` — Sort order (asc or desc)
+
+  Possible values: `asc`, `desc`
+
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+* `--select <SELECT>` — Experimental selector (JSON). Currently ignored; reserved for future server-side projection
+
+
+
+## `iroha ledger rwa list filter`
+
+Filter by a given predicate
+
+**Usage:** `iroha ledger rwa list filter [OPTIONS] <PREDICATE>`
+
+###### **Arguments:**
+
+* `<PREDICATE>` — Filtering condition specified as a JSON string
+
+###### **Options:**
+
+* `--sort-by-metadata-key <SORT_BY_METADATA_KEY>` — Sort by metadata key
+* `--order <ORDER>` — Sort order (asc or desc)
+
+  Possible values: `asc`, `desc`
+
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+* `--select <SELECT>` — Experimental selector (JSON). Currently ignored; reserved for future server-side projection
+
+
+
+## `iroha ledger rwa register`
+
+Register an RWA lot using `NewRwa` JSON from stdin
+
+**Usage:** `iroha ledger rwa register`
+
+
+
+## `iroha ledger rwa transfer`
+
+Transfer quantity from an existing lot
+
+**Usage:** `iroha ledger rwa transfer --id <ID> --from <FROM> --quantity <QUANTITY> --to <TO>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — RWA identifier in the format `hash$domain`
+* `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
+* `-q`, `--quantity <QUANTITY>` — Quantity to transfer
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
+
+
+
+## `iroha ledger rwa merge`
+
+Merge parent lots using `MergeRwas` JSON from stdin
+
+**Usage:** `iroha ledger rwa merge`
+
+
+
+## `iroha ledger rwa redeem`
+
+Redeem quantity from an existing lot
+
+**Usage:** `iroha ledger rwa redeem --id <ID> --quantity <QUANTITY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — RWA identifier in the format `hash$domain`
+* `-q`, `--quantity <QUANTITY>` — Quantity for the operation
+
+
+
+## `iroha ledger rwa freeze`
+
+Freeze an existing lot
+
+**Usage:** `iroha ledger rwa freeze --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — RWA identifier in the format `hash$domain`
+
+
+
+## `iroha ledger rwa unfreeze`
+
+Unfreeze an existing lot
+
+**Usage:** `iroha ledger rwa unfreeze --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — RWA identifier in the format `hash$domain`
+
+
+
+## `iroha ledger rwa hold`
+
+Hold quantity on an existing lot
+
+**Usage:** `iroha ledger rwa hold --id <ID> --quantity <QUANTITY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — RWA identifier in the format `hash$domain`
+* `-q`, `--quantity <QUANTITY>` — Quantity for the operation
+
+
+
+## `iroha ledger rwa release`
+
+Release held quantity from an existing lot
+
+**Usage:** `iroha ledger rwa release --id <ID> --quantity <QUANTITY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — RWA identifier in the format `hash$domain`
+* `-q`, `--quantity <QUANTITY>` — Quantity for the operation
+
+
+
+## `iroha ledger rwa force-transfer`
+
+Force-transfer quantity from an existing lot
+
+**Usage:** `iroha ledger rwa force-transfer --id <ID> --quantity <QUANTITY> --to <TO>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — RWA identifier in the format `hash$domain`
+* `-q`, `--quantity <QUANTITY>` — Quantity to transfer
+* `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
+
+
+
+## `iroha ledger rwa set-controls`
+
+Replace the lot control policy using `RwaControlPolicy` JSON from stdin
+
+**Usage:** `iroha ledger rwa set-controls --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — RWA identifier in the format `hash$domain`
+
+
+
+## `iroha ledger rwa meta`
+
+Read and write metadata
+
+**Usage:** `iroha ledger rwa meta <COMMAND>`
+
+###### **Subcommands:**
+
+* `get` — Retrieve a value from the key-value store
+* `set` — Create or update an entry in the key-value store using JSON input from stdin
+* `remove` — Delete an entry from the key-value store
+
+
+
+## `iroha ledger rwa meta get`
+
+Retrieve a value from the key-value store
+
+**Usage:** `iroha ledger rwa meta get --id <ID> --key <KEY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>`
+* `-k`, `--key <KEY>`
+
+
+
+## `iroha ledger rwa meta set`
+
+Create or update an entry in the key-value store using JSON input from stdin
+
+**Usage:** `iroha ledger rwa meta set --id <ID> --key <KEY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>`
+* `-k`, `--key <KEY>`
+
+
+
+## `iroha ledger rwa meta remove`
+
+Delete an entry from the key-value store
+
+**Usage:** `iroha ledger rwa meta remove --id <ID> --key <KEY>`
 
 ###### **Options:**
 
@@ -1931,9 +2253,9 @@ Register a trigger
 * `--data-filter <JSON>` — JSON for a `DataEventFilter` to use as filter
 * `--data-domain <DATA_DOMAIN>` — Data filter preset: events within a domain
 * `--data-account <DATA_ACCOUNT>` — Data filter preset: events for an account (canonical I105 literal)
-* `--data-asset <DATA_ASSET>` — Data filter preset: asset definition id for a concrete asset bucket; use with `--data-asset-account`
-* `--data-asset-account <DATA_ASSET_ACCOUNT>` — Data filter preset: account owning the selected asset bucket
-* `--data-asset-scope <DATA_ASSET_SCOPE>` — Data filter preset: optional balance scope (`global` or `dataspace:<id>`) for `--data-asset`
+* `--data-asset <DATA_ASSET>` — Data filter preset: events for a specific asset definition; use with `--data-asset-account` for a concrete ownership bucket
+* `--data-asset-account <DATA_ASSET_ACCOUNT>` — Data filter preset: account owning the selected asset bucket (canonical I105 literal)
+* `--data-asset-scope <DATA_ASSET_SCOPE>` — Data filter preset: balance scope for the selected asset bucket (`global` or `dataspace:<id>`)
 * `--data-asset-definition <DATA_ASSET_DEFINITION>` — Data filter preset: events for an asset definition
 * `--data-role <DATA_ROLE>` — Data filter preset: events for a role
 * `--data-trigger <DATA_TRIGGER>` — Data filter preset: events for a trigger
@@ -2169,6 +2491,7 @@ Read and write multi-signature accounts and transactions
 * `register` — Register a multisig account
 * `propose` — Propose a multisig transaction using JSON input from stdin
 * `approve` — Approve a multisig transaction
+* `cancel` — Propose cancellation of an existing multisig transaction
 * `inspect` — Inspect a multisig account controller and print the CTAP2 payload + digest
 
 
@@ -2242,6 +2565,20 @@ Approve a multisig transaction
 
 * `-a`, `--account <ACCOUNT>` — Multisig authority of the transaction
 * `-i`, `--instructions-hash <INSTRUCTIONS_HASH>` — Hash of the instructions to approve
+
+
+
+## `iroha ledger multisig cancel`
+
+Propose cancellation of an existing multisig transaction
+
+**Usage:** `iroha ledger multisig cancel [OPTIONS] --account <ACCOUNT> --instructions-hash <INSTRUCTIONS_HASH>`
+
+###### **Options:**
+
+* `-a`, `--account <ACCOUNT>` — Multisig authority of the transaction
+* `-i`, `--instructions-hash <INSTRUCTIONS_HASH>` — Hash of the target proposal instructions to cancel
+* `-t`, `--transaction-ttl <TRANSACTION_TTL>` — Overrides the default time-to-live for the cancel proposal itself
 
 
 
@@ -3447,7 +3784,7 @@ Fetch current execution witness snapshot from Torii debug endpoints
 * `--decode <PATH>` — Decode a Norito-encoded `ExecWitness` from a file and print with human-readable keys
 * `--filter <PREFIXES>` — Filter decoded entries by key namespace prefix (comma-separated). Shorthand groups supported: - roles => [role, role.binding, perm.account, perm.role] - assets => [asset, `asset_def.total`] - `all_assets` => [asset, `asset_def.total`, `asset_def.detail`] - metadata => [account.detail, domain.detail, nft.detail, `asset_def.detail`] - `all_meta` => [account.detail, domain.detail, nft.detail, `asset_def.detail`] (alias of metadata) - perm | perms | permissions => [perm.account, perm.role] Examples: "assets,metadata", "roles", "account.detail,domain.detail". Applied only with --decode; prefixes match the human-readable key labels.
 
-   Matching on the identifier segment supports: - exact (e.g., `account.detail:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn`) - partial substring (e.g., `account.detail:6cmzPVPX`) - glob wildcards `*` and `?` (e.g., `asset:rose#*#6cmz*`) - regex-like syntax `/.../` (treated as a glob pattern inside the slashes)
+   Matching on the identifier segment supports: - exact (e.g., `account.detail:sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB`) - partial substring (e.g., `account.detail:6cmzPVPX`) - glob wildcards `*` and `?` (e.g., `asset:rose#*#6cmz*`) - regex-like syntax `/.../` (treated as a glob pattern inside the slashes)
 * `--fastpq-batches` — Include FASTPQ transition batches recorded in the witness when decoding (enabled by default)
 
   Default value: `true`
@@ -4697,6 +5034,8 @@ Contracts helpers (code storage)
 
 * `code` — Contract code helpers
 * `deploy` — Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
+* `call` — Submit a contract call through Torii (POST /v1/contracts/call)
+* `view` — Execute a read-only contract view through Torii (POST /v1/contracts/view)
 * `deploy-activate` — Deploy bytecode, register manifest, and activate a namespace binding in one transaction
 * `manifest` — Contract manifest helpers
 * `simulate` — Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
@@ -4738,9 +5077,56 @@ Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 ###### **Options:**
 
 * `--authority <AUTHORITY>` — Authority account identifier (canonical I105 account literal)
+* `--dataspace <DATASPACE>` — Target dataspace alias for public address-first deploys (defaults to `universal`)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
 * `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
+
+
+
+## `iroha app contracts call`
+
+Submit a contract call through Torii (POST /v1/contracts/call)
+
+**Usage:** `iroha app contracts call [OPTIONS]`
+
+###### **Options:**
+
+* `--authority <AUTHORITY>` — Authority account identifier. Defaults to the configured client authority
+* `--private-key <HEX>` — Hex-encoded private key override used to sign and submit the call directly
+* `--scaffold-only` — Request an unsigned transaction scaffold instead of direct submission
+* `--entrypoint <ENTRYPOINT>` — Optional contract entrypoint selector (defaults to `main`)
+* `--gas-asset-id <GAS_ASSET_ID>` — Optional gas asset id forwarded to transaction metadata
+* `--fee-sponsor <FEE_SPONSOR>` — Optional fee sponsor account charged for gas/fees when supported
+* `--gas-limit <GAS_LIMIT>` — Gas limit metadata forwarded to the contract call
+
+  Default value: `100000`
+* `--contract-address <CONTRACT_ADDRESS>` — Canonical contract address. When provided it takes precedence over namespace/id
+* `--namespace <NAMESPACE>` — Namespace hosting the contract when using the legacy binding path
+* `--contract-id <CONTRACT_ID>` — Contract id within the namespace when using the legacy binding path
+* `--payload-json <JSON>` — Inline Norito JSON payload object or value
+* `--payload-file <PATH>` — File containing a Norito JSON payload object or value
+
+
+
+## `iroha app contracts view`
+
+Execute a read-only contract view through Torii (POST /v1/contracts/view)
+
+**Usage:** `iroha app contracts view [OPTIONS]`
+
+###### **Options:**
+
+* `--authority <AUTHORITY>` — Authority account identifier used as the read context. Defaults to the configured client authority
+* `--entrypoint <ENTRYPOINT>` — Optional contract entrypoint selector (defaults to `main`)
+* `--gas-limit <GAS_LIMIT>` — Gas limit applied to the local view execution
+
+  Default value: `100000`
+* `--contract-address <CONTRACT_ADDRESS>` — Canonical contract address. When provided it takes precedence over namespace/id
+* `--namespace <NAMESPACE>` — Namespace hosting the contract when using the legacy binding path
+* `--contract-id <CONTRACT_ID>` — Contract id within the namespace when using the legacy binding path
+* `--payload-json <JSON>` — Inline Norito JSON payload object or value
+* `--payload-file <PATH>` — File containing a Norito JSON payload object or value
 
 
 
@@ -6175,7 +6561,7 @@ Convert a rent quote into deterministic ledger transfer instructions
 * `--provider-account <ACCOUNT_ID>` — Provider payout account that receives the base rent remainder
 * `--pdp-bonus-account <ACCOUNT_ID>` — Account earmarked for PDP bonus payouts
 * `--potr-bonus-account <ACCOUNT_ID>` — Account earmarked for `PoTR` bonus payouts
-* `--asset-definition <AID>` — Asset definition identifier used for transfers (canonical unprefixed Base58)
+* `--asset-definition <AID>` — Asset definition identifier used for transfers (canonical unprefixed Base58 address)
 
 
 
@@ -6799,6 +7185,12 @@ Soracloud deployment/control-plane helpers
 * `init` — Scaffold baseline container/service manifests
 * `deploy` — Validate manifests and register a new service deployment
 * `status` — Show authoritative Soracloud service state (all services or one service)
+* `config-set` — Record or replace an authoritative service config entry
+* `config-delete` — Delete an authoritative service config entry
+* `config-status` — Query authoritative service config state
+* `secret-set` — Record or replace an authoritative service secret entry
+* `secret-delete` — Delete an authoritative service secret entry
+* `secret-status` — Query authoritative service secret state
 * `upgrade` — Validate manifests and upgrade an existing deployed service
 * `rollback` — Roll back a deployed service to a previous (or specified) version
 * `rollout` — Advance or fail a rollout step using health-gated canary controls
@@ -6825,6 +7217,26 @@ Soracloud deployment/control-plane helpers
 * `model-weight-promote` — Promote a model weight version in live Torii control-plane mode
 * `model-weight-rollback` — Roll back a model weight version in live Torii control-plane mode
 * `model-weight-status` — Query model weight status in live Torii control-plane mode
+* `model-upload-encryption-recipient` — Fetch the active uploaded-model encryption recipient from Torii
+* `model-upload-init` — Register an uploaded-model bundle root in live Torii control-plane mode
+* `model-upload-chunk` — Append one uploaded-model encrypted chunk in live Torii control-plane mode
+* `model-upload-finalize` — Finalize an uploaded-model bundle into the model registry
+* `model-upload-status` — Query uploaded-model bundle/chunk status in live Torii control-plane mode
+* `model-compile` — Admit a deterministic private compile profile for an uploaded model
+* `model-compile-status` — Query uploaded-model compile status in live Torii control-plane mode
+* `model-allow` — Bind an uploaded model to an apartment that already admits model inference
+* `model-run-private` — Start and finalize a private uploaded-model inference session
+* `model-run-status` — Query private uploaded-model inference session status
+* `model-decrypt-output` — Release governed output material for a private uploaded-model session
+* `model-publish-private` — Orchestrate uploaded-model publish/init/chunk/finalize/compile/allow from a plan file
+* `hf-deploy` — Join or create a shared Hugging Face lease pool in live Torii control-plane mode
+* `hf-status` — Query shared Hugging Face lease pool status in live Torii control-plane mode
+* `hf-lease-leave` — Leave a shared Hugging Face lease pool in live Torii control-plane mode
+* `hf-lease-renew` — Renew an expired or drained shared Hugging Face lease pool window
+* `model-host-advertise` — Advertise validator-host capabilities for authoritative HF placement
+* `model-host-heartbeat` — Refresh the heartbeat TTL for an advertised model host
+* `model-host-withdraw` — Withdraw an advertised model host capability
+* `model-host-status` — Query authoritative model-host capability adverts
 
 
 
@@ -6877,6 +7289,8 @@ Validate manifests and register a new service deployment
 * `--service <PATH>` — Path to a `SoraServiceManifestV1` JSON document
 
   Default value: `fixtures/soracloud/sora_service_manifest_v1.json`
+* `--initial-configs <PATH>` — Optional JSON file containing a map of inline config values committed atomically with deploy
+* `--initial-secrets <PATH>` — Optional JSON file containing a map of inline secret envelopes committed atomically with deploy
 * `--torii-url <URL>` — Torii base URL to execute deploy against authoritative control-plane APIs
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
@@ -6902,6 +7316,117 @@ Show authoritative Soracloud service state (all services or one service)
 
 
 
+## `iroha app soracloud config-set`
+
+Record or replace an authoritative service config entry
+
+**Usage:** `iroha app soracloud config-set [OPTIONS] --service-name <NAME> --config-name <NAME>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name owning the config entry
+* `--config-name <NAME>` — Stable service-scoped config name
+* `--value-json <JSON>` — Inline JSON value for the config entry
+* `--value-file <PATH>` — Path to a JSON document used as the config value
+* `--torii-url <URL>` — Torii base URL for authoritative `service/config/set`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud config-delete`
+
+Delete an authoritative service config entry
+
+**Usage:** `iroha app soracloud config-delete [OPTIONS] --service-name <NAME> --config-name <NAME>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name owning the config entry
+* `--config-name <NAME>` — Stable service-scoped config name
+* `--torii-url <URL>` — Torii base URL for authoritative `service/config/delete`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud config-status`
+
+Query authoritative service config state
+
+**Usage:** `iroha app soracloud config-status [OPTIONS] --service-name <NAME>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name owning the config entries
+* `--config-name <NAME>` — Optional config name filter
+* `--torii-url <URL>` — Torii base URL for authoritative `service/config/status`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane queries
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud secret-set`
+
+Record or replace an authoritative service secret entry
+
+**Usage:** `iroha app soracloud secret-set [OPTIONS] --service-name <NAME> --secret-name <NAME> --secret-file <PATH>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name owning the secret entry
+* `--secret-name <NAME>` — Stable service-scoped secret name
+* `--secret-file <PATH>` — Path to a `SecretEnvelopeV1` JSON document
+* `--torii-url <URL>` — Torii base URL for authoritative `service/secret/set`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud secret-delete`
+
+Delete an authoritative service secret entry
+
+**Usage:** `iroha app soracloud secret-delete [OPTIONS] --service-name <NAME> --secret-name <NAME>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name owning the secret entry
+* `--secret-name <NAME>` — Stable service-scoped secret name
+* `--torii-url <URL>` — Torii base URL for authoritative `service/secret/delete`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud secret-status`
+
+Query authoritative service secret state
+
+**Usage:** `iroha app soracloud secret-status [OPTIONS] --service-name <NAME>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name owning the secret entries
+* `--secret-name <NAME>` — Optional secret name filter
+* `--torii-url <URL>` — Torii base URL for authoritative `service/secret/status`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane queries
+
+  Default value: `10`
+
+
+
 ## `iroha app soracloud upgrade`
 
 Validate manifests and upgrade an existing deployed service
@@ -6916,6 +7441,8 @@ Validate manifests and upgrade an existing deployed service
 * `--service <PATH>` — Path to a `SoraServiceManifestV1` JSON document
 
   Default value: `fixtures/soracloud/sora_service_manifest_v1.json`
+* `--initial-configs <PATH>` — Optional JSON file containing a map of inline config values committed atomically with upgrade
+* `--initial-secrets <PATH>` — Optional JSON file containing a map of inline secret envelopes committed atomically with upgrade
 * `--torii-url <URL>` — Torii base URL to execute upgrade against authoritative control-plane APIs
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for Torii mutation requests
@@ -7057,7 +7584,7 @@ Submit an apartment wallet spend request under policy guardrails
 ###### **Options:**
 
 * `--apartment-name <NAME>` — Apartment name issuing the spend request
-* `--asset-definition <ASSET>` — Asset definition identifier (canonical unprefixed Base58)
+* `--asset-definition <ASSET>` — Asset definition identifier (canonical unprefixed Base58 address)
 * `--amount-nanos <NANOS>` — Spend amount in nanos
 * `--torii-url <URL>` — Torii base URL for authoritative `agent/wallet/spend`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
@@ -7193,6 +7720,8 @@ Approve an autonomous run under allowlist/provenance/budget guardrails
 * `--provenance-hash <HASH>` — Optional provenance hash for this run request
 * `--budget-units <UNITS>` — Budget units requested for this run
 * `--run-label <LABEL>` — Human-readable run label
+* `--workflow-input-json <JSON>` — Optional canonical JSON body to forward to the generated HF `/infer` handler
+* `--workflow-input-json-file <PATH>` — Optional path to a JSON file forwarded to the generated HF `/infer` handler
 * `--torii-url <URL>` — Torii base URL for authoritative `agent/autonomy/run`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
@@ -7428,6 +7957,419 @@ Query model weight status in live Torii control-plane mode
 * `--torii-url <URL>` — Torii base URL for live control-plane query
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
 * `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-upload-encryption-recipient`
+
+Fetch the active uploaded-model encryption recipient from Torii
+
+**Usage:** `iroha app soracloud model-upload-encryption-recipient [OPTIONS]`
+
+###### **Options:**
+
+* `--torii-url <URL>` — Torii base URL for authoritative `model/upload/encryption-recipient`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying Torii
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-upload-init`
+
+Register an uploaded-model bundle root in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-upload-init [OPTIONS] --bundle-file <PATH>`
+
+###### **Options:**
+
+* `--bundle-file <PATH>` — Path to a `SoraUploadedModelBundleV1` JSON document
+* `--torii-url <URL>` — Torii base URL for authoritative `model/upload/init`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-upload-chunk`
+
+Append one uploaded-model encrypted chunk in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-upload-chunk [OPTIONS] --chunk-file <PATH>`
+
+###### **Options:**
+
+* `--chunk-file <PATH>` — Path to a `SoraUploadedModelChunkV1` JSON document
+* `--torii-url <URL>` — Torii base URL for authoritative `model/upload/chunk`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-upload-finalize`
+
+Finalize an uploaded-model bundle into the model registry
+
+**Usage:** `iroha app soracloud model-upload-finalize [OPTIONS] --request-file <PATH>`
+
+###### **Options:**
+
+* `--request-file <PATH>` — Path to an `UploadedModelFinalizePayload` JSON document
+* `--torii-url <URL>` — Torii base URL for authoritative `model/upload/finalize`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-upload-status`
+
+Query uploaded-model bundle/chunk status in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-upload-status [OPTIONS] --service-name <NAME> --weight-version <VERSION>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the uploaded model
+* `--weight-version <VERSION>` — Uploaded-model pinned weight version
+* `--model-id <ID>` — Optional uploaded-model identifier
+* `--model-name <NAME>` — Optional logical model name used to resolve the uploaded-model record
+* `--bundle-root <HASH>` — Optional bundle-root filter
+* `--compile-profile-hash <HASH>` — Optional compile-profile hash filter
+* `--torii-url <URL>` — Torii base URL for authoritative `model/upload/status`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-compile`
+
+Admit a deterministic private compile profile for an uploaded model
+
+**Usage:** `iroha app soracloud model-compile [OPTIONS] --request-file <PATH>`
+
+###### **Options:**
+
+* `--request-file <PATH>` — Path to a `PrivateCompilePayload` JSON document
+* `--torii-url <URL>` — Torii base URL for authoritative `model/compile`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-compile-status`
+
+Query uploaded-model compile status in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud model-compile-status [OPTIONS] --service-name <NAME> --weight-version <VERSION>`
+
+###### **Options:**
+
+* `--service-name <NAME>` — Service name that owns the uploaded model
+* `--weight-version <VERSION>` — Uploaded-model pinned weight version
+* `--model-id <ID>` — Optional uploaded-model identifier
+* `--model-name <NAME>` — Optional logical model name used to resolve the uploaded-model record
+* `--bundle-root <HASH>` — Optional bundle-root filter
+* `--compile-profile-hash <HASH>` — Optional compile-profile hash filter
+* `--torii-url <URL>` — Torii base URL for authoritative `model/compile/status`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-allow`
+
+Bind an uploaded model to an apartment that already admits model inference
+
+**Usage:** `iroha app soracloud model-allow [OPTIONS] --request-file <PATH>`
+
+###### **Options:**
+
+* `--request-file <PATH>` — Path to an `UploadedModelAllowPayload` JSON document
+* `--torii-url <URL>` — Torii base URL for authoritative `model/allow`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-run-private`
+
+Start and finalize a private uploaded-model inference session
+
+**Usage:** `iroha app soracloud model-run-private [OPTIONS] --session-file <PATH>`
+
+###### **Options:**
+
+* `--session-file <PATH>` — Path to a `SoraPrivateInferenceSessionV1` JSON document
+* `--torii-url <URL>` — Torii base URL for authoritative `model/run-private`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-run-status`
+
+Query private uploaded-model inference session status
+
+**Usage:** `iroha app soracloud model-run-status [OPTIONS] --session-id <ID>`
+
+###### **Options:**
+
+* `--session-id <ID>` — Private inference session identifier
+* `--torii-url <URL>` — Torii base URL for authoritative `model/run-status`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane query
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-decrypt-output`
+
+Release governed output material for a private uploaded-model session
+
+**Usage:** `iroha app soracloud model-decrypt-output [OPTIONS] --session-id <ID> --decrypt-request-id <ID>`
+
+###### **Options:**
+
+* `--session-id <ID>` — Private inference session identifier
+* `--decrypt-request-id <ID>` — Decryption request identifier to release
+* `--torii-url <URL>` — Torii base URL for authoritative `model/decrypt-output`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutation
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-publish-private`
+
+Orchestrate uploaded-model publish/init/chunk/finalize/compile/allow from a plan file
+
+**Usage:** `iroha app soracloud model-publish-private [OPTIONS]`
+
+###### **Options:**
+
+* `--plan-file <PATH>` — Path to a prepared `PrivateModelPublishPlan` JSON document
+* `--draft-file <PATH>` — Path to a source-backed `PrivateModelPublishDraft` JSON document
+* `--emit-plan-file <PATH>` — Optional path where the prepared publish plan should be written
+* `--torii-url <URL>` — Torii base URL for authoritative uploaded-model control-plane routes
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token`
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations and queries
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud hf-deploy`
+
+Join or create a shared Hugging Face lease pool in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud hf-deploy [OPTIONS] --repo-id <REPO> --service-name <NAME> --lease-term-ms <MS> --lease-asset-definition <ASSET> --base-fee-nanos <NANOS>`
+
+###### **Options:**
+
+* `--repo-id <REPO>` — Hugging Face repository identifier (for example `openai/gpt-oss`)
+* `--revision <REVISION>` — Optional Hugging Face revision. Defaults to `main` when omitted
+* `--model-name <NAME>` — Optional local model label. Defaults to the repo slug
+* `--service-name <NAME>` — Soracloud service name bound to this lease membership
+* `--apartment-name <NAME>` — Optional agent apartment name bound to this lease membership
+* `--storage-class <STORAGE_CLASS>` — Shared-lease storage tier
+
+  Default value: `warm`
+
+  Possible values: `hot`, `warm`, `cold`
+
+* `--lease-term-ms <MS>` — Shared-lease window length in milliseconds
+* `--lease-asset-definition <ASSET>` — Settlement asset definition identifier
+* `--base-fee-nanos <NANOS>` — Base lease fee, charged in nanos of the settlement asset
+* `--torii-url <URL>` — Torii base URL for authoritative `hf/deploy`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud hf-status`
+
+Query shared Hugging Face lease pool status in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud hf-status [OPTIONS] --repo-id <REPO> --lease-term-ms <MS>`
+
+###### **Options:**
+
+* `--repo-id <REPO>` — Hugging Face repository identifier (for example `openai/gpt-oss`)
+* `--revision <REVISION>` — Optional Hugging Face revision. Defaults to `main` when omitted
+* `--storage-class <STORAGE_CLASS>` — Shared-lease storage tier
+
+  Default value: `warm`
+
+  Possible values: `hot`, `warm`, `cold`
+
+* `--lease-term-ms <MS>` — Shared-lease window length in milliseconds
+* `--account-id <ACCOUNT>` — Optional account filter for membership-specific status
+* `--torii-url <URL>` — Torii base URL for authoritative `hf/status`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane queries
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud hf-lease-leave`
+
+Leave a shared Hugging Face lease pool in live Torii control-plane mode
+
+**Usage:** `iroha app soracloud hf-lease-leave [OPTIONS] --repo-id <REPO> --lease-term-ms <MS>`
+
+###### **Options:**
+
+* `--repo-id <REPO>` — Hugging Face repository identifier
+* `--revision <REVISION>` — Optional Hugging Face revision. Defaults to `main` when omitted
+* `--storage-class <STORAGE_CLASS>` — Shared-lease storage tier
+
+  Default value: `warm`
+
+  Possible values: `hot`, `warm`, `cold`
+
+* `--lease-term-ms <MS>` — Shared-lease window length in milliseconds
+* `--service-name <NAME>` — Optional service binding to include in the signed leave request
+* `--apartment-name <NAME>` — Optional apartment binding to include in the signed leave request
+* `--torii-url <URL>` — Torii base URL for authoritative `hf/lease/leave`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud hf-lease-renew`
+
+Renew an expired or drained shared Hugging Face lease pool window
+
+**Usage:** `iroha app soracloud hf-lease-renew [OPTIONS] --repo-id <REPO> --service-name <NAME> --lease-term-ms <MS> --lease-asset-definition <ASSET> --base-fee-nanos <NANOS>`
+
+###### **Options:**
+
+* `--repo-id <REPO>` — Hugging Face repository identifier
+* `--revision <REVISION>` — Optional Hugging Face revision. Defaults to `main` when omitted
+* `--model-name <NAME>` — Optional local model label. Defaults to the repo slug
+* `--service-name <NAME>` — Soracloud service name bound to the renewed lease membership
+* `--apartment-name <NAME>` — Optional agent apartment name bound to the renewed lease membership
+* `--storage-class <STORAGE_CLASS>` — Shared-lease storage tier
+
+  Default value: `warm`
+
+  Possible values: `hot`, `warm`, `cold`
+
+* `--lease-term-ms <MS>` — Shared-lease window length in milliseconds
+* `--lease-asset-definition <ASSET>` — Settlement asset definition identifier
+* `--base-fee-nanos <NANOS>` — Base lease fee, charged in nanos of the settlement asset
+* `--torii-url <URL>` — Torii base URL for authoritative `hf/lease/renew`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-host-advertise`
+
+Advertise validator-host capabilities for authoritative HF placement
+
+**Usage:** `iroha app soracloud model-host-advertise [OPTIONS] --peer-id <PEER_ID> --max-model-bytes <BYTES> --max-disk-cache-bytes <BYTES> --max-ram-bytes <BYTES> --max-concurrent-resident-models <COUNT> --host-class <CLASS> --heartbeat-expires-at-ms <UNIX_MS>`
+
+###### **Options:**
+
+* `--peer-id <PEER_ID>` — Peer identifier used for Soracloud routing
+* `--backends <BACKENDS>` — Supported backend families
+
+  Possible values: `transformers`, `gguf`
+
+* `--formats <FORMATS>` — Supported model formats
+
+  Possible values: `safetensors`, `pytorch`, `gguf`
+
+* `--max-model-bytes <BYTES>` — Maximum canonical model bytes accepted by this host
+* `--max-disk-cache-bytes <BYTES>` — Maximum disk cache bytes reserved for resident models
+* `--max-ram-bytes <BYTES>` — Maximum system RAM bytes reserved for resident models
+* `--max-vram-bytes <BYTES>` — Maximum accelerator VRAM bytes reserved for resident models
+
+  Default value: `0`
+* `--max-concurrent-resident-models <COUNT>` — Maximum concurrent resident-model slots
+* `--host-class <CLASS>` — Governance-defined host class used for compute tariff lookup
+* `--heartbeat-expires-at-ms <UNIX_MS>` — Heartbeat expiry timestamp (unix ms) for this advert
+* `--torii-url <URL>` — Torii base URL for authoritative `model-host/advertise`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-host-heartbeat`
+
+Refresh the heartbeat TTL for an advertised model host
+
+**Usage:** `iroha app soracloud model-host-heartbeat [OPTIONS] --heartbeat-expires-at-ms <UNIX_MS>`
+
+###### **Options:**
+
+* `--heartbeat-expires-at-ms <UNIX_MS>` — Heartbeat expiry timestamp (unix ms) for this advert
+* `--torii-url <URL>` — Torii base URL for authoritative `model-host/heartbeat`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-host-withdraw`
+
+Withdraw an advertised model host capability
+
+**Usage:** `iroha app soracloud model-host-withdraw [OPTIONS]`
+
+###### **Options:**
+
+* `--torii-url <URL>` — Torii base URL for authoritative `model-host/withdraw`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane mutations
+
+  Default value: `10`
+
+
+
+## `iroha app soracloud model-host-status`
+
+Query authoritative model-host capability adverts
+
+**Usage:** `iroha app soracloud model-host-status [OPTIONS]`
+
+###### **Options:**
+
+* `--validator-account-id <ACCOUNT>` — Optional validator account identifier filter
+* `--torii-url <URL>` — Torii base URL for authoritative `model-host/status`
+* `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when querying live control-plane APIs
+* `--timeout-secs <SECS>` — HTTP timeout for live control-plane queries
 
   Default value: `10`
 
@@ -8938,7 +9880,7 @@ Convert a reserve quote into rent/reserve transfer instructions
 * `--provider-account <ACCOUNT_ID>` — Provider account paying the rent and reserve top-ups
 * `--treasury-account <ACCOUNT_ID>` — Treasury account receiving the rent payment
 * `--reserve-account <ACCOUNT_ID>` — Reserve escrow account receiving the reserve top-up
-* `--asset-definition <AID>` — Asset definition identifier used for transfers (canonical unprefixed Base58)
+* `--asset-definition <AID>` — Asset definition identifier used for transfers (canonical unprefixed Base58 address)
 
 
 
@@ -9303,7 +10245,7 @@ Renew a SNS name via `/v1/sns/names/domain/{literal}/renew`
 
 ###### **Options:**
 
-* `--selector <LABEL.SUFFIX>` — Selector literal (e.g. `makoto.sora`)
+* `--selector <LABEL.SUFFIX>` — Legacy domain selector literal (e.g. `makoto.sora`)
 * `--term-years <U8>` — Additional term to purchase (years)
 
   Default value: `1`
@@ -9325,7 +10267,7 @@ Transfer ownership of a SNS name
 
 ###### **Options:**
 
-* `--selector <LABEL.SUFFIX>` — Selector literal (e.g. `makoto.sora`)
+* `--selector <LABEL.SUFFIX>` — Legacy domain selector literal (e.g. `makoto.sora`)
 * `--new-owner <ACCOUNT-ID>` — New owner account identifier
 * `--governance-json <PATH>` — Path to `GovernanceHookV1` JSON proving transfer approval
 
@@ -9339,7 +10281,7 @@ Replace controllers on a SNS name
 
 ###### **Options:**
 
-* `--selector <LABEL.SUFFIX>` — Selector literal (e.g. `makoto.sora`)
+* `--selector <LABEL.SUFFIX>` — Legacy domain selector literal (e.g. `makoto.sora`)
 * `--controller <ACCOUNT-ID>` — Replacement controller account identifiers (repeatable). Defaults to `[config account]`
 
 
@@ -9352,7 +10294,7 @@ Freeze a SNS name
 
 ###### **Options:**
 
-* `--selector <LABEL.SUFFIX>` — Selector literal (e.g. `makoto.sora`)
+* `--selector <LABEL.SUFFIX>` — Legacy domain selector literal (e.g. `makoto.sora`)
 * `--reason <TEXT>` — Reason recorded in the freeze log
 * `--until-ms <U64>` — Timestamp (ms since epoch) when the freeze should auto-expire
 * `--guardian-ticket <JSON>` — Guardian ticket signature (JSON literal)
@@ -9367,7 +10309,7 @@ Unfreeze a SNS name
 
 ###### **Options:**
 
-* `--selector <LABEL.SUFFIX>` — Selector literal (e.g. `makoto.sora`)
+* `--selector <LABEL.SUFFIX>` — Legacy domain selector literal (e.g. `makoto.sora`)
 * `--governance-json <PATH>` — Path to `GovernanceHookV1` JSON authorising the unfreeze
 
 
@@ -9380,7 +10322,7 @@ Fetch a SNS name record
 
 ###### **Options:**
 
-* `--selector <SELECTOR>` — Selector literal (`label.suffix`) in canonical I105 form
+* `--selector <SELECTOR>` — Legacy domain selector literal (`label.suffix`) in canonical I105 form
 
 
 
@@ -9398,7 +10340,7 @@ Fetch the policy for a suffix
 
 ## `iroha app sns governance`
 
-Governance helpers (arbitration, transparency exports, etc.)
+Governance helper placeholders retained for dry-run validation only
 
 **Usage:** `iroha app sns governance <COMMAND>`
 
@@ -9727,7 +10669,6 @@ Developer utilities and diagnostics
 ###### **Subcommands:**
 
 * `address` — Account address helpers (canonical I105 conversions)
-* `encode` — Canonical ID encoders
 * `crypto` — Cryptography helpers (SM2/SM3/SM4)
 * `ivm` — IVM/ABI helpers (e.g., compute ABI hash)
 * `markdown-help` — Output CLI documentation in Markdown format
@@ -9762,7 +10703,7 @@ Convert account addresses between supported textual encodings
 ###### **Options:**
 
 * `--expect-prefix <PREFIX>` — Require I105 inputs to match the provided network prefix
-* `--network-prefix <PREFIX>` — Network prefix to use when emitting I105 output
+* `--network-prefix <PREFIX>` — Network prefix to use when emitting i105 output
 
   Default value: `753`
 * `--format <FORMAT>` — Desired output format (defaults to I105)
@@ -9784,7 +10725,7 @@ Scan a list of addresses and emit conversion summaries
 
 * `--input <PATH>` — Path to a file containing newline-separated addresses (defaults to STDIN)
 * `--expect-prefix <PREFIX>` — Require I105 inputs to match the provided network prefix
-* `--network-prefix <PREFIX>` — Network prefix to use when emitting I105 output
+* `--network-prefix <PREFIX>` — Network prefix to use when emitting i105 output
 
   Default value: `753`
 * `--allow-errors` — Succeed even if parse errors were encountered (allow auditing large dumps)
@@ -9808,7 +10749,7 @@ Rewrite newline-separated addresses into canonical encodings
 * `--input <PATH>` — Path to a file containing newline-separated addresses (defaults to STDIN)
 * `--output <PATH>` — Write the converted addresses to a file (defaults to STDOUT)
 * `--expect-prefix <PREFIX>` — Require I105 inputs to match the provided network prefix
-* `--network-prefix <PREFIX>` — Network prefix to use when emitting I105 output
+* `--network-prefix <PREFIX>` — Network prefix to use when emitting i105 output
 
   Default value: `753`
 * `--format <FORMAT>` — Desired output format (defaults to I105)
@@ -10113,3 +11054,4 @@ Show versions and git SHA of client and server
     This document was generated automatically by
     <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
 </i></small>
+

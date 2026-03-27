@@ -3,17 +3,17 @@
 Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Apple platforms.
 
 Features:
-- Torii HTTP client (balances, transactions, explorer instructions/transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Device-bound offline cash helpers (`ToriiClient.setupOfflineCash`, `loadOfflineCash`, `refreshOfflineCash`, `syncOfflineCash`, `redeemOfflineCash`) plus transfer-history inspection and signed revocation bundle fetch via `/v1/offline/revocations`
+- Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
+- Device-bound offline cash request/response models for `/v1/offline/cash/*`, plus transfer-history inspection and signed revocation bundle fetch via `/v1/offline/revocations`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Native NoritoBridge integration (auto-enabled when `dist/NoritoBridge.xcframework` is present, otherwise Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - Pipeline submission helpers (POST `/v1/pipeline/transactions` with configurable retries + status polling)
 - Ed25519 key management & signing via CryptoKit (iOS 15+)
-- Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally, plus Torii wrappers for `/v1/confidential/derive-keyset`
+- Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
-- Verifying key registry helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, register/update) covering `/v1/zk/vk` operations
+- Verifying key registry read/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
 
 ## Installation
 
@@ -127,7 +127,7 @@ last month) or `next_period` for fixed-price plans billed in advance.
 
 ```swift
 let plan: ToriiSubscriptionPlan = [
-    "provider": .string("aws@commerce"),
+    "provider": .string("<provider_account_i105>"),
     "billing": .object([
         "cadence": .object([
             "kind": .string("monthly_calendar"),
@@ -154,36 +154,12 @@ let plan: ToriiSubscriptionPlan = [
     ])
 ]
 
-let planRequest = ToriiSubscriptionPlanCreateRequest(
-    authority: "<provider_account_i105>",
-    privateKey: "provider-private-key-hex",
-    planId: "aws_compute#commerce",
-    plan: plan
-)
-try await torii.createSubscriptionPlan(planRequest)
-
-let subscriptionRequest = ToriiSubscriptionCreateRequest(
-    authority: "<subscriber_account_i105>",
-    privateKey: "subscriber-private-key-hex",
-    subscriptionId: "sub-001",
-    planId: "aws_compute#commerce"
-)
-try await torii.createSubscription(subscriptionRequest)
-
-let usageRequest = ToriiSubscriptionUsageRequest(
-    authority: "<provider_account_i105>",
-    privateKey: "provider-private-key-hex",
-    unitKey: "compute_ms",
-    delta: "3600000"
-)
-try await torii.recordSubscriptionUsage(subscriptionId: "sub-001", requestBody: usageRequest)
-
-let actionRequest = ToriiSubscriptionActionRequest(
-    authority: "<provider_account_i105>",
-    privateKey: "provider-private-key-hex"
-)
-try await torii.chargeSubscriptionNow(subscriptionId: "sub-001", requestBody: actionRequest)
 ```
+
+The direct subscription mutation helpers now fail closed instead of accepting
+embedded private keys. Build the equivalent subscription instructions locally,
+sign them with your wallet key material, and submit the resulting transaction
+through `submitTransaction` or `/v1/pipeline/transactions`.
 
 ### Canonical request signing
 
@@ -207,7 +183,7 @@ headers.forEach { key, value in
 }
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept only canonical I105 account IDs. `@domain` suffixes and other legacy literals are rejected.
+> **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
 
 ### Explorer instruction history
 
@@ -280,7 +256,8 @@ if #available(iOS 15.0, macOS 12.0, *) {
 ```
 
 You can also pass `assetDefinitionId` or `assetId` to narrow results. The `assetId` filter matches
-the source asset id literal (definition + sender account) as reported by explorer transfers.
+the source internal asset balance-bucket literal (`<base58-asset-definition-id>#<canonical-i105-account-id>`) as reported by explorer
+transfers.
 Transaction-scoped helpers (`getExplorerTransactionTransferSummaries`,
 `streamTransactionTransferSummaries`) accept the same filters.
 
@@ -316,6 +293,61 @@ If you need transfer details for a specific transaction, call
 `getExplorerTransactionTransferSummaries(hashHex:matchingAccount:)`.
 Use `streamTransactionTransferSummaries` or `transactionTransferSummariesPublisher` to keep
 receiving live transfer updates for that transaction.
+
+For RWA lots, use the dedicated explorer and chain-state helpers:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    let lots = try await torii.getExplorerRwas(
+        params: ToriiExplorerRwasParams(
+            page: 1,
+            perPage: 25,
+            ownedBy: "<account_i105>",
+            domain: "commodities"
+        )
+    )
+    if let first = lots.items.first {
+        let detail = try await torii.getExplorerRwaDetail(rwaId: first.id)
+        print(detail.quantity, detail.heldQuantity, detail.primaryReference)
+    }
+
+    let rwaIds = try await torii.listRwas(options: ToriiListOptions(limit: 10))
+    print(rwaIds.items.map(\.id))
+}
+```
+
+For local instruction composition, `RwaInstructionBuilders` and the matching
+`IrohaSDK` convenience methods now cover the dedicated RWA instruction family.
+The richer registration/merge/control-policy payloads stay as `NoritoJSON`
+objects so callers can pass canonical Rust-side JSON shapes directly:
+
+```swift
+let newRwa = try NoritoJSON.fromJSONObject([
+    "domain": "commodities",
+    "quantity": "10.5",
+    "spec": ["scale": 1],
+    "primary_reference": "vault-cert-001",
+    "metadata": ["origin": "AE"],
+    "parents": [],
+    "controls": ["freeze_enabled": true]
+])
+let registerRwa = try sdk.buildRegisterRwa(rwa: newRwa)
+let transferRwa = try sdk.buildTransferRwa(
+    sourceAccountId: "<source_i105>",
+    rwaId: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+    quantity: "1.5",
+    destinationAccountId: "<destination_i105>"
+)
+
+let metadata = try NoritoJSON(["serial": "vault-01"])
+let setMetadata = SetMetadataRequest(
+    chainId: "00000000-0000-0000-0000-000000000000",
+    authority: "<source_i105>",
+    target: .rwa("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities"),
+    key: "serial",
+    value: metadata
+)
+```
 
 To react to new blocks as they commit, subscribe to the explorer SSE streams:
 
@@ -462,20 +494,25 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-For offline cash flows, use the offline cash endpoints directly and treat the returned
+For offline cash flows, call the authenticated offline cash endpoints directly and treat the returned
 envelope as authoritative:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
     let request = ToriiOfflineCashLoadRequest(
         operationId: UUID().uuidString,
+        lineageId: existingEnvelope.lineageState.lineageId,
         accountId: authorityId,
-        deviceId: deviceId,
-        offlinePublicKey: offlinePublicKey,
+        assetDefinitionId: assetDefinitionId,
         amount: "10.00",
-        attestation: attestationPayload
+        deviceBinding: deviceBinding,
+        deviceProof: deviceProof
     )
-    let envelope = try await torii.loadOfflineCash(request)
+    let envelope = try await authenticatedTransport.post(
+        "/v1/offline/cash/load",
+        body: request,
+        decode: ToriiOfflineCashEnvelope.self
+    )
     print("cash", envelope.lineageState.lineageId, "balance", envelope.lineageState.balance)
 }
 ```
@@ -514,20 +551,20 @@ backoff, retrying 429/5xx responses and transport errors). For example:
 
 ### Confidential key derivation
 
-Wallets can build the confidential key hierarchy locally or request it from Torii:
+Wallets derive the confidential key hierarchy locally:
 
 ```swift
 let seed = Data(repeating: 0x42, count: 32)
 let localKeyset = try ConfidentialKeyset.derive(from: seed)
 
 if #available(iOS 15, macOS 12, *) {
-    let remoteKeyset = try await sdk.deriveConfidentialKeyset(seedHex: localKeyset.spendKeyHex)
-    assert(remoteKeyset == localKeyset)
+    let sdkKeyset = try await sdk.deriveConfidentialKeyset(seedHex: localKeyset.spendKeyHex)
+    assert(sdkKeyset == localKeyset)
 }
 ```
 
-`IrohaSDK.deriveConfidentialKeyset` mirrors `POST /v1/confidential/derive-keyset` and wraps
-the response so apps receive a fully populated `ConfidentialKeyset`. Provide either
+`IrohaSDK.deriveConfidentialKeyset` is a local convenience wrapper around
+`ConfidentialKeyset.derive`. No Torii request is made. Provide either
 `seedHex` or `seedBase64`; inputs are trimmed automatically, and invalid encodings surface
 as `ConfidentialKeyDerivationError`.
 
@@ -726,27 +763,13 @@ on callback-first code.
 
 ### Verifying key registry
 
-Register, update, and list verifying keys via the Torii helpers:
+Inspect verifying keys via the Torii helpers:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let vkBytes = Data(repeating: 0xAA, count: 32)
-    var request = ToriiVerifyingKeyRegisterRequest(
-        authority: "<account_i105>",
-        privateKey: "ed25519:...",
-        backend: "halo2/ipa",
-        name: "payments_v1",
-        version: 1,
-        circuitId: "payments:v1",
-        publicInputsSchemaHashHex: String(repeating: "0a", count: 32),
-        gasScheduleId: "halo2-default",
-        verifyingKeyBytes: vkBytes
-    )
-    request.metadataUriCid = "ipfs://example-metadata"
-    try await torii.registerVerifyingKey(request)
-
+    let detail = try await torii.getVerifyingKey(backend: "halo2/ipa", name: "payments_v1")
     let current = try await torii.listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: "halo2/ipa"))
-    print("vk count:", current.count)
+    print("vk status:", detail.record.status, "count:", current.count)
 }
 ```
 
@@ -802,7 +825,7 @@ Pipeline submissions always use `/v1/pipeline/transactions` and `/v1/pipeline/tr
 
 ### Verifying key registry
 
-Interact with the Torii verifying-key endpoints to inspect and manage Halo2 verifier metadata:
+Interact with the Torii verifying-key endpoints to inspect and monitor Halo2 verifier metadata:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
@@ -816,44 +839,14 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Submit verifier lifecycle transactions with the typed request bodies. When embedding inline
-bytes supply base64 data and let the helper compute `vk_len` automatically:
+The typed register/update/deprecate request DTOs remain useful when you are
+assembling locally signed transactions, but the direct Torii mutation helpers
+now fail closed instead of accepting embedded private keys. Submit those
+verifier-management transactions through the pipeline helpers after local
+signing.
 
-```swift
-if #available(iOS 15, macOS 12, *) {
-    guard let vkBytes = Data(base64Encoded: "AQID") else { return }
-
-    var register = ToriiVerifyingKeyRegisterRequest(
-        authority: "<account_i105>",
-        privateKey: "ed0120...",
-        backend: "halo2/ipa",
-        name: "vk_main",
-        version: 1,
-        circuitId: "halo2/ipa::transfer_v1",
-        publicInputsSchemaHashHex: "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
-        gasScheduleId: "halo2_default",
-        verifyingKeyBytes: vkBytes
-    )
-    register.maxProofBytes = 8_192
-    try await torii.registerVerifyingKey(register)
-
-    var update = ToriiVerifyingKeyUpdateRequest(
-        authority: register.authority,
-        privateKey: register.privateKey,
-        backend: register.backend,
-        name: register.name,
-        version: register.version + 1,
-        circuitId: register.circuitId,
-        publicInputsSchemaHashHex: register.publicInputsSchemaHashHex
-    )
-    update.commitmentHex = "20574662a58708e02e0000000000000000000000000000000000000000000000"
-    try await torii.updateVerifyingKey(update)
-}
-```
-
-Completion-style overloads mirror the async variants (`registerVerifyingKey(_:completion:)`,
-`updateVerifyingKey(_:completion:)`) and return a
-`Task<Void, Never>` so UI layers can cancel inflight submissions if needed.
+Completion-style overloads still mirror the async read and event-stream helpers
+so UI layers can cancel inflight work if needed.
 
 ```swift
 if #available(iOS 15, macOS 12, *) {

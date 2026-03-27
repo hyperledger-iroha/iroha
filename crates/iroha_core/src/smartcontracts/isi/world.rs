@@ -2325,12 +2325,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical account id".into(),
+                                        reason: "owner must be a canonical I105 account id".into(),
                                 },
                             ),
                         ));
                         InstructionExecutionError::InvariantViolation(
-                            "owner must be a canonical account id".into(),
+                            "owner must be a canonical I105 account id".into(),
                         )
                     })?;
                         let owner_str = owner_str_raw.trim();
@@ -2339,12 +2339,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical account id form".into(),
+                                        reason: "owner must use canonical I105 account id form".into(),
                                     },
                                 ),
                             ));
                             return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical account id form".into(),
+                                "owner must use canonical I105 account id form".into(),
                             ));
                         }
 
@@ -2357,12 +2357,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical account id".into(),
+                                        reason: "owner must be a canonical I105 account id".into(),
                                     },
                                 ),
                             ));
                             InstructionExecutionError::InvariantViolation(
-                                "owner must be a canonical account id".into(),
+                                "owner must be a canonical I105 account id".into(),
                             )
                         })?;
                         if owner_parsed.to_string() != owner_str {
@@ -2370,12 +2370,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical account id form".into(),
+                                        reason: "owner must use canonical I105 account id form".into(),
                                     },
                                 ),
                             ));
                             return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical account id form".into(),
+                                "owner must use canonical I105 account id form".into(),
                             ));
                         }
                         if lock_owner.is_none() {
@@ -10166,8 +10166,12 @@ pub mod isi {
         }
     }
 
-    fn parse_config_asset_definition_id(raw: &str) -> Option<AssetDefinitionId> {
-        raw.parse().ok()
+    fn parse_config_asset_definition_id(
+        world: &impl crate::state::WorldReadOnly,
+        raw: &str,
+        now_ms: u64,
+    ) -> Option<AssetDefinitionId> {
+        crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
 
     fn is_permission_domain_associated(permission: &Permission, domain_id: &DomainId) -> bool {
@@ -10325,15 +10329,10 @@ pub mod isi {
                 .account_subjects_in_domain(&domain_id)
                 .into_iter()
                 .collect();
-            let relabeled_accounts: Vec<(AccountId, AccountLabel)> = state_transaction
+            let relabeled_accounts: Vec<AccountId> = state_transaction
                 .world
                 .accounts_in_domain_iter(&domain_id)
-                .filter_map(|account| {
-                    account
-                        .label()
-                        .cloned()
-                        .map(|label| (account.id().clone(), label))
-                })
+                .map(|account| account.id().clone())
                 .collect();
             let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
                 .world
@@ -10370,6 +10369,21 @@ pub mod isi {
                 .nfts_in_domain_iter(&domain_id)
                 .map(|nft| nft.id().clone())
                 .collect();
+
+            if let Some(rwa_id) = state_transaction
+                .world
+                .rwas_in_domain_iter(&domain_id)
+                .map(|rwa| rwa.id().clone())
+                .next()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: RWA {rwa_id} still exists in the domain; transfer or redeem all RWAs first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
 
             for nft_id in remove_nfts {
                 crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
@@ -10451,8 +10465,12 @@ pub mod isi {
                     )
                     .into());
                 }
-                if parse_config_asset_definition_id(&state_transaction.nexus.fees.fee_asset_id)
-                    .is_some_and(|configured| &configured == asset_definition_id)
+                if parse_config_asset_definition_id(
+                    &state_transaction.world,
+                    &state_transaction.nexus.fees.fee_asset_id,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .is_some_and(|configured| &configured == asset_definition_id)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -10462,8 +10480,12 @@ pub mod isi {
                     )
                     .into());
                 }
-                if parse_config_asset_definition_id(&state_transaction.nexus.staking.stake_asset_id)
-                    .is_some_and(|configured| &configured == asset_definition_id)
+                if parse_config_asset_definition_id(
+                    &state_transaction.world,
+                    &state_transaction.nexus.staking.stake_asset_id,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .is_some_and(|configured| &configured == asset_definition_id)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -10645,15 +10667,30 @@ pub mod isi {
                     .remove(asset_definition_id.clone());
             }
 
-            for (account_id, label) in relabeled_accounts {
-                if let Some(account) = state_transaction.world.accounts.get_mut(&account_id) {
+            for account_id in relabeled_accounts {
+                let labels: Vec<_> = state_transaction
+                    .world
+                    .account_aliases_by_account
+                    .get(&account_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|label| label.domain.as_ref() == Some(&domain_id))
+                    .collect();
+                if let Some(account) = state_transaction.world.accounts.get_mut(&account_id)
+                    && account
+                        .label()
+                        .is_some_and(|label| label.domain.as_ref() == Some(&domain_id))
+                {
                     account.set_label(None);
                 }
-                state_transaction
-                    .world
-                    .account_rekey_records
-                    .remove(label.clone());
-                state_transaction.world.account_aliases.remove(label);
+                for label in labels {
+                    state_transaction
+                        .world
+                        .account_rekey_records
+                        .remove(label.clone());
+                    state_transaction.world.remove_account_alias_binding(&label);
+                }
             }
             for subject in unlink_subjects {
                 state_transaction
@@ -16896,7 +16933,7 @@ pub mod isi {
         fn activate_contract_instance_is_public_for_unprotected_namespace() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let state = State::new_for_testing(World::default(), kura, query_handle);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
                 None,
@@ -16940,7 +16977,7 @@ pub mod isi {
         fn activate_contract_instance_requires_governance_for_protected_namespace() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let state = State::new_for_testing(World::default(), kura, query_handle);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
                 None,

@@ -30,8 +30,8 @@ ID de compte que vous comptez utiliser. Le bundle par défaut inclut déjà deux
 issue des clés de démo :
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirmez les valeurs en listant les premiers comptes :

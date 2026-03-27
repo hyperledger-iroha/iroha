@@ -218,7 +218,7 @@ Substituições locais کو runbook de operações میں documento کریں؛ j
 - Hierarquia de derivação de chave por conta:
   - `sk_spend` → `nk` (chave anuladora), `ivk` (chave de visualização de entrada), `ovk` (chave de visualização de saída), `fvk`.
 - Cargas úteis de notas criptografadas AEAD استعمال کرتے ہیں جو chaves compartilhadas derivadas de ECDH سے بنے ہوتے ہیں؛ auditor opcional visualizar chaves política de ativos کے مطابق saídas کے ساتھ anexar کئے جا سکتے ہیں۔
-- Adições CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, descriptografia de memorandos کرنے کیلئے ferramentas de auditor, e auxiliar `iroha app zk envelope` e envelopes de memorando Norito offline produzir/inspecionar کرتا ہے۔ Torii `POST /v1/confidential/derive-keyset` کے ذریعے وہی fluxo de derivação فراہم کرتا ہے اور hex/base64 دونوں formulários واپس دیتا ہے تاکہ carteiras, hierarquias de chaves programaticamente buscam کر سکیں۔
+- Adições CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, descriptografia de memorandos کرنے کیلئے ferramentas de auditor, e auxiliar `iroha app zk envelope` e envelopes de memorando Norito offline produzir/inspecionar کرتا ہے۔
 
 ## Controles de gás, limites e DoS
 - Cronograma determinístico de gás:

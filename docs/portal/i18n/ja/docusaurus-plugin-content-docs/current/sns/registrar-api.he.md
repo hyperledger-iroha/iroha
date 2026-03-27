@@ -128,7 +128,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | GET | -- | 現在の `SuffixPolicyV1` を取得 (キャッシュ可能)。 |
 | `/v1/sns/names/{namespace}/{literal}` | GET | -- | 現在の `NameRecordV1` と有効状態 (Active, Grace など) を返す。 |
 
-**セレクタのエンコード:** `{selector}` パスセグメントは ADDR-5 に従う I105/圧縮/正規 hex を受け付け、Torii が `NameSelectorV1` で正規化します。
+**セレクタのエンコード:** `{selector}` パスセグメントは ADDR-5 に従う i105/圧縮/正規 hex を受け付け、Torii が `NameSelectorV1` で正規化します。
 
 **エラーモデル:** 全エンドポイントは Norito JSON で `code`, `message`, `details` を返します。コードは `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` を含みます。
 
@@ -174,7 +174,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -236,7 +236,7 @@ Torii は以下を確認して証明を検証します:
 
 1. クライアントは `/v1/sns/policies/{suffix_id}` を取得し、価格、猶予、利用可能な tier を確認。
 2. クライアントは `RegisterNameRequestV1` を構築:
-   - `selector` は I105（推奨）/圧縮（次善）ラベルから導出。
+   - `selector` は i105（推奨）/圧縮（次善）ラベルから導出。
    - `term_years` はポリシー範囲内。
    - `payment` は treasury/steward splitter 送金を参照。
 3. Torii が検証:

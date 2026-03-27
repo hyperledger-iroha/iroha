@@ -1,247 +1,123 @@
 ---
-lang: hy
-direction: ltr
-source: docs/portal/docs/sns/address-display-guidelines.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 91a1116d82eb9845a26805effed00ad8cd13c1ebd034aef3827aebfa4e1eb846
-source_last_modified: "2026-01-28T17:11:30.700223+00:00"
-translation_last_reviewed: 2026-02-07
 id: address-display-guidelines
 title: Sora Address Display Guidelines
 sidebar_label: Address display
-description: UX and CLI requirements for I105 vs I105 Sora address presentation (ADDR-6).
-translator: machine-google-reviewed
+description: UX and CLI requirements for canonical i105 account ids and on-chain aliases (ADDR-6).
 ---
 
-ներմուծել ExplorerAddressCard-ը «@site/src/components/ExplorerAddressCard»-ից;
+import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
-:::note Կանոնական աղբյուր
-Այս էջը արտացոլում է `docs/source/sns/address_display_guidelines.md` և այժմ ծառայում է
-որպես կանոնական պորտալի պատճեն: Աղբյուրի ֆայլը մնում է թարգմանչական PR-ների համար:
+:::note Canonical Source
+This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
+as the canonical portal copy. The source file sticks around for translation PRs.
 :::
 
-Դրամապանակները, հետազոտողները և SDK-ի նմուշները պետք է հաշվի հասցեները համարվեն որպես անփոփոխ
-օգտակար բեռներ. Android մանրածախ դրամապանակի նմուշը
-`examples/android/retail-wallet`-ն այժմ ցույց է տալիս պահանջվող UX օրինակը.
+Wallets, explorers, and SDK samples must treat the canonical I105
+literal as the only public account-id format. On-chain aliases are separate
+lookup keys:
 
-- **Կրկնակի պատճենման թիրախներ** Առաքեք երկու բացահայտ պատճենման կոճակ՝ I105 (նախընտրելի) և
-  սեղմված Sora-միայն ձև (`i105`, երկրորդ լավագույն): I105-ը միշտ անվտանգ է արտաքինից համօգտագործելու համար
-  և սնուցում է QR ծանրաբեռնվածությունը: Սեղմված տարբերակը պետք է ներառի ներդիր
-  նախազգուշացում, քանի որ այն աշխատում է միայն Sora-aware հավելվածների ներսում: Android մանրածախ
-  դրամապանակի նմուշային լարերը և՛ Նյութի կոճակները, և՛ դրանց գործիքների ծայրերը
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, և
-  iOS SwiftUI-ի ցուցադրությունը արտացոլում է նույն UX-ը ներսում `AddressPreviewCard`-ի միջոցով
-  `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, ընտրովի տեքստ:** Արտացրե՛ք երկու տողերը մոնոսփեյս տառատեսակով և
-  `textIsSelectable="true"`, որպեսզի օգտվողները կարողանան ստուգել արժեքները՝ առանց IME կանչելու:
-  Խուսափեք խմբագրվող դաշտերից. IME-ները կարող են վերաշարադրել kana-ն կամ ներարկել զրոյական լայնությամբ ծածկագրի կետեր:
-- **Նախադրված լռելյայն տիրույթի ակնարկներ.** Երբ ընտրիչը ցույց է տալիս ենթադրյալի վրա
-  `default` տիրույթ, վերնագիր, որը հիշեցնում է օպերատորներին, վերջածանց չի պահանջվում:
-  Հետազոտողները պետք է նաև ընդգծեն կանոնական տիրույթի պիտակը, երբ ընտրիչը
-  կոդավորում է մարսողություն:
-- **I105 QR օգտակար բեռներ:** QR կոդերը պետք է կոդավորեն I105 տողը: Եթե QR սերունդ
-  ձախողվում է, ցուցադրեք բացահայտ սխալ՝ դատարկ պատկերի փոխարեն:
-- **Clipboard հաղորդագրություններ.** Սեղմված ձևը պատճենելուց հետո թողարկեք կենաց կամ
-  Խորտկարան հիշեցնում է օգտատերերին, որ այն միայն Sora-ի համար է և հակված է IME-ի խափանումներին:
+- `name@dataspace`
+- `name@domain.dataspace`
 
-Այս պաշտպանիչ գծերին հետևելը կանխում է Unicode/IME կոռուպցիան և բավարարում է
-ADDR-6 ճանապարհային քարտեզի ընդունման չափանիշներ դրամապանակի/հետախույզների UX-ի համար:
+Those aliases resolve on-chain to the canonical i105 account id. They are not
+an alternate public account-id encoding.
 
-## Սքրինշոթ հարմարանքներ
+## Required UX
 
-Օգտագործեք հետևյալ հարմարանքները տեղայնացման վերանայումների ժամանակ՝ ապահովելու կոճակների պիտակները,
-Գործիքների հուշումները և նախազգուշացումները համահունչ են մնում հարթակներում.
+- **Copy/share only canonical i105.** Ship one primary copy action for the
+  canonical I105 account id. That same literal powers QR payloads,
+  deep links, and clipboard actions.
+- **Render aliases separately.** If a workflow includes an alias, show it in a
+  labeled field such as “Alias” or “Routing alias”. Do not concatenate it onto
+  the i105 literal.
+- **Monospace, selectable text.** Render the i105 literal with a monospace font
+  and `textIsSelectable="true"` so users can inspect it without invoking an
+  IME. Avoid editable fields: IMEs can rewrite kana or inject zero-width code
+  points.
+- **Confirm the exact copied value.** After copying the i105 form, emit a toast
+  or snackbar that quotes the canonical i105 literal.
+- **No alternate public encodings.** Canonical hex and legacy/non-canonical
+  address forms are tooling/debug inputs only and must not be marketed as
+  copy/share formats.
 
-- Android-ի հղում՝ `/img/sns/address_copy_android.svg`
+## Screenshot fixtures
 
-  ![Android-ի կրկնակի պատճենի հղում](/img/sns/address_copy_android.svg)
+Use the following fixtures during localization reviews to ensure button labels,
+tooltips, and warnings stay aligned across platforms:
 
-- iOS տեղեկանք՝ `/img/sns/address_copy_ios.svg`
+- Android reference: `/img/sns/address_copy_android.svg`
 
-  ![iOS-ի կրկնակի պատճենի հղում](/img/sns/address_copy_ios.svg)
+  ![Android address copy reference](/img/sns/address_copy_android.svg)
 
-## SDK օգնականներ
+- iOS reference: `/img/sns/address_copy_ios.svg`
 
-Յուրաքանչյուր SDK ցուցադրում է հարմարության օգնական, որը վերադարձնում է I105 (նախընտրելի) և սեղմված (`sora`, երկրորդ լավագույնը)
-ձևավորվում է նախազգուշացնող տողի կողքին, որպեսզի UI շերտերը կարողանան հետևողական մնալ.
+  ![iOS address copy reference](/img/sns/address_copy_ios.svg)
 
-- JavaScript՝ `AccountAddress.displayFormats(networkPrefix?: number)`
+## SDK helpers
+
+Each SDK exposes a convenience helper that returns canonical I105
+rendering plus warning text so UI layers can stay consistent:
+
+- JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript տեսուչ. `inspectAccountId(...)`-ը վերադարձնում է սեղմված նախազգուշացումը
-  տողը և այն կցում է `warnings`-ին, երբ զանգահարողները տրամադրում են `i105`
-  բառացի, այնպես որ հետազոտողները/դրամապանակի վահանակները կարող են հայտնվել միայն Sora-ի ծանուցումը
-  paste/validation հոսքերի ժամանակ, այլ ոչ միայն այն դեպքում, երբ դրանք առաջացնում են
-  սեղմված ձևն իրենք են:
-- Python՝ `AccountAddress.display_formats(network_prefix: int = 753)`
-- Swift՝ `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- Java/Kotlin՝ `AccountAddress.displayFormats(int networkPrefix = 753)`
+- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
+- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-Օգտագործեք այս օգնականները՝ UI շերտերում կոդավորման տրամաբանությունը վերագործարկելու փոխարեն:
-JavaScript-ի օգնականը նաև բացահայտում է `selector` ծանրաբեռնվածությունը `domainSummary`-ում
-(`tag`, `digest_hex`, `registry_id`, `label`), ուստի միջերեսները կարող են ցույց տալ, թե արդյոք
-ընտրիչն ունի Local-12 կամ ռեգիստրով ապահովված՝ առանց չմշակված օգտակար բեռը նորից վերլուծելու:
+Use these helpers instead of reimplementing the encode logic in UI layers.
+Use alias-aware Torii endpoints when you need to resolve `name@dataspace` or
+`name@domain.dataspace` into the canonical i105 account id.
 
-## Explorer գործիքավորման ցուցադրություն
+## Explorer instrumentation demo
 
 <ExplorerAddressCard />
 
-Հետախույզները պետք է արտացոլեն դրամապանակի հեռաչափությունը և հասանելիության աշխատանքը.
+Explorers should mirror the wallet telemetry and accessibility work:
 
-- Կիրառեք `data-copy-mode="i105|i105_default|qr"` կոճակները պատճենելու համար, որպեսզի ճակատային մասերը կարողանան օգտագործել օգտագործման հաշվիչներ
-  Torii կողմի `torii_address_format_total` չափման կողքին: Դեմո բաղադրիչը վերևում ուղարկվում է
-  `iroha:address-copy` միջոցառում `{mode,timestamp}`-ով — սա միացրեք ձեր վերլուծական/հեռաչափություն
-  խողովակաշար (օրինակ՝ մղել դեպի հատված կամ NORITO-ով ապահովված կոլեկտոր), որպեսզի վահանակները կարողանան փոխկապակցել սերվերին
-  հասցեի ձևաչափի օգտագործումը հաճախորդի պատճենման պահվածքով: Նաև արտացոլեք Torii տիրույթի հաշվիչները
-  (`torii_address_domain_total{domain_kind}`) նույն հոսքում, որպեսզի Local-12 կենսաթոշակային ակնարկները կարողանան
-  արտահանեք 30-օրյա `domain_kind="local12"` զրոյական օգտագործման ապացույց անմիջապես `address_ingest`-ից
-  Grafana տախտակ.
-- Զուգավորեք յուրաքանչյուր հսկողություն հստակ `aria-label`/`aria-describedby` ակնարկների հետ, որոնք բացատրում են, թե արդյոք
-  բառացիորեն անվտանգ է կիսվել (`I105`) կամ միայն Sora-ով (սեղմված `sora`): Ներառեք անուղղակի տիրույթի վերնագիրը
-  նկարագրությունը, ուստի օժանդակ տեխնոլոգիան երևում է տեսողականորեն ցուցադրվող նույն համատեքստում:
-- Բացահայտեք կենդանի տարածաշրջան (օրինակ՝ `<output aria-live="polite">…</output>`), որը հայտարարում է պատճենների արդյունքները և
-  նախազգուշացումներ, որոնք համապատասխանում են VoiceOver/TalkBack-ի վարքագծին, որն այժմ միացված է Swift/Android նմուշներին:
+- Apply `data-copy-mode="i105|alias|qr"` to copy buttons so front-ends can emit
+  usage counters alongside server-side account-literal metrics.
+- Pair every control with distinct `aria-label`/`aria-describedby` hints that
+  explain whether a control copies the canonical i105 account id, views the
+  alias, or shares the QR payload.
+- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
+  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
 
-Այս գործիքավորումը բավարարում է ADDR-6b-ը՝ ապացուցելով, որ օպերատորները կարող են դիտարկել ինչպես Torii-ի ընդունումը, այնպես էլ
-հաճախորդի կողմից պատճենման ռեժիմներ, նախքան Տեղական ընտրիչները անջատված են:
+## Enforcing canonical forms
 
-## Տեղական → Համաշխարհային միգրացիայի գործիքակազմ
+Use the CLI workflow documented under ADDR-5:
 
-Օգտագործեք [Local → Global Toolkit] (local-to-global-toolkit.md) ավտոմատացման համար
-JSON աուդիտի հաշվետվությունը և փոխարկված նախընտրելի I105 / երկրորդ լավագույն սեղմված (`sora`) ցուցակը, որը օպերատորները կցում են
-դեպի պատրաստության տոմսեր, մինչդեռ ուղեկցող runbook-ը կապում է Grafana-ը
-վահանակները և Alertmanager-ի կանոնները, որոնք փակում են խիստ ռեժիմի կտրումը:
-
-## Երկուական դասավորության արագ հղում (ADDR-1a)
-
-Երբ SDK-ները բացահայտում են հասցեների առաջադեմ գործիքավորումը (տեսուչներ, վավերացման հուշումներ,
-մանիֆեստի կառուցողներ), ծրագրավորողներին մատնանշում են կանոնական մետաղալարերի ձևաչափը
-`docs/account_structure.md`. Դասավորությունը միշտ է
-`header · selector · controller`, որտեղ վերնագրի բիթերն են.
-
-```
-bit index:   7        5 4      3 2      1 0
-             ┌─────────┬────────┬────────┬────┐
-payload bit: │version  │ class  │  norm  │ext │
-             └─────────┴────────┴────────┴────┘
-```
-
-- `addr_version = 0` (bits7-5) այսօր; ոչ զրոյական արժեքները վերապահված են և պարտադիր են
-  բարձրացնել `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class`-ը տարբերակում է միայնակ (`0`) և բազմասիգ (`1`) կարգավորիչները:
-- `norm_version = 1`-ը կոդավորում է Normv1 ընտրիչի կանոնները: Ապագա նորմերը կվերօգտագործվեն
-  նույն 2-բիթանոց դաշտը:
-- `ext_flag`-ը միշտ էլ `0` է. սահմանված բիթերը ցույց են տալիս չաջակցվող բեռների ընդլայնումներ:
-
-Ընտրողը անմիջապես հետևում է գլխի գլխին.
-
-```
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind)           │
-└──────────┴──────────────────────────────────────────────┘
-```
-
-UI և SDK մակերեսները պետք է պատրաստ լինեն ցուցադրելու ընտրիչի տեսակը.
-
-- `0x00` = լռելյայն լռելյայն տիրույթ (առանց ծանրաբեռնվածության):
-- `0x01` = տեղական ամփոփում (12-բայթ `blake2s_mac("SORA-LOCAL-K:v1", label)`):
-- `0x02` = գլոբալ ռեգիստրի մուտք (big-endian `registry_id:u32`):
-
-Կանոնական վեցանկյուն օրինակներ, որոնք դրամապանակի գործիքավորումը կարող է կապել կամ տեղադրել փաստաթղթերում/թեստերում.
-
-| Ընտրիչ տեսակի | Կանոնական վեցանկյուն |
-|---------------|---------------|
-| Անուղղակի լռելյայն | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Տեղական մարսողություն (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Համաշխարհային ռեգիստր (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
-
-Ամբողջական ընտրիչի/վիճակի համար տես `docs/source/references/address_norm_v1.md`
-աղյուսակ և `docs/account_structure.md` ամբողջական բայթ դիագրամի համար:
-
-## Կանոնական ձևերի պարտադրում
-
-տողերը պետք է հետևեն ADDR-5-ով փաստաթղթավորված CLI աշխատանքային հոսքին.
-
-1. `iroha tools address inspect`-ն այժմ թողարկում է կառուցված JSON ամփոփագիր I105-ով,
-   սեղմված և կանոնական վեցանկյուն օգտակար բեռներ: Ամփոփագիրը ներառում է նաև `domain`
-   օբյեկտ `kind`/`warning` դաշտերով և արձագանքում է ցանկացած տրամադրված տիրույթի միջոցով
-   `input_domain` դաշտ: Երբ `kind`-ը `local12` է, CLI-ն նախազգուշացում է տպում
-   stderr-ը և JSON ամփոփագիրը կրկնում են նույն ուղեցույցը, այնպես որ CI խողովակաշարերը և SDK-ները
-   կարող է այն մակերեսային դարձնել: Անցեք `legacy  suffix`, երբ ցանկանում եք փոխակերպումը
-   կոդավորումը վերարտադրվում է որպես `<i105>@<domain>`:
-2. SDK-ները կարող են ցուցադրել նույն նախազգուշացումը/ամփոփումը JavaScript-ի օգնականի միջոցով.
+1. Run `iroha tools address convert <address-or-account_id> --format json`.
+   The summary reports the detected format and canonical encodings (`i105`,
+   `canonical_hex`). Strict parser paths accept canonical I105 only.
+2. SDKs can surface the same summary via JavaScript:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("sora...");
-   if (summary.domain.warning) {
-     console.warn(summary.domain.warning);
-   }
+   const summary = inspectAccountId(accountLiteral);
    console.log(summary.i105.value, summary.i105Warning);
    ```
-  Օգնականը պահպանում է I105 նախածանցը, որը հայտնաբերվել է բառացիից, եթե դուք չեք
-  հստակորեն տրամադրեք `networkPrefix`, այնպես որ ոչ լռելյայն ցանցերի ամփոփագրերը
-  լուռ չվերարտադրել լռելյայն նախածանցով:
+3. Resolve aliases through alias-aware APIs instead of feeding
+   `name@dataspace` or `name@domain.dataspace` into strict `AccountId`
+   parsers.
+4. Reuse `i105.value` from the summary (or request another encoding via
+   `--format`) in manifests and user-facing docs.
+4. For bulk data sets, run
+   `iroha tools address audit --input addresses.txt --network-prefix 753`.
+   Audit emits JSON/CSV summaries per row and fails on parse errors by default.
+   Use `--allow-errors` only for best-effort scans.
+5. For newline-to-newline rewrites, run
+   `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
+   This rewrites each parsed row to the requested encoding
+   (canonical I105/hex/JSON). Pair with
+   `--allow-errors` for malformed dump triage.
 
-3. Փոխակերպեք կանոնական բեռնվածությունը՝ կրկին օգտագործելով `i105.value` կամ `i105_default`
-   դաշտերը ամփոփագրից (կամ այլ կոդավորում պահանջեք `--format`-ի միջոցով): Սրանք
-   տողերն արդեն ապահով են արտաքինից համօգտագործելու համար:
-4. Թարմացրեք մանիֆեստները, գրանցամատյանները և հաճախորդներին առնչվող փաստաթղթերը
-   կանոնական ձևակերպել և ծանուցել գործընկերներին, որ կլինեն Տեղական ընտրողներ
-   մերժվում է կտրվածքի ավարտից հետո:
-5. Զանգվածային տվյալների հավաքածուների համար գործարկեք
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. Հրաման
-   կարդում է նոր տողով առանձնացված տառերը (`#`-ով սկսվող մեկնաբանությունները անտեսվում են, և
-   `--input -` կամ որևէ դրոշակ չի օգտագործում STDIN), թողարկում է JSON հաշվետվություն
-   կանոնական/նախընտրելի I105/երկրորդ լավագույն սեղմված (`sora`) ամփոփագրեր յուրաքանչյուր մուտքի համար և հաշվում են երկուսն էլ վերլուծված
-   աղբավայրեր, որոնք պարունակում են անպետք տողեր և դարպասների ավտոմատացում `strict CI post-check`-ով
-   երբ օպերատորները պատրաստ լինեն արգելափակել տեղական ընտրիչները CI-ում:
-6. Երբ ձեզ անհրաժեշտ է նոր տողից նոր տող վերաշարադրել, օգտագործեք
-  Տեղական ընտրիչի վերականգնման աղյուսակների համար օգտագործեք
-  արտահանել `input,status,format,…` CSV, որն ընդգծում է կանոնական կոդավորումները, նախազգուշացումները և վերլուծում ձախողումները մեկ անցումով:
-   Օգնականը լռելյայն բաց է թողնում ոչ տեղական տողերը, փոխակերպում է մնացած բոլոր մուտքերը
-   պահանջվող կոդավորման մեջ (I105/hex/JSON) և պահպանում է
-   բնօրինակ տիրույթը, երբ դրված է `legacy  suffix`: Զուգակցեք այն `--allow-errors`-ի հետ
-   շարունակել սկանավորումը նույնիսկ այն դեպքում, երբ աղբավայրը պարունակում է անսարք տառեր:
-7. CI/lint ավտոմատացումը կարող է գործարկել `ci/check_address_normalize.sh`, որը հանում է
-   Տեղական ընտրիչները `fixtures/account/address_vectors.json`-ից, փոխակերպվում են
-   դրանք `iroha tools address normalize`-ի միջոցով և կրկնում
-   `iroha tools address audit` ապացուցելու համար, որ թողարկումներն այլևս չեն թողարկվում
-   Տեղական մարսողություններ.`torii_address_local8_total{endpoint}` գումարած
-`torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}` և
-Grafana տախտակը `dashboards/grafana/address_ingest.json` ապահովում է կատարումը
-ազդանշան. երբ արտադրական վահանակները ցույց են տալիս զրոյական օրինական տեղական ներկայացումներ և
-զրո Local-12 բախումներ 30 օր անընդմեջ, Torii-ը կշրջի Local-8-ը
-gate to hard-fail mainnet-ում, որին հաջորդում է Local-12-ը, երբ գլոբալ տիրույթներն ունեն
-ռեեստրի համապատասխան գրառումները: Դիտարկենք CLI-ի ելքը օպերատորին ուղղված ծանուցում
-այս սառեցման համար՝ նույն նախազգուշացման տողը օգտագործվում է SDK գործիքների հուշումներում և
-ավտոմատացում՝ ճանապարհային քարտեզի ելքի չափանիշներին համարժեք պահելու համար: Torii-ն այժմ կանխադրված է
-ռեգրեսիաների ախտորոշման ժամանակ. Շարունակեք արտացոլել `torii_address_domain_total{domain_kind}`
-մեջ Grafana (`dashboards/grafana/address_ingest.json`), այնպես որ ADDR-7 ապացույցների փաթեթը
-կարող է ապացուցել, որ `domain_kind="local12"`-ը մնացել է զրոյական մակարդակում պահանջվող 30-օրյա պատուհանից առաջ
-(`dashboards/alerts/address_ingest_rules.yml`) ավելացնում է երեք պահակաձողեր.
+### Release note snippet (wallet & explorer)
 
-- `AddressLocal8Resurgence` էջեր, երբ համատեքստը հաղորդում է թարմ Local-8
-  ավելացում. Դադարեցրեք խիստ ռեժիմի տեղադրումը, տեղադրեք վիրավորող SDK-ի մակերեսը
-  մինչև ազդանշանը վերադառնա զրոյի, ապա վերականգնեք լռելյայն (`true`):
-- `AddressLocal12Collision`-ն անջատվում է, երբ երկու Local-12 պիտակներ հաշվում են նույնը
-  մարսել. Դադարեցրեք մանիֆեստի առաջխաղացումները, գործարկեք Local → Global գործիքակազմը՝ աուդիտի համար
-  digest քարտեզագրում և համակարգում Nexus կառավարման հետ՝ նախքան վերաթողարկելը
-  գրանցամատյանում մուտքագրում կամ վերագործարկում հոսանքով ներքևում:
-- `AddressInvalidRatioSlo` զգուշացնում է, երբ ամբողջ նավատորմի անվավեր հարաբերակցությունը (բացառությամբ
-  Տեղական-8/խիստ ռեժիմի մերժումներ) գերազանցում է 0,1% SLO-ը տասը րոպեի ընթացքում: Օգտագործեք
-  `torii_address_invalid_total`՝ մատնանշելու պատասխանատու համատեքստը/պատճառը և
-  կոորդինացնել սեփական SDK թիմի հետ նախքան խիստ ռեժիմը նորից միացնելը:
+Include the following bullet in wallet/explorer release notes when shipping the cutover:
 
-### Թողարկման նշումի հատված (դրամապանակ և հետազոտող)
-
-Առաքելիս ներառեք հետևյալ պարբերակը դրամապանակի/հետախույզների թողարկման նշումներում
-կտրվածքը:
-
-> **Հասցեներ.** Ավելացվել է `iroha tools address normalize`
-> օգնական և միացրիր այն CI-ին (`ci/check_address_normalize.sh`), այնպես որ դրամապանակ/հետախույզ
-> մինչ Local-8/Local-12-ն արգելափակվել է mainnet-ում: Թարմացրեք ցանկացած մաքսային արտահանում
-> գործարկեք հրամանը և կցեք նորմալացված ցուցակը թողարկման ապացույցների փաթեթին:
+> **Addresses:** Copy/share flows now use canonical I105 account ids
+> only. On-chain aliases remain available as separate routing labels in
+> `name@dataspace` / `name@domain.dataspace` form and resolve to the same
+> canonical i105 account id.

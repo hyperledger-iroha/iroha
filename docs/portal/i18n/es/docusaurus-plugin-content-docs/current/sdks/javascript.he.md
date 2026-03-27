@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -163,11 +163,11 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 5,
   assetId,
 });
@@ -271,7 +271,7 @@ La telemetría de Explorer proporciona ayudas escritas para `/v1/explorer/metric
 puntos finales `/v1/explorer/accounts/{account_id}/qr` para que los paneles puedan reproducir el
 Las mismas instantáneas que alimentan el portal. `getExplorerMetrics()` normaliza el
 carga útil y devuelve `null` cuando la ruta está deshabilitada. Combínalo con
-`getExplorerAccountQr()` siempre que necesite literales I105 (preferido)/sora (segundo mejor) más en línea
+`getExplorerAccountQr()` siempre que necesite literales i105 (preferido)/sora (segundo mejor) más en línea
 SVG para botones de compartir.
 
 ```ts
@@ -286,7 +286,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -294,8 +294,8 @@ console.log(
 );
 ```
 
-Pasar `I105` refleja el comprimido predeterminado de Explorer
-selectores; omita la anulación para la salida I105 preferida o solicite `i105_qr`
+Pasar `i105` refleja el comprimido predeterminado de Explorer
+selectores; omita la anulación para la salida i105 preferida o solicite `i105_qr`
 cuando necesite la variante segura para QR. El literal comprimido es el segundo mejor.
 Opción exclusiva de Sora para UX. El ayudante siempre devuelve el identificador canónico,
 el literal seleccionado y los metadatos (prefijo de red, versión/módulos QR, error
@@ -506,7 +506,7 @@ canonicalizarlos antes de enviar solicitudes:- `getUaidPortfolio(uaid, { assetId
   agrupar tenencias de activos por ID de cuenta canónica; pase `assetId` para filtrar el
   cartera hasta una sola instancia de activo.
 - `getUaidBindings(uaid)` enumera cada espacio de datos ↔ cuenta
-  enlace (`I105` devuelve los literales `i105`).
+  enlace (`i105` devuelve los literales `i105`).
 - `getUaidManifests(uaid, { dataspaceId })` devuelve cada manifiesto de capacidad,
   estado del ciclo de vida y cuentas vinculadas para auditoría.
 
@@ -551,7 +551,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -561,7 +561,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

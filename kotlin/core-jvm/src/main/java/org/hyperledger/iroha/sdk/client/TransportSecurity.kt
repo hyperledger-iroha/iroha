@@ -6,6 +6,24 @@ import java.util.Locale
 
 /** Shared transport-safety checks for SDK requests that carry credentials or raw private keys. */
 internal object TransportSecurity {
+    private val credentialHeaders = setOf(
+        "authorization",
+        "x-api-token",
+        "x-iroha-account",
+        "x-iroha-signature",
+        "x-iroha-timestamp-ms",
+        "x-iroha-nonce",
+    )
+
+    private val sensitiveBodyFields = listOf(
+        "\"private_key\"",
+        "\"seed_hex\"",
+        "\"seed_b64\"",
+        "\"seed_base64\"",
+        "\"key_seed_hex\"",
+        "\"key_seed_b64\"",
+    )
+
     fun requireHttpRequestAllowed(
         context: String,
         baseUri: URI,
@@ -48,19 +66,15 @@ internal object TransportSecurity {
     }
 
     fun headersContainCredentials(headers: Map<String, String>?): Boolean =
-        headers?.keys?.any {
-            when (it.lowercase(Locale.ROOT)) {
-                "authorization", "x-api-token" -> true
-                else -> false
-            }
-        } == true
+        headers?.keys?.any { credentialHeaders.contains(it.lowercase(Locale.ROOT)) } == true
 
     private fun isSensitive(headers: Map<String, String>?, body: ByteArray?): Boolean =
-        headersContainCredentials(headers) || bodyContainsPrivateKey(body)
+        headersContainCredentials(headers) || bodyContainsSensitiveMaterial(body)
 
-    private fun bodyContainsPrivateKey(body: ByteArray?): Boolean {
+    private fun bodyContainsSensitiveMaterial(body: ByteArray?): Boolean {
         if (body == null || body.isEmpty()) return false
-        return String(body, StandardCharsets.UTF_8).lowercase(Locale.ROOT).contains("\"private_key\"")
+        val rendered = String(body, StandardCharsets.UTF_8).lowercase(Locale.ROOT)
+        return sensitiveBodyFields.any(rendered::contains)
     }
 
     private fun expectedWebSocketScheme(baseUri: URI): String =

@@ -77,9 +77,9 @@ Em caso de sucesso, o script escreveu um manifesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ Em caso de sucesso, o script escreveu um manifesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -249,7 +249,7 @@ os auditores podem se concentrar em um único CSV de execução.
   referências a arquivos são resoluções relativas à localização do CSV.
   Os metadados não objetos produzem um erro de validação.
 - **Controladores:** as células vêem o respeito `--default-controllers`. Fournissez
-  des listes explícitas (por exemplo `i105...;i105...`) quando você delega a des
+  des listes explícitas (por exemplo `<i105-account-id>;<i105-account-id>`) quando você delega a des
   atores não proprietários.
 
 Les echecs são sinalizados com números de linha contextuais (por exemplo

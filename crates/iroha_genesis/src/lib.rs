@@ -516,8 +516,8 @@ pub mod genesis_instructions_json {
         domain::NewDomain,
         isi::{
             ActivatePublicLaneValidator, Grant, GrantBox, InstructionBox, Mint, MintBox, Register,
-            RegisterPublicLaneValidator, SetParameter, Transfer, TransferBox,
-            register::RegisterBox,
+            RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter, Transfer,
+            TransferBox, register::RegisterBox,
         },
         metadata::Metadata,
         nexus::LaneId,
@@ -624,6 +624,9 @@ pub mod genesis_instructions_json {
                             "Transfer" => try_decode_transfer(inner.clone())?,
                             "SetParameter" => try_decode_set_parameter(inner.clone())?,
                             "Grant" => try_decode_grant(inner.clone())?,
+                            "SetAssetDefinitionAlias" => {
+                                try_decode_set_asset_definition_alias(inner.clone())?
+                            }
                             "RegisterPublicLaneValidator" => {
                                 try_decode_register_public_lane_validator(inner.clone())?
                             }
@@ -821,6 +824,72 @@ pub mod genesis_instructions_json {
             norito::json::value::from_value(Value::Object(permission_fields))?;
         let instruction = InstructionBox::from(Grant::account_permission(permission, destination));
         Ok(Some(instruction))
+    }
+
+    fn try_decode_set_asset_definition_alias(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = match inner {
+            Value::Object(map) => map,
+            _ => return Ok(None),
+        };
+        let asset_definition_id = match fields.remove("asset_definition_id") {
+            Some(Value::String(value)) => AssetDefinitionId::from_str(&value).map_err(|err| {
+                json::Error::Message(format!(
+                    "invalid SetAssetDefinitionAlias.asset_definition_id `{value}`: {err}"
+                ))
+            })?,
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected string for SetAssetDefinitionAlias.asset_definition_id, found {other:?}"
+                )));
+            }
+            None => {
+                return Err(json::Error::Message(
+                    "missing SetAssetDefinitionAlias.asset_definition_id".to_string(),
+                ));
+            }
+        };
+
+        let alias = match fields.remove("alias") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(value)) => Some(value.parse().map_err(|err| {
+                json::Error::Message(format!(
+                    "invalid SetAssetDefinitionAlias.alias `{value}`: {err}"
+                ))
+            })?),
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected string or null for SetAssetDefinitionAlias.alias, found {other:?}"
+                )));
+            }
+        };
+
+        let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
+            None | Some(Value::Null) => None,
+            Some(Value::Number(Number::U64(value))) => Some(value),
+            Some(Value::Number(Number::I64(value))) if value >= 0 => Some(value as u64),
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected unsigned integer or null for SetAssetDefinitionAlias.lease_expiry_ms, found {other:?}"
+                )));
+            }
+        };
+
+        if !fields.is_empty() {
+            return Err(json::Error::Message(format!(
+                "unexpected SetAssetDefinitionAlias fields: {}",
+                fields.keys().cloned().collect::<Vec<_>>().join(",")
+            )));
+        }
+
+        let instruction = match alias {
+            Some(alias) => {
+                SetAssetDefinitionAlias::bind(asset_definition_id, alias, lease_expiry_ms)
+            }
+            None => SetAssetDefinitionAlias::clear(asset_definition_id),
+        };
+        Ok(Some(InstructionBox::from(instruction)))
     }
 
     fn try_decode_register_public_lane_validator(
@@ -1058,6 +1127,34 @@ pub mod genesis_instructions_json {
                 });
         }
 
+        if let Some(set_asset_definition_alias) = instruction
+            .as_any()
+            .downcast_ref::<SetAssetDefinitionAlias>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "asset_definition_id".to_string(),
+                Value::String(set_asset_definition_alias.asset_definition_id().to_string()),
+            );
+            fields.insert(
+                "alias".to_string(),
+                match set_asset_definition_alias.alias() {
+                    Some(alias) => Value::String(alias.to_string()),
+                    None => Value::Null,
+                },
+            );
+            fields.insert(
+                "lease_expiry_ms".to_string(),
+                match set_asset_definition_alias.lease_expiry_ms() {
+                    Some(value) => Value::Number(Number::U64(*value)),
+                    None => Value::Null,
+                },
+            );
+            let mut outer = Map::new();
+            outer.insert("SetAssetDefinitionAlias".to_string(), Value::Object(fields));
+            return Some(Value::Object(outer));
+        }
+
         if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
             return match grant {
                 GrantBox::Permission(grant_perm) => {
@@ -1166,6 +1263,7 @@ pub mod genesis_instructions_json {
 
         #[allow(unused_imports)]
         use iroha_data_model::{
+            asset::AssetDefinitionAlias,
             domain::Domain,
             isi::{
                 GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox,
@@ -1229,6 +1327,7 @@ pub mod genesis_instructions_json {
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(domain_id.clone(), "coin".parse().unwrap());
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
+            let asset_alias: AssetDefinitionAlias = "coin#wonderland".parse().unwrap();
 
             let parameter = Parameter::Transaction(TransactionParameter::MaxInstructions(
                 NonZeroU64::new(64).unwrap(),
@@ -1245,6 +1344,8 @@ pub mod genesis_instructions_json {
                 .into(),
                 Grant::account_permission(CanSetParameters, account_id.clone()).into(),
                 SetParameter::new(parameter.clone()).into(),
+                SetAssetDefinitionAlias::bind(asset_def_id.clone(), asset_alias.clone(), None)
+                    .into(),
             ];
 
             let mut json_text = String::new();
@@ -1252,7 +1353,7 @@ pub mod genesis_instructions_json {
             let parsed =
                 norito::json::from_str::<Value>(&json_text).expect("parse serialized JSON");
             let instructions = from_value(&parsed).expect("deserialize instructions");
-            assert_eq!(instructions.len(), 5);
+            assert_eq!(instructions.len(), 6);
 
             match instructions[0].as_any().downcast_ref::<RegisterBox>() {
                 Some(RegisterBox::Domain(reg)) => assert_eq!(reg.object(), &domain),
@@ -1282,6 +1383,17 @@ pub mod genesis_instructions_json {
             match instructions[4].as_any().downcast_ref::<SetParameter>() {
                 Some(set_param) => assert_eq!(set_param.inner(), &parameter),
                 other => panic!("unexpected set-parameter instruction: {other:?}"),
+            }
+            match instructions[5]
+                .as_any()
+                .downcast_ref::<SetAssetDefinitionAlias>()
+            {
+                Some(set_alias) => {
+                    assert_eq!(set_alias.asset_definition_id(), &asset_def_id);
+                    assert_eq!(set_alias.alias().as_ref(), Some(&asset_alias));
+                    assert_eq!(set_alias.lease_expiry_ms(), &None);
+                }
+                other => panic!("unexpected set-asset-definition-alias instruction: {other:?}"),
             }
         }
 
@@ -4895,7 +5007,7 @@ mod tests {
         let json = norito::json::to_json_pretty(&genesis)?;
         assert!(
             json.contains(&account_id.to_string()),
-            "expected I105 account id in genesis JSON"
+            "expected i105 account id in genesis JSON"
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, json)?;

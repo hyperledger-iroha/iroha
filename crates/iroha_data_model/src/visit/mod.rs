@@ -6,6 +6,7 @@ use crate::{
     isi::{
         ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
+        rwa::RwaInstructionBox,
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdmitSoracloudPrivateCompileProfile,
             AdvanceSoracloudRollout, AdvertiseSoracloudModelHost,
@@ -123,6 +124,10 @@ pub trait Visit {
 
     crate::query_visitors!(visit_all);
     crate::instruction_visitors!(visit_all);
+    /// Visit a grouped RWA instruction.
+    fn visit_rwa_instruction_box(&mut self, operation: &RwaInstructionBox) {
+        visit_rwa_instruction_box(self, operation);
+    }
 }
 
 /// Walk a transaction and delegate to the provided visitor.

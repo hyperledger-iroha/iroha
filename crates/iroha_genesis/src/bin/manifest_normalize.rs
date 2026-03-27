@@ -41,7 +41,7 @@ fn main() -> Result<()> {
     );
     for (batch_idx, tx) in block.0.external_transactions().enumerate() {
         if let Executable::Instructions(batch) = tx.instructions() {
-            print_batch("signed_block", batch_idx, &batch);
+            print_batch("signed_block", batch_idx, batch);
         }
     }
 

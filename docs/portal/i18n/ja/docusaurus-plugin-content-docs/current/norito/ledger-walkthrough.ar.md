@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 `$ADMIN_ACCOUNT` と `$RECEIVER_ACCOUNT` を確認してください。バンドルのバンドルのバンドル:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 回答:

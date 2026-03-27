@@ -9,6 +9,7 @@ use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
+    smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{NewAccount, prelude::*};
@@ -128,9 +129,8 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        let mut definition =
+        let definition =
             AssetDefinition::numeric(asset_def_id.clone()).with_name("rose".to_owned());
-        definition.alias = Some(asset_alias.parse().expect("asset alias literal"));
         let init_instrs: [InstructionBox; 5] = [
             Register::domain(Domain::new(domain_id.clone())).into(),
             Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
@@ -154,6 +154,13 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
                 .execute_instruction(&mut stx, &owner, instr)
                 .unwrap();
         }
+        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
+            asset_def_id.clone(),
+            asset_alias.parse().expect("asset alias literal"),
+            None,
+        )
+        .execute(&owner, &mut stx)
+        .expect("bind asset alias");
         // Push 5 commitments (cap is 3).
         for i in 0..5u8 {
             let mut note = [0u8; 32];

@@ -293,7 +293,8 @@ impl ValueExt for Value {
 mod tests {
     use super::*;
 
-    const ALICE_ID_STR: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const ALICE_ID_STR: &str =
+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
     #[test]
     fn predicate_roundtrip_canonicalises_order() {
         let bob_id = crate::account::AccountId::new(

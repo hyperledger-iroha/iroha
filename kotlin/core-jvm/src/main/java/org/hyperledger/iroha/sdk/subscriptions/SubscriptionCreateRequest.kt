@@ -5,7 +5,6 @@ import org.hyperledger.iroha.sdk.client.JsonEncoder
 /** Request payload for `POST /v1/subscriptions`. */
 class SubscriptionCreateRequest(
     authority: String,
-    privateKey: String,
     subscriptionId: String,
     planId: String,
     billingTriggerId: String? = null,
@@ -14,7 +13,6 @@ class SubscriptionCreateRequest(
     val grantUsageToProvider: Boolean? = null,
 ) {
     val authority: String = requireNonBlank(authority, "authority")
-    val privateKey: String = requireNonBlank(privateKey, "private_key")
     val subscriptionId: String = requireNonBlank(subscriptionId, "subscription_id")
     val planId: String = requireNonBlank(planId, "plan_id")
     val billingTriggerId: String? = normalizeOptional(billingTriggerId)
@@ -25,7 +23,6 @@ class SubscriptionCreateRequest(
 
     fun toJsonMap(): Map<String, Any> = buildMap {
         put("authority", authority)
-        put("private_key", privateKey)
         put("subscription_id", subscriptionId)
         put("plan_id", planId)
         this@SubscriptionCreateRequest.billingTriggerId?.let { put("billing_trigger_id", it) }

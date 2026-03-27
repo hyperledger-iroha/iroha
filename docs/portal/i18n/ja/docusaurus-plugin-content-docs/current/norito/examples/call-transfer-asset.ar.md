@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## جولة دفتر الأستاذ
 
-- موّل سلطة العقد (مثلا `i105...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذناああ。
-- `call_transfer_asset` 5 وحساب العقد إلى `i105...` بما يعكس最高のパフォーマンスを見せてください。
-- 評価 `FindAccountAssets` أو `iroha_cli ledger assets list --account i105...` وافحص الأحداث لتأكيد أن حارس بياناتありがとうございます。
+- موّل سلطة العقد (مثلا `<i105-account-id>`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذناああ。
+- `call_transfer_asset` 5 وحساب العقد إلى `<i105-account-id>` بما يعكس最高のパフォーマンスを見せてください。
+- 評価 `FindAccountAssets` أو `iroha_cli ledger assets list --account <i105-account-id>` وافحص الأحداث لتأكيد أن حارس بياناتありがとうございます。
 
 ## SDK の開発
 
@@ -36,8 +36,8 @@ translation_last_reviewed: 2026-02-07
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

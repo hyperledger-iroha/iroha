@@ -12,21 +12,21 @@
       "balance_proof": {
         "claimed_delta": "45.00",
         "initial_amount": "250.00",
-        "initial_asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        "initial_asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr",
         "initial_commitment_hex": "C6BD0E817F1D9ABDF72B1844A2A928D281F0100E3AE107BD86E7247308164140",
         "resulting_commitment_hex": "72954CFFEC45DA48B52B4356DDB147AF813BD1DAEDEEA74E430462E0607E4E2F",
         "zk_proof_hex": null
       },
       "bundle_id_hex": "370F4B1FE64C999891A30D6A2173FD9252B57CB2AEC62E980697E57736979C7F",
-      "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "counter_checkpoint": 40,
-      "deposit_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "deposit_account": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "label": "ios-demo-bundle",
       "receipts": [
         {
           "amount": "25.00",
-          "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-          "from": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr",
+          "from": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
           "invoice_id": "INV-1001",
           "issued_at_ms": 1730314876000,
           "platform_proof": {
@@ -40,13 +40,13 @@
           },
           "sender_certificate_id_hex": "2A86B1A09A0A2B97DF13FF2F86AFA6B3D63A8AB4EA0AC390BB18BE612F607C61",
           "sender_signature_hex": "26C41AA25EF08287293974EB6069830F5FEBD031DB0D2A54D4EB6343C6DA9003B98C9F417B6A4943646241D57A9BC70FC533A2EEA1E676D017530DCAB0F00007",
-          "to": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "to": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
           "tx_id_hex": "FDE7DAC62A81775C0B6185C71D0BE28D05D2EAAAADE4C70DBD89DC3B3D8FFD1E"
         },
         {
           "amount": "20.00",
-          "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-          "from": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr",
+          "from": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
           "invoice_id": "INV-1002",
           "issued_at_ms": 1730314877000,
           "platform_proof": {
@@ -60,11 +60,11 @@
           },
           "sender_certificate_id_hex": "2A86B1A09A0A2B97DF13FF2F86AFA6B3D63A8AB4EA0AC390BB18BE612F607C61",
           "sender_signature_hex": "26C41AA25EF08287293974EB6069830F5FEBD031DB0D2A54D4EB6343C6DA9003B98C9F417B6A4943646241D57A9BC70FC533A2EEA1E676D017530DCAB0F00007",
-          "to": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "to": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
           "tx_id_hex": "8D9C844236791FBB80337F4201F19B3430B0004A00BBD5DF1626B28B912E2065"
         }
       ],
-      "receiver": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "receiver": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "recorded_at_height": 640001,
       "recorded_at_ms": 1730315876000,
       "replay_log_head_hex": "7BDB70159206F27825DEA4727937A934543956F96A2A6E1C75395FCAF16F481F",

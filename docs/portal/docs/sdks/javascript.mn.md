@@ -68,15 +68,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -164,11 +164,11 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 5,
   assetId,
 });
@@ -276,7 +276,7 @@ Explorer телеметр нь `/v1/explorer/metrics` болон
 `/v1/explorer/accounts/{account_id}/qr` төгсгөлийн цэгүүд нь хяналтын самбаруудыг дахин тоглуулах боломжтой
 порталыг идэвхжүүлдэг ижил хормын хувилбарууд. `getExplorerMetrics()`-г хэвийн болгож байна
 ачаалал ба чиглүүлэлт идэвхгүй болсон үед `null` буцаана. Үүнийг хослуул
-`getExplorerAccountQr()` хэрэгтэй үед I105 (давуу)/sora (хоёр дахь шилдэг) литералууд дээр нэмэх нь шугам
+`getExplorerAccountQr()` хэрэгтэй үед i105 (давуу)/sora (хоёр дахь шилдэг) литералууд дээр нэмэх нь шугам
 Хуваалцах товчлууруудад зориулсан SVG.
 
 ```ts
@@ -291,7 +291,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -299,8 +299,8 @@ console.log(
 );
 ```
 
-`I105`-ийг дамжуулснаар Explorer-ийн өгөгдмөл шахагдсан хувилбарыг тусгана
-сонгогчид; илүүд үздэг I105 гаралт эсвэл `i105_qr` хүсэлтийг дарж бичихийг орхих
+`i105`-ийг дамжуулснаар Explorer-ийн өгөгдмөл шахагдсан хувилбарыг тусгана
+сонгогчид; илүүд үздэг i105 гаралт эсвэл `i105_qr` хүсэлтийг дарж бичихийг орхих
 танд QR-аюулгүй хувилбар хэрэгтэй үед. Шахсан үгийн утга нь хоёрдугаарт ордог
 UX-д зориулсан цорын ганц Sora сонголт. Туслах нь үргэлж каноник танигчийг буцаадаг.
 сонгосон үгийн утга, мета өгөгдөл (сүлжээний угтвар, QR хувилбар/модуль, алдаа
@@ -519,7 +519,7 @@ for await (const event of torii.streamEvents({
   хөрөнгийн эзэмшлийг каноник дансны дугаараар бүлэглэх; шүүлтүүрийг `assetId` дамжуулна
   багцын нэг хөрөнгийн жишээ хүртэл.
 - `getUaidBindings(uaid)` нь өгөгдлийн орон зай ↔ данс бүрийг тоолдог
-  холбох (`I105` `i105` литералуудыг буцаана).
+  холбох (`i105` `i105` литералуудыг буцаана).
 - `getUaidManifests(uaid, { dataspaceId })` чадварын манифест бүрийг буцаана.
   амьдралын мөчлөгийн төлөв, аудитын холбоотой дансууд.Операторын нотолгооны багц, манифест нийтлэх/цуцлах урсгал болон SDK шилжүүлгийн хувьд
 зааварчилгаа, Бүх нийтийн дансны гарын авлагыг дагаарай (`docs/source/universal_accounts_guide.md`)
@@ -562,7 +562,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -572,7 +572,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

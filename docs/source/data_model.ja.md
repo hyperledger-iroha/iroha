@@ -32,9 +32,9 @@ translation_last_reviewed: 2026-03-12
 - `IdBox`: サポートされている ID の合計タイプのエンベロープ (`DomainId`、`AccountId`、`AssetDefinitionId`、`AssetId`、`NftId`、`PeerId`、 `TriggerId`、`RoleId`、`Permission`、`CustomParameterId`)。単一タイプとしての汎用フローおよび Norito エンコードに役立ちます。
 - `ChainId`: トランザクションのリプレイ保護に使用される不透明なチェーン識別子。文字列形式の ID (`Display`/`FromStr` とラウンドトリップ可能):
 - `DomainId`: `name` (例: `wonderland`)。
-- `AccountId`: `AccountAddress` を介して I105 のみとしてエンコードされた正規のドメインレス アカウント識別子。パーサー入力は正規の I105 である必要があります。ドメイン サフィックス (`@domain`)、正規 I105 リテラル、エイリアス リテラル、正規 16 進パーサー入力、レガシー `norito:` ペイロード、および `uaid:`/`opaque:` アカウント パーサー フォームは拒否されます。
+- `AccountId`: `AccountAddress` を介して i105 のみとしてエンコードされた正規のドメインレス アカウント識別子。パーサー入力は正規の i105 である必要があります。ドメイン サフィックス (`@domain`)、正規 i105 リテラル、エイリアス リテラル、正規 16 進パーサー入力、レガシー `norito:` ペイロード、および `uaid:`/`opaque:` アカウント パーサー フォームは拒否されます。
 - `AssetDefinitionId`: 正規の `unprefixed Base58 address with versioning and checksum` (UUID-v4 バイト)。
-- `AssetId`: 正規エンコードされたリテラル `<asset-definition-id>#<account-id>` (従来のテキスト形式は最初のリリースではサポートされていません)。
+- `AssetId`: 正規エンコードされたリテラル `<canonical-base58-asset-definition-id>` (従来のテキスト形式は最初のリリースではサポートされていません)。
 - `NftId`: `nft$domain` (例: `rose$garden`)。
 - `PeerId`: `public_key` (ピアの同等性は公開キーによって決まります)。
 
@@ -44,7 +44,7 @@ translation_last_reviewed: 2026-03-12
 - `DomainId { name: Name }` – 一意の名前。
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`。
 - ビルダー: `NewDomain` と `with_logo`、`with_metadata`、その後 `Registrable::build(authority)` は `owned_by` を設定します。### アカウント
-- `AccountId` は、コントローラによってキー設定され、正規の I105 としてエンコードされた正規のドメインレス アカウント ID です。
+- `AccountId` は、コントローラによってキー設定され、正規の i105 としてエンコードされた正規のドメインレス アカウント ID です。
 - `ScopedAccountId { account: AccountId, domain: DomainId }` は、スコープ付きビューが必要な場合にのみ明示的なドメイン コンテキストを伝えます。
 - `Account { id, metadata, label?, uaid? }` — `label` は、キー再生成レコードで使用されるオプションの安定したエイリアスです。`uaid` は、オプションの Nexus 全体の [ユニバーサル アカウント ID](./universal_accounts_guide.md) を保持します。
 - ビルダー: `Account::new(id)` 経由の `NewAccount`。登録には明示的な `ScopedAccountId` ドメインが必要であり、デフォルトからは推測されません。
@@ -251,7 +251,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -260,7 +260,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```移行メモ:
 - 古い `name#domain` 資産定義 ID は、v1 では受け入れられません。
-- ミント/バーン/転送のアセット ID は正規の `<asset-definition-id>#<account-id>` のままです。以下を使用してそれらを構築します。
+- ミント/バーン/転送のアセット ID は正規の `<canonical-base58-asset-definition-id>` のままです。以下を使用してそれらを構築します。
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - または `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`。
 

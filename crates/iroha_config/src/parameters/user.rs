@@ -131,6 +131,28 @@ fn parse_account_id_literal(raw: &str, context: &str) -> AccountId {
     )
 }
 
+fn validate_asset_definition_selector_literal(value: &str) -> core::result::Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("must not be empty".to_owned());
+    }
+    if AssetDefinitionId::parse_address_literal(trimmed).is_ok() {
+        return Ok(trimmed.to_owned());
+    }
+    AssetDefinitionAlias::from_str(trimmed)
+        .map(|_| trimmed.to_owned())
+        .map_err(|err| {
+            format!(
+                "{err}; expected canonical Base58 asset definition id or on-chain asset alias literal"
+            )
+        })
+}
+
+fn parse_asset_definition_selector_literal(field_path: &str, value: &str) -> String {
+    validate_asset_definition_selector_literal(value)
+        .unwrap_or_else(|err| panic!("invalid {field_path} `{value}`: {err}"))
+}
+
 static ACCOUNT_ADDRESS_PARSE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 enum KyberKeyConfig {
@@ -148,7 +170,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     ChainId, Level,
     account::{AccountId, curve::CurveId},
-    asset::prelude::AssetDefinitionId,
+    asset::{AssetDefinitionAlias, prelude::AssetDefinitionId},
     block::BlockHeader,
     compute::{
         ComputeAuthPolicy, ComputeFeeSplit, ComputePriceAmplifiers, ComputePriceDeltaBounds,
@@ -11168,6 +11190,17 @@ impl NexusStaking {
             )));
             return None;
         }
+        let stake_asset_id = match validate_asset_definition_selector_literal(&self.stake_asset_id)
+        {
+            Ok(value) => value,
+            Err(err) => {
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "invalid nexus.staking.stake_asset_id `{}`: {err}",
+                    self.stake_asset_id
+                )));
+                return None;
+            }
+        };
         Some(actual::NexusStaking {
             public_validator_mode: self.public_validator_mode.into(),
             restricted_validator_mode: self.restricted_validator_mode.into(),
@@ -11177,7 +11210,7 @@ impl NexusStaking {
             withdraw_grace: self.withdraw_grace_ms.get(),
             max_slash_bps: self.max_slash_bps,
             reward_dust_threshold: self.reward_dust_threshold,
-            stake_asset_id: self.stake_asset_id,
+            stake_asset_id,
             stake_escrow_account_id: self.stake_escrow_account_id,
             slash_sink_account_id: self.slash_sink_account_id,
         })
@@ -11408,13 +11441,16 @@ impl Default for NexusFees {
 
 impl NexusFees {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusFees> {
-        if self.fee_asset_id.trim().is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.fees.fee_asset_id must not be empty".to_string()),
-            );
-            return None;
-        }
+        let fee_asset_id = match validate_asset_definition_selector_literal(&self.fee_asset_id) {
+            Ok(value) => value,
+            Err(err) => {
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "invalid nexus.fees.fee_asset_id `{}`: {err}",
+                    self.fee_asset_id
+                )));
+                return None;
+            }
+        };
         if self.fee_sink_account_id.trim().is_empty() {
             emitter.emit(
                 Report::new(ParseError::InvalidNexusConfig)
@@ -11424,7 +11460,7 @@ impl NexusFees {
         }
 
         Some(actual::NexusFees {
-            fee_asset_id: self.fee_asset_id,
+            fee_asset_id,
             fee_sink_account_id: self.fee_sink_account_id,
             base_fee: self.base_fee,
             per_byte_fee: self.per_byte_fee,
@@ -11433,6 +11469,39 @@ impl NexusFees {
             sponsorship_enabled: self.sponsorship_enabled,
             sponsor_max_fee: self.sponsor_max_fee,
         })
+    }
+}
+
+#[cfg(test)]
+mod nexus_asset_selector_tests {
+    use super::*;
+
+    #[test]
+    fn nexus_staking_parse_accepts_asset_alias_selector() {
+        let cfg = NexusStaking {
+            stake_asset_id: "xor#universal".to_owned(),
+            ..NexusStaking::default()
+        };
+
+        let mut emitter = Emitter::new();
+        let parsed = cfg
+            .parse(&mut emitter)
+            .expect("staking config should parse");
+
+        assert_eq!(parsed.stake_asset_id, "xor#universal");
+        assert!(emitter.into_result().is_ok());
+    }
+
+    #[test]
+    fn nexus_fees_parse_rejects_invalid_asset_selector() {
+        let cfg = NexusFees {
+            fee_asset_id: "invalid selector".to_owned(),
+            ..NexusFees::default()
+        };
+
+        let mut emitter = Emitter::new();
+        assert!(cfg.parse(&mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
     }
 }
 
@@ -14721,9 +14790,10 @@ pub struct ToriiTxHistory {
 impl ToriiTxHistory {
     fn parse(self) -> actual::ToriiTxHistory {
         let allowed_asset_definition_id = self.allowed_asset_definition_id.map(|value| {
-            AssetDefinitionId::parse_address_literal(&value).unwrap_or_else(|err| {
-                panic!("invalid torii.tx_history.allowed_asset_definition_id `{value}`: {err}")
-            })
+            parse_asset_definition_selector_literal(
+                "torii.tx_history.allowed_asset_definition_id",
+                &value,
+            )
         });
         actual::ToriiTxHistory {
             mandatory_aliases_path: self.mandatory_aliases_path,
@@ -14788,6 +14858,40 @@ impl ToriiTxHistoryJwt {
                 "invalid torii.tx_history.jwt.algorithm `{other}`; expected HS256/384/512, RS256/384/512, PS256/384/512, ES256/384, or EdDSA"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod torii_tx_history_tests {
+    use super::*;
+
+    #[test]
+    fn torii_tx_history_parse_accepts_asset_alias_selector() {
+        let parsed = ToriiTxHistory {
+            mandatory_aliases_path: None,
+            allowed_asset_definition_id: Some("xor#universal".to_owned()),
+            jwt: None,
+        }
+        .parse();
+
+        assert_eq!(
+            parsed.allowed_asset_definition_id.as_deref(),
+            Some("xor#universal")
+        );
+    }
+
+    #[test]
+    fn torii_tx_history_parse_rejects_invalid_asset_selector() {
+        let panic = std::panic::catch_unwind(|| {
+            ToriiTxHistory {
+                mandatory_aliases_path: None,
+                allowed_asset_definition_id: Some("not a selector".to_owned()),
+                jwt: None,
+            }
+            .parse();
+        });
+
+        assert!(panic.is_err(), "expected invalid selector to panic");
     }
 }
 
@@ -15239,28 +15343,9 @@ impl ToriiFaucet {
             |err| panic!("invalid torii.faucet.authority `{}`: {err}", self.authority),
             iroha_data_model::account::ParsedAccountId::into_account_id,
         );
-        let asset_definition_id = self.asset_definition_id.split_once('#').map_or_else(
-            || {
-                AssetDefinitionId::parse_address_literal(&self.asset_definition_id).unwrap_or_else(
-                    |err| {
-                        panic!(
-                            "invalid torii.faucet.asset_definition_id `{}`: {err}",
-                            self.asset_definition_id
-                        )
-                    },
-                )
-            },
-            |(name_literal, domain_literal)| {
-                let name = name_literal.trim().parse().unwrap_or_else(|err| {
-                    panic!("invalid torii.faucet.asset_definition_id name `{name_literal}`: {err}")
-                });
-                let domain = domain_literal.trim().parse().unwrap_or_else(|err| {
-                    panic!(
-                        "invalid torii.faucet.asset_definition_id domain `{domain_literal}`: {err}"
-                    )
-                });
-                AssetDefinitionId::new(domain, name)
-            },
+        let asset_definition_id = parse_asset_definition_selector_literal(
+            "torii.faucet.asset_definition_id",
+            &self.asset_definition_id,
         );
         let amount = Numeric::from_str(self.amount.trim())
             .unwrap_or_else(|err| panic!("invalid torii.faucet.amount `{}`: {err}", self.amount));
@@ -15308,13 +15393,18 @@ mod torii_faucet_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("public key");
+        let asset_definition_id = AssetDefinitionId::new(
+            "sora".parse().expect("domain"),
+            "xor".parse().expect("name"),
+        )
+        .to_string();
         ToriiFaucet {
             enabled: true,
             authority: AccountId::new(public_key).to_string(),
             private_key: "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .expect("private key"),
-            asset_definition_id: "xor#sora".to_owned(),
+            asset_definition_id,
             amount: "25000".to_owned(),
             pow_difficulty_bits: 18,
             pow_scrypt_log_n: 13,
@@ -15334,10 +15424,7 @@ mod torii_faucet_tests {
         assert_eq!(parsed.authority.to_string(), sample_faucet().authority);
         assert_eq!(
             parsed.asset_definition_id,
-            AssetDefinitionId::new(
-                "sora".parse().expect("domain"),
-                "xor".parse().expect("name")
-            )
+            sample_faucet().asset_definition_id
         );
         assert_eq!(parsed.amount.to_string(), "25000");
         assert_eq!(parsed.pow_difficulty_bits, 18);
@@ -15367,6 +15454,22 @@ mod torii_faucet_tests {
     }
 
     #[test]
+    fn torii_faucet_parse_accepts_asset_alias_selector() {
+        let mut faucet = sample_faucet();
+        faucet.asset_definition_id = "xor#universal".to_owned();
+        let parsed = faucet.parse().expect("alias selector should parse");
+        assert_eq!(parsed.asset_definition_id, "xor#universal");
+    }
+
+    #[test]
+    fn torii_faucet_parse_rejects_invalid_asset_selector() {
+        let mut faucet = sample_faucet();
+        faucet.asset_definition_id = "not a selector".to_owned();
+        let panic = std::panic::catch_unwind(|| faucet.parse());
+        assert!(panic.is_err(), "expected invalid asset selector to panic");
+    }
+
+    #[test]
     fn torii_faucet_parse_rejects_non_positive_pow_anchor_age() {
         let mut faucet = sample_faucet();
         faucet.pow_max_anchor_age_blocks = 0;
@@ -15389,7 +15492,7 @@ pub struct ToriiOfflineIssuer {
     /// Master enable switch (defaults to enabled).
     #[config(default = "defaults::torii::offline_issuer::ENABLED")]
     pub enabled: bool,
-    /// Optional on-chain operator account used for reserve and revocation transactions.
+    /// Optional on-chain operator account used for offline escrow and revocation transactions.
     pub operator_authority: Option<String>,
     /// Private key used to sign offline wallet certificates.
     pub operator_private_key: ExposedPrivateKey,
@@ -15399,9 +15502,9 @@ pub struct ToriiOfflineIssuer {
     /// Optional allow-list of controllers eligible for issuance.
     #[config(default = "defaults::torii::offline_issuer::allowed_controllers()")]
     pub allowed_controllers: Vec<String>,
-    /// Device-bound offline reserve policy.
+    /// Device-bound offline lineage policy.
     #[config(default)]
-    pub reserve_policy: ToriiOfflineReservePolicy,
+    pub lineage_policy: ToriiOfflineLineagePolicy,
 }
 
 impl ToriiOfflineIssuer {
@@ -15434,15 +15537,15 @@ impl ToriiOfflineIssuer {
             operator_private_key: self.operator_private_key,
             legacy_operator_private_keys: self.legacy_operator_private_keys,
             allowed_controllers,
-            reserve_policy: self.reserve_policy.parse(),
+            lineage_policy: self.lineage_policy.parse(),
         })
     }
 }
 
-/// Device-bound offline reserve policy values.
+/// Device-bound offline lineage policy values.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct ToriiOfflineReservePolicy {
-    /// Maximum total spendable offline balance per reserve.
+pub struct ToriiOfflineLineagePolicy {
+    /// Maximum total spendable offline balance per bearer lineage.
     #[config(default = "defaults::torii::offline_issuer::RESERVE_MAX_BALANCE.to_owned()")]
     pub max_balance: String,
     /// Maximum single offline transfer value.
@@ -15459,7 +15562,7 @@ pub struct ToriiOfflineReservePolicy {
     pub revocation_ttl_ms: u64,
 }
 
-impl Default for ToriiOfflineReservePolicy {
+impl Default for ToriiOfflineLineagePolicy {
     fn default() -> Self {
         Self {
             max_balance: defaults::torii::offline_issuer::RESERVE_MAX_BALANCE.to_owned(),
@@ -15472,9 +15575,9 @@ impl Default for ToriiOfflineReservePolicy {
     }
 }
 
-impl ToriiOfflineReservePolicy {
-    fn parse(self) -> actual::ToriiOfflineReservePolicy {
-        actual::ToriiOfflineReservePolicy {
+impl ToriiOfflineLineagePolicy {
+    fn parse(self) -> actual::ToriiOfflineLineagePolicy {
+        actual::ToriiOfflineLineagePolicy {
             max_balance: self.max_balance,
             max_tx_value: self.max_tx_value,
             authorization_ttl: Duration::from_millis(self.authorization_ttl_ms),
@@ -17442,9 +17545,13 @@ pub struct IsoCurrencyAsset {
 
 impl IsoCurrencyAsset {
     fn parse(self) -> actual::IsoCurrencyAsset {
+        let asset_definition = parse_asset_definition_selector_literal(
+            "iso_bridge.currency_assets.asset_definition",
+            &self.asset_definition,
+        );
         actual::IsoCurrencyAsset {
             currency: self.currency,
-            asset_definition: self.asset_definition,
+            asset_definition,
         }
     }
 }
@@ -17639,18 +17746,21 @@ mod offline_cfg_tests {
 
     #[test]
     fn iso_bridge_json_deserializes() {
+        let asset_definition =
+            AssetDefinitionId::new("fin".parse().expect("domain"), "usd".parse().expect("name"))
+                .to_string();
         let json = r#"{
             "enabled": true,
             "dedupe_ttl_secs": 120,
             "signer": {
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
                 "private_key": "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
             },
             "account_aliases": [
-                {"iban": "DE137017", "account_id": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"}
+                {"iban": "DE137017", "account_id": "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"}
             ],
             "currency_assets": [
-                {"currency": "USD", "asset_definition": "usd#fin"}
+                {"currency": "USD", "asset_definition": "__ASSET_DEFINITION__"}
             ],
             "reference_data": {
                 "refresh_interval_secs": 3600,
@@ -17658,21 +17768,59 @@ mod offline_cfg_tests {
                 "bic_lei_path": null,
                 "mic_directory_path": null
             }
-        }"#;
+        }"#
+        .replace("__ASSET_DEFINITION__", &asset_definition);
 
-        let parsed: IsoBridge = norito::json::from_json(json).expect("valid iso bridge JSON");
+        let parsed: IsoBridge = norito::json::from_json(&json).expect("valid iso bridge JSON");
 
         assert!(parsed.enabled);
         assert_eq!(parsed.dedupe_ttl_secs, 120);
         let signer = parsed.signer.expect("signer present");
         assert_eq!(
             signer.account_id,
-            "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
         );
         assert_eq!(parsed.account_aliases[0].iban, "DE137017");
         assert_eq!(parsed.currency_assets[0].currency, "USD");
+        assert_eq!(parsed.currency_assets[0].asset_definition, asset_definition);
         assert_eq!(parsed.reference_data.refresh_interval_secs, 3600);
         assert!(parsed.reference_data.isin_crosswalk_path.is_none());
+    }
+
+    #[test]
+    fn iso_bridge_parse_accepts_asset_alias_selector() {
+        let cfg = IsoBridge {
+            enabled: true,
+            dedupe_ttl_secs: 120,
+            signer: None,
+            account_aliases: Vec::new(),
+            currency_assets: vec![IsoCurrencyAsset {
+                currency: "USD".to_owned(),
+                asset_definition: "usd#fin".to_owned(),
+            }],
+            reference_data: IsoReferenceData::default(),
+        };
+
+        let parsed = cfg.parse();
+        assert_eq!(parsed.currency_assets[0].asset_definition, "usd#fin");
+    }
+
+    #[test]
+    fn iso_bridge_parse_rejects_invalid_asset_selector() {
+        let cfg = IsoBridge {
+            enabled: true,
+            dedupe_ttl_secs: 120,
+            signer: None,
+            account_aliases: Vec::new(),
+            currency_assets: vec![IsoCurrencyAsset {
+                currency: "USD".to_owned(),
+                asset_definition: "invalid selector".to_owned(),
+            }],
+            reference_data: IsoReferenceData::default(),
+        };
+
+        let panic = std::panic::catch_unwind(|| cfg.parse());
+        assert!(panic.is_err(), "expected invalid asset definition to panic");
     }
 
     #[test]

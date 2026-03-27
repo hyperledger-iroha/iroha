@@ -9,7 +9,14 @@ with Iroha nodes.
 This snapshot covers the offline key management façade, Norito encoding backed
 by the shared `norito-java` implementation, the Android Keystore/StrongBox
 backend (with cached attestations + deterministic software fallbacks), and
-scaffolding for network clients.
+scaffolding for network clients. The generated instruction helpers now include
+the first dedicated RWA lot builder slice alongside NFT helpers:
+`RegisterRwaInstruction`, `TransferRwaInstruction`,
+`MergeRwasInstruction`, `RedeemRwaInstruction`,
+`FreezeRwaInstruction`, `UnfreezeRwaInstruction`,
+`HoldRwaInstruction`, `ReleaseRwaInstruction`,
+`ForceTransferRwaInstruction`, `SetRwaControlsInstruction`,
+and RWA-aware metadata setters/removers.
 
 ## Gradle quickstart
 
@@ -49,7 +56,7 @@ published coordinates when consuming from Maven.
 import org.hyperledger.iroha.android.address.AccountAddress;
 
 byte[] key = new byte[32];
-AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 System.out.println(address.canonicalHex());
 System.out.println(address.toI105(753));
 
@@ -129,7 +136,7 @@ plan.put("period", "month");
 SubscriptionPlanCreateResponse planResponse =
     client.createSubscriptionPlan(
             SubscriptionPlanCreateRequest.builder()
-                .authority("aws@commerce")
+                .authority("<provider_account_i105>")
                 .privateKey("<hex>")
                 .planId("aws_compute#commerce")
                 .plan(plan)
@@ -139,7 +146,7 @@ SubscriptionPlanCreateResponse planResponse =
 SubscriptionCreateResponse subscriptionResponse =
     client.createSubscription(
             SubscriptionCreateRequest.builder()
-                .authority("alice@wonderland")
+                .authority("<subscriber_account_i105>")
                 .privateKey("<hex>")
                 .subscriptionId("sub-001$subscriptions")
                 .planId("aws_compute#commerce")
@@ -149,7 +156,7 @@ SubscriptionCreateResponse subscriptionResponse =
 client.recordSubscriptionUsage(
         "sub-001$subscriptions",
         SubscriptionUsageRequest.builder()
-            .authority("aws@commerce")
+            .authority("<provider_account_i105>")
             .privateKey("<hex>")
             .unitKey("compute_ms")
             .delta("3600000")
@@ -720,9 +727,9 @@ HTTP requests:
 import java.net.URI;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 
-URI uri = URI.create("https://torii.example/v1/accounts/alice@wonderland/assets?limit=10");
+URI uri = URI.create("https://torii.example/v1/accounts/<account_i105>/assets?limit=10");
 Map<String, String> headers =
-    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "alice@wonderland", keyPair.getPrivate());
+    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
 ```
 
 Signatures cover the canonical method/path/query/body layout plus freshness
@@ -1016,7 +1023,7 @@ from any `HttpClientTransport`:
 ```java
 OfflineListParams params = OfflineListParams.builder()
     .limit(10L)
-    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"merchant@wonderland\"]}")
+    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"<merchant_account_i105>\"]}")
     .build();
 
 transport.offlineToriiClient().listAllowances(params)
@@ -1027,7 +1034,7 @@ transport.offlineToriiClient().listAllowances(params)
     });
 
 OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"merchant@wonderland\"]}")
+    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"<merchant_account_i105>\"]}")
     .setLimit(25L)
     .build();
 

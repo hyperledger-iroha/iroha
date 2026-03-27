@@ -88,9 +88,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -99,7 +99,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -258,7 +258,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   引用是相对于 CSV 位置解析的。非对象元数据
   产生验证错误。
 - **控制器：** 空白单元符合 `--default-controllers`。提供明确的
-  委派给非所有者时的控制器列表（例如 `i105...;i105...`）
+  委派给非所有者时的控制器列表（例如 `<i105-account-id>;<i105-account-id>`）
   演员。
 
 使用上下文行号报告失败（例如

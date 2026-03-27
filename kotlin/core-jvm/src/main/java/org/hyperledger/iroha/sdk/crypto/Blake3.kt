@@ -6,8 +6,8 @@ package org.hyperledger.iroha.sdk.crypto
 /**
  * Pure Kotlin implementation of the BLAKE3 hash function.
  *
- * Supports inputs up to 1024 bytes (single chunk). This covers all asset definition seed
- * strings used for deriving canonical asset-definition addresses from `"name#domain"` input.
+ * Supports inputs up to 1024 bytes (single chunk). This covers the canonical address payloads
+ * and checksummed literals used by the Kotlin SDK.
  *
  * Reference: [BLAKE3 Specification](https://github.com/BLAKE3-team/BLAKE3-specs)
  */

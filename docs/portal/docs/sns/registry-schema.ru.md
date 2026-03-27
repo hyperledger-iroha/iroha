@@ -241,7 +241,7 @@ Enum RegistryEventKind {
 Gateways подписываются на `RegistryEventV1` и синхронизируют DNS/SoraFS, выполняя:
 
 1. Загрузка последнего `NameRecordV1`, на который указывает последовательность событий.
-2. Перегенерация resolver templates (I105 предпочтительно + I105 как второй выбор, text records).
+2. Перегенерация resolver templates (i105 предпочтительно + i105 как второй выбор, text records).
 3. Pin обновленных данных зоны через SoraDNS workflow из [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Гарантии доставки событий:
@@ -261,7 +261,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "i105...",
+    owner: "<i105-account-id>",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -288,7 +288,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "i105...",
+    steward: "<i105-account-id>",
     status: Active,
     payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
     pricing: [
@@ -301,10 +301,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("<i105-account-id>"), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "i105...",
+    fund_splitter_account: "<i105-account-id>",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

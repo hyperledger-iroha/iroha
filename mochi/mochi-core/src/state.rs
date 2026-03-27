@@ -744,6 +744,8 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
         QueryOutputBatchBox::RepoAgreement(_) => "RepoAgreement",
         QueryOutputBatchBox::NftId(_) => "NftId",
         QueryOutputBatchBox::Nft(_) => "Nft",
+        QueryOutputBatchBox::RwaId(_) => "RwaId",
+        QueryOutputBatchBox::Rwa(_) => "Rwa",
         QueryOutputBatchBox::Role(_) => "Role",
         QueryOutputBatchBox::Parameter(_) => "Parameter",
         QueryOutputBatchBox::Permission(_) => "Permission",
@@ -813,11 +815,11 @@ mod tests {
     #[test]
     fn summary_json_handles_optional_fields() {
         let json_text = build_summary_json(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
             "Signatory alice",
             "Metadata keys: foo",
             Some("test"),
-            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
+            Some("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
             None,
         );
         let parsed: json::Value = json::from_str(&json_text).expect("summary json");
@@ -826,12 +828,12 @@ mod tests {
         };
         assert_eq!(
             map.get("title").and_then(|v| v.as_str()),
-            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            Some("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
         );
         assert_eq!(map.get("domain").and_then(|v| v.as_str()), Some("test"));
         assert_eq!(
             map.get("owner").and_then(|v| v.as_str()),
-            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            Some("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
         );
         assert!(!map.contains_key("asset_definition"));
 
@@ -1011,7 +1013,12 @@ mod tests {
     }
 
     #[test]
-    fn batch_label_handles_offline_variants() {
+    fn batch_label_handles_rwa_and_offline_variants() {
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),
+            "RwaId"
+        );
+        assert_eq!(batch_label(&QueryOutputBatchBox::Rwa(Vec::new())), "Rwa");
         assert_eq!(
             batch_label(&QueryOutputBatchBox::OfflineCounterSummary(Vec::new())),
             "OfflineCounterSummary"
@@ -1020,5 +1027,10 @@ mod tests {
             batch_label(&QueryOutputBatchBox::OfflineVerdictRevocation(Vec::new())),
             "OfflineVerdictRevocation"
         );
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),
+            "RwaId"
+        );
+        assert_eq!(batch_label(&QueryOutputBatchBox::Rwa(Vec::new())), "Rwa");
     }
 }

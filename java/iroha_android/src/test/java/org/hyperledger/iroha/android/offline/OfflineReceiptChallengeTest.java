@@ -29,8 +29,8 @@ public final class OfflineReceiptChallengeTest {
     OfflineReceiptChallenge.compute(
         "testnet",
         "inv-frac",
-        "bob@wonderland",
-        "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#treasury@wonderland",
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+        "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "12.5",
         1_700_000_000_000L,
         SAMPLE_CERTIFICATE_ID_HEX,
@@ -49,8 +49,8 @@ public final class OfflineReceiptChallengeTest {
         OfflineReceiptChallenge.compute(
             "testnet",
             "inv-android-tests",
-            "bob@wonderland",
-            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#treasury@wonderland",
+            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "100",
             1_700_000_000_000L,
             SAMPLE_CERTIFICATE_ID_HEX,

@@ -16,10 +16,31 @@ fn cuda_helpers_fall_back_when_disabled() {
     assert!(!ivm::keccak_f1600_cuda(&mut keccak_state));
     let mut sha_state = [0u32; 8];
     assert!(!ivm::sha256_compress_cuda(&mut sha_state, &[0u8; 64]));
+    assert!(ivm::sha256_leaves_cuda(&[[0u8; 64]]).is_none());
+    assert!(ivm::sha256_pairs_reduce_cuda(&[[0u8; 32], [1u8; 32]]).is_none());
 
     // AES helpers return None without CUDA.
     assert!(ivm::aesenc_cuda([0u8; 16], [0u8; 16]).is_none());
     assert!(ivm::aesdec_cuda([0u8; 16], [0u8; 16]).is_none());
+    assert!(ivm::aesenc_batch_cuda(&[[0u8; 16]], [0u8; 16]).is_none());
+    assert!(ivm::aesdec_batch_cuda(&[[0u8; 16]], [0u8; 16]).is_none());
+    assert!(ivm::aesenc_rounds_batch_cuda(&[[0u8; 16]], &[[0u8; 16]]).is_none());
+    assert!(ivm::aesdec_rounds_batch_cuda(&[[0u8; 16]], &[[0u8; 16]]).is_none());
+
+    // Sorting helper returns None without CUDA.
+    let mut hi = [5u64, 3, 5, 3, 3];
+    let mut lo = [7u64, 9, 1, 2, 1];
+    assert!(ivm::bitonic_sort_pairs(&mut hi, &mut lo).is_none());
+    assert_eq!(hi, [5u64, 3, 5, 3, 3]);
+    assert_eq!(lo, [7u64, 9, 1, 2, 1]);
+
+    // Vector CUDA helper entry points return None without CUDA.
+    assert!(ivm::vector_add_f32(&[1.0, 2.0], &[3.0, 4.0]).is_none());
+    assert!(ivm::vadd32_cuda(&[1u32, 2], &[3u32, 4]).is_none());
+    assert!(ivm::vadd64_cuda(&[1u64, 2], &[3u64, 4]).is_none());
+    assert!(ivm::vand_cuda(&[1u32, 2], &[3u32, 4]).is_none());
+    assert!(ivm::vxor_cuda(&[1u32, 2], &[3u32, 4]).is_none());
+    assert!(ivm::vor_cuda(&[1u32, 2], &[3u32, 4]).is_none());
 
     // BN254 and Ed25519 helpers fall back gracefully.
     assert!(ivm::bn254_add_cuda([0; 4], [0; 4]).is_none());

@@ -160,7 +160,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -169,7 +169,7 @@ fn download_qr() -> eyre::Result<()> {
 ```
 
 `ExplorerAccountQrSnapshot` mirrors the `/v1/explorer/accounts/{id}/qr` JSON
-surface: it includes the canonical account id, the canonical I105 literal, network prefix/error-correction metadata, QR dimensions, and
+surface: it includes the canonical I105 account id, the canonical I105 literal, network prefix/error-correction metadata, QR dimensions, and
 the inline SVG payload that wallets/explorers can embed directly.
 
 ## 7. Subscribe to events

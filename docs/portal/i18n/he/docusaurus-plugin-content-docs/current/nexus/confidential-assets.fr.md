@@ -227,7 +227,7 @@ Documentez les עוקף את locaux dans le runbook d operations; les politiques
 - חשבון היררכיה של גזירה:
   - `sk_spend` -> `nk` (מפתח מבטל), `ivk` (מפתח צפייה נכנס), `ovk` (מפתח צפייה יוצא), `fvk`.
 - מטענים משותפים הם שימושיים ב-AEAD עם מפתחות משותפים שמקורם ב-ECDH; des view keys d auditeur optionnelles peuvent etre attachees aux outputs selon la politique de l actif.
-- Ajouts CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, מבקר כלי עבודה pour dechiffrer les memos, et le helper `iroha app zk envelope` pour produire/inspecter des envelopes I0108030X offline. Torii לחשוף את ה-meme flux de derivation דרך `POST /v1/confidential/derive-keyset`, retournant des formes hex et base64 pour que les wallets puissent recuperer les hierarchies de cles programtiquement.## גז, מגבלות ושליטה ב-DoS
+- Ajouts CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, מבקר כלי עבודה pour dechiffrer les memos, et le helper `iroha app zk envelope` pour produire/inspecter des envelopes I0108030X offline.
 - לוח זמנים לקביעת גז:
   - Halo2 (Plonkish): בסיס `250_000` גז + `2_000` גז בשווי קלט ציבורי.
   - `5` בייט חסין גז, בתוספת חיובים פרטניים (`300`) והתחייבות ממוצעת (`500`).

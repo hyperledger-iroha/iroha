@@ -46,8 +46,9 @@ fn sample_descriptor() -> AxtDescriptor {
 
 #[test]
 fn tlv_account_id_structure() {
-    // "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
-    let payload = b"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    // "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+    let payload =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".as_bytes();
     let tlv = make_tlv(0x0001, 1, payload);
     // type, version, len, payload, hash
     assert_eq!(tlv.len(), 2 + 1 + 4 + payload.len() + 32);
@@ -194,7 +195,8 @@ fn tlv_asset_handle_roundtrip() {
     let handle = AssetHandle {
         scope: vec!["transfer".into(), "withdraw".into()],
         subject: HandleSubject {
-            account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            account: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+                .into(),
             origin_dsid: Some(DataSpaceId::new(5)),
         },
         budget: HandleBudget {

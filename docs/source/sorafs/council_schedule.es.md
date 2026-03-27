@@ -28,7 +28,7 @@ respaldan cada decision.
 - **Chair y Secretaria:** Chair rotativo del council; la Secretaria de Governance
   maneja la circulacion de agenda, recoleccion de evidencia y publicacion de
   minutas dentro de 48 horas.
-- **Lista de distribucion:** `council@sora.foundation` (decision makers),
+- **Lista de distribucion:** `council@governance.dataspace.foundation` (decision makers),
   `storage-wg@hyperledger.org` (observadores del Storage Team),
   `sdk-program@hyperledger.org` (notificaciones de paridad SDK).
 

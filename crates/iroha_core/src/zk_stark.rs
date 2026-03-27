@@ -19,7 +19,10 @@
 #![allow(clippy::needless_pass_by_value)]
 
 use fastpq_prover::{hash_field_elements, pack_bytes};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+use crate::json_macros::{JsonDeserialize, JsonSerialize};
 
 /// Goldilocks prime modulus p = 2^64 - 2^32 + 1
 const MOD_P: u128 = (1u128 << 64) - (1u128 << 32) + 1;
@@ -626,7 +629,16 @@ fn derive_query_index(
 }
 
 /// Norito-serializable Merkle path (dirs as bitset, siblings as hashes).
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
 pub struct MerklePath {
     /// Direction bits per level: 0 => leaf/hash on left, 1 => on right
     pub dirs: Vec<u8>,
@@ -635,7 +647,16 @@ pub struct MerklePath {
 }
 
 /// Parameters for a binary multi-round FRI check.
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
 pub struct StarkFriParamsV1 {
     /// Version tag for format evolution
     pub version: u16,
@@ -662,7 +683,16 @@ pub struct StarkFriParamsV1 {
 ///
 /// Note: `domain_tag` is **not** part of the verifying key because it is instance-specific
 /// and is derived from the outer [`iroha_data_model::zk::OpenVerifyEnvelope`] metadata.
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
 pub struct StarkFriVerifyingKeyV1 {
     /// Version tag for format evolution.
     pub version: u16,
@@ -683,7 +713,16 @@ pub struct StarkFriVerifyingKeyV1 {
 }
 
 /// Commitments for multiple layers and optional composition root.
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
 pub struct StarkCommitmentsV1 {
     /// Version tag for format evolution
     pub version: u16,
@@ -694,7 +733,17 @@ pub struct StarkCommitmentsV1 {
 }
 
 /// Auxiliary term contributing to the composition polynomial evaluation.
-#[derive(Debug, Clone, Copy, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
 pub struct StarkCompositionTermV1 {
     /// Canonical wire index for this auxiliary value (monotonic, caller-defined ordering)
     pub wire_index: u32,
@@ -705,7 +754,16 @@ pub struct StarkCompositionTermV1 {
 }
 
 /// Composition leaf data stored under `comp_root`.
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
 pub struct StarkCompositionValueV1 {
     /// Merkle leaf value recorded under `comp_root`
     pub leaf: u64,
@@ -720,7 +778,16 @@ pub struct StarkCompositionValueV1 {
 }
 
 /// Decommitment for one fold step at layer `k`.
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
 pub struct FoldDecommitV1 {
     /// Index j at this layer (so layer k reads positions 2*j and 2*j+1 from layer k)
     pub j: u32,
@@ -739,7 +806,16 @@ pub struct FoldDecommitV1 {
 }
 
 /// STARK proof carrying commitments and query decommitments.
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
 pub struct StarkProofV1 {
     /// Version tag
     pub version: u16,
@@ -755,7 +831,16 @@ pub struct StarkProofV1 {
 }
 
 /// Verification envelope for STARK FRI multi-round (binary) proofs.
-#[derive(Debug, Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+)]
 pub struct StarkVerifyEnvelopeV1 {
     /// Parameters used by the prover
     pub params: StarkFriParamsV1,

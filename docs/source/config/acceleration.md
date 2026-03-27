@@ -142,6 +142,34 @@ IVM/Crypto will target these two kernels in the next accel sweep. Baseline budge
 - Target ≥1.3× speedup for `poseidon_hash_columns` and ≥1.2× for `lde` once tuned Metal
   and CUDA kernels land, without changing outputs or telemetry labels.
 
+The latest FASTPQ CUDA sweep closed the obvious buildability/parity regressions on
+Linux: the `fastpq-gpu` feature path now compiles with CUDA 12.0 on a GCC 13 host
+by steering NVCC to a supported host compiler and disabling the conflicting
+device-debug flags, and the regular/fused Poseidon column-hash paths now match
+the CPU reference once the GPU batch builders use the same trace-column and
+trace-node domains as the scalar sponge. The next tuning pass should therefore
+focus on device-resident workspaces and copy elimination rather than re-fighting
+basic parity issues. That work has advanced again: the native CUDA FFT/IFFT/LDE
+wrappers now stage through per-device workspaces on real device memory, take the
+planner's actual trace/LDE roots instead of assuming one fixed Goldilocks root,
+and apply LDE coset powers before the FFT on-device instead of relying on an
+oversized shared-memory scratch buffer. The planner-facing async path now submits
+those transforms through native pending handles too; each outstanding FFT/IFFT/LDE
+submission now borrows a reusable stream plus device/pinned staging bundle from
+a per-device CUDA pool, so concurrent callers no longer depend on an outer Rust
+serialization lane while also avoiding fresh allocation churn on every submit.
+The next missing CUDA feature was BN254; that first slice is now live too.
+FASTPQ now ships low-level `fastpq_bn254_fft(...)` / `fastpq_bn254_lde(...)`
+wrappers that stage canonical BN254 twiddles on the host, validate cosets, and
+drive matching CUDA kernels that convert limbs into Montgomery form on-device
+and match the scalar BN254 reference in focused parity tests. The remaining
+BN254 work is therefore higher-level integration and measurement, not basic
+kernel correctness.
+The next lab run should therefore measure whether the remaining break-even cost
+is dominated by host/device copies, by the current conservative kernels, or by
+the residual cost of staging through those pooled buffers, and then extend the
+same evidence flow to the new BN254 path.
+
 Attach the JSON trace and `cargo xtask acceleration-state --format json` snapshot to
 future lab runs so CI/regressions can assert both the budgets and backend health while
 comparing CPU-only vs. accel-on runs.
@@ -156,11 +184,17 @@ The workspace now builds Norito with the `gpu-compression` feature enabled by de
 so GPU zstd backends are compiled in; runtime availability still depends on hardware,
 the helper backend and the `allow_gpu_compression` config flag. On Apple Silicon
 workspace builds, `gpuzstd_metal` is a target dependency of `norito`, so it is built
-automatically as part of normal Cargo builds (no separate helper build step). The
-current Metal helper runs GPU match-finding/sequence generation and uses the in-crate
-deterministic zstd frame encoder (Huffman/FSE + frame assembly) on the host; decode
-uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames until
-GPU block decode is wired in.
+automatically as part of normal Cargo builds (no separate helper build step). On
+Unix/Windows non-macOS hosts, the workspace now also ships a dedicated
+`gpuzstd_cuda` helper crate, so `cargo build -p gpuzstd_cuda` produces
+`libgpuzstd_cuda.so` / `gpuzstd_cuda.dll` in-tree. Norito prefers that CUDA-named
+artifact, then accepts the compatible workspace-built fallback
+`libgpuzstd_metal.so` / `gpuzstd_metal.dll` when it is present next to the binary or
+on the loader path. Until dedicated CUDA match-finding kernels land, the CUDA helper
+now reports `gpu_unavailable` for compression so Norito can fall back cleanly to CPU
+encode while still distinguishing “no CUDA compression kernel” from parity failures in
+its helper self-tests. Decode still uses the deterministic shared frame-decoder path
+with a CPU zstd fallback for unsupported frames.
 
 | Field | Default | Purpose |
 |-------|---------|---------|

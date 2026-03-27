@@ -50,7 +50,7 @@ PaymentBundleV1:
   holdback: "0 61CtjvNd9T3THAR65GsMVHr82Bjc"
   invoices: [InvoiceLineV1, …]
   ledger_projection:
-    debit_account: "i105..."
+    debit_account: "<i105-account-id>"
     credit_instructions: [Transfer, Transfer, ...]
 ```
 
@@ -86,7 +86,7 @@ systems can reproduce the audit trail without scraping stdout.
 | Command | Purpose |
 |---------|---------|
 | `iroha_cli app sns settlement quote --selector makoto.sora --term-years 2 --pricing hot-tier-a --referral 0.05` | Computes the fee matrix, referral deduction, and ledger projection. |
-| `iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05-01/makoto.sora.json --treasury-account i105... --steward-account i105...` | Emits Norito `Transfer` ISIs and persists them beside the bundle. |
+| `iroha_cli app sns settlement ledger --bundle artifacts/sns/settlements/2026-05-01/makoto.sora.json --treasury-account <i105-account-id> --steward-account <i105-account-id>` | Emits Norito `Transfer` ISIs and persists them beside the bundle. |
 | `iroha_cli app sns settlement reconcile --period 2026-05 --out reports/settlement_202605.md` | Compares Torii transactions against expected bundles, flags drift, and writes Markdown + JSON digests. |
 | `iroha_cli app sns settlement refund --bundle <path> --amount 30 --reason "duplicate charge" --approval ticket.json` | Produces `RefundRecordV1` with governance metadata. |
 

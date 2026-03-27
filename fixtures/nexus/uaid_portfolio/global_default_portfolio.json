@@ -8,17 +8,17 @@
       "dataspace_alias": "universal",
       "accounts": [
         {
-          "account_id": "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+          "account_id": "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
           "label": null,
           "assets": [
             {
-              "asset": "cash#portfolio_fixture",
-              "scope": "global",
+              "asset_id": "78GDVxQE17JDQzP6TuvvYxoF5q5B",
+              "asset_definition_id": "78GDVxQE17JDQzP6TuvvYxoF5q5B",
               "quantity": "875"
             },
             {
-              "asset": "points#portfolio_fixture",
-              "scope": "global",
+              "asset_id": "4qjUdo1shUjFsepZCgmvWzwCEsqq",
+              "asset_definition_id": "4qjUdo1shUjFsepZCgmvWzwCEsqq",
               "quantity": "320"
             }
           ]

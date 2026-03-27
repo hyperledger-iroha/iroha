@@ -3323,6 +3323,7 @@ pub(crate) enum RoundPhaseTrace {
 pub(crate) enum RoundEventCauseTrace {
     #[default]
     Tick,
+    #[allow(dead_code)] // Only emitted/asserted by round-trace unit tests.
     ProposalObserved,
     BlockAvailable,
     RbcDelivered,
@@ -6890,6 +6891,7 @@ fn round_gap_snapshot() -> RoundGapSnapshot {
         .unwrap_or_default()
 }
 
+#[allow(dead_code)] // Read by round-trace unit tests.
 pub(crate) fn round_trace_snapshot() -> RoundTraceSnapshot {
     round_trace_status_slot()
         .lock()
@@ -9789,16 +9791,20 @@ mod tests {
         super::reset_nexus_economics_for_tests();
         super::record_nexus_fee_event(super::NexusFeeEvent::Charged {
             payer_kind: super::NexusFeePayer::Payer,
-            payer_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
+            payer_id: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+                .to_owned(),
             amount: Numeric::from(10_u32),
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorDisabled {
-            payer_id: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),
+            payer_id: "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+                .to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorUnauthorized {
-            sponsor_id: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),
-            authority_id: "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV".to_owned(),
+            sponsor_id: "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+                .to_owned(),
+            authority_id: "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53"
+                .to_owned(),
         });
         let snap = super::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 1);
@@ -9809,7 +9815,7 @@ mod tests {
         assert_eq!(
             snap.last_error.as_deref(),
             Some(
-                "sponsor not authorized for authority 6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
+                "sponsor not authorized for authority sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53"
             )
         );
     }

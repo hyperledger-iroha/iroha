@@ -11,6 +11,7 @@ use iroha_data_model::{
         QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
         SingularQueryOutputBox, parameters::ForwardCursor,
     },
+    rwa::{Rwa, RwaControlPolicy, RwaId},
 };
 use nonzero_ext::nonzero;
 
@@ -143,6 +144,54 @@ fn iterable_query_response_roundtrips_header_and_json() {
     let decoded_batch: QueryOutputBatchBoxTuple =
         norito::codec::decode_adaptive(&bare_batch).expect("decode batch tuple");
     assert_eq!(decoded_batch, batch, "Bare batch payload must roundtrip");
+}
+
+#[test]
+fn rwa_iterable_query_response_roundtrips_header_and_json() {
+    let rwa = Rwa::new(
+        RwaId::generated(
+            "vault".parse().expect("domain"),
+            iroha_crypto::Hash::prehashed([0x11; iroha_crypto::Hash::LENGTH]),
+        ),
+        "12.5".parse().expect("quantity"),
+        iroha_primitives::numeric::NumericSpec::fractional(1),
+        "https://example.test/rwa/lot-1".to_owned(),
+        Some("vaulted".parse().expect("status")),
+        iroha_data_model::Metadata::default(),
+        Vec::new(),
+        RwaControlPolicy::default(),
+        iroha_data_model::AccountId::new(iroha_crypto::KeyPair::random().public_key().clone()),
+    );
+    let batch = QueryOutputBatchBoxTuple {
+        tuple: vec![QueryOutputBatchBox::Rwa(vec![rwa.clone()])],
+    };
+    let output = QueryOutput {
+        batch: batch.clone(),
+        remaining_items: 0,
+        continue_cursor: None,
+    };
+    let resp = QueryResponse::Iterable(output.clone());
+
+    let bytes = norito::to_bytes(&resp).expect("encode RWA QueryResponse");
+    let decoded: QueryResponse =
+        norito::decode_from_bytes(&bytes).expect("decode RWA QueryResponse");
+    assert_eq!(decoded, resp, "Norito roundtrip must preserve RWA batches");
+
+    let json = norito::json::to_vec(&resp).expect("serialize RWA QueryResponse to JSON");
+    let decoded_json: QueryResponse =
+        norito::json::from_slice(&json).expect("decode RWA QueryResponse from JSON");
+    assert_eq!(
+        decoded_json, resp,
+        "JSON roundtrip must preserve RWA iterable responses"
+    );
+
+    let bare_batch = norito::codec::Encode::encode(&output.batch);
+    let decoded_batch: QueryOutputBatchBoxTuple =
+        norito::codec::decode_adaptive(&bare_batch).expect("decode RWA batch tuple");
+    assert_eq!(
+        decoded_batch, batch,
+        "Bare RWA batch payload must roundtrip"
+    );
 }
 
 #[test]

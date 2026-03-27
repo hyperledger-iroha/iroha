@@ -114,7 +114,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTENER | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش). |
 | `/v1/sns/names/{namespace}/{literal}` | OBTENER | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Activo, Gracia, الخ). |
 
-**Selector ترميز:** مقطع `{selector}` يقبل I105 او مضغوط او hex قياسي حسب ADDR-5; Torii يطبعها عبر `NameSelectorV1`.**Actualización:** Establece el JSON Norito entre `code`, `message`, `details`. Utilice los valores `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Selector ترميز:** مقطع `{selector}` يقبل i105 او مضغوط او hex قياسي حسب ADDR-5; Torii يطبعها عبر `NameSelectorV1`.**Actualización:** Establece el JSON Norito entre `code`, `message`, `details`. Utilice los valores `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 CLI de configuración (متطلب المسجل اليدوي N0)
 
@@ -158,7 +158,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -216,7 +216,7 @@ Torii يتحقق من الاثباتات عبر فحص:
 
 ### 6.1 Actualizar1. يستعلم العميل `/v1/sns/policies/{suffix_id}` للحصول على الاسعار وفترة Grace والشرائح المتاحة.
 2. يبني العميل `RegisterNameRequestV1`:
-   - `selector` Coloque la etiqueta I105 (المفضل) او المضغوط (الخيار الثاني).
+   - `selector` Coloque la etiqueta i105 (المفضل) او المضغوط (الخيار الثاني).
    - `term_years` ضمن حدود السياسة.
    - `payment` يشير الى تحويل splitter الخزينة/steward.
 3. Torii Texto:

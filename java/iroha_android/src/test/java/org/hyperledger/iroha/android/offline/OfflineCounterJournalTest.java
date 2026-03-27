@@ -39,7 +39,7 @@ public final class OfflineCounterJournalTest {
       final OfflineSummaryList.OfflineSummaryItem item =
           new OfflineSummaryList.OfflineSummaryItem(
               "deadbeef",
-              "alice@wonderland",
+              "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "Alice",
               summaryHash,
               apple,
@@ -67,7 +67,7 @@ public final class OfflineCounterJournalTest {
       final OfflineSummaryList.OfflineSummaryItem item =
           new OfflineSummaryList.OfflineSummaryItem(
               "deadbeef",
-              "alice@wonderland",
+              "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "Alice",
               "00".repeat(32),
               apple,
@@ -93,7 +93,7 @@ public final class OfflineCounterJournalTest {
       final OfflineCounterJournal journal = new OfflineCounterJournal(tempFile);
       journal.advanceAppleCounter(
           "deadbeef",
-          "alice@wonderland",
+          "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
           "Alice",
           "app.attest:k1",
           1L,
@@ -102,7 +102,7 @@ public final class OfflineCounterJournalTest {
       try {
         journal.advanceAppleCounter(
             "deadbeef",
-            "alice@wonderland",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             "Alice",
             "app.attest:k1",
             3L,
@@ -124,7 +124,7 @@ public final class OfflineCounterJournalTest {
         """
         {
           "deadbeef": {
-            "controller_id": "alice@wonderland",
+            "controller_id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             "controller_display": "Alice",
             "summary_hash_hex": "00",
             "apple_key_counters": { "app.attest:k1": 1.5 },
@@ -150,7 +150,7 @@ public final class OfflineCounterJournalTest {
         """
         {
           "deadbeef": {
-            "controller_id": "alice@wonderland",
+            "controller_id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             "controller_display": "Alice",
             "summary_hash_hex": "00",
             "apple_key_counters": { "app.attest:k1": 1 },

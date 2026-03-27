@@ -28,7 +28,7 @@ fn decodes_android_approve_frame_fixture() {
             assert_eq!(wallet_pk, [0x07u8; 32]);
             assert_eq!(
                 account_id,
-                "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
             );
             let parsed = AccountId::parse_encoded(&account_id)
                 .map(ParsedAccountId::into_account_id)

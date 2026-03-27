@@ -245,7 +245,7 @@ Enum RegistryEventKind {
 網關通過以下方式訂閱 `RegistryEventV1` 並同步到 DNS/SoraFS：
 
 1. 獲取事件序列引用的最新 `NameRecordV1`。
-2.重新生成解析器模板（首選I105 +次優壓縮（`sora`）地址、文本記錄）。
+2.重新生成解析器模板（首選i105 +次優壓縮（`sora`）地址、文本記錄）。
 3. 通過 [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) 中描述的 SoraDNS 工作流程固定更新的區域數據。
 
 活動交付保證：
@@ -265,7 +265,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "i105...",
+    owner: "<i105-account-id>",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -292,7 +292,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "i105...",
+    steward: "<i105-account-id>",
     status: Active,
     payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
     pricing: [
@@ -305,10 +305,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("<i105-account-id>"), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "i105...",
+    fund_splitter_account: "<i105-account-id>",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

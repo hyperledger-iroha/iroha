@@ -14,7 +14,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 - `scripts/address_local_toolkit.sh` は `iroha` CLI をラップして次を生成します:
   - `audit.json` -- `iroha tools address audit --format json` の構造化出力。
-  - `normalized.txt` -- Local-domain selector ごとの I105（推奨）/I105（次善） literals。
+  - `normalized.txt` -- Local-domain selector ごとの i105（推奨）/i105（次善） literals。
 - スクリプトをアドレス ingest dashboard (`dashboards/grafana/address_ingest.json`) と
   Alertmanager ルール (`dashboards/alerts/address_ingest_rules.yml`) と組み合わせ、Local-8 /
   Local-12 cutover が安全であることを証明します。Local-8 と Local-12 の collision パネルと
@@ -31,7 +31,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 オプション:
 
-- `--format I105` は I105 の代わりに `sora...` を出力。
+- `--format i105` は i105 の代わりに `sora...` を出力。
 - `domainless output (default)` は bare literals を出力。
 - `--audit-only` は変換ステップをスキップ。
 - `--allow-errors` は不正な行が出てもスキャンを続行 (CLI の挙動と一致)。

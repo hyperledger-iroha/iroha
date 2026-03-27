@@ -232,7 +232,7 @@ public final class OkHttpClientIntegrationTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority("okhttp@wonderland")
+            .setAuthority("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)

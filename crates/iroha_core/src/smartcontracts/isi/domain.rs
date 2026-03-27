@@ -84,10 +84,7 @@ pub mod isi {
                 "purging stale account alias binding label={:?} missing_owner={}",
                 label, existing_owner
             );
-            state_transaction
-                .world
-                .account_aliases
-                .remove(label.clone());
+            state_transaction.world.remove_account_alias_binding(label);
         }
 
         if let Some(record) = state_transaction
@@ -131,6 +128,84 @@ pub mod isi {
                     .to_owned()
                     .into(),
             ))
+        }
+    }
+
+    fn contract_alias_matches_account_label(
+        alias: &ContractAlias,
+        label: &AccountLabel,
+        catalog: &DataSpaceCatalog,
+    ) -> bool {
+        let Some(dataspace_alias) = catalog
+            .by_id(label.dataspace)
+            .map(|entry| entry.alias.as_str())
+        else {
+            return false;
+        };
+        alias.name_segment() == label.label.as_ref()
+            && alias.domain_segment() == label.domain.as_ref().map(|domain| domain.name().as_ref())
+            && alias.dataspace_segment() == dataspace_alias
+    }
+
+    fn ensure_contract_alias_namespace_available(
+        state_transaction: &StateTransaction<'_, '_>,
+        label: &AccountLabel,
+    ) -> Result<(), InstructionExecutionError> {
+        let now_ms = state_transaction.block_unix_timestamp_ms();
+        let catalog = &state_transaction.nexus.dataspace_catalog;
+        let has_conflict = state_transaction
+            .world
+            .contract_alias_bindings()
+            .iter()
+            .any(|(_, binding)| {
+                !binding.is_grace_expired_at(now_ms)
+                    && contract_alias_matches_account_label(&binding.alias, label, catalog)
+            });
+        if has_conflict {
+            Err(InstructionExecutionError::InvariantViolation(
+                "account alias collides with an active contract alias"
+                    .to_owned()
+                    .into(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn ensure_account_alias_namespace_available_for_contract_alias(
+        state_transaction: &StateTransaction<'_, '_>,
+        alias: &ContractAlias,
+    ) -> Result<(), InstructionExecutionError> {
+        let catalog = &state_transaction.nexus.dataspace_catalog;
+        let (label_name, domain, dataspace) = alias.resolve_components(catalog).map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                err.to_string().into(),
+            ))
+        })?;
+        let label = AccountLabel::new_in_dataspace(label_name, domain, dataspace);
+        let selector = crate::sns::selector_for_account_alias(&label, catalog).map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                err.to_string().into(),
+            ))
+        })?;
+        let Some(record) = crate::sns::record_by_selector(state_transaction.world(), &selector)
+        else {
+            return Ok(());
+        };
+        let status =
+            crate::sns::effective_status(&record, state_transaction.block_unix_timestamp_ms());
+        if matches!(
+            status,
+            iroha_data_model::sns::NameStatus::Active
+                | iroha_data_model::sns::NameStatus::GracePeriod
+        ) {
+            Err(InstructionExecutionError::InvariantViolation(
+                "contract alias collides with an active account alias"
+                    .to_owned()
+                    .into(),
+            ))
+        } else {
+            Ok(())
         }
     }
 
@@ -685,19 +760,15 @@ pub mod isi {
 
     fn resolve_config_account_literal(
         world: &impl crate::state::WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
         raw: &str,
         field_path: &'static str,
     ) -> Result<AccountId, Error> {
-        crate::block::parse_account_literal_with_world(world, raw)
-            .or_else(|| {
-                AccountId::parse_encoded(raw)
-                    .ok()
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            })
+        crate::block::parse_account_literal_with_world(world, dataspace_catalog, raw)
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "invalid {field_path} account literal `{raw}`: expected account identifier"
+                        "invalid {field_path} account literal `{raw}`: expected canonical I105 account id or on-chain alias"
                     )
                     .into(),
                 )
@@ -707,16 +778,21 @@ pub mod isi {
 
     fn config_account_matches(
         world: &impl crate::state::WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
         raw: &str,
         account_id: &AccountId,
         field_path: &'static str,
     ) -> Result<bool, Error> {
-        let configured = resolve_config_account_literal(world, raw, field_path)?;
+        let configured = resolve_config_account_literal(world, dataspace_catalog, raw, field_path)?;
         Ok(configured == *account_id)
     }
 
-    fn parse_config_asset_definition_id(raw: &str) -> Option<AssetDefinitionId> {
-        raw.parse().ok()
+    fn parse_config_asset_definition_id(
+        world: &impl crate::state::WorldReadOnly,
+        raw: &str,
+        now_ms: u64,
+    ) -> Option<AssetDefinitionId> {
+        crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
 
     impl Execute for Register<Account> {
@@ -847,8 +923,7 @@ pub mod isi {
             if let Some(label) = account.label() {
                 if state_transaction
                     .world
-                    .account_aliases
-                    .insert(label.clone(), account_id.clone())
+                    .insert_account_alias_binding(label.clone(), account_id.clone())
                     .is_some()
                 {
                     state_transaction
@@ -877,10 +952,7 @@ pub mod isi {
                             .remove_account_with_links(&account_id);
                         state_transaction.world.uaid_accounts.remove(*uaid);
                         if let Some(label) = account.label() {
-                            state_transaction
-                                .world
-                                .account_aliases
-                                .remove(label.clone());
+                            state_transaction.world.remove_account_alias_binding(label);
                         }
                         for inserted in account.opaque_ids() {
                             state_transaction.world.opaque_uaids.remove(*inserted);
@@ -908,10 +980,7 @@ pub mod isi {
                     state_transaction.rebuild_space_directory_bindings(*uaid);
                 }
                 if let Some(label) = account.label() {
-                    state_transaction
-                        .world
-                        .account_aliases
-                        .remove(label.clone());
+                    state_transaction.world.remove_account_alias_binding(label);
                 }
                 for opaque in account.opaque_ids() {
                     state_transaction.world.opaque_uaids.remove(*opaque);
@@ -1043,18 +1112,21 @@ pub mod isi {
             }
             let nexus_fee_sink_matches = config_account_matches(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.nexus.fees.fee_sink_account_id,
                 &account_id,
                 "nexus.fees.fee_sink_account_id",
             )?;
             let nexus_stake_escrow_matches = config_account_matches(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.nexus.staking.stake_escrow_account_id,
                 &account_id,
                 "nexus.staking.stake_escrow_account_id",
             )?;
             let nexus_slash_sink_matches = config_account_matches(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.nexus.staking.slash_sink_account_id,
                 &account_id,
                 "nexus.staking.slash_sink_account_id",
@@ -1745,6 +1817,20 @@ pub mod isi {
                 )
                 .into());
             }
+            if let Some((rwa_id, _)) = state_transaction
+                .world
+                .rwas
+                .iter()
+                .find(|(_, rwa)| rwa.owned_by == account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it owns RWA {rwa_id}; transfer or redeem the lot first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
 
             remove_account_associated_permissions(state_transaction, &account_id);
 
@@ -1822,12 +1908,14 @@ pub mod isi {
                 .offline_transfer_receiver_index
                 .remove(account_id.clone());
 
-            if let Some(label) = account_value.label().cloned() {
+            for label in state_transaction
+                .world
+                .remove_account_alias_bindings_for_account(&account_id)
+            {
                 state_transaction
                     .world
                     .account_rekey_records
                     .remove(label.clone());
-                state_transaction.world.account_aliases.remove(label);
             }
 
             if let Some(uaid) = account_value.uaid().copied() {
@@ -1996,8 +2084,12 @@ pub mod isi {
                 )
                 .into());
             }
-            if parse_config_asset_definition_id(&state_transaction.nexus.fees.fee_asset_id)
-                .is_some_and(|configured| configured == asset_definition_id)
+            if parse_config_asset_definition_id(
+                &state_transaction.world,
+                &state_transaction.nexus.fees.fee_asset_id,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .is_some_and(|configured| configured == asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -2007,8 +2099,12 @@ pub mod isi {
                 )
                 .into());
             }
-            if parse_config_asset_definition_id(&state_transaction.nexus.staking.stake_asset_id)
-                .is_some_and(|configured| configured == asset_definition_id)
+            if parse_config_asset_definition_id(
+                &state_transaction.world,
+                &state_transaction.nexus.staking.stake_asset_id,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .is_some_and(|configured| configured == asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -2282,6 +2378,107 @@ pub mod isi {
         }
     }
 
+    impl Execute for SetContractAlias {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let SetContractAlias {
+                contract_address,
+                alias,
+                lease_expiry_ms,
+            } = self;
+
+            if alias.is_none() && lease_expiry_ms.is_some() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "lease_expiry_ms requires alias binding".into(),
+                    ),
+                )
+                .into());
+            }
+
+            let contract_dataspace_id = contract_address.dataspace_id().map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err.to_string().into(),
+                ))
+            })?;
+            let Some(contract_dataspace) = state_transaction
+                .nexus
+                .dataspace_catalog
+                .by_id(contract_dataspace_id)
+            else {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "contract address dataspace is unknown".to_owned().into(),
+                )
+                .into());
+            };
+            if state_transaction
+                .world
+                .contract_instances()
+                .get(&(
+                    contract_dataspace.alias.clone(),
+                    contract_address.to_string(),
+                ))
+                .is_none()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("contract {contract_address} is not deployed").into(),
+                )
+                .into());
+            }
+
+            if let Some(alias) = alias {
+                let (_, _, alias_dataspace_id) = alias
+                    .resolve_components(&state_transaction.nexus.dataspace_catalog)
+                    .map_err(|err| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(err.to_string().into()),
+                        )
+                    })?;
+                if alias_dataspace_id != contract_dataspace_id {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "contract alias dataspace must match contract address dataspace".into(),
+                        ),
+                    )
+                    .into());
+                }
+
+                ensure_account_alias_namespace_available_for_contract_alias(
+                    state_transaction,
+                    &alias,
+                )?;
+
+                let bound_at_ms = state_transaction.block_unix_timestamp_ms();
+                if lease_expiry_ms.is_some_and(|lease_expiry_ms| lease_expiry_ms <= bound_at_ms) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "lease_expiry_ms must be greater than the current block timestamp"
+                                .into(),
+                        ),
+                    )
+                    .into());
+                }
+                let grace_until_ms = alias_grace_until_ms(lease_expiry_ms);
+                state_transaction.world.bind_contract_alias(
+                    &contract_address,
+                    alias,
+                    lease_expiry_ms,
+                    grace_until_ms,
+                    bound_at_ms,
+                )?;
+            } else {
+                state_transaction
+                    .world
+                    .clear_contract_alias(&contract_address);
+            }
+
+            Ok(())
+        }
+    }
+
     impl Execute for SetKeyValue<AssetDefinition> {
         #[metrics(+"set_key_value_asset_definition")]
         fn execute(
@@ -2514,6 +2711,7 @@ pub mod isi {
                 .into());
             }
             ensure_active_account_alias_lease(state_transaction, &label)?;
+            ensure_contract_alias_namespace_available(state_transaction, &label)?;
 
             purge_stale_account_label_state(state_transaction, &label);
             state_transaction.world.account(&account)?;
@@ -2549,10 +2747,7 @@ pub mod isi {
                             .account_mut(existing_owner)?
                             .set_label(None);
                     }
-                    state_transaction
-                        .world
-                        .account_aliases
-                        .remove(label.clone());
+                    state_transaction.world.remove_account_alias_binding(&label);
                 }
             }
             if existing_alias_binding.is_none()
@@ -2570,8 +2765,7 @@ pub mod isi {
 
             state_transaction
                 .world
-                .account_aliases
-                .insert(label.clone(), account.clone());
+                .insert_account_alias_binding(label.clone(), account.clone());
             upsert_account_rekey_record(state_transaction, &label, &account);
 
             Ok(())
@@ -2605,6 +2799,7 @@ pub mod isi {
                 .into());
             }
             ensure_active_account_alias_lease(state_transaction, &label)?;
+            ensure_contract_alias_namespace_available(state_transaction, &label)?;
 
             purge_stale_account_label_state(state_transaction, &label);
             if let Some(domain) = &label.domain {
@@ -2639,10 +2834,7 @@ pub mod isi {
                             .account_mut(existing_owner)?
                             .set_label(None);
                     }
-                    state_transaction
-                        .world
-                        .account_aliases
-                        .remove(label.clone());
+                    state_transaction.world.remove_account_alias_binding(&label);
                 }
             }
             if existing_label.as_ref() != Some(&label)
@@ -2661,8 +2853,7 @@ pub mod isi {
             if let Some(previous_label) = existing_label.as_ref() {
                 state_transaction
                     .world
-                    .account_aliases
-                    .remove(previous_label.clone());
+                    .remove_account_alias_binding(previous_label);
                 state_transaction
                     .world
                     .account_rekey_records
@@ -2675,8 +2866,7 @@ pub mod isi {
                 .set_label(Some(label.clone()));
             state_transaction
                 .world
-                .account_aliases
-                .insert(label.clone(), account.clone());
+                .insert_account_alias_binding(label.clone(), account.clone());
             upsert_account_rekey_record(state_transaction, &label, &account);
 
             Ok(())
@@ -3901,6 +4091,57 @@ mod tests {
                 .label()
                 .is_none(),
             "binding extra aliases should not overwrite the account's canonical label"
+        );
+    }
+
+    #[test]
+    fn unregister_account_removes_all_bound_aliases() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+
+        let primary_label =
+            AccountLabel::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
+        let bound_label =
+            AccountLabel::domainless("public".parse::<Name>().unwrap(), DataSpaceId::GLOBAL);
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(keypair.public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        seed_account_alias_lease(&mut tx, &authority, &primary_label);
+        seed_account_alias_lease(&mut tx, &authority, &bound_label);
+        Register::account(
+            Account::new(account_id.clone().to_account_id(domain_id.clone()))
+                .with_label(Some(primary_label.clone())),
+        )
+        .execute(&authority, &mut tx)
+        .expect("register account with primary label");
+        BindAccountAlias {
+            account: account_id.clone(),
+            label: bound_label.clone(),
+        }
+        .execute(&authority, &mut tx)
+        .expect("bind additional alias");
+
+        Unregister::account(account_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("unregister account");
+
+        assert!(tx.world.account_aliases.get(&primary_label).is_none());
+        assert!(tx.world.account_aliases.get(&bound_label).is_none());
+        assert!(tx.world.account_rekey_records.get(&primary_label).is_none());
+        assert!(tx.world.account_rekey_records.get(&bound_label).is_none());
+        assert!(
+            tx.world
+                .account_aliases_by_account
+                .get(&account_id)
+                .is_none(),
+            "reverse alias index must be cleared on unregister"
         );
     }
 
@@ -7036,6 +7277,130 @@ mod tests {
         assert!(
             updated.alias().is_none(),
             "definition alias should be cleared"
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_updates_world_indexes() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world.contract_instances.insert(
+            ("universal".to_owned(), contract_address.to_string()),
+            Hash::new("contract-alias"),
+        );
+
+        let alias: ContractAlias = "router::universal".parse().expect("alias");
+        SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
+            .execute(&authority, &mut tx)
+            .expect("bind contract alias");
+
+        assert_eq!(
+            tx.world.contract_aliases.get(&alias),
+            Some(&contract_address),
+            "alias index must resolve to contract address"
+        );
+        let binding = tx
+            .world
+            .contract_alias_bindings
+            .get(&contract_address)
+            .expect("binding should be present");
+        assert_eq!(binding.alias, alias);
+        assert_eq!(binding.lease_expiry_ms, Some(11_000));
+        assert_eq!(
+            binding.grace_until_ms,
+            Some(11_000 + 369u64 * 60 * 60 * 1_000)
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_rejects_account_alias_collision() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+        let label = AccountLabel::domainless("router".parse().expect("label"), DataSpaceId::GLOBAL);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world.contract_instances.insert(
+            ("universal".to_owned(), contract_address.to_string()),
+            Hash::new("contract-alias"),
+        );
+        seed_account_alias_lease(&mut tx, &authority, &label);
+
+        let err = SetContractAlias::bind(
+            contract_address,
+            "router::universal".parse().expect("alias"),
+            Some(11_000),
+        )
+        .execute(&authority, &mut tx)
+        .expect_err("account alias collision must fail");
+        assert!(
+            err.to_string()
+                .contains("collides with an active account alias"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bind_account_alias_rejects_contract_alias_collision() {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+        let label = AccountLabel::domainless("router".parse().expect("label"), DataSpaceId::GLOBAL);
+        let account = Account {
+            id: authority.clone(),
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+            linked_domains: BTreeSet::new(),
+        };
+        let (account_id, account_value) = account.into_key_value();
+        state.world.accounts.insert(account_id, account_value);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+            }),
+        );
+        seed_account_alias_lease(&mut tx, &authority, &label);
+        tx.world.contract_instances.insert(
+            ("universal".to_owned(), contract_address.clone().to_string()),
+            Hash::new("contract-alias"),
+        );
+        tx.world
+            .bind_contract_alias(
+                &contract_address,
+                "router::universal".parse().expect("alias"),
+                Some(11_000),
+                Some(11_000 + 369u64 * 60 * 60 * 1_000),
+                10_000,
+            )
+            .expect("seed contract alias");
+
+        let err = BindAccountAlias {
+            account: authority.clone(),
+            label,
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("contract alias collision must fail");
+        assert!(
+            err.to_string()
+                .contains("collides with an active contract alias"),
+            "unexpected error: {err}"
         );
     }
 

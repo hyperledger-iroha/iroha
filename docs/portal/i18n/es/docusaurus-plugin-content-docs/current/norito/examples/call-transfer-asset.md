@@ -14,9 +14,9 @@ Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host
 
 ## Recorrido del libro mayor
 
-- Fondea la autoridad del contrato (por ejemplo `i105...`) con el activo que transferirá y otórgale el rol `CanTransfer` o un permiso equivalente.
-- Llama al entrypoint `call_transfer_asset` para transferir 5 unidades desde la cuenta del contrato a `i105...`, reflejando la forma en que la automatización on-chain puede envolver llamadas del host.
-- Verifica los balances mediante `FindAccountAssets` o `iroha_cli ledger assets list --account i105...` e inspecciona los eventos para confirmar que la guardia de metadatos registró el contexto de la transferencia.
+- Fondea la autoridad del contrato (por ejemplo `<i105-account-id>`) con el activo que transferirá y otórgale el rol `CanTransfer` o un permiso equivalente.
+- Llama al entrypoint `call_transfer_asset` para transferir 5 unidades desde la cuenta del contrato a `<i105-account-id>`, reflejando la forma en que la automatización on-chain puede envolver llamadas del host.
+- Verifica los balances mediante `FindAccountAssets` o `iroha_cli ledger assets list --account <i105-account-id>` e inspecciona los eventos para confirmar que la guardia de metadatos registró el contexto de la transferencia.
 
 ## Guías de SDK relacionadas
 
@@ -31,8 +31,8 @@ Demuestra cómo un entrypoint de Kotodama puede llamar a la instrucción de host
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

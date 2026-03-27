@@ -67,6 +67,7 @@ pub(crate) fn set_merkle_cuda_min_leaves(n: usize) {
 }
 
 #[inline]
+#[cfg(any(target_os = "macos", test))]
 fn merkle_metal_min_leaves() -> usize {
     let v = MERKLE_METAL_MIN_LEAVES.load(Ordering::SeqCst);
     if v == 0 { merkle_gpu_min_leaves() } else { v }
@@ -235,6 +236,7 @@ impl ByteMerkleTree {
     ///   or sequential builder.
     pub fn from_bytes_accel(data: &[u8], chunk: usize) -> Self {
         assert!(chunk > 0 && chunk <= 32);
+        #[cfg(any(target_os = "macos", feature = "cuda"))]
         let zero_hash = Self::compute_zero_hash(chunk);
         let leaves_count = data.len().div_ceil(chunk).max(1);
 
@@ -518,7 +520,6 @@ impl ByteMerkleTree {
     pub fn root_from_bytes_accel(data: &[u8], chunk: usize) -> [u8; 32] {
         assert!(chunk > 0 && chunk <= 32);
         let leaves_count = data.len().div_ceil(chunk).max(1);
-        let min_metal = merkle_metal_min_leaves();
 
         // Prefer CPU SHA2 on AArch64 for medium sizes
         if prefer_cpu_sha2(leaves_count) {
@@ -531,7 +532,7 @@ impl ByteMerkleTree {
 
         // GPU Metal path (macOS)
         #[cfg(target_os = "macos")]
-        if crate::vector::metal_available() && leaves_count >= min_metal {
+        if crate::vector::metal_available() && leaves_count >= merkle_metal_min_leaves() {
             let mut blocks: Vec<[u8; 64]> = Vec::with_capacity(leaves_count);
             let bit_len_be = (chunk as u64 * 8).to_be_bytes();
             for i in 0..leaves_count {
@@ -577,9 +578,7 @@ impl ByteMerkleTree {
                 block[56..64].copy_from_slice(&bit_len_be);
                 blocks.push(block);
             }
-            if let Some(root) = crate::cuda::sha256_leaves_cuda(&blocks)
-                .and_then(|digests| crate::cuda::sha256_pairs_reduce_cuda(&digests))
-            {
+            if let Some(root) = crate::cuda::sha256_merkle_root_cuda(&blocks) {
                 let metrics = iroha_telemetry::metrics::global_or_default();
                 metrics.merkle_root_gpu_total.inc();
                 return root;

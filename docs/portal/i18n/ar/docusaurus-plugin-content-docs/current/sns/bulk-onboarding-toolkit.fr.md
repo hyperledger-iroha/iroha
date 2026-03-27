@@ -73,9 +73,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -241,7 +241,7 @@ reussite/echec des soumissions. مرشح اللوحة على أساس `release` 
   المراجع إلى الملفات هي قرارات تتعلق بوضع ملف CSV.
   تؤدي بيانات التعريف غير المهمة إلى خطأ في التحقق من الصحة.
 - **وحدات التحكم:** الخلايا تحترم `--default-controllers`. فورنيسيز
-  القوائم الصريحة (على سبيل المثال `i105...;i105...`) عند تفويضها
+  القوائم الصريحة (على سبيل المثال `<i105-account-id>;<i105-account-id>`) عند تفويضها
   الجهات الفاعلة غير المالك.
 
 الإشارات هي إشارات بأرقام الخطوط السياقية (على سبيل المثال

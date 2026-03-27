@@ -56,6 +56,24 @@ pub struct Args {
     /// Override the default chain identifier.
     #[arg(long, value_name = "CHAIN")]
     pub chain_id: Option<String>,
+    /// Override the public P2P host/IP advertised for this peer.
+    #[arg(long, value_name = "HOST")]
+    pub p2p_host: Option<String>,
+    /// Override the public P2P port for this peer.
+    #[arg(long, value_name = "PORT")]
+    pub p2p_port: Option<u16>,
+    /// Override the Torii host/IP advertised for this peer.
+    #[arg(long, value_name = "HOST")]
+    pub torii_host: Option<String>,
+    /// Override the Torii port for this peer.
+    #[arg(long, value_name = "PORT")]
+    pub torii_port: Option<u16>,
+    /// Override the relay mode instead of prompting interactively.
+    #[arg(long, value_enum)]
+    pub relay_mode: Option<RelayMode>,
+    /// Relay hub addresses (`host:port`), repeat once per hub when relay mode uses them.
+    #[arg(long = "relay-hub-address", value_name = "HOST:PORT")]
+    pub relay_hub_addresses: Vec<String>,
     /// Override the bootstrap peer (`pubkey@host:port`). Comma-separated for multiple entries.
     #[arg(long, value_name = "PEERS")]
     pub trusted_peers: Option<String>,
@@ -78,8 +96,8 @@ struct Answers {
     output_dir: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RelayMode {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum RelayMode {
     Disabled,
     Hub,
     Spoke,
@@ -208,27 +226,42 @@ impl<T: Write> RunArgs<T> for Args {
             .wrap_err("failed to serialise genesis after wizard updates")?;
         fs::write(&genesis_path, genesis_payload)
             .wrap_err_with(|| format!("failed to write genesis to {}", genesis_path.display()))?;
-
-        tui::success(format!(
-            "Config and genesis ready under {}",
-            answers.output_dir.display()
-        ));
-        writeln!(writer, "config: {}", config_path.display())?;
-        writeln!(writer, "genesis: {}", genesis_path.display())?;
-        if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
-            writeln!(writer, "sora profile: pass --sora when starting irohad")?;
-        }
-        writeln!(
-            writer,
-            "next: irohad {} --config {} --genesis-manifest-json {}",
+        let guide_path = answers.output_dir.join("README.md");
+        let next_command = format!(
+            "cd {} && irohad {}--config {} --genesis-manifest-json {}",
+            answers.output_dir.display(),
             if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
-                "--sora"
+                "--sora "
             } else {
                 ""
             },
             config_path.display(),
             genesis_path.display()
+        );
+        write_wizard_readme(
+            &guide_path,
+            answers.profile,
+            &answers.chain,
+            keypair.public_key(),
+            &config_path,
+            &genesis_path,
+            &next_command,
         )?;
+
+        tui::success(format!(
+            "Config and genesis ready under {}",
+            answers.output_dir.display()
+        ));
+        writeln!(writer, "profile: {}", answers.profile)?;
+        writeln!(writer, "chain_id: {}", answers.chain)?;
+        writeln!(writer, "generated_public_key: {}", keypair.public_key())?;
+        writeln!(writer, "config: {}", config_path.display())?;
+        writeln!(writer, "genesis: {}", genesis_path.display())?;
+        writeln!(writer, "guide: {}", guide_path.display())?;
+        if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
+            writeln!(writer, "sora profile: pass --sora when starting irohad")?;
+        }
+        writeln!(writer, "next: {next_command}")?;
         Ok(())
     }
 }
@@ -245,32 +278,46 @@ fn gather_answers(args: &Args) -> Result<Answers> {
     )?;
     let p2p_host = resolve_text(
         "Trusted peer public host",
-        None,
+        args.p2p_host.clone(),
         defaults.host.to_string(),
         args.non_interactive,
     )?;
-    let p2p_port = resolve_number("P2P port", defaults.p2p_port, args.non_interactive)?;
+    let p2p_port = resolve_number(
+        "P2P port",
+        args.p2p_port,
+        defaults.p2p_port,
+        args.non_interactive,
+    )?;
     let torii_host = resolve_text(
         "Trusted peer Torii host",
-        None,
+        args.torii_host.clone(),
         defaults.host.to_string(),
         args.non_interactive,
     )?;
-    let torii_port = resolve_number("Torii port", defaults.torii_port, args.non_interactive)?;
+    let torii_port = resolve_number(
+        "Torii port",
+        args.torii_port,
+        defaults.torii_port,
+        args.non_interactive,
+    )?;
 
-    let relay_mode = resolve_relay_mode(args.non_interactive)?;
+    let relay_mode = resolve_relay_mode(args.relay_mode, args.non_interactive)?;
     let relay_hub_addresses = if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist) {
-        let raw = resolve_text(
-            "Relay hub addresses (comma separated host:port)",
-            None,
-            format!("{}:{}", defaults.host, defaults.p2p_port),
-            args.non_interactive,
-        )?;
-        raw.split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>()
+        if !args.relay_hub_addresses.is_empty() {
+            args.relay_hub_addresses.clone()
+        } else {
+            let raw = resolve_text(
+                "Relay hub addresses (comma separated host:port)",
+                None,
+                format!("{}:{}", defaults.host, defaults.p2p_port),
+                args.non_interactive,
+            )?;
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        }
     } else {
         Vec::new()
     };
@@ -483,7 +530,10 @@ fn resolve_profile(args: &Args) -> Result<Profile> {
     .wrap_err("failed to read profile selection")
 }
 
-fn resolve_relay_mode(non_interactive: bool) -> Result<RelayMode> {
+fn resolve_relay_mode(cli_value: Option<RelayMode>, non_interactive: bool) -> Result<RelayMode> {
+    if let Some(mode) = cli_value {
+        return Ok(mode);
+    }
     if non_interactive {
         return Ok(RelayMode::Disabled);
     }
@@ -518,7 +568,15 @@ fn resolve_text(
         .wrap_err_with(|| format!("{prompt} prompt failed"))
 }
 
-fn resolve_number(prompt: &str, default: u16, non_interactive: bool) -> Result<u16> {
+fn resolve_number(
+    prompt: &str,
+    cli_value: Option<u16>,
+    default: u16,
+    non_interactive: bool,
+) -> Result<u16> {
+    if let Some(value) = cli_value {
+        return Ok(value);
+    }
     if non_interactive {
         return Ok(default);
     }
@@ -528,6 +586,39 @@ fn resolve_number(prompt: &str, default: u16, non_interactive: bool) -> Result<u
         .wrap_err_with(|| format!("{prompt} prompt failed"))?;
     text.parse::<u16>()
         .wrap_err_with(|| format!("{prompt} must be a u16 port"))
+}
+
+fn write_wizard_readme(
+    path: &PathBuf,
+    profile: Profile,
+    chain_id: &str,
+    public_key: &PublicKey,
+    config_path: &PathBuf,
+    genesis_path: &PathBuf,
+    next_command: &str,
+) -> Result<()> {
+    let rendered = format!(
+        concat!(
+            "# Kagami Wizard Output\n\n",
+            "- Profile: `{profile}`\n",
+            "- Chain ID: `{chain_id}`\n",
+            "- Generated public key: `{public_key}`\n",
+            "- Config: `{config}`\n",
+            "- Genesis: `{genesis}`\n\n",
+            "## Next step\n\n",
+            "```bash\n",
+            "{next_command}\n",
+            "```\n",
+        ),
+        profile = profile,
+        chain_id = chain_id,
+        public_key = public_key,
+        config = config_path.display(),
+        genesis = genesis_path.display(),
+        next_command = next_command,
+    );
+    fs::write(path, rendered)
+        .wrap_err_with(|| format!("failed to write wizard guide to {}", path.display()))
 }
 
 fn load_config_template(
@@ -1005,6 +1096,12 @@ mod tests {
             output_dir: PathBuf::from("out"),
             non_interactive: true,
             chain_id: None,
+            p2p_host: None,
+            p2p_port: None,
+            torii_host: None,
+            torii_port: None,
+            relay_mode: None,
+            relay_hub_addresses: Vec::new(),
             trusted_peers: None,
             trusted_peers_pop: None,
         };

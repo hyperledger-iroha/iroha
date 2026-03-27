@@ -5157,6 +5157,7 @@ mod state {
         local_pk: &K::PublicKey,
         remote_pk: &K::PublicKey,
         chain_id: Option<&iroha_data_model::ChainId>,
+        transport_binding: Option<&[u8; iroha_crypto::Hash::LENGTH]>,
     ) -> Vec<u8> {
         let _ = (local_pk, remote_pk);
         let mut data = Vec::new();
@@ -5164,6 +5165,9 @@ mod state {
         data.extend_from_slice(&advertised_addr.encode());
         if let Some(cid) = chain_id {
             data.extend_from_slice(&cid.encode());
+        }
+        if let Some(binding) = transport_binding {
+            data.extend_from_slice(binding);
         }
         data
     }
@@ -5357,21 +5361,27 @@ mod state {
                         match stream {
                             crate::transport::TcpConnectStream::Plain(tcp) => {
                                 let tls = crate::transport::tls::connect_tls(sni_host, tcp).await?;
+                                let transport_binding =
+                                    Some(crate::transport::tls_peer_certificate_fingerprint(&tls)?);
                                 let (read_half, write_half) = tokio::io::split(tls);
-                                Ok::<_, std::io::Error>(Connection::from_split(
+                                Ok::<_, std::io::Error>(Connection::from_split_with_binding(
                                     connection_id,
                                     read_half,
                                     write_half,
+                                    transport_binding,
                                 ))
                             }
                             crate::transport::TcpConnectStream::Tls(proxy_tls) => {
                                 let tls =
                                     crate::transport::tls::connect_tls(sni_host, proxy_tls).await?;
+                                let transport_binding =
+                                    Some(crate::transport::tls_peer_certificate_fingerprint(&tls)?);
                                 let (read_half, write_half) = tokio::io::split(tls);
-                                Ok::<_, std::io::Error>(Connection::from_split(
+                                Ok::<_, std::io::Error>(Connection::from_split_with_binding(
                                     connection_id,
                                     read_half,
                                     write_half,
+                                    transport_binding,
                                 ))
                             }
                         }
@@ -5473,6 +5483,8 @@ mod state {
 
                     let res = tokio::time::timeout(remaining, async {
                         let conn = dialer.connect(target, QUIC_SERVER_NAME).await?;
+                        let transport_binding =
+                            Some(crate::transport::quic_peer_certificate_fingerprint(&conn)?);
                         let remote = conn.remote_address();
                         let (send_hi, recv_hi) = conn
                             .open_bi()
@@ -5495,6 +5507,7 @@ mod state {
                             send_low,
                             recv_low,
                             Some(remote),
+                            transport_binding,
                         ))
                     })
                     .await;
@@ -6264,6 +6277,7 @@ mod state {
                 &kx_local_pk,
                 &kx_remote_pk,
                 chain_id.as_ref(),
+                connection.transport_binding.as_ref(),
             );
             let signature = Signature::new(key_pair.private_key(), &payload);
             let (alg, pk_bytes) = key_pair.public_key().to_bytes();
@@ -6399,6 +6413,7 @@ mod state {
                 &kx_remote_pk,
                 &kx_local_pk,
                 chain_id.as_ref(),
+                connection.transport_binding.as_ref(),
             );
             signature.verify(&remote_pub_key, &payload)?;
 
@@ -6872,6 +6887,155 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn handshake_accepts_matching_transport_binding() {
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
+        let key_pair = KeyPair::random();
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[9u8; 32]).unwrap();
+        let transport_binding = [0x5Au8; iroha_crypto::Hash::LENGTH];
+
+        let (stream_a, stream_b) = tokio::io::duplex(256);
+        let (sender_read, sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+
+        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+            our_public_address: addr,
+            expected_peer_id: None,
+            key_pair,
+            kx_local_pk: sender_kx.clone(),
+            kx_remote_pk: receiver_kx.clone(),
+            connection: Connection::from_split_with_binding(
+                11,
+                sender_read,
+                sender_write,
+                Some(transport_binding),
+            ),
+            cryptographer: cryptographer.clone(),
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        });
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split_with_binding(
+                12,
+                receiver_read,
+                receiver_write,
+                Some(transport_binding),
+            ),
+            expected_peer_id: None,
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let sender = tokio::spawn(async move {
+            let _ = SendKey::send_our_public_key(send_key).await?;
+            Result::<(), crate::Error>::Ok(())
+        });
+
+        let ready = GetKey::read_their_public_key(get_key)
+            .await
+            .expect("handshake should succeed with matching transport binding");
+        sender
+            .await
+            .expect("sender task panicked")
+            .expect("sending handshake should succeed");
+
+        assert_eq!(ready.connection.transport_binding, Some(transport_binding));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_mismatched_transport_binding() {
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1446".parse().unwrap();
+        let key_pair = KeyPair::random();
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[10u8; 32]).unwrap();
+
+        let (stream_a, stream_b) = tokio::io::duplex(256);
+        let (sender_read, sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+
+        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+            our_public_address: addr,
+            expected_peer_id: None,
+            key_pair,
+            kx_local_pk: sender_kx.clone(),
+            kx_remote_pk: receiver_kx.clone(),
+            connection: Connection::from_split_with_binding(
+                13,
+                sender_read,
+                sender_write,
+                Some([0x11u8; iroha_crypto::Hash::LENGTH]),
+            ),
+            cryptographer: cryptographer.clone(),
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        });
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split_with_binding(
+                14,
+                receiver_read,
+                receiver_write,
+                Some([0x22u8; iroha_crypto::Hash::LENGTH]),
+            ),
+            expected_peer_id: None,
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let sender = tokio::spawn(async move {
+            let _ = SendKey::send_our_public_key(send_key).await?;
+            Result::<(), crate::Error>::Ok(())
+        });
+
+        let err = match GetKey::read_their_public_key(get_key).await {
+            Ok(_) => panic!("mismatched transport binding must be rejected"),
+            Err(err) => err,
+        };
+        sender
+            .await
+            .expect("sender task panicked")
+            .expect("sending handshake should succeed");
+
+        assert!(
+            matches!(err, crate::Error::Keys(_)),
+            "expected signature verification failure, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn outgoing_handshake_rejects_unexpected_peer_identity() {
         let kx = KexAlgo::new();
         let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
@@ -7263,6 +7427,8 @@ mod cryptographer {
 
 /// An identification for peer connections.
 pub type ConnectionId = u64;
+/// Hash-sized binding for authenticated transport sessions.
+pub type TransportBinding = [u8; iroha_crypto::Hash::LENGTH];
 
 /// P2P connection
 pub struct Connection {
@@ -7280,6 +7446,8 @@ pub struct Connection {
     pub quic: Option<crate::transport::QuicConnection>,
     /// Remote addr, for logging purpose.
     pub remote_addr: Option<SocketAddr>,
+    /// Optional certificate fingerprint for TLS/QUIC channel binding.
+    pub transport_binding: Option<TransportBinding>,
 }
 
 impl Connection {
@@ -7295,11 +7463,27 @@ impl Connection {
             write_low: None,
             quic: None,
             remote_addr,
+            transport_binding: None,
         }
     }
 
     /// Instantiate a connection from arbitrary read/write halves.
     pub fn from_split<R, W>(id: ConnectionId, read: R, write: W) -> Self
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        Self::from_split_with_binding(id, read, write, None)
+    }
+
+    /// Instantiate a connection from arbitrary read/write halves with an optional
+    /// transport certificate binding.
+    pub fn from_split_with_binding<R, W>(
+        id: ConnectionId,
+        read: R,
+        write: W,
+        transport_binding: Option<TransportBinding>,
+    ) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
@@ -7312,6 +7496,7 @@ impl Connection {
             write_low: None,
             quic: None,
             remote_addr: None,
+            transport_binding,
         }
     }
 
@@ -7325,6 +7510,7 @@ impl Connection {
         send_low: Option<quinn::SendStream>,
         recv_low: Option<quinn::RecvStream>,
         remote_addr: Option<SocketAddr>,
+        transport_binding: Option<TransportBinding>,
     ) -> Self {
         Connection {
             id,
@@ -7340,6 +7526,7 @@ impl Connection {
             }),
             quic: Some(quic),
             remote_addr,
+            transport_binding,
         }
     }
 }

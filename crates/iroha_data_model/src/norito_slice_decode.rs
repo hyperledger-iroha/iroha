@@ -38,6 +38,7 @@ impl_decode_from_slice_via_archived! {
     crate::asset::id::AssetDefinitionId,
     crate::asset::alias::AssetDefinitionAlias,
     crate::nft::NftId,
+    crate::rwa::RwaId,
     crate::trigger::TriggerId,
     crate::role::RoleId,
     crate::parameter::CustomParameterId,
@@ -126,6 +127,7 @@ impl_decode_from_slice_via_archived! {
     crate::confidential::ConfidentialFeatureDigest,
     crate::asset::value::Asset,
     crate::nft::Nft,
+    crate::rwa::Rwa,
     crate::permission::Permission,
     crate::parameter::system::Parameter,
     // Triggers and actions

@@ -73,6 +73,7 @@ use sha2::{Digest, Sha256};
 #[cfg(feature = "telemetry")]
 use crate::telemetry::StateTelemetry;
 use crate::{
+    executor::ContractRuntimeExecutionContext,
     smartcontracts::isi::{
         query::{IvmQueryValidator, QueryLimits, ValidQueryRequest},
         triggers::{TRIGGER_ENABLED_METADATA_KEY, set::SetReadOnly},
@@ -834,6 +835,7 @@ pub(crate) struct HostExecutionArtifacts {
     confidential_gas_delta: u64,
     completed_axt: Vec<axt::HostAxtState>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    contract_runtime_context: Option<ContractRuntimeExecutionContext>,
 }
 
 impl HostExecutionArtifacts {
@@ -844,7 +846,12 @@ impl HostExecutionArtifacts {
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
         let executor = tx.world.executor.clone();
         for instr in &self.queued {
-            executor.execute_instruction(tx, authority, instr.clone())?;
+            executor.execute_instruction_with_contract_runtime_context(
+                tx,
+                authority,
+                instr.clone(),
+                self.contract_runtime_context.as_ref(),
+            )?;
         }
         if self.confidential_gas_delta > 0 {
             tx.record_confidential_gas_delta(self.confidential_gas_delta);
@@ -1833,6 +1840,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.durable_state_overlay.clear();
     }
 
+    /// Replace the durable smart-contract state snapshot with a prebuilt offline fixture.
+    pub fn set_durable_state_snapshot(&mut self, snapshot: BTreeMap<Name, Vec<u8>>) {
+        self.durable_state_base = snapshot;
+        self.durable_state_overlay.clear();
+    }
+
     /// Set the chain id for ZK domain binding.
     pub fn set_chain_id_bytes(&mut self, chain_id: Vec<u8>) {
         self.chain_id_bytes = chain_id;
@@ -2283,6 +2296,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     pub(crate) fn into_execution_artifacts(
         mut self,
+        contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<HostExecutionArtifacts, ValidationFail> {
         let queued = self.drain_instructions();
         self.validate_queued_for_zk(&queued)?;
@@ -2297,6 +2311,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             confidential_gas_delta,
             completed_axt,
             durable_state_overlay,
+            contract_runtime_context,
         })
     }
 
@@ -2309,12 +2324,28 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
+        self.apply_queued_with_contract_runtime_context(tx, authority, None)
+    }
+
+    /// Apply queued ISIs via the executor while preserving an optional
+    /// contract runtime context for nested contract execution.
+    pub fn apply_queued_with_contract_runtime_context(
+        &mut self,
+        tx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    ) -> Result<Vec<InstructionBox>, ValidationFail> {
         let queued = self.drain_instructions();
         self.validate_queued_for_zk(&queued)?;
         let executor = tx.world.executor.clone();
         for instr in &queued {
             let instr = instr.clone();
-            executor.execute_instruction(tx, authority, instr)?;
+            executor.execute_instruction_with_contract_runtime_context(
+                tx,
+                authority,
+                instr,
+                contract_runtime_context,
+            )?;
         }
         if !queued.is_empty() {
             let delta = queued

@@ -92,6 +92,32 @@ impl JsonKeyCodec for crate::account::rekey::AccountLabel {
     }
 }
 
+impl JsonKeyCodec for crate::smart_contract::ContractAlias {
+    fn encode_json_key(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_ref(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        encoded
+            .parse()
+            .map_err(|err: crate::ParseError| json::Error::Message(err.reason.into()))
+    }
+}
+
+impl JsonKeyCodec for crate::smart_contract::ContractAddress {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(self.as_ref(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        encoded
+            .parse()
+            .map_err(|err: crate::smart_contract::ContractAddressError| {
+                json::Error::Message(err.to_string())
+            })
+    }
+}
+
 impl JsonKeyCodec for crate::confidential::ConfidentialParamsId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
@@ -247,7 +273,7 @@ mod tests {
 
     #[test]
     fn account_id_json_key_codec_rejects_domain_suffix_literal() {
-        let err = crate::account::AccountId::decode_json_key("alice@wonderland")
+        let err = crate::account::AccountId::decode_json_key("alice@hbl.dataspace")
             .expect_err("domain suffix literal must be rejected");
         assert!(
             err.to_string().contains("canonical I105"),

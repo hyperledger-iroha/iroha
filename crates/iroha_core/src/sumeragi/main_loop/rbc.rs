@@ -927,7 +927,7 @@ pub(super) struct RbcPlanInputs<'a> {
 }
 
 impl Actor {
-    fn release_block_payload_dedup(&self, key: &BlockPayloadDedupKey) {
+    pub(super) fn release_block_payload_dedup(&self, key: &BlockPayloadDedupKey) {
         let mut guard = self
             .block_payload_dedup
             .lock()
@@ -1458,6 +1458,15 @@ impl Actor {
 
     pub(super) fn install_rbc_session_plan(&mut self, plan: &RbcSessionPlan) -> Result<()> {
         let key = plan.key;
+        if self.retire_exact_frontier_rbc_runtime(key, "plan_install") {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                "skipping RBC session installation for near-tip locally known block"
+            );
+            return Ok(());
+        }
         if self
             .subsystems
             .da_rbc
@@ -1480,6 +1489,9 @@ impl Actor {
 
     pub(super) fn broadcast_rbc_session_plan(&mut self, plan: RbcSessionPlan) -> Result<()> {
         let key = plan.key;
+        if self.retire_exact_frontier_rbc_runtime(key, "plan_broadcast") {
+            return Ok(());
+        }
         let topology_peers = plan.roster;
         if topology_peers.is_empty() {
             return Ok(());
@@ -2281,13 +2293,10 @@ impl Actor {
                                         leader_signature,
                                         payload,
                                     );
-                                    if let Err(err) = self.handle_block_created(
-                                        super::message::BlockCreated {
-                                            block,
-                                            frontier: None,
-                                        },
-                                        None,
-                                    ) {
+                                    let block_created =
+                                        self.frontier_block_created_for_wire(&block);
+                                    if let Err(err) = self.handle_block_created(block_created, None)
+                                    {
                                         warn!(
                                             ?err,
                                             height = key.1,
@@ -2470,9 +2479,40 @@ impl Actor {
         roster: &[PeerId],
         now: Instant,
     ) -> bool {
-        if !self.frontier_slot_is_exact_height(key.1)
-            || self.authoritative_block_payload_available(key.0)
-        {
+        let committed_height = self.committed_height_snapshot();
+        let frontier_height = committed_height.saturating_add(1);
+        if key.1 <= committed_height {
+            self.clear_missing_block_request(&key.0, MissingBlockClearReason::Obsolete);
+            self.clear_missing_block_view_change(&key.0);
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                committed_height,
+                "retiring superseded RBC recovery without generic missing-BlockCreated fetch"
+            );
+            return true;
+        }
+        if key.1 == frontier_height.saturating_add(1) {
+            self.next_slot_prefetch = Some(super::FrontierPrefetchSlot {
+                height: key.1,
+                view: key.2,
+                block_hash: key.0,
+            });
+            self.clear_missing_block_request(&key.0, MissingBlockClearReason::Obsolete);
+            self.clear_missing_block_view_change(&key.0);
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                "staging next-slot prefetch without generic missing-BlockCreated fetch"
+            );
+            return true;
+        }
+        if key.1 != frontier_height {
+            return false;
+        }
+        if self.frontier_block_materialized_locally(key.0) && !self.block_known_locally(key.0) {
             return false;
         }
         if roster.is_empty() {
@@ -2482,8 +2522,10 @@ impl Actor {
                 key.2,
                 None,
                 BTreeSet::new(),
-                false,
-                false,
+                /*block_created_seen*/ false,
+                /*exact_fetch_armed*/ true,
+                self.frontier_block_materialized_locally(key.0),
+                None,
                 None,
                 now,
             ) {
@@ -2506,9 +2548,12 @@ impl Actor {
             );
         }
 
-        self.handle_frontier_body_gap_with_topology(
-            key.0, key.1, key.2, &signers, &topology, false, now,
-        )
+        let _ = self.handle_frontier_body_gap_with_topology(
+            key.0, key.1, key.2, &signers, &topology, /*exact_fetch_armed*/ true, now,
+        );
+        self.clear_missing_block_request(&key.0, MissingBlockClearReason::Obsolete);
+        self.clear_missing_block_view_change(&key.0);
+        true
     }
 
     fn suppress_far_future_rbc_missing_block_fetch(

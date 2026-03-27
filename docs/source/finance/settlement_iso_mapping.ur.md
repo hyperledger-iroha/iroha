@@ -211,12 +211,12 @@ iroha app settlement dvp \
   --settlement-id DVP-FIXTURE-1 \
   --delivery-asset security#equities \
   --delivery-quantity 500 \
-  --delivery-from i105... \
-  --delivery-to i105... \
+  --delivery-from <i105-account-id> \
+  --delivery-to <i105-account-id> \
   --payment-asset usd#fi \
   --payment-quantity 1050000 \
-  --payment-from i105... \
-  --payment-to i105... \
+  --payment-from <i105-account-id> \
+  --payment-to <i105-account-id> \
   --delivery-instrument-id US0378331005 \
   --place-of-settlement-mic XNAS \
   --partial-indicator npar \

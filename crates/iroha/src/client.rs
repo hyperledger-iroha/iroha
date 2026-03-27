@@ -123,6 +123,16 @@ const HEADER_SORA_PROOF_STATUS: &str = "sora-proof-status";
 /// `Result` with [`QueryError`] as an error
 pub type QueryResult<T> = core::result::Result<T, QueryError>;
 
+fn ensure_canonical_i105_account_id(value: &str, field: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed != value {
+        return Err(eyre!("{field} must not contain surrounding whitespace"));
+    }
+    AccountId::parse_encoded(trimmed)
+        .map_err(|err| eyre!("{field} must be a canonical I105 account id: {err}"))?;
+    Ok(())
+}
+
 /// Filters for `/v1/zk/prover/reports` listing/counting/deletion endpoints.
 #[derive(Debug, Default, Clone)]
 pub struct ZkProverReportsFilter<'a> {
@@ -620,10 +630,10 @@ pub struct UaidPortfolioTotals {
 /// Asset position grouped under a UAID-backed account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidPortfolioAsset {
-    /// Asset definition selector.
-    pub asset: String,
-    /// Balance scope selector (`global` or `dataspace:<id>`).
-    pub scope: String,
+    /// Concrete canonical asset identifier.
+    pub asset_id: String,
+    /// Canonical asset definition identifier.
+    pub asset_definition_id: String,
     /// Norito numeric quantity (string encoded to preserve precision).
     pub quantity: String,
 }
@@ -748,6 +758,25 @@ impl ExplorerAccountQrSnapshot {
             qr_version,
             svg,
         })
+    }
+}
+
+/// Query parameters accepted by the UAID portfolio endpoint.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UaidPortfolioQuery {
+    /// Optional exact asset-id filter.
+    pub asset_id: Option<String>,
+}
+
+impl UaidPortfolioQuery {
+    fn apply(&self, mut builder: DefaultRequestBuilder) -> Result<DefaultRequestBuilder> {
+        if let Some(asset_id) = self.asset_id.as_deref() {
+            let normalized = iroha_data_model::asset::AssetId::parse_literal(asset_id)
+                .map_err(|err| eyre!("uaid portfolio query.asset_id is invalid: {err}"))?
+                .to_string();
+            builder = builder.param("asset_id", &normalized);
+        }
+        Ok(builder)
     }
 }
 
@@ -1004,13 +1033,18 @@ impl UaidPortfolioAsset {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
-        let asset = require_string(map.get("asset"), &format!("{context}.asset"))?.to_owned();
-        let scope = require_string(map.get("scope"), &format!("{context}.scope"))?.to_owned();
+        let asset_id =
+            require_string(map.get("asset_id"), &format!("{context}.asset_id"))?.to_owned();
+        let asset_definition_id = require_string(
+            map.get("asset_definition_id"),
+            &format!("{context}.asset_definition_id"),
+        )?
+        .to_owned();
         let quantity =
             require_string(map.get("quantity"), &format!("{context}.quantity"))?.to_owned();
         Ok(Self {
-            asset,
-            scope,
+            asset_id,
+            asset_definition_id,
             quantity,
         })
     }
@@ -3416,7 +3450,7 @@ mod evidence_http_tests {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        let literal = "alice@wonderland";
+        let literal = "alice@hbl.dataspace";
 
         with_mock_http(respond_with(&snapshots, response), || {
             let resp = client
@@ -6490,6 +6524,30 @@ impl Client {
             .send()
     }
 
+    /// Convenience: POST `/v1/aliases/by_account` with a canonical account id and optional
+    /// alias-scope filters.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, NORITO serialization, or the HTTP call fails.
+    pub fn post_alias_lookup_by_account(
+        &self,
+        account_id: &str,
+        dataspace: Option<&str>,
+        domain: Option<&str>,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/aliases/by_account");
+        let body = norito::json::to_vec(&norito::json!({
+            "account_id": account_id,
+            "dataspace": dataspace,
+            "domain": domain,
+        }))?;
+        self.default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()
+    }
+
     /// Convenience: POST `/v1/assets/aliases/resolve` with an asset alias literal.
     ///
     /// # Errors
@@ -7595,6 +7653,7 @@ impl Client {
         &self,
         request: &SorafsRepairWorkerClaimRequest,
     ) -> Result<Response<Vec<u8>>> {
+        ensure_canonical_i105_account_id(&request.worker_id, "worker_id")?;
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/claim");
         let body = norito::json::to_vec(request)?;
         self.default_request(HttpMethod::POST, url)
@@ -7612,6 +7671,7 @@ impl Client {
         &self,
         request: &SorafsRepairWorkerCompleteRequest,
     ) -> Result<Response<Vec<u8>>> {
+        ensure_canonical_i105_account_id(&request.worker_id, "worker_id")?;
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/complete");
         let body = norito::json::to_vec(request)?;
         self.default_request(HttpMethod::POST, url)
@@ -7629,6 +7689,7 @@ impl Client {
         &self,
         request: &SorafsRepairWorkerFailRequest,
     ) -> Result<Response<Vec<u8>>> {
+        ensure_canonical_i105_account_id(&request.worker_id, "worker_id")?;
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/fail");
         let body = norito::json::to_vec(request)?;
         self.default_request(HttpMethod::POST, url)
@@ -7646,6 +7707,7 @@ impl Client {
         &self,
         proposal: &RepairSlashProposalV1,
     ) -> Result<Response<Vec<u8>>> {
+        ensure_canonical_i105_account_id(&proposal.auditor_account, "auditor_account")?;
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/slash");
         let body = norito::json::to_vec(proposal)?;
         self.default_request(HttpMethod::POST, url)
@@ -8516,7 +8578,8 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/contracts/deploy` with JSON body `{ authority, private_key, code_b64 }`.
+    /// POST `/v1/contracts/deploy` with JSON body
+    /// `{ authority, private_key, code_b64, dataspace? }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn post_contract_deploy_json(
@@ -8524,6 +8587,7 @@ impl Client {
         authority: &iroha_data_model::account::AccountId,
         private_key: &iroha_crypto::PrivateKey,
         code_b64: &str,
+        dataspace: Option<&str>,
     ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/contracts/deploy");
         let mut payload = norito::json::Map::new();
@@ -8535,6 +8599,9 @@ impl Client {
             ))?,
         );
         payload.insert("code_b64".into(), code_b64.into());
+        if let Some(dataspace) = dataspace {
+            payload.insert("dataspace".into(), dataspace.into());
+        }
         let body = norito::json::to_vec(&norito::json::Value::from(payload))?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -8550,6 +8617,118 @@ impl Client {
             ));
         }
         Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// POST `/v1/contracts/call` with a JSON body.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn post_contract_call_json(
+        &self,
+        authority: &iroha_data_model::account::AccountId,
+        private_key: Option<&iroha_crypto::PrivateKey>,
+        contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+        contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+        entrypoint: Option<&str>,
+        payload: Option<&norito::json::Value>,
+        creation_time_ms: Option<u64>,
+        gas_asset_id: Option<&str>,
+        fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+        gas_limit: u64,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/contracts/call");
+        let mut body = norito::json::Map::new();
+        body.insert("authority".into(), authority.to_string().into());
+        if let Some(private_key) = private_key {
+            body.insert(
+                "private_key".into(),
+                norito::json::to_value(&iroha_data_model::prelude::ExposedPrivateKey(
+                    private_key.clone(),
+                ))?,
+            );
+        }
+        if let Some(contract_address) = contract_address {
+            body.insert(
+                "contract_address".into(),
+                norito::json::to_value(contract_address)?,
+            );
+        }
+        if let Some(contract_alias) = contract_alias {
+            body.insert(
+                "contract_alias".into(),
+                norito::json::to_value(contract_alias)?,
+            );
+        }
+        if let Some(entrypoint) = entrypoint {
+            body.insert("entrypoint".into(), entrypoint.into());
+        }
+        if let Some(payload) = payload {
+            body.insert("payload".into(), payload.clone());
+        }
+        if let Some(creation_time_ms) = creation_time_ms {
+            body.insert("creation_time_ms".into(), creation_time_ms.into());
+        }
+        if let Some(gas_asset_id) = gas_asset_id {
+            body.insert("gas_asset_id".into(), gas_asset_id.into());
+        }
+        if let Some(fee_sponsor) = fee_sponsor {
+            body.insert("fee_sponsor".into(), fee_sponsor.to_string().into());
+        }
+        body.insert("gas_limit".into(), gas_limit.into());
+        let payload = norito::json::to_vec(&norito::json::Value::Object(body))?;
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(payload),
+        )?;
+        Self::parse_json_ok_response(&response, "contract call request")
+    }
+
+    /// POST `/v1/contracts/view` with a JSON body.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn post_contract_view_json(
+        &self,
+        authority: &iroha_data_model::account::AccountId,
+        contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+        contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+        entrypoint: Option<&str>,
+        payload: Option<&norito::json::Value>,
+        gas_limit: u64,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/contracts/view");
+        let mut body = norito::json::Map::new();
+        body.insert("authority".into(), authority.to_string().into());
+        if let Some(contract_address) = contract_address {
+            body.insert(
+                "contract_address".into(),
+                norito::json::to_value(contract_address)?,
+            );
+        }
+        if let Some(contract_alias) = contract_alias {
+            body.insert(
+                "contract_alias".into(),
+                norito::json::to_value(contract_alias)?,
+            );
+        }
+        if let Some(entrypoint) = entrypoint {
+            body.insert("entrypoint".into(), entrypoint.into());
+        }
+        if let Some(payload) = payload {
+            body.insert("payload".into(), payload.clone());
+        }
+        body.insert("gas_limit".into(), gas_limit.into());
+        let payload = norito::json::to_vec(&norito::json::Value::Object(body))?;
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(payload),
+        )?;
+        Self::parse_json_ok_response(&response, "contract view request")
     }
 
     /// POST `/v1/subscriptions/plans` with a JSON subscription plan payload.
@@ -8904,13 +9083,30 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_uaid_portfolio(&self, uaid: &str) -> Result<UaidPortfolioResponse> {
+        self.get_uaid_portfolio_with_query(uaid, None)
+    }
+
+    /// GET `/v1/accounts/{uaid}/portfolio` — aggregated holdings for a UAID with query parameters.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    pub fn get_uaid_portfolio_with_query(
+        &self,
+        uaid: &str,
+        query: Option<UaidPortfolioQuery>,
+    ) -> Result<UaidPortfolioResponse> {
         let canonical = canonicalize_uaid_literal(uaid, "get_uaid_portfolio.uaid")?;
         let path = format!("v1/accounts/{canonical}/portfolio");
         let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
-        )?;
+        let builder = self
+            .default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON);
+        let builder = if let Some(options) = query {
+            options.apply(builder)?
+        } else {
+            builder
+        };
+        let resp = self.send_builder(builder)?;
         let payload = Self::parse_json_ok_response(&resp, "uaid portfolio request")?;
         UaidPortfolioResponse::from_value(payload)
     }
@@ -11570,6 +11766,10 @@ mod tests {
     const PASSWORD: &str = "ilovetea";
     // `mad_hatter:ilovetea` encoded with base64
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
+    const TEST_WORKER_I105: &str =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const TEST_AUDITOR_I105: &str =
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
 
     fn sample_commit_qc(block_header: &BlockHeader) -> Qc {
         let validator_set: Vec<PeerId> = Vec::new();
@@ -11813,7 +12013,8 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.toml".to_owned()),
                 validator_ids: vec![
-                    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
+                    "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+                        .to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -13298,12 +13499,12 @@ mod tests {
       "dataspace_alias":"retail",
       "accounts":[
         {{
-          "account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "account_id":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
           "label":"primary",
           "assets":[
             {{
-              "asset":"cash#nexus",
-              "scope":"global",
+              "asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity":"500"
             }}
           ]
@@ -13329,6 +13530,14 @@ mod tests {
         assert_eq!(dataspace.dataspace_alias.as_deref(), Some("retail"));
         assert_eq!(dataspace.accounts.len(), 1);
         assert_eq!(dataspace.accounts[0].assets.len(), 1);
+        assert_eq!(
+            dataspace.accounts[0].assets[0].asset_id,
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+        );
+        assert_eq!(
+            dataspace.accounts[0].assets[0].asset_definition_id,
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+        );
         assert_eq!(dataspace.accounts[0].assets[0].quantity, "500");
 
         let snapshot = snapshots
@@ -13353,6 +13562,53 @@ mod tests {
     }
 
     #[test]
+    fn get_uaid_portfolio_with_query_encodes_asset_id_filter() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(base_url());
+        let uaid_hex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543211";
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        )
+        .expect("asset definition literal");
+        let asset_account = iroha_data_model::account::AccountId::parse_encoded(TEST_WORKER_I105)
+            .expect("worker account literal")
+            .into_account_id();
+        let asset_id =
+            iroha_data_model::asset::AssetId::new(asset_definition, asset_account).to_string();
+        let payload = format!(
+            r#"{{
+  "uaid":"uaid:{uaid_hex}",
+  "totals":{{"accounts":0,"positions":0}},
+  "dataspaces":[]
+}}"#
+        );
+        let response = json_response(StatusCode::OK, &payload);
+        with_mock_http(respond_with(&snapshots, response), || {
+            client.get_uaid_portfolio_with_query(
+                &format!("uaid:{uaid_hex}"),
+                Some(UaidPortfolioQuery {
+                    asset_id: Some(asset_id.clone()),
+                }),
+            )
+        })
+        .expect("portfolio call succeeds");
+
+        let snapshot = snapshots
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("snapshot captured");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert!(
+            snapshot
+                .url
+                .query_pairs()
+                .any(|(name, value)| name == "asset_id" && value == asset_id)
+        );
+    }
+
+    #[test]
     fn get_uaid_bindings_parses_payload() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
@@ -13364,14 +13620,14 @@ mod tests {
     {{
       "dataspace_id":0,
       "dataspace_alias":"universal",
-      "accounts":["6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"]
+      "accounts":["sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"]
     }},
     {{
       "dataspace_id":11,
       "dataspace_alias":"cbdc",
       "accounts":[
-        "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
-        "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
+        "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76",
+        "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53"
       ]
     }}
   ]
@@ -13417,7 +13673,7 @@ mod tests {
       "manifest_hash":"{hash}",
       "status":"Active",
       "lifecycle":{{"activated_epoch":4097,"expired_epoch":null,"revocation":null}},
-      "accounts":["6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"],
+      "accounts":["sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"],
       "manifest":{manifest}
     }}
   ]
@@ -13492,7 +13748,7 @@ mod tests {
         let payload = with_mock_http(respond_with(&snapshot_store, response), || {
             client.get_public_lane_stake(
                 LaneId::new(1),
-                Some("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
+                Some("sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"),
             )
         })
         .expect("request succeeds");
@@ -13507,7 +13763,7 @@ mod tests {
         assert!(snapshot.url.query_pairs().any(|pair| pair
             == (
                 "validator".into(),
-                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()
+                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE".into()
             )));
     }
 
@@ -13520,7 +13776,7 @@ mod tests {
         let payload = with_mock_http(respond_with(&snapshot_store, response), || {
             client.get_public_lane_pending_rewards(
                 LaneId::new(0),
-                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
                 Some(5),
             )
         })
@@ -13539,7 +13795,7 @@ mod tests {
         let pairs: Vec<_> = snapshot.url.query_pairs().collect();
         assert!(pairs.contains(&(
             "account".into(),
-            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()
+            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE".into()
         )));
         assert!(pairs.contains(&("upto_epoch".into(), "5".into())));
     }
@@ -14798,7 +15054,8 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.toml".to_owned()),
                 validator_ids: vec![
-                    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
+                    "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+                        .to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -15028,7 +15285,9 @@ mod tests {
                 .first()
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            Some("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned()),
+            Some(
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".to_owned()
+            ),
             "validator id mismatch"
         );
         let runtime_hook = lane_entry
@@ -15808,7 +16067,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-401".to_string());
         let manifest_digest = [0x11; 32];
         let provider_id = [0x22; 32];
-        let worker_id = "worker@wonderland".to_string();
+        let worker_id = TEST_WORKER_I105.to_string();
         let idempotency_key = "claim-401".to_string();
         let claimed_at_unix = 1_700_000_001;
         let payload = RepairWorkerSignaturePayloadV1 {
@@ -15855,7 +16114,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-402".to_string());
         let manifest_digest = [0x33; 32];
         let provider_id = [0x44; 32];
-        let worker_id = "worker@wonderland".to_string();
+        let worker_id = TEST_WORKER_I105.to_string();
         let idempotency_key = "complete-402".to_string();
         let completed_at_unix = 1_700_000_002;
         let resolution_notes = Some("repaired".to_string());
@@ -15907,7 +16166,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-403".to_string());
         let manifest_digest = [0x55; 32];
         let provider_id = [0x66; 32];
-        let worker_id = "worker@wonderland".to_string();
+        let worker_id = TEST_WORKER_I105.to_string();
         let idempotency_key = "fail-403".to_string();
         let failed_at_unix = 1_700_000_003;
         let reason = "checksum_mismatch".to_string();
@@ -15960,7 +16219,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-404".to_string()),
             provider_id: [0x77; 32],
             manifest_digest: [0x88; 32],
-            auditor_account: "auditor@wonderland".to_string(),
+            auditor_account: TEST_AUDITOR_I105.to_string(),
             proposed_penalty_nano: 500,
             submitted_at_unix: 1_700_000_004,
             rationale: "sla_missed".to_string(),
@@ -15988,6 +16247,62 @@ mod tests {
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         let expected = norito::json::to_value(&proposal).expect("encode request");
         assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn sorafs_repair_claim_rejects_alias_worker_id() {
+        let client = client_with_base_url(base_url());
+        let key_pair = KeyPair::random();
+        let ticket_id = RepairTicketId("REP-405".to_string());
+        let manifest_digest = [0x11; 32];
+        let provider_id = [0x22; 32];
+        let worker_id = "worker@hbl.dataspace".to_string();
+        let idempotency_key = "claim-405".to_string();
+        let claimed_at_unix = 1_700_000_005;
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: ticket_id.clone(),
+            manifest_digest,
+            provider_id,
+            worker_id: worker_id.clone(),
+            idempotency_key: idempotency_key.clone(),
+            action: RepairWorkerActionV1::Claim { claimed_at_unix },
+        };
+        let signature = SignatureOf::new(key_pair.private_key(), &payload);
+        let request = SorafsRepairWorkerClaimRequest {
+            ticket_id,
+            manifest_digest_hex: hex::encode(manifest_digest),
+            worker_id,
+            claimed_at_unix,
+            idempotency_key,
+            signature,
+        };
+
+        let err = client
+            .post_sorafs_repair_claim(&request)
+            .expect_err("alias worker id must be rejected");
+        assert!(err.to_string().contains("canonical I105 account id"));
+    }
+
+    #[test]
+    fn sorafs_repair_slash_rejects_alias_auditor_account() {
+        let client = client_with_base_url(base_url());
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId("REP-406".to_string()),
+            provider_id: [0x77; 32],
+            manifest_digest: [0x88; 32],
+            auditor_account: "auditor@hbl.dataspace".to_string(),
+            proposed_penalty_nano: 500,
+            submitted_at_unix: 1_700_000_006,
+            rationale: "sla_missed".to_string(),
+            approval: None,
+        };
+
+        let err = client
+            .post_sorafs_repair_slash(&proposal)
+            .expect_err("alias auditor account must be rejected");
+        assert!(err.to_string().contains("canonical I105 account id"));
     }
 
     #[test]

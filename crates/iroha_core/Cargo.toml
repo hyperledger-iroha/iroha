@@ -135,6 +135,7 @@ settlement_router = { path = "../settlement_router" }
 tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false }
 sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+serde = { version = "1.0.228", features = ["derive"] }
 rayon = { workspace = true }
 base64 = { workspace = true }
 rust_decimal = { workspace = true }

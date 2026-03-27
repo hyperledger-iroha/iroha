@@ -1013,13 +1013,13 @@ fn zk_ballot_rejects_owner_non_string() {
     .execute(&ALICE_ID, &mut stx)
     .unwrap_err();
     let s = format!("{err}");
-    assert!(s.contains("owner must be a canonical account id"));
+    assert!(s.contains("owner must be a canonical I105 account id"));
 
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::BallotRejected(rej)))
-            if rej.reason.contains("owner must be a canonical account id")
+            if rej.reason.contains("owner must be a canonical I105 account id")
     )));
 }
 

@@ -9,13 +9,21 @@ enum IrohaTransportSecurity {
         "x-iroha-timestamp-ms",
         "x-iroha-nonce"
     ]
+    private static let sensitiveBodyFields: [String] = [
+        "\"private_key\"",
+        "\"seed_hex\"",
+        "\"seed_b64\"",
+        "\"seed_base64\"",
+        "\"key_seed_hex\"",
+        "\"key_seed_b64\""
+    ]
 
     static func httpViolation(context: String,
                               baseURL: URL,
                               targetURL: URL,
                               headers: [String: String],
                               body: Data?) -> String? {
-        let sensitive = containsCredentialHeaders(headers) || bodyContainsPrivateKey(body)
+        let sensitive = containsCredentialHeaders(headers) || bodyContainsSensitiveMaterial(body)
         guard sensitive else { return nil }
 
         let targetScheme = normalizedScheme(targetURL)
@@ -63,10 +71,10 @@ enum IrohaTransportSecurity {
         headers.keys.contains { credentialHeaders.contains($0.lowercased()) }
     }
 
-    private static func bodyContainsPrivateKey(_ body: Data?) -> Bool {
+    private static func bodyContainsSensitiveMaterial(_ body: Data?) -> Bool {
         guard let body, !body.isEmpty else { return false }
         guard let rendered = String(data: body, encoding: .utf8)?.lowercased() else { return false }
-        return rendered.contains("\"private_key\"")
+        return sensitiveBodyFields.contains { rendered.contains($0) }
     }
 
     private static func expectedWebSocketScheme(for baseURL: URL) -> String {

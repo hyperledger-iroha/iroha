@@ -245,7 +245,7 @@ SPDX-License-Identifier: Apache-2.0
 - التسلسل الهرمي للاشتقاق الحسابي:
   - `sk_spend` -> `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - يتم استخدام حمولات الملاحظات Chiffre باستخدام AEAD مع المفاتيح المشتركة المشتقة وفقًا لـ ECDH؛ يمكن لخيارات عرض المفاتيح أن يتم إرفاق مخرجات أخرى من خلال سياسة النشاط.
-- Ajouts CLI: `confidential create-keys`، `confidential send`، `confidential export-view-key`، مدقق الأدوات لإلغاء تشفير المذكرات، والمساعد `iroha app zk envelope` لإنتاج/فحص المغلفات Norito دون الاتصال بالإنترنت. يعرض Torii تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset`، ويعيد الأشكال السداسية وbase64 حتى تتمكن المحافظ من استعادة التسلسلات الهرمية للعناصر المبرمجة.
+- Ajouts CLI: `confidential create-keys`، `confidential send`، `confidential export-view-key`، مدقق الأدوات لإلغاء تشفير المذكرات، والمساعد `iroha app zk envelope` لإنتاج/فحص المغلفات Norito دون الاتصال بالإنترنت. يعرض
 
 ## الغاز وحدوده وضوابط DoS
 - جدول تحديد الغاز:

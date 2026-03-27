@@ -6,6 +6,11 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include <mutex>
+#include <new>
+#include <string.h>
+#include <unordered_map>
+#include <vector>
 
 #ifndef FASTPQ_CUDA_ARCH_MIN
 #define FASTPQ_CUDA_ARCH_MIN 800
@@ -19,18 +24,365 @@
 // Field constants (Goldilocks prime: 2^64 - 2^32 + 1).
 // -----------------------------------------------------------------------------.
 static __device__ __constant__ uint64_t FIELD_MODULUS = 18446744069414584321ull;
-static __device__ __constant__ uint64_t FIELD_GENERATOR = 7ull;           // primitive generator
 static __device__ __constant__ uint64_t FOLD_CONST = 0x00000000FFFFFFFFull; // 2^32 - 1
+static __device__ __constant__ uint64_t TRACE_NODE_DOMAIN_SEED = 6068040151459020611ull;
 
 #define POSEIDON_STATE_WIDTH 3u
 #define POSEIDON_RATE 2u
 #define POSEIDON_FULL_ROUNDS_HALF 4u
 #define POSEIDON_PARTIAL_ROUNDS 57u
+#define BN254_LIMBS 4u
+
+static __device__ __constant__ uint64_t BN254_MODULUS[BN254_LIMBS] = {
+    0x43e1f593f0000001ull,
+    0x2833e84879b97091ull,
+    0xb85045b68181585dull,
+    0x30644e72e131a029ull,
+};
+static __device__ __constant__ uint64_t BN254_MODULUS_INV = 0xc2e1f593efffffffull;
+static __device__ __constant__ uint64_t BN254_R2[BN254_LIMBS] = {
+    0x1bb8e645ae216da7ull,
+    0x53fe3ab1e35c59e3ull,
+    0x8c49833d53bb8085ull,
+    0x0216d0b17f4e44a5ull,
+};
 
 struct PoseidonSlice {
     uint32_t offset;
     uint32_t len;
 };
+
+struct Bn254Value {
+    uint64_t limbs[BN254_LIMBS];
+};
+
+struct TransformWorkspace {
+    uint64_t* dense;
+    uint64_t* coeffs;
+    uint64_t* evals;
+    uint64_t* bn254_twiddles;
+    uint64_t* bn254_coset;
+    size_t dense_capacity_bytes;
+    size_t coeff_capacity_bytes;
+    size_t eval_capacity_bytes;
+    size_t bn254_twiddle_capacity_bytes;
+    size_t bn254_coset_capacity_bytes;
+
+    TransformWorkspace()
+        : dense(nullptr),
+          coeffs(nullptr),
+          evals(nullptr),
+          bn254_twiddles(nullptr),
+          bn254_coset(nullptr),
+          dense_capacity_bytes(0),
+          coeff_capacity_bytes(0),
+          eval_capacity_bytes(0),
+          bn254_twiddle_capacity_bytes(0),
+          bn254_coset_capacity_bytes(0) {}
+};
+
+struct AsyncDispatchBuffers {
+    int device;
+    uint64_t* dense;
+    uint64_t* coeffs;
+    uint64_t* evals;
+    uint64_t* host_dense;
+    uint64_t* host_coeffs;
+    uint64_t* host_evals;
+    size_t dense_capacity_bytes;
+    size_t coeff_capacity_bytes;
+    size_t eval_capacity_bytes;
+    size_t host_dense_capacity_bytes;
+    size_t host_coeff_capacity_bytes;
+    size_t host_eval_capacity_bytes;
+    cudaStream_t stream;
+    bool stream_ready;
+
+    explicit AsyncDispatchBuffers(int device_in)
+        : device(device_in),
+          dense(nullptr),
+          coeffs(nullptr),
+          evals(nullptr),
+          host_dense(nullptr),
+          host_coeffs(nullptr),
+          host_evals(nullptr),
+          dense_capacity_bytes(0),
+          coeff_capacity_bytes(0),
+          eval_capacity_bytes(0),
+          host_dense_capacity_bytes(0),
+          host_coeff_capacity_bytes(0),
+          host_eval_capacity_bytes(0),
+          stream(nullptr),
+          stream_ready(false) {}
+};
+
+struct PendingTransform {
+    int device;
+    cudaEvent_t event;
+    AsyncDispatchBuffers* buffers;
+    void* host_output;
+    void* staging_output;
+    size_t output_byte_len;
+
+    PendingTransform(
+        int device_in,
+        cudaEvent_t event_in,
+        AsyncDispatchBuffers* buffers_in,
+        void* host_output_in,
+        void* staging_output_in,
+        size_t output_byte_len_in
+    )
+        : device(device_in),
+          event(event_in),
+          buffers(buffers_in),
+          host_output(host_output_in),
+          staging_output(staging_output_in),
+          output_byte_len(output_byte_len_in) {}
+};
+
+struct PoseidonWorkspace {
+    uint64_t* payloads;
+    PoseidonSlice* slices;
+    uint64_t* states;
+    uint64_t* hashes;
+    size_t payload_capacity_bytes;
+    size_t slice_capacity_bytes;
+    size_t state_capacity_bytes;
+    size_t hash_capacity_bytes;
+
+    PoseidonWorkspace()
+        : payloads(nullptr),
+          slices(nullptr),
+          states(nullptr),
+          hashes(nullptr),
+          payload_capacity_bytes(0),
+          slice_capacity_bytes(0),
+          state_capacity_bytes(0),
+          hash_capacity_bytes(0) {}
+};
+
+static std::mutex& transform_workspace_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+static std::unordered_map<int, TransformWorkspace>& transform_workspaces() {
+    static auto* workspaces = new std::unordered_map<int, TransformWorkspace>();
+    return *workspaces;
+}
+
+static std::mutex& async_dispatch_pool_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+static std::unordered_map<int, std::vector<AsyncDispatchBuffers*>>& async_dispatch_pools() {
+    static auto* pools = new std::unordered_map<int, std::vector<AsyncDispatchBuffers*>>();
+    return *pools;
+}
+
+static std::mutex& poseidon_workspace_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+static std::unordered_map<int, PoseidonWorkspace>& poseidon_workspaces() {
+    static auto* workspaces = new std::unordered_map<int, PoseidonWorkspace>();
+    return *workspaces;
+}
+
+template <typename T>
+static cudaError_t ensure_workspace_buffer(
+    T** buffer,
+    size_t* capacity_bytes,
+    size_t need_bytes
+) {
+    if (need_bytes == 0) {
+        return cudaSuccess;
+    }
+    if (*buffer != nullptr && *capacity_bytes >= need_bytes) {
+        return cudaSuccess;
+    }
+    if (*buffer != nullptr) {
+        cudaError_t free_status = cudaFree(*buffer);
+        if (free_status != cudaSuccess) {
+            return free_status;
+        }
+        *buffer = nullptr;
+        *capacity_bytes = 0;
+    }
+    cudaError_t status = cudaMalloc(reinterpret_cast<void**>(buffer), need_bytes);
+    if (status == cudaSuccess) {
+        *capacity_bytes = need_bytes;
+    }
+    return status;
+}
+
+template <typename T>
+static cudaError_t ensure_pinned_workspace_buffer(
+    T** buffer,
+    size_t* capacity_bytes,
+    size_t need_bytes
+) {
+    if (need_bytes == 0) {
+        return cudaSuccess;
+    }
+    if (*buffer != nullptr && *capacity_bytes >= need_bytes) {
+        return cudaSuccess;
+    }
+    if (*buffer != nullptr) {
+        cudaError_t free_status = cudaFreeHost(*buffer);
+        if (free_status != cudaSuccess) {
+            return free_status;
+        }
+        *buffer = nullptr;
+        *capacity_bytes = 0;
+    }
+    cudaError_t status = cudaHostAlloc(reinterpret_cast<void**>(buffer), need_bytes, cudaHostAllocDefault);
+    if (status == cudaSuccess) {
+        *capacity_bytes = need_bytes;
+    }
+    return status;
+}
+
+static cudaError_t ensure_async_dispatch_stream(AsyncDispatchBuffers* buffers) {
+    if (buffers == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    if (buffers->stream_ready) {
+        return cudaSuccess;
+    }
+    cudaError_t status = cudaStreamCreateWithFlags(&buffers->stream, cudaStreamNonBlocking);
+    if (status == cudaSuccess) {
+        buffers->stream_ready = true;
+    }
+    return status;
+}
+
+static cudaError_t dense_buffer_bytes(size_t column_count, uint64_t column_len, size_t* byte_len) {
+    if (byte_len == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    size_t column_len_size = (size_t)column_len;
+    if (column_len != (uint64_t)column_len_size) {
+        return cudaErrorInvalidValue;
+    }
+    if (column_len_size != 0 && column_count > SIZE_MAX / column_len_size) {
+        return cudaErrorInvalidValue;
+    }
+    size_t element_count = column_count * column_len_size;
+    if (element_count > SIZE_MAX / sizeof(uint64_t)) {
+        return cudaErrorInvalidValue;
+    }
+    *byte_len = element_count * sizeof(uint64_t);
+    return cudaSuccess;
+}
+
+static cudaError_t limb_buffer_bytes(size_t limb_count, size_t* byte_len) {
+    if (byte_len == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    if (limb_count > SIZE_MAX / sizeof(uint64_t)) {
+        return cudaErrorInvalidValue;
+    }
+    *byte_len = limb_count * sizeof(uint64_t);
+    return cudaSuccess;
+}
+
+static cudaError_t bn254_dense_buffer_bytes(
+    size_t column_count,
+    uint64_t element_count,
+    size_t* byte_len
+) {
+    if (element_count > UINT64_MAX / BN254_LIMBS) {
+        return cudaErrorInvalidValue;
+    }
+    return dense_buffer_bytes(column_count, element_count * BN254_LIMBS, byte_len);
+}
+
+static TransformWorkspace* current_transform_workspace() {
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess) {
+        return nullptr;
+    }
+    return &transform_workspaces()[device];
+}
+
+static AsyncDispatchBuffers* acquire_async_dispatch_buffers(int device) {
+    std::lock_guard<std::mutex> guard(async_dispatch_pool_mutex());
+    std::vector<AsyncDispatchBuffers*>& pool = async_dispatch_pools()[device];
+    if (!pool.empty()) {
+        AsyncDispatchBuffers* buffers = pool.back();
+        pool.pop_back();
+        return buffers;
+    }
+    return new (std::nothrow) AsyncDispatchBuffers(device);
+}
+
+static void release_async_dispatch_buffers(AsyncDispatchBuffers* buffers) {
+    if (buffers == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> guard(async_dispatch_pool_mutex());
+    async_dispatch_pools()[buffers->device].push_back(buffers);
+}
+
+static void destroy_pending_transform(PendingTransform* pending) {
+    if (pending == nullptr) {
+        return;
+    }
+    (void)cudaSetDevice(pending->device);
+    if (pending->buffers != nullptr && pending->buffers->stream_ready) {
+        (void)cudaStreamSynchronize(pending->buffers->stream);
+    }
+    if (pending->event != nullptr) {
+        (void)cudaEventDestroy(pending->event);
+    }
+    release_async_dispatch_buffers(pending->buffers);
+    delete pending;
+}
+
+static cudaError_t create_pending_transform(
+    int device,
+    AsyncDispatchBuffers* buffers,
+    void* host_output,
+    void* staging_output,
+    size_t output_byte_len,
+    PendingTransform** pending_out
+) {
+    if (pending_out == nullptr || buffers == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    *pending_out = nullptr;
+    cudaEvent_t event = nullptr;
+    cudaError_t status = cudaEventCreateWithFlags(&event, cudaEventDisableTiming);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    PendingTransform* pending = new (std::nothrow)
+        PendingTransform(
+            device,
+            event,
+            buffers,
+            host_output,
+            staging_output,
+            output_byte_len
+        );
+    if (pending == nullptr) {
+        (void)cudaEventDestroy(event);
+        return cudaErrorMemoryAllocation;
+    }
+    *pending_out = pending;
+    return cudaSuccess;
+}
+
+static PoseidonWorkspace* current_poseidon_workspace() {
+    int device = 0;
+    if (cudaGetDevice(&device) != cudaSuccess) {
+        return nullptr;
+    }
+    return &poseidon_workspaces()[device];
+}
 
 static __device__ __constant__ uint64_t POSEIDON_ROUND_CONSTANTS[POSEIDON_FULL_ROUNDS_HALF * 2u + POSEIDON_PARTIAL_ROUNDS][POSEIDON_STATE_WIDTH] = {
     {0x0355defb099bed96ull, 0xfcc55fb9681355e6ull, 0x931368d725f8720aull},
@@ -160,6 +512,242 @@ __device__ __forceinline__ uint64_t f_inv(uint64_t value) {
     return f_pow(value, FIELD_MODULUS - 2ull);
 }
 
+__device__ __forceinline__ Bn254Value bn254_load(const uint64_t* ptr) {
+    Bn254Value value;
+    #pragma unroll
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        value.limbs[idx] = ptr[idx];
+    }
+    return value;
+}
+
+__device__ __forceinline__ Bn254Value bn254_zero() {
+    Bn254Value value = {{0ull, 0ull, 0ull, 0ull}};
+    return value;
+}
+
+__device__ __forceinline__ void bn254_store(uint64_t* ptr, const Bn254Value& value) {
+    #pragma unroll
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        ptr[idx] = value.limbs[idx];
+    }
+}
+
+__device__ __forceinline__ bool bn254_ge_modulus(const Bn254Value& value) {
+    for (int idx = (int)BN254_LIMBS - 1; idx >= 0; --idx) {
+        if (value.limbs[idx] != BN254_MODULUS[idx]) {
+            return value.limbs[idx] > BN254_MODULUS[idx];
+        }
+    }
+    return true;
+}
+
+__device__ __forceinline__ uint64_t add_with_carry(
+    uint64_t lhs,
+    uint64_t rhs,
+    uint64_t* carry
+) {
+    uint64_t sum = lhs + rhs;
+    bool carry0 = sum < lhs;
+    uint64_t result = sum + *carry;
+    bool carry1 = result < sum;
+    *carry = (carry0 || carry1) ? 1ull : 0ull;
+    return result;
+}
+
+__device__ __forceinline__ uint64_t sub_with_borrow(
+    uint64_t lhs,
+    uint64_t rhs,
+    uint64_t* borrow
+) {
+    uint64_t diff = lhs - rhs;
+    bool borrow0 = lhs < rhs;
+    uint64_t result = diff - *borrow;
+    bool borrow1 = diff < *borrow;
+    *borrow = (borrow0 || borrow1) ? 1ull : 0ull;
+    return result;
+}
+
+__device__ __forceinline__ Bn254Value bn254_sub_modulus(const Bn254Value& value) {
+    Bn254Value out;
+    uint64_t borrow = 0ull;
+    #pragma unroll
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        out.limbs[idx] = sub_with_borrow(value.limbs[idx], BN254_MODULUS[idx], &borrow);
+    }
+    return out;
+}
+
+__device__ __forceinline__ Bn254Value bn254_add(const Bn254Value& a, const Bn254Value& b) {
+    Bn254Value sum;
+    uint64_t carry = 0ull;
+    #pragma unroll
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        sum.limbs[idx] = add_with_carry(a.limbs[idx], b.limbs[idx], &carry);
+    }
+    if (carry != 0ull || bn254_ge_modulus(sum)) {
+        sum = bn254_sub_modulus(sum);
+    }
+    return sum;
+}
+
+__device__ __forceinline__ Bn254Value bn254_sub(const Bn254Value& a, const Bn254Value& b) {
+    Bn254Value out;
+    uint64_t borrow = 0ull;
+    #pragma unroll
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        out.limbs[idx] = sub_with_borrow(a.limbs[idx], b.limbs[idx], &borrow);
+    }
+    if (borrow != 0ull) {
+        uint64_t carry = 0ull;
+        #pragma unroll
+        for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+            out.limbs[idx] = add_with_carry(out.limbs[idx], BN254_MODULUS[idx], &carry);
+        }
+    }
+    return out;
+}
+
+__device__ __forceinline__ void bn254_mul_add(
+    uint64_t x,
+    uint64_t y,
+    uint64_t* acc,
+    uint64_t* carry
+) {
+    uint64_t lo = x * y;
+    uint64_t hi = __umul64hi(x, y);
+
+    uint64_t sum = *acc + lo;
+    uint64_t carry0 = sum < *acc ? 1ull : 0ull;
+    sum += *carry;
+    uint64_t carry1 = sum < *carry ? 1ull : 0ull;
+
+    *acc = sum;
+    *carry = hi + carry0 + carry1;
+}
+
+__device__ __forceinline__ void bn254_montgomery_reduce(
+    uint64_t t[8],
+    uint64_t out[BN254_LIMBS]
+) {
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        uint64_t m = t[idx] * BN254_MODULUS_INV;
+        uint64_t carry = 0ull;
+        #pragma unroll
+        for (unsigned int limb = 0; limb < BN254_LIMBS; ++limb) {
+            bn254_mul_add(m, BN254_MODULUS[limb], &t[idx + limb], &carry);
+        }
+        unsigned int carry_idx = idx + BN254_LIMBS;
+        uint64_t sum = t[carry_idx] + carry;
+        uint64_t carry_out = sum < t[carry_idx] ? 1ull : 0ull;
+        t[carry_idx] = sum;
+        while (carry_out != 0ull) {
+            ++carry_idx;
+            uint64_t prior = t[carry_idx];
+            t[carry_idx] += carry_out;
+            carry_out = t[carry_idx] < prior ? 1ull : 0ull;
+        }
+    }
+
+    Bn254Value candidate;
+    #pragma unroll
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        out[idx] = t[idx + BN254_LIMBS];
+        candidate.limbs[idx] = out[idx];
+    }
+    if (bn254_ge_modulus(candidate)) {
+        candidate = bn254_sub_modulus(candidate);
+        #pragma unroll
+        for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+            out[idx] = candidate.limbs[idx];
+        }
+    }
+}
+
+__device__ __forceinline__ Bn254Value bn254_montgomery_mul(
+    const Bn254Value& a,
+    const Bn254Value& b
+) {
+    uint64_t t[8] = {0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull, 0ull};
+    for (unsigned int i = 0; i < BN254_LIMBS; ++i) {
+        uint64_t carry = 0ull;
+        for (unsigned int j = 0; j < BN254_LIMBS; ++j) {
+            bn254_mul_add(a.limbs[i], b.limbs[j], &t[i + j], &carry);
+        }
+        unsigned int idx = i + BN254_LIMBS;
+        uint64_t sum = t[idx] + carry;
+        uint64_t carry_out = sum < t[idx] ? 1ull : 0ull;
+        t[idx] = sum;
+        while (carry_out != 0ull) {
+            ++idx;
+            uint64_t prior = t[idx];
+            t[idx] += carry_out;
+            carry_out = t[idx] < prior ? 1ull : 0ull;
+        }
+    }
+    uint64_t reduced[BN254_LIMBS];
+    bn254_montgomery_reduce(t, reduced);
+    Bn254Value out;
+    #pragma unroll
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        out.limbs[idx] = reduced[idx];
+    }
+    return out;
+}
+
+__device__ __forceinline__ Bn254Value bn254_r2() {
+    Bn254Value out;
+    #pragma unroll
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        out.limbs[idx] = BN254_R2[idx];
+    }
+    return out;
+}
+
+__device__ __forceinline__ Bn254Value bn254_from_canonical(const Bn254Value& raw);
+
+__device__ __forceinline__ Bn254Value bn254_one_mont() {
+    Bn254Value one = {{1ull, 0ull, 0ull, 0ull}};
+    return bn254_from_canonical(one);
+}
+
+__device__ __forceinline__ Bn254Value bn254_from_canonical(const Bn254Value& raw) {
+    return bn254_montgomery_mul(raw, bn254_r2());
+}
+
+__device__ __forceinline__ Bn254Value bn254_pow_u64(Bn254Value base, uint64_t exp) {
+    Bn254Value acc = bn254_one_mont();
+    while (exp != 0ull) {
+        if ((exp & 1ull) != 0ull) {
+            acc = bn254_montgomery_mul(acc, base);
+        }
+        base = bn254_montgomery_mul(base, base);
+        exp >>= 1ull;
+    }
+    return acc;
+}
+
+__device__ __forceinline__ Bn254Value bn254_to_canonical(const Bn254Value& value) {
+    uint64_t t[8] = {
+        value.limbs[0],
+        value.limbs[1],
+        value.limbs[2],
+        value.limbs[3],
+        0ull,
+        0ull,
+        0ull,
+        0ull,
+    };
+    uint64_t reduced[BN254_LIMBS];
+    bn254_montgomery_reduce(t, reduced);
+    Bn254Value out;
+    #pragma unroll
+    for (unsigned int idx = 0; idx < BN254_LIMBS; ++idx) {
+        out.limbs[idx] = reduced[idx];
+    }
+    return out;
+}
+
 __device__ __forceinline__ uint64_t poseidon_pow5(uint64_t x) {
     uint64_t x2 = f_mul(x, x);
     uint64_t x4 = f_mul(x2, x2);
@@ -221,7 +809,13 @@ __device__ __forceinline__ uint64_t bit_reverse_index(uint64_t index, uint32_t l
 // -----------------------------------------------------------------------------.
 // In-place radix-2 FFT (and inverse FFT) over a single column.
 // -----------------------------------------------------------------------------
-__device__ void fft_inplace_device(uint64_t* data, uint64_t len, uint32_t log_len, bool inverse) {
+__device__ void fft_inplace_device(
+    uint64_t* data,
+    uint64_t len,
+    uint32_t log_len,
+    uint64_t root,
+    bool inverse
+) {
     for (uint64_t i = 1; i < len - 1; ++i) {
         uint64_t j = bit_reverse_index(i, log_len);
         if (i < j) {
@@ -231,10 +825,7 @@ __device__ void fft_inplace_device(uint64_t* data, uint64_t len, uint32_t log_le
         }
     }
 
-    uint64_t omega = f_pow(FIELD_GENERATOR, (FIELD_MODULUS - 1ull) >> log_len);
-    if (inverse) {
-        omega = f_inv(omega);
-    }
+    uint64_t omega = inverse ? f_inv(root) : root;
 
     for (uint64_t size = 2; size <= len; size <<= 1) {
         uint64_t step = len / size;
@@ -269,55 +860,52 @@ __device__ void lde_eval_device(
     uint64_t* out,
     uint64_t trace_len,
     uint64_t eval_len,
-    uint32_t trace_log,
-    uint32_t blowup_log,
+    uint32_t eval_log,
+    uint64_t eval_root,
     uint64_t coset
 ) {
-    uint64_t omega_trace = f_pow(FIELD_GENERATOR, (FIELD_MODULUS - 1ull) >> trace_log);
-    uint64_t omega_eval = f_pow(FIELD_GENERATOR, (FIELD_MODULUS - 1ull) >> (trace_log + blowup_log));
-
-    uint64_t omega_inv = f_inv(omega_trace);
-
-    extern __shared__ uint64_t shared[];
-
-    for (uint64_t i = threadIdx.x; i < trace_len; i += blockDim.x) {
-        shared[i] = coeffs[i];
-    }
-    __syncthreads();
-
-    for (uint64_t i = trace_len; i < eval_len; ++i) {
-        shared[i] = 0ull;
-    }
-
-    uint64_t* ptr = shared;
-    fft_inplace_device(ptr, eval_len, trace_log + blowup_log, false);
-
     uint64_t coset_pow = 1ull;
-    for (uint64_t i = 0; i < eval_len; ++i) {
-        out[i] = f_mul(ptr[i], coset_pow);
+    for (uint64_t i = 0; i < trace_len; ++i) {
+        out[i] = f_mul(coeffs[i], coset_pow);
         coset_pow = f_mul(coset_pow, coset);
     }
+    for (uint64_t i = trace_len; i < eval_len; ++i) {
+        out[i] = 0ull;
+    }
+    fft_inplace_device(out, eval_len, eval_log, eval_root, false);
 }
 
 // -----------------------------------------------------------------------------.
 // CUDA kernels - each column handled by a single thread for determinism.
 // -----------------------------------------------------------------------------
-__global__ void fastpq_fft_kernel(uint64_t* elements, uint64_t column_len, uint32_t log_len) {
+__global__ void fastpq_fft_kernel(
+    uint64_t* elements,
+    size_t column_count,
+    uint64_t column_len,
+    uint32_t log_len,
+    uint64_t root
+) {
     uint64_t col = blockIdx.x * blockDim.x + threadIdx.x;
-    if (col >= gridDim.x * blockDim.x) {
+    if ((size_t)col >= column_count) {
         return;
     }
     uint64_t* column = elements + col * column_len;
-    fft_inplace_device(column, column_len, log_len, false);
+    fft_inplace_device(column, column_len, log_len, root, false);
 }
 
-__global__ void fastpq_ifft_kernel(uint64_t* elements, uint64_t column_len, uint32_t log_len) {
+__global__ void fastpq_ifft_kernel(
+    uint64_t* elements,
+    size_t column_count,
+    uint64_t column_len,
+    uint32_t log_len,
+    uint64_t root
+) {
     uint64_t col = blockIdx.x * blockDim.x + threadIdx.x;
-    if (col >= gridDim.x * blockDim.x) {
+    if ((size_t)col >= column_count) {
         return;
     }
     uint64_t* column = elements + col * column_len;
-    fft_inplace_device(column, column_len, log_len, true);
+    fft_inplace_device(column, column_len, log_len, root, true);
 }
 
 __global__ void fastpq_lde_kernel(
@@ -325,14 +913,134 @@ __global__ void fastpq_lde_kernel(
     uint64_t* out,
     uint64_t trace_len,
     uint64_t eval_len,
-    uint32_t trace_log,
-    uint32_t blowup_log,
+    uint32_t eval_log,
+    uint64_t eval_root,
     uint64_t coset
 ) {
     uint64_t col = blockIdx.x;
     const uint64_t* column_coeffs = coeffs + col * trace_len;
     uint64_t* out_column = out + col * eval_len;
-    lde_eval_device(column_coeffs, out_column, trace_len, eval_len, trace_log, blowup_log, coset);
+    lde_eval_device(column_coeffs, out_column, trace_len, eval_len, eval_log, eval_root, coset);
+}
+
+__global__ void fastpq_bn254_fft_kernel(
+    uint64_t* elements,
+    size_t column_count,
+    uint64_t column_len,
+    uint32_t log_len,
+    const uint64_t* stage_twiddles
+) {
+    size_t col = (size_t)blockIdx.x;
+    if (col >= column_count || stage_twiddles == nullptr) {
+        return;
+    }
+    uint64_t* column = elements + col * column_len * BN254_LIMBS;
+    for (uint64_t idx = threadIdx.x; idx < column_len; idx += blockDim.x) {
+        Bn254Value value = bn254_load(column + idx * BN254_LIMBS);
+        bn254_store(column + idx * BN254_LIMBS, bn254_from_canonical(value));
+    }
+    __syncthreads();
+
+    uint64_t stage_span = column_len >> 1;
+    for (uint32_t stage = 0; stage < log_len; ++stage) {
+        uint64_t len = 1ull << (stage + 1u);
+        uint64_t half_len = len >> 1;
+        uint64_t stage_offset = (uint64_t)stage * stage_span;
+        for (uint64_t pair_idx = threadIdx.x; pair_idx < stage_span; pair_idx += blockDim.x) {
+            uint64_t block = pair_idx / half_len;
+            uint64_t pair = pair_idx % half_len;
+            uint64_t idx = block * len + pair;
+            if (idx + half_len >= column_len) {
+                continue;
+            }
+            Bn254Value twiddle = bn254_from_canonical(
+                bn254_load(stage_twiddles + (stage_offset + pair) * BN254_LIMBS)
+            );
+            Bn254Value u = bn254_load(column + idx * BN254_LIMBS);
+            Bn254Value v = bn254_montgomery_mul(
+                bn254_load(column + (idx + half_len) * BN254_LIMBS),
+                twiddle
+            );
+            bn254_store(column + idx * BN254_LIMBS, bn254_add(u, v));
+            bn254_store(column + (idx + half_len) * BN254_LIMBS, bn254_sub(u, v));
+        }
+        __syncthreads();
+    }
+
+    for (uint64_t idx = threadIdx.x; idx < column_len; idx += blockDim.x) {
+        Bn254Value value = bn254_load(column + idx * BN254_LIMBS);
+        bn254_store(column + idx * BN254_LIMBS, bn254_to_canonical(value));
+    }
+}
+
+__global__ void fastpq_bn254_lde_kernel(
+    const uint64_t* coeffs,
+    uint64_t* out,
+    uint64_t trace_len,
+    uint64_t eval_len,
+    uint32_t trace_log,
+    uint32_t blowup_log,
+    const uint64_t* stage_twiddles,
+    const uint64_t* coset_limbs
+) {
+    size_t col = (size_t)blockIdx.x;
+    if (stage_twiddles == nullptr || coset_limbs == nullptr) {
+        return;
+    }
+    const uint64_t* coeff_column = coeffs + col * trace_len * BN254_LIMBS;
+    uint64_t* out_column = out + col * eval_len * BN254_LIMBS;
+    for (uint64_t idx = threadIdx.x; idx < trace_len; idx += blockDim.x) {
+        Bn254Value value = bn254_load(coeff_column + idx * BN254_LIMBS);
+        bn254_store(out_column + idx * BN254_LIMBS, bn254_from_canonical(value));
+    }
+    for (uint64_t idx = threadIdx.x + trace_len; idx < eval_len; idx += blockDim.x) {
+        Bn254Value zero = {{0ull, 0ull, 0ull, 0ull}};
+        bn254_store(out_column + idx * BN254_LIMBS, zero);
+    }
+    __syncthreads();
+
+    const uint32_t log_len = trace_log + blowup_log;
+    const uint64_t stage_span = eval_len >> 1;
+    const Bn254Value coset_mont = bn254_from_canonical(bn254_load(coset_limbs));
+    for (uint64_t idx = threadIdx.x; idx < trace_len; idx += blockDim.x) {
+        Bn254Value value = bn254_load(out_column + idx * BN254_LIMBS);
+        Bn254Value coset_power = bn254_pow_u64(coset_mont, idx);
+        bn254_store(
+            out_column + idx * BN254_LIMBS,
+            bn254_montgomery_mul(value, coset_power)
+        );
+    }
+    __syncthreads();
+
+    for (uint32_t stage = 0; stage < log_len; ++stage) {
+        const uint64_t len = 1ull << (stage + 1u);
+        const uint64_t half_len = len >> 1;
+        const uint64_t stage_offset = (uint64_t)stage * stage_span;
+        for (uint64_t pair_idx = threadIdx.x; pair_idx < stage_span; pair_idx += blockDim.x) {
+            const uint64_t block = pair_idx / half_len;
+            const uint64_t pair = pair_idx % half_len;
+            const uint64_t idx = block * len + pair;
+            if (idx + half_len >= eval_len) {
+                continue;
+            }
+            Bn254Value twiddle = bn254_from_canonical(
+                bn254_load(stage_twiddles + (stage_offset + pair) * BN254_LIMBS)
+            );
+            Bn254Value u = bn254_load(out_column + idx * BN254_LIMBS);
+            Bn254Value v = bn254_montgomery_mul(
+                bn254_load(out_column + (idx + half_len) * BN254_LIMBS),
+                twiddle
+            );
+            bn254_store(out_column + idx * BN254_LIMBS, bn254_add(u, v));
+            bn254_store(out_column + (idx + half_len) * BN254_LIMBS, bn254_sub(u, v));
+        }
+        __syncthreads();
+    }
+
+    for (uint64_t idx = threadIdx.x; idx < eval_len; idx += blockDim.x) {
+        Bn254Value value = bn254_load(out_column + idx * BN254_LIMBS);
+        bn254_store(out_column + idx * BN254_LIMBS, bn254_to_canonical(value));
+    }
 }
 
 __global__ void fastpq_poseidon_permute_kernel(uint64_t* states, size_t state_count) {
@@ -405,11 +1113,12 @@ __global__ void fastpq_poseidon_parent_kernel(
     if (right >= column_count) {
         right = column_count - 1;
     }
-    uint64_t state[POSEIDON_STATE_WIDTH] = {
-        leaf_hashes[left],
-        leaf_hashes[right],
-        0ull,
-    };
+    uint64_t state[POSEIDON_STATE_WIDTH] = {0ull, 0ull, 0ull};
+    state[0] = f_add(state[0], TRACE_NODE_DOMAIN_SEED);
+    state[1] = f_add(state[1], leaf_hashes[left]);
+    poseidon_permute(state);
+    state[0] = f_add(state[0], leaf_hashes[right]);
+    state[1] = f_add(state[1], 1ull);
     poseidon_permute(state);
     parent_hashes[parent_idx] = state[0];
 }
@@ -417,34 +1126,530 @@ __global__ void fastpq_poseidon_parent_kernel(
 // -----------------------------------------------------------------------------.
 // Public C interface.
 // -----------------------------------------------------------------------------
+extern "C" cudaError_t fastpq_pending_wait_cuda(void* handle) {
+    PendingTransform* pending = reinterpret_cast<PendingTransform*>(handle);
+    if (pending == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+
+    cudaError_t status = cudaSetDevice(pending->device);
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+
+    status = cudaEventSynchronize(pending->event);
+    if (status == cudaSuccess) {
+        if (pending->staging_output == nullptr || pending->host_output == nullptr) {
+            status = cudaErrorInvalidValue;
+        } else if (pending->staging_output != pending->host_output) {
+            memcpy(pending->host_output, pending->staging_output, pending->output_byte_len);
+        }
+    }
+    destroy_pending_transform(pending);
+    return status;
+}
+
+extern "C" cudaError_t fastpq_fft_async_submit_cuda(
+    uint64_t* elements,
+    size_t column_count,
+    uint32_t log_size,
+    uint64_t root,
+    void** out_handle
+) {
+    if (elements == nullptr || column_count == 0 || out_handle == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    *out_handle = nullptr;
+    uint64_t n = 1ull << log_size;
+    size_t byte_len = 0;
+    cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    int device = 0;
+    status = cudaGetDevice(&device);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    AsyncDispatchBuffers* buffers = acquire_async_dispatch_buffers(device);
+    if (buffers == nullptr) {
+        return cudaErrorMemoryAllocation;
+    }
+    status = ensure_workspace_buffer(
+        &buffers->dense,
+        &buffers->dense_capacity_bytes,
+        byte_len
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    status = ensure_pinned_workspace_buffer(
+        &buffers->host_dense,
+        &buffers->host_dense_capacity_bytes,
+        byte_len
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    status = ensure_async_dispatch_stream(buffers);
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    memcpy(buffers->host_dense, elements, byte_len);
+    uint64_t* host_dense_io = buffers->host_dense;
+    void* staging_output = buffers->host_dense;
+
+    PendingTransform* pending = nullptr;
+    status = create_pending_transform(
+        device,
+        buffers,
+        elements,
+        staging_output,
+        byte_len,
+        &pending
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+
+    status = cudaMemcpyAsync(
+        buffers->dense,
+        host_dense_io,
+        byte_len,
+        cudaMemcpyHostToDevice,
+        buffers->stream
+    );
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    const unsigned int threads_per_block = 128u;
+    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
+    if (grid_size_host == 0) {
+        grid_size_host = 1;
+    }
+    if (grid_size_host > (size_t)UINT32_MAX) {
+        destroy_pending_transform(pending);
+        return cudaErrorInvalidValue;
+    }
+    fastpq_fft_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, buffers->stream>>>(
+        buffers->dense,
+        column_count,
+        n,
+        log_size,
+        root
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    status = cudaMemcpyAsync(
+        staging_output,
+        buffers->dense,
+        byte_len,
+        cudaMemcpyDeviceToHost,
+        buffers->stream
+    );
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    status = cudaEventRecord(pending->event, buffers->stream);
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    *out_handle = pending;
+    return cudaSuccess;
+}
+
+extern "C" cudaError_t fastpq_ifft_async_submit_cuda(
+    uint64_t* elements,
+    size_t column_count,
+    uint32_t log_size,
+    uint64_t root,
+    void** out_handle
+) {
+    if (elements == nullptr || column_count == 0 || out_handle == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    *out_handle = nullptr;
+    uint64_t n = 1ull << log_size;
+    size_t byte_len = 0;
+    cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    int device = 0;
+    status = cudaGetDevice(&device);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    AsyncDispatchBuffers* buffers = acquire_async_dispatch_buffers(device);
+    if (buffers == nullptr) {
+        return cudaErrorMemoryAllocation;
+    }
+    status = ensure_workspace_buffer(
+        &buffers->dense,
+        &buffers->dense_capacity_bytes,
+        byte_len
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    status = ensure_pinned_workspace_buffer(
+        &buffers->host_dense,
+        &buffers->host_dense_capacity_bytes,
+        byte_len
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    status = ensure_async_dispatch_stream(buffers);
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    memcpy(buffers->host_dense, elements, byte_len);
+    uint64_t* host_dense_io = buffers->host_dense;
+    void* staging_output = buffers->host_dense;
+
+    PendingTransform* pending = nullptr;
+    status = create_pending_transform(
+        device,
+        buffers,
+        elements,
+        staging_output,
+        byte_len,
+        &pending
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+
+    status = cudaMemcpyAsync(
+        buffers->dense,
+        host_dense_io,
+        byte_len,
+        cudaMemcpyHostToDevice,
+        buffers->stream
+    );
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    const unsigned int threads_per_block = 128u;
+    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
+    if (grid_size_host == 0) {
+        grid_size_host = 1;
+    }
+    if (grid_size_host > (size_t)UINT32_MAX) {
+        destroy_pending_transform(pending);
+        return cudaErrorInvalidValue;
+    }
+    fastpq_ifft_kernel<<<(unsigned int)grid_size_host, threads_per_block, 0, buffers->stream>>>(
+        buffers->dense,
+        column_count,
+        n,
+        log_size,
+        root
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    status = cudaMemcpyAsync(
+        staging_output,
+        buffers->dense,
+        byte_len,
+        cudaMemcpyDeviceToHost,
+        buffers->stream
+    );
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    status = cudaEventRecord(pending->event, buffers->stream);
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    *out_handle = pending;
+    return cudaSuccess;
+}
+
+extern "C" cudaError_t fastpq_lde_async_submit_cuda(
+    const uint64_t* coeffs,
+    size_t column_count,
+    uint32_t trace_log,
+    uint32_t blowup_log,
+    uint64_t lde_root,
+    uint64_t coset,
+    uint64_t* out,
+    void** out_handle
+) {
+    if (coeffs == nullptr || out == nullptr || column_count == 0 || out_handle == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    *out_handle = nullptr;
+    uint64_t trace_len = 1ull << trace_log;
+    uint64_t eval_len = 1ull << (trace_log + blowup_log);
+
+    size_t coeff_byte_len = 0;
+    cudaError_t status = dense_buffer_bytes(column_count, trace_len, &coeff_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    size_t eval_byte_len = 0;
+    status = dense_buffer_bytes(column_count, eval_len, &eval_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+
+    int device = 0;
+    status = cudaGetDevice(&device);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    AsyncDispatchBuffers* buffers = acquire_async_dispatch_buffers(device);
+    if (buffers == nullptr) {
+        return cudaErrorMemoryAllocation;
+    }
+    status = ensure_workspace_buffer(
+        &buffers->coeffs,
+        &buffers->coeff_capacity_bytes,
+        coeff_byte_len
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &buffers->evals,
+        &buffers->eval_capacity_bytes,
+        eval_byte_len
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    status = ensure_pinned_workspace_buffer(
+        &buffers->host_coeffs,
+        &buffers->host_coeff_capacity_bytes,
+        coeff_byte_len
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    status = ensure_pinned_workspace_buffer(
+        &buffers->host_evals,
+        &buffers->host_eval_capacity_bytes,
+        eval_byte_len
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    status = ensure_async_dispatch_stream(buffers);
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+    memcpy(buffers->host_coeffs, coeffs, coeff_byte_len);
+    const uint64_t* host_coeff_input = buffers->host_coeffs;
+    uint64_t* host_eval_output = buffers->host_evals;
+    void* staging_output = buffers->host_evals;
+
+    PendingTransform* pending = nullptr;
+    status = create_pending_transform(
+        device,
+        buffers,
+        out,
+        staging_output,
+        eval_byte_len,
+        &pending
+    );
+    if (status != cudaSuccess) {
+        release_async_dispatch_buffers(buffers);
+        return status;
+    }
+
+    status = cudaMemcpyAsync(
+        buffers->coeffs,
+        host_coeff_input,
+        coeff_byte_len,
+        cudaMemcpyHostToDevice,
+        buffers->stream
+    );
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    if (column_count > (size_t)UINT32_MAX) {
+        destroy_pending_transform(pending);
+        return cudaErrorInvalidValue;
+    }
+    fastpq_lde_kernel<<<(unsigned int)column_count, 1, 0, buffers->stream>>>(
+        buffers->coeffs,
+        buffers->evals,
+        trace_len,
+        eval_len,
+        trace_log + blowup_log,
+        lde_root,
+        coset
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    status = cudaMemcpyAsync(
+        host_eval_output,
+        buffers->evals,
+        eval_byte_len,
+        cudaMemcpyDeviceToHost,
+        buffers->stream
+    );
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    status = cudaEventRecord(pending->event, buffers->stream);
+    if (status != cudaSuccess) {
+        destroy_pending_transform(pending);
+        return status;
+    }
+    *out_handle = pending;
+    return cudaSuccess;
+}
+
 extern "C" cudaError_t fastpq_fft_cuda(
     uint64_t* elements,
     size_t column_count,
-    uint32_t log_size
+    uint32_t log_size,
+    uint64_t root
 ) {
     if (elements == nullptr || column_count == 0) {
         return cudaErrorInvalidValue;
     }
     uint64_t n = 1ull << log_size;
-    dim3 block_dim(1);
-    dim3 grid_dim((unsigned int)column_count);
-    fastpq_fft_kernel<<<grid_dim, block_dim>>>(elements, n, log_size);
-    return cudaGetLastError();
+    size_t byte_len = 0;
+    cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    std::lock_guard<std::mutex> guard(transform_workspace_mutex());
+    TransformWorkspace* workspace = current_transform_workspace();
+    if (workspace == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->dense,
+        &workspace->dense_capacity_bytes,
+        byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(workspace->dense, elements, byte_len, cudaMemcpyHostToDevice);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    const unsigned int threads_per_block = 128u;
+    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
+    if (grid_size_host == 0) {
+        grid_size_host = 1;
+    }
+    if (grid_size_host > (size_t)UINT32_MAX) {
+        return cudaErrorInvalidValue;
+    }
+    fastpq_fft_kernel<<<(unsigned int)grid_size_host, threads_per_block>>>(
+        workspace->dense,
+        column_count,
+        n,
+        log_size,
+        root
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(elements, workspace->dense, byte_len, cudaMemcpyDeviceToHost);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    return cudaSuccess;
 }
 
 extern "C" cudaError_t fastpq_ifft_cuda(
     uint64_t* elements,
     size_t column_count,
-    uint32_t log_size
+    uint32_t log_size,
+    uint64_t root
 ) {
     if (elements == nullptr || column_count == 0) {
         return cudaErrorInvalidValue;
     }
     uint64_t n = 1ull << log_size;
-    dim3 block_dim(1);
-    dim3 grid_dim((unsigned int)column_count);
-    fastpq_ifft_kernel<<<grid_dim, block_dim>>>(elements, n, log_size);
-    return cudaGetLastError();
+    size_t byte_len = 0;
+    cudaError_t status = dense_buffer_bytes(column_count, n, &byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    std::lock_guard<std::mutex> guard(transform_workspace_mutex());
+    TransformWorkspace* workspace = current_transform_workspace();
+    if (workspace == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->dense,
+        &workspace->dense_capacity_bytes,
+        byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(workspace->dense, elements, byte_len, cudaMemcpyHostToDevice);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    const unsigned int threads_per_block = 128u;
+    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
+    if (grid_size_host == 0) {
+        grid_size_host = 1;
+    }
+    if (grid_size_host > (size_t)UINT32_MAX) {
+        return cudaErrorInvalidValue;
+    }
+    fastpq_ifft_kernel<<<(unsigned int)grid_size_host, threads_per_block>>>(
+        workspace->dense,
+        column_count,
+        n,
+        log_size,
+        root
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(elements, workspace->dense, byte_len, cudaMemcpyDeviceToHost);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    return cudaSuccess;
 }
 
 extern "C" cudaError_t fastpq_lde_cuda(
@@ -452,6 +1657,7 @@ extern "C" cudaError_t fastpq_lde_cuda(
     size_t column_count,
     uint32_t trace_log,
     uint32_t blowup_log,
+    uint64_t lde_root,
     uint64_t coset,
     uint64_t* out
 ) {
@@ -460,19 +1666,256 @@ extern "C" cudaError_t fastpq_lde_cuda(
     }
     uint64_t trace_len = 1ull << trace_log;
     uint64_t eval_len = 1ull << (trace_log + blowup_log);
-    dim3 grid_dim((unsigned int)column_count);
-    dim3 block_dim(1);
-    size_t shared_bytes = eval_len * sizeof(uint64_t);
-    fastpq_lde_kernel<<<grid_dim, block_dim, shared_bytes>>>(
-        coeffs,
-        out,
+    size_t coeff_byte_len = 0;
+    cudaError_t status = dense_buffer_bytes(column_count, trace_len, &coeff_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    size_t eval_byte_len = 0;
+    status = dense_buffer_bytes(column_count, eval_len, &eval_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    std::lock_guard<std::mutex> guard(transform_workspace_mutex());
+    TransformWorkspace* workspace = current_transform_workspace();
+    if (workspace == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->coeffs,
+        &workspace->coeff_capacity_bytes,
+        coeff_byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->evals,
+        &workspace->eval_capacity_bytes,
+        eval_byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(workspace->coeffs, coeffs, coeff_byte_len, cudaMemcpyHostToDevice);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    if (column_count > (size_t)UINT32_MAX) {
+        return cudaErrorInvalidValue;
+    }
+    fastpq_lde_kernel<<<(unsigned int)column_count, 1>>>(
+        workspace->coeffs,
+        workspace->evals,
+        trace_len,
+        eval_len,
+        trace_log + blowup_log,
+        lde_root,
+        coset
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(out, workspace->evals, eval_byte_len, cudaMemcpyDeviceToHost);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    return cudaSuccess;
+}
+
+extern "C" cudaError_t fastpq_bn254_fft_cuda(
+    uint64_t* elements,
+    size_t column_count,
+    uint32_t log_size,
+    const uint64_t* stage_twiddles,
+    size_t stage_twiddle_len
+) {
+    if (elements == nullptr || stage_twiddles == nullptr || column_count == 0 || stage_twiddle_len == 0) {
+        return cudaErrorInvalidValue;
+    }
+    uint64_t n = 1ull << log_size;
+    size_t dense_byte_len = 0;
+    cudaError_t status = bn254_dense_buffer_bytes(column_count, n, &dense_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    size_t twiddle_byte_len = 0;
+    status = limb_buffer_bytes(stage_twiddle_len, &twiddle_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    std::lock_guard<std::mutex> guard(transform_workspace_mutex());
+    TransformWorkspace* workspace = current_transform_workspace();
+    if (workspace == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->dense,
+        &workspace->dense_capacity_bytes,
+        dense_byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->bn254_twiddles,
+        &workspace->bn254_twiddle_capacity_bytes,
+        twiddle_byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(workspace->dense, elements, dense_byte_len, cudaMemcpyHostToDevice);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(
+        workspace->bn254_twiddles,
+        stage_twiddles,
+        twiddle_byte_len,
+        cudaMemcpyHostToDevice
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    if (column_count > (size_t)UINT32_MAX) {
+        return cudaErrorInvalidValue;
+    }
+    const unsigned int threads_per_block = 128u;
+    fastpq_bn254_fft_kernel<<<(unsigned int)column_count, threads_per_block>>>(
+        workspace->dense,
+        column_count,
+        n,
+        log_size,
+        workspace->bn254_twiddles
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(elements, workspace->dense, dense_byte_len, cudaMemcpyDeviceToHost);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    return cudaSuccess;
+}
+
+extern "C" cudaError_t fastpq_bn254_lde_cuda(
+    const uint64_t* coeffs,
+    size_t column_count,
+    uint32_t trace_log,
+    uint32_t blowup_log,
+    const uint64_t* stage_twiddles,
+    size_t stage_twiddle_len,
+    const uint64_t* coset,
+    uint64_t* out
+) {
+    if (
+        coeffs == nullptr || stage_twiddles == nullptr || coset == nullptr || out == nullptr
+        || column_count == 0 || stage_twiddle_len == 0
+    ) {
+        return cudaErrorInvalidValue;
+    }
+    uint64_t trace_len = 1ull << trace_log;
+    uint64_t eval_len = 1ull << (trace_log + blowup_log);
+    size_t coeff_byte_len = 0;
+    cudaError_t status = bn254_dense_buffer_bytes(column_count, trace_len, &coeff_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    size_t eval_byte_len = 0;
+    status = bn254_dense_buffer_bytes(column_count, eval_len, &eval_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    size_t twiddle_byte_len = 0;
+    status = limb_buffer_bytes(stage_twiddle_len, &twiddle_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    size_t coset_byte_len = 0;
+    status = limb_buffer_bytes(BN254_LIMBS, &coset_byte_len);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    std::lock_guard<std::mutex> guard(transform_workspace_mutex());
+    TransformWorkspace* workspace = current_transform_workspace();
+    if (workspace == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->coeffs,
+        &workspace->coeff_capacity_bytes,
+        coeff_byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->evals,
+        &workspace->eval_capacity_bytes,
+        eval_byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->bn254_twiddles,
+        &workspace->bn254_twiddle_capacity_bytes,
+        twiddle_byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = ensure_workspace_buffer(
+        &workspace->bn254_coset,
+        &workspace->bn254_coset_capacity_bytes,
+        coset_byte_len
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(workspace->coeffs, coeffs, coeff_byte_len, cudaMemcpyHostToDevice);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(
+        workspace->bn254_twiddles,
+        stage_twiddles,
+        twiddle_byte_len,
+        cudaMemcpyHostToDevice
+    );
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(workspace->bn254_coset, coset, coset_byte_len, cudaMemcpyHostToDevice);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    if (column_count > (size_t)UINT32_MAX) {
+        return cudaErrorInvalidValue;
+    }
+    const unsigned int threads_per_block = 128u;
+    fastpq_bn254_lde_kernel<<<(unsigned int)column_count, threads_per_block>>>(
+        workspace->coeffs,
+        workspace->evals,
         trace_len,
         eval_len,
         trace_log,
         blowup_log,
-        coset
+        workspace->bn254_twiddles,
+        workspace->bn254_coset
     );
-    return cudaGetLastError();
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return status;
+    }
+    status = cudaMemcpy(out, workspace->evals, eval_byte_len, cudaMemcpyDeviceToHost);
+    if (status != cudaSuccess) {
+        return status;
+    }
+    return cudaSuccess;
 }
 
 extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t state_count) {
@@ -483,15 +1926,23 @@ extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t sta
     const size_t total_elements = state_count * (size_t)POSEIDON_STATE_WIDTH;
     const size_t byte_len = total_elements * sizeof(uint64_t);
 
-    uint64_t* device_states = nullptr;
-    cudaError_t status = cudaMalloc(&device_states, byte_len);
+    std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
+    PoseidonWorkspace* workspace = current_poseidon_workspace();
+    if (workspace == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    cudaError_t status = ensure_workspace_buffer(
+        &workspace->states,
+        &workspace->state_capacity_bytes,
+        byte_len
+    );
     if (status != cudaSuccess) {
         return status;
     }
+    uint64_t* device_states = workspace->states;
 
     status = cudaMemcpy(device_states, states, byte_len, cudaMemcpyHostToDevice);
     if (status != cudaSuccess) {
-        cudaFree(device_states);
         return status;
     }
 
@@ -501,7 +1952,6 @@ extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t sta
         grid_size_host = 1;
     }
     if (grid_size_host > (size_t)UINT32_MAX) {
-        cudaFree(device_states);
         return cudaErrorInvalidValue;
     }
 
@@ -511,15 +1961,7 @@ extern "C" cudaError_t fastpq_poseidon_permute_cuda(uint64_t* states, size_t sta
     );
     status = cudaGetLastError();
     if (status == cudaSuccess) {
-        status = cudaDeviceSynchronize();
-    }
-    if (status == cudaSuccess) {
         status = cudaMemcpy(states, device_states, byte_len, cudaMemcpyDeviceToHost);
-    }
-
-    cudaError_t free_status = cudaFree(device_states);
-    if (status == cudaSuccess && free_status != cudaSuccess) {
-        status = free_status;
     }
     return status;
 }
@@ -545,30 +1987,41 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
         payload_bytes = ((size_t)last.offset + (size_t)last.len) * sizeof(uint64_t);
     }
 
-    uint64_t* device_payloads = nullptr;
-    PoseidonSlice* device_slices = nullptr;
-    uint64_t* device_states = nullptr;
-    cudaError_t status = cudaMalloc(&device_payloads, payload_bytes);
+    std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
+    PoseidonWorkspace* workspace = current_poseidon_workspace();
+    if (workspace == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    cudaError_t status = ensure_workspace_buffer(
+        &workspace->payloads,
+        &workspace->payload_capacity_bytes,
+        payload_bytes
+    );
     if (status != cudaSuccess) {
         return status;
     }
-    status = cudaMalloc(&device_slices, column_count * sizeof(PoseidonSlice));
+    status = ensure_workspace_buffer(
+        &workspace->slices,
+        &workspace->slice_capacity_bytes,
+        column_count * sizeof(PoseidonSlice)
+    );
     if (status != cudaSuccess) {
-        cudaFree(device_payloads);
         return status;
     }
-    status = cudaMalloc(&device_states, state_bytes);
+    status = ensure_workspace_buffer(
+        &workspace->states,
+        &workspace->state_capacity_bytes,
+        state_bytes
+    );
     if (status != cudaSuccess) {
-        cudaFree(device_slices);
-        cudaFree(device_payloads);
         return status;
     }
+    uint64_t* device_payloads = workspace->payloads;
+    PoseidonSlice* device_slices = workspace->slices;
+    uint64_t* device_states = workspace->states;
 
     status = cudaMemcpy(device_payloads, payloads, payload_bytes, cudaMemcpyHostToDevice);
     if (status != cudaSuccess) {
-        cudaFree(device_states);
-        cudaFree(device_slices);
-        cudaFree(device_payloads);
         return status;
     }
     status = cudaMemcpy(
@@ -578,9 +2031,6 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
         cudaMemcpyHostToDevice
     );
     if (status != cudaSuccess) {
-        cudaFree(device_states);
-        cudaFree(device_slices);
-        cudaFree(device_payloads);
         return status;
     }
 
@@ -590,9 +2040,6 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
         grid_size_host = 1;
     }
     if (grid_size_host > (size_t)UINT32_MAX) {
-        cudaFree(device_states);
-        cudaFree(device_slices);
-        cudaFree(device_payloads);
         return cudaErrorInvalidValue;
     }
 
@@ -605,23 +2052,7 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_cuda(
     );
     status = cudaGetLastError();
     if (status == cudaSuccess) {
-        status = cudaDeviceSynchronize();
-    }
-    if (status == cudaSuccess) {
         status = cudaMemcpy(out_states, device_states, state_bytes, cudaMemcpyDeviceToHost);
-    }
-
-    cudaError_t payload_status = cudaFree(device_payloads);
-    cudaError_t slice_status = cudaFree(device_slices);
-    cudaError_t state_status = cudaFree(device_states);
-    if (status == cudaSuccess && payload_status != cudaSuccess) {
-        status = payload_status;
-    }
-    if (status == cudaSuccess && slice_status != cudaSuccess) {
-        status = slice_status;
-    }
-    if (status == cudaSuccess && state_status != cudaSuccess) {
-        status = state_status;
     }
     return status;
 }
@@ -649,33 +2080,50 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
     size_t slice_bytes = column_count * sizeof(PoseidonSlice);
     size_t hash_bytes = (column_count + parents) * sizeof(uint64_t);
 
-    uint64_t* device_payloads = nullptr;
-    PoseidonSlice* device_slices = nullptr;
-    uint64_t* device_states = nullptr;
-    uint64_t* device_hashes = nullptr;
-
-    cudaError_t status = cudaMalloc(&device_payloads, payload_bytes);
+    const unsigned int threads_per_block = 128u;
+    size_t grid_size_host = 0;
+    size_t parent_grid = 0;
+    std::lock_guard<std::mutex> guard(poseidon_workspace_mutex());
+    PoseidonWorkspace* workspace = current_poseidon_workspace();
+    if (workspace == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    cudaError_t status = ensure_workspace_buffer(
+        &workspace->payloads,
+        &workspace->payload_capacity_bytes,
+        payload_bytes
+    );
     if (status != cudaSuccess) {
         return status;
     }
-    status = cudaMalloc(&device_slices, slice_bytes);
+    status = ensure_workspace_buffer(
+        &workspace->slices,
+        &workspace->slice_capacity_bytes,
+        slice_bytes
+    );
     if (status != cudaSuccess) {
-        cudaFree(device_payloads);
         return status;
     }
-    status = cudaMalloc(&device_states, state_bytes);
+    status = ensure_workspace_buffer(
+        &workspace->states,
+        &workspace->state_capacity_bytes,
+        state_bytes
+    );
     if (status != cudaSuccess) {
-        cudaFree(device_slices);
-        cudaFree(device_payloads);
         return status;
     }
-    status = cudaMalloc(&device_hashes, hash_bytes);
+    status = ensure_workspace_buffer(
+        &workspace->hashes,
+        &workspace->hash_capacity_bytes,
+        hash_bytes
+    );
     if (status != cudaSuccess) {
-        cudaFree(device_states);
-        cudaFree(device_slices);
-        cudaFree(device_payloads);
         return status;
     }
+    uint64_t* device_payloads = workspace->payloads;
+    PoseidonSlice* device_slices = workspace->slices;
+    uint64_t* device_states = workspace->states;
+    uint64_t* device_hashes = workspace->hashes;
 
     status = cudaMemcpy(device_payloads, payloads, payload_bytes, cudaMemcpyHostToDevice);
     if (status != cudaSuccess) {
@@ -691,10 +2139,13 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
         goto fused_cleanup;
     }
 
-    const unsigned int threads_per_block = 128u;
-    size_t grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
+    grid_size_host = (column_count + threads_per_block - 1u) / threads_per_block;
     if (grid_size_host == 0) {
         grid_size_host = 1;
+    }
+    if (grid_size_host > (size_t)UINT32_MAX) {
+        status = cudaErrorInvalidValue;
+        goto fused_cleanup;
     }
     fastpq_poseidon_hash_columns_kernel<<<(unsigned int)grid_size_host, threads_per_block>>>(
         device_payloads,
@@ -704,9 +2155,6 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
         device_states
     );
     status = cudaGetLastError();
-    if (status == cudaSuccess) {
-        status = cudaDeviceSynchronize();
-    }
     if (status != cudaSuccess) {
         goto fused_cleanup;
     }
@@ -717,16 +2165,17 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
         device_hashes
     );
     status = cudaGetLastError();
-    if (status == cudaSuccess) {
-        status = cudaDeviceSynchronize();
-    }
     if (status != cudaSuccess) {
         goto fused_cleanup;
     }
 
-    size_t parent_grid = (parents + threads_per_block - 1u) / threads_per_block;
+    parent_grid = (parents + threads_per_block - 1u) / threads_per_block;
     if (parent_grid == 0) {
         parent_grid = 1;
+    }
+    if (parent_grid > (size_t)UINT32_MAX) {
+        status = cudaErrorInvalidValue;
+        goto fused_cleanup;
     }
     fastpq_poseidon_parent_kernel<<<(unsigned int)parent_grid, threads_per_block>>>(
         device_hashes,
@@ -734,9 +2183,6 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
         device_hashes + column_count
     );
     status = cudaGetLastError();
-    if (status == cudaSuccess) {
-        status = cudaDeviceSynchronize();
-    }
     if (status != cudaSuccess) {
         goto fused_cleanup;
     }
@@ -744,33 +2190,5 @@ extern "C" cudaError_t fastpq_poseidon_hash_columns_fused_cuda(
     status = cudaMemcpy(out_hashes, device_hashes, hash_bytes, cudaMemcpyDeviceToHost);
 
 fused_cleanup:
-    cudaError_t free_hashes = cudaFree(device_hashes);
-    cudaError_t free_states = cudaFree(device_states);
-    cudaError_t free_slices = cudaFree(device_slices);
-    cudaError_t free_payloads = cudaFree(device_payloads);
-    if (status == cudaSuccess) {
-        if (free_hashes != cudaSuccess) {
-            status = free_hashes;
-        } else if (free_states != cudaSuccess) {
-            status = free_states;
-        } else if (free_slices != cudaSuccess) {
-            status = free_slices;
-        } else if (free_payloads != cudaSuccess) {
-            status = free_payloads;
-        }
-    } else {
-        if (free_hashes != cudaSuccess) {
-            status = free_hashes;
-        }
-        if (free_states != cudaSuccess) {
-            status = free_states;
-        }
-        if (free_slices != cudaSuccess) {
-            status = free_slices;
-        }
-        if (free_payloads != cudaSuccess) {
-            status = free_payloads;
-        }
-    }
     return status;
 }

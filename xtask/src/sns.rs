@@ -650,7 +650,7 @@ fn ensure_asset_literal(literal: &str, field: &str, prefix: &str, errors: &mut V
     }
     if let Err(err) = iroha_data_model::asset::AssetId::parse_literal(trimmed) {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be an asset id in `<asset-definition-id>#<account-id>` form: {err}"
+            "{prefix}: {field} `{literal}` must be an asset-holding id in `<base58-asset-definition-id>#<i105-account-id>` form: {err}"
         ));
     }
 }
@@ -2547,8 +2547,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod catalog_verify_tests {
     use super::*;
 
-    const SAMPLE_ASSET_ID: &str =
-        "6sLdgCzX8t3h4cU4cinuyqHVivrr#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const SAMPLE_ASSET_ID: &str = "6sLdgCzX8t3h4cU4cinuyqHVivrr#sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
     fn sample_pricing() -> PricingTier {
         PricingTier {
@@ -2570,8 +2569,10 @@ mod catalog_verify_tests {
             suffix: ".sora".into(),
             suffix_id: 1,
             status: "active".into(),
-            steward_account: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into(),
-            fund_splitter_account: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into(),
+            steward_account:
+                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
+            fund_splitter_account:
+                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
             payment_asset_id: SAMPLE_ASSET_ID.into(),
             referral_cap_bps: 500,
             min_term_years: 1,
@@ -2581,7 +2582,10 @@ mod catalog_verify_tests {
             policy_version: 1,
             reserved_labels: vec![ReservedLabel {
                 label: "treasury".into(),
-                assigned_to: Some("6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ".into()),
+                assigned_to: Some(
+                    "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
+                        .into(),
+                ),
                 release_at_ms: None,
                 note: None,
             }],

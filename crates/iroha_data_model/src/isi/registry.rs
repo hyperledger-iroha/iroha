@@ -2,9 +2,10 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys, domain_link,
-        endorsement, identifier, kaigi, nexus, offline, oracle, ram_lfe, repo, runtime_upgrade,
-        settlement, smart_contract_code, social, soracloud, sorafs, space_directory,
+        InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys,
+        contract_alias, domain_link, endorsement, identifier, kaigi, nexus, offline, oracle,
+        ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud,
+        sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -47,6 +48,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<Transfer<Account, NftId, Account>>,
     InstructionRegistry::register::<TransferAssetBatch>,
     InstructionRegistry::register::<TransferBox>,
+    InstructionRegistry::register::<rwa::RwaInstructionBox>,
     InstructionRegistry::register::<repo::RepoInstructionBox>,
     InstructionRegistry::register::<repo::RepoIsi>,
     InstructionRegistry::register::<repo::ReverseRepoIsi>,
@@ -79,14 +81,14 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<Revoke<RoleId, Account>>,
     InstructionRegistry::register::<Revoke<Permission, Role>>,
     InstructionRegistry::register::<RevokeBox>,
-    InstructionRegistry::register::<offline::RegisterOfflineReserve>,
-    InstructionRegistry::register::<offline::CommitOfflineReserveOperation>,
+    InstructionRegistry::register::<offline::RegisterOfflineLineage>,
+    InstructionRegistry::register::<offline::CommitOfflineLineageOperation>,
     InstructionRegistry::register::<offline::RegisterOfflineAllowance>,
     InstructionRegistry::register::<offline::SubmitOfflineToOnlineTransfer>,
     InstructionRegistry::register::<offline::RegisterOfflineVerdictRevocation>,
     InstructionRegistry::register::<offline::ReclaimExpiredOfflineAllowance>,
-    InstructionRegistry::register::<offline::ReserveOfflineEscrowBalance>,
-    InstructionRegistry::register::<offline::RefundOfflineEscrowBalance>,
+    InstructionRegistry::register::<offline::LoadOfflineEscrowBalance>,
+    InstructionRegistry::register::<offline::RedeemOfflineEscrowBalance>,
     InstructionRegistry::register::<crate::isi::staking::RegisterPublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ActivatePublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ExitPublicLaneValidator>,
@@ -168,6 +170,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<domain_link::LinkAccountDomain>,
     InstructionRegistry::register::<domain_link::BindAccountAlias>,
     InstructionRegistry::register::<domain_link::SetAccountLabel>,
+    InstructionRegistry::register::<contract_alias::SetContractAlias>,
     InstructionRegistry::register::<domain_link::UnlinkAccountDomain>,
     InstructionRegistry::register::<ram_lfe::RegisterRamLfeProgramPolicy>,
     InstructionRegistry::register::<ram_lfe::ActivateRamLfeProgramPolicy>,
@@ -284,6 +287,7 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id::<BurnBox>(BurnBox::WIRE_ID);
     registry = registry.register_with_id::<TransferBox>(TransferBox::WIRE_ID);
     registry = registry.register_with_id::<TransferAssetBatch>(TransferAssetBatch::WIRE_ID);
+    registry = registry.register_with_id::<rwa::RwaInstructionBox>(rwa::RwaInstructionBox::WIRE_ID);
     registry = registry.register_with_id::<repo::RepoIsi>(repo::RepoIsi::WIRE_ID);
     registry = registry.register_with_id::<repo::ReverseRepoIsi>(repo::ReverseRepoIsi::WIRE_ID);
     registry = registry.register_with_id::<settlement::DvpIsi>(settlement::DvpIsi::WIRE_ID);
@@ -483,6 +487,9 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
         registry.register_with_id::<identifier::RevokeIdentifier>("identity::RevokeIdentifier");
     registry = registry.register_with_id::<asset_alias::SetAssetDefinitionAlias>(
         asset_alias::SetAssetDefinitionAlias::WIRE_ID,
+    );
+    registry = registry.register_with_id::<contract_alias::SetContractAlias>(
+        contract_alias::SetContractAlias::WIRE_ID,
     );
     registry = registry.register_with_id::<nexus::SetLaneRelayEmergencyValidators>(
         "nexus::SetLaneRelayEmergencyValidators",

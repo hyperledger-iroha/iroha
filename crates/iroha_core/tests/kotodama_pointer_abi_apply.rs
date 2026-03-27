@@ -502,7 +502,7 @@ fn dlmm_pool_seed_bin_entrypoint_survives_cross_call() {
         "active_bin": 0
     }));
     let mut init_vm = IVM::new(50_000_000);
-    let mut init_host =
+    let init_host =
         CoreHost::with_accounts_and_args(authority.clone(), Arc::clone(&accounts), init_args);
     init_vm.load_program(&program).expect("load dlmm_pool");
     init_vm

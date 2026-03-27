@@ -300,10 +300,6 @@ unsafe fn mul_sse2(a: FieldElem, b: FieldElem) -> FieldElem {
     }
     let reduced = FieldElem(reduce_wide(out));
     let scalar = mul_scalar(a, b);
-    println!(
-        "mul_neon debug: a={:?} b={:?} neon={:?} scalar={:?}",
-        a, b, reduced, scalar
-    );
     assert_eq!(reduced, scalar);
     reduced
 }

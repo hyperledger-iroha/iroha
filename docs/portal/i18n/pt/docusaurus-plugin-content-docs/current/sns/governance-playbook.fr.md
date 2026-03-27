@@ -61,7 +61,7 @@ painéis e velocidades de escalada.
 | Gráfico + adendos KPI | `docs/source/sns/governance_addenda/` | Signatários de gráficos com controle de versão, KPI de convênios e decisões de governança referenciadas por votos CLI. |
 | Esquema de registro | [`registry-schema.md`](./registry-schema.md) | Estruturas canônicas Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrato do registrador | [`registrar-api.md`](./registrar-api.md) | Cargas REST/gRPC, métricas `sns_registrar_status_total` e atenção aos ganchos de governança. |
-| Guia UX de endereços | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canonices I105 (preferir) e compressas (segunda escolha) reproduzidos por carteiras/exploradores. |
+| Guia UX de endereços | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canonices i105 (preferir) e compressas (segunda escolha) reproduzidos por carteiras/exploradores. |
 | Documentos SoraDNS/GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | A derivação determina os hosts, o fluxo de trabalho do tamanho da transparência e as regras de alerta. |
 | Memorandos regulamentares | `docs/source/sns/regulatory/` | Notes d'accueil par juridiction (ex. EU DSA), administrador de reconhecimentos, anexos de modelo. |
 | Diário de perfuração | `ops/drill-log.md` | Journal des ensaios caos e IR requis avant sorties de phase. |
@@ -104,7 +104,7 @@ decisão em 24 horas.
    etat GAR/zone s'est propage (ver 4.5).
 6. **Cliente de divulgação:** Mettre a jour le ledger oriente client (wallet/explorer)
    via les fixtures compartilhadas em [`address-display-guidelines.md`](./address-display-guidelines.md),
-   com certeza que os resultados I105 e as compactações correspondentes aos guias de cópia/QR.
+   com certeza que os resultados i105 e as compactações correspondentes aos guias de cópia/QR.
 
 ### 4.3 Renovações, faturação e reconciliação de tesouros- **Workflow de renovação:** Os registradores aplicam a janela de graça de
   30 dias + a janela de resgate de 60 dias especificada em `SuffixPolicyV1`.
@@ -136,11 +136,11 @@ decisão em 24 horas.
 | Fase | Proprietário | Ação e prevenção | SLA |
 |-------|-------------|------------------|-----|
 | Demanda de gel suave | Administrador / suporte | Deposite um ticket `SNS-DF-<id>` com pré-pagamento, referência de título de litígio e seletor(es) afetado(s). | <=4 horas após a entrada. |
-| Guardião de ingressos | Conselho guardião | Produto `sns governance freeze --selector <I105> --reason <text> --until <ts>` `GuardianFreezeTicketV1`. Armazene o JSON do ticket sob `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h de execução. |
+| Guardião de ingressos | Conselho guardião | Produto `sns governance freeze --selector <i105> --reason <text> --until <ts>` `GuardianFreezeTicketV1`. Armazene o JSON do ticket sob `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h de execução. |
 | Ratificação do conselho | Conselho de governo | Ao aprovar ou rejeitar os géis, documente a decisão com garantia sobre o guardião do tíquete e o resumo do título de litígio. | Prochaine session du conseil ou vote asynchrone. |
 | Painel de arbitragem | Conformista + mordomo | Convocar um painel de 7 jurados (selon roadmap) com hashes de boletins via `sns governance dispute ballot`. Junte-se ao recus de voto anonimamente no pacote de incidentes. | Veredicto <= 7 dias após o depósito do título. |
 | Apelo | Guardião + conselho | Os apelos dobram o vínculo e repetem o processo dos jurados; registre o manifesto Norito `DisputeAppealV1` e referencie o ticket principal. | <=10 horas. |
-| Degel e remediação | Registrador + resolvedor de operações | O executor `sns governance unfreeze --selector <I105> --ticket <id>`, atualizou o status do registrador e propaga as diferenças GAR/resolver. | Imediatamente após o veredicto. |Les canons d'urgence (gels declenches par Guardian <=72 h) suivent le meme flux
+| Degel e remediação | Registrador + resolvedor de operações | O executor `sns governance unfreeze --selector <i105> --ticket <id>`, atualizou o status do registrador e propaga as diferenças GAR/resolver. | Imediatamente após o veredicto. |Les canons d'urgence (gels declenches par Guardian <=72 h) suivent le meme flux
 mais exigir uma revista retroativa do conselho e uma nota de transparência sob
 `docs/source/sns/regulatory/`.
 

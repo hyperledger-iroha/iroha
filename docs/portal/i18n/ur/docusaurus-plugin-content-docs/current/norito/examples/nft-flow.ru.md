@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## قدم بہ قدم رجسٹری ٹریورسل
 
-- اس بات کو یقینی بنائیں کہ این ایف ٹی تعریف (مثال کے طور پر `n0#wonderland`) اسنیپٹ (`i105...` ، `i105...`) میں استعمال ہونے والے مالک/وصول کنندہ اکاؤنٹس کے ساتھ موجود ہے۔
+- اس بات کو یقینی بنائیں کہ این ایف ٹی تعریف (مثال کے طور پر `n0#wonderland`) اسنیپٹ (`<i105-account-id>` ، `<i105-account-id>`) میں استعمال ہونے والے مالک/وصول کنندہ اکاؤنٹس کے ساتھ موجود ہے۔
 - کال انٹری پوائنٹ `nft_issue_and_transfer` NFT کو جاری کرنے کے لئے ، اسے ایلس سے باب میں منتقل کریں ، اور رہائی کی وضاحت کرنے والے میٹا ڈیٹا پرچم منسلک کریں۔
 - منتقلی کی تصدیق کے ل I `iroha_cli ledger nfts list --account <id>` یا SDK کے مساویوں کے ذریعے NFT رجسٹری کی حیثیت کو چیک کریں ، پھر اس بات کو یقینی بنائیں کہ برن ہدایت پر عمل درآمد کے بعد اثاثہ حذف ہو گیا ہے۔
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("i105...");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

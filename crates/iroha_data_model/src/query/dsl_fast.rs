@@ -1168,6 +1168,7 @@ impl<T: 'static> EvaluateSelector<T> for () {
                 batch
             );
             project_ids_ref!(crate::nft::Nft, crate::nft::NftId, batch);
+            project_ids_ref!(crate::rwa::Rwa, crate::rwa::RwaId, batch);
             project_ids_ref!(crate::role::Role, crate::role::RoleId, batch);
             project_ids_ref!(crate::trigger::Trigger, crate::trigger::TriggerId, batch);
         }
@@ -1210,6 +1211,7 @@ impl<T: 'static> EvaluateSelector<T> for () {
                 batch
             );
             project_ids_owned!(crate::nft::Nft, crate::nft::NftId, batch);
+            project_ids_owned!(crate::rwa::Rwa, crate::rwa::RwaId, batch);
             project_ids_owned!(crate::role::Role, crate::role::RoleId, batch);
             project_ids_owned!(crate::trigger::Trigger, crate::trigger::TriggerId, batch);
         }

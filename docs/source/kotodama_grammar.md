@@ -81,6 +81,7 @@ Top-level items
 - Contracts: `seiyaku Name { ... }` contain functions, state, structs, and metadata.
 - Multiple contracts per file are allowed but discouraged; one primary `seiyaku` is used as default entry in manifests.
 - `struct` declarations define user types within a contract.
+- `const NAME[: Type] = expr;` defines a contract-level compile-time constant. Current constant initializers are literal-safe expressions and may reference previously declared constants.
 
 Visibility
 - `kotoage fn` denotes a public entrypoint; visibility affects dispatcher permissions, not codegen.
@@ -140,7 +141,7 @@ register_trigger wake {
   call run;
   on time pre_commit;
   repeats 2;
-  authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  authority "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
   metadata { tag: "alpha"; count: 1; enabled: true; }
 }
 ```
@@ -225,7 +226,7 @@ Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 Prelude macros provide shorter aliases and inline validation for these constructors:
-- `account!("i105...")`, `account_id!("i105...")`
+- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
 - `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
@@ -290,13 +291,14 @@ Notes
 
 Type: `Map<K, V>`
 - In-memory maps (heap-allocated via `Map::new()` or passed as parameters) store a single key/value pair; keys and values must be word-sized types: `int`, `bool`, `string`, `Blob`, `bytes`, `Json`, or pointer types (e.g., `AccountId`, `Name`).
-- Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, or pointer types.
+- Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, pointer types, tuples of durable-supported values, or structs whose fields are all durable-supported values.
 - `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
 - State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
 - Operations:
   - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
   - Existence: `contains(map, key) -> bool` (lowered helper; may be an intrinsic syscall).
   - Iteration: `for (k, v) in map { ... }` with deterministic order and mutation rules.
+- Composite durable map values are written and read as whole values. Partial field updates on stored records still lower to a load-modify-store pattern in user code.
 
 Deterministic iteration rules
 - The iteration set is the snapshot of keys at loop entry.

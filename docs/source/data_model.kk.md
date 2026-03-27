@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`: кез келген қолдау көрсетілетін идентификаторға арналған жиынтық түрдегі конверт (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `AssetId`, Kotodama `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Жалпы ағындар мен Norito кодтауы жалғыз түр ретінде пайдалы.
 - `ChainId`: транзакцияларда қайта ойнатудан қорғау үшін пайдаланылатын мөлдір емес тізбек идентификаторы.Идентификаторлардың жолдық пішіндері (`Display`/`FromStr` арқылы екі рет айналуға болады):
 - `DomainId`: `name` (мысалы, `wonderland`).
-- `AccountId`: `AccountAddress` арқылы тек I105 ретінде кодталған канондық доменсіз тіркелгі идентификаторы. Талдаушы кірістері канондық I105 болуы керек; домен жұрнақтары (`@domain`), канондық I105 литералдары, лақап ат литералдары, канондық он алтылық талдаушы кірісі, бұрынғы `norito:` пайдалы жүктемелері және `uaid:`/`opaque:` есептік жазбасы қабылданбайды.
+- `AccountId`: `AccountAddress` арқылы тек i105 ретінде кодталған канондық доменсіз тіркелгі идентификаторы. Талдаушы кірістері канондық i105 болуы керек; домен жұрнақтары (`@domain`), канондық i105 литералдары, лақап ат литералдары, канондық он алтылық талдаушы кірісі, бұрынғы `norito:` пайдалы жүктемелері және `uaid:`/`opaque:` есептік жазбасы қабылданбайды.
 - `AssetDefinitionId`: канондық `unprefixed Base58 address with versioning and checksum` (UUID-v4 байт).
-- `AssetId`: канондық кодталған литерал `<asset-definition-id>#<account-id>` (бұрынғы мәтіндік пішіндерге бірінші шығарылымда қолдау көрсетілмейді).
+- `AssetId`: канондық кодталған литерал `<canonical-base58-asset-definition-id>` (бұрынғы мәтіндік пішіндерге бірінші шығарылымда қолдау көрсетілмейді).
 - `NftId`: `nft$domain` (мысалы, `rose$garden`).
 - `PeerId`: `public_key` (тең теңдік ашық кілт арқылы жүзеге асырылады).
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` – бірегей атау.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Builder: `NewDomain` `with_logo`, `with_metadata`, содан кейін `Registrable::build(authority)` `owned_by` жинақтары.### Тіркелгі
-- `AccountId` - контроллер арқылы кілттелген және канондық I105 ретінде кодталған канондық доменсіз тіркелгі идентификаторы.
+- `AccountId` - контроллер арқылы кілттелген және канондық i105 ретінде кодталған канондық доменсіз тіркелгі идентификаторы.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` ауқымды көрініс қажет болған жағдайда ғана анық домен мәтінмәнін тасымалдайды.
 - `Account { id, metadata, label?, uaid? }` — `label` қайта кілт жазбалары пайдаланатын қосымша тұрақты бүркеншік ат, `uaid` кең ауқымда қосымша Nexus [Әмбебап тіркелгі идентификаторы](Kotodama) бар.
 - Құрылысшы: `NewAccount` `Account::new(id)` арқылы; тіркеу нақты `ScopedAccountId` доменін қажет етеді және әдепкіден біреуін шығармайды.
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Көшіру жазбасы:
 - Ескі `name#domain` актив анықтамасының идентификаторлары v1 нұсқасында қабылданбайды.
-- Жалға беру/жазу/тасымалдау үшін актив идентификаторлары канондық `<asset-definition-id>#<account-id>` болып қалады; оларды құру:
+- Жалға беру/жазу/тасымалдау үшін актив идентификаторлары канондық `<canonical-base58-asset-definition-id>` болып қалады; оларды құру:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - немесе `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

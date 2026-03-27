@@ -42,13 +42,13 @@ I18NI000000032X, һәм I18NI000000033X.
 - Миҫал өҙөктәре:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "<i105-account-id>", method: "get", path: "/v1/accounts/<i105-account-id>/assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/<i105-account-id>/assets?limit=5`, { headers });
 ```
 I18NF000000025X
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("<i105-account-id>", "get", "/v1/accounts/<i105-account-id>/assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Аҙаҡҡы нөктә инвентаризацияһы

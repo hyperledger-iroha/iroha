@@ -1391,13 +1391,27 @@ impl MockWorldStateView {
         asset_id: AssetDefinitionId,
         amount: Numeric,
     ) -> bool {
+        self.transfer_with_permission_bypass(caller, from, to, asset_id, amount, false)
+    }
+
+    pub fn transfer_with_permission_bypass(
+        &mut self,
+        caller: &ScopedAccountId,
+        from: ScopedAccountId,
+        to: ScopedAccountId,
+        asset_id: AssetDefinitionId,
+        amount: Numeric,
+        bypass_transfer_permission: bool,
+    ) -> bool {
         if !self.account_is_linked(&from) || !self.account_is_linked(&to) {
             return false;
         }
         if !Self::is_unsigned_scale0(&amount) {
             return false;
         }
-        if Self::account_subject(caller) != Self::account_subject(&from) {
+        if Self::account_subject(caller) != Self::account_subject(&from)
+            && !bypass_transfer_permission
+        {
             let token = PermissionToken::TransferAsset(asset_id.clone());
             if !self.has_permission(caller, &token) {
                 return false;
@@ -1911,6 +1925,7 @@ pub struct WsvHost {
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
     sm_enabled: bool,
+    allow_contract_runtime_asset_transfer_bypass: bool,
     fastpq_batch_entries:
         Option<Vec<(ScopedAccountId, ScopedAccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
@@ -1936,6 +1951,7 @@ struct WsvHostSnapshot {
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
     sm_enabled: bool,
+    allow_contract_runtime_asset_transfer_bypass: bool,
     fastpq_batch_entries:
         Option<Vec<(ScopedAccountId, ScopedAccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
@@ -1985,6 +2001,7 @@ impl WsvHost {
             axt_policy: policy,
             axt_policy_overridden: false,
             sm_enabled: false,
+            allow_contract_runtime_asset_transfer_bypass: false,
             fastpq_batch_entries: None,
             actual_access: crate::host::AccessLog::default(),
             state_overlay: HashMap::new(),
@@ -2075,6 +2092,8 @@ impl WsvHost {
             axt_policy: Arc::clone(&self.axt_policy),
             axt_policy_overridden: self.axt_policy_overridden,
             sm_enabled: self.sm_enabled,
+            allow_contract_runtime_asset_transfer_bypass: self
+                .allow_contract_runtime_asset_transfer_bypass,
             fastpq_batch_entries: self.fastpq_batch_entries.clone(),
             actual_access: self.actual_access.clone(),
             state_overlay: self.state_overlay.clone(),
@@ -2100,6 +2119,8 @@ impl WsvHost {
         self.axt_policy = Arc::clone(&snapshot.axt_policy);
         self.axt_policy_overridden = snapshot.axt_policy_overridden;
         self.sm_enabled = snapshot.sm_enabled;
+        self.allow_contract_runtime_asset_transfer_bypass =
+            snapshot.allow_contract_runtime_asset_transfer_bypass;
         self.fastpq_batch_entries = snapshot.fastpq_batch_entries.clone();
         self.actual_access = snapshot.actual_access.clone();
         self.state_overlay = snapshot.state_overlay.clone();
@@ -2229,6 +2250,16 @@ impl WsvHost {
     /// Toggle SM helper support at runtime.
     pub fn set_sm_enabled(&mut self, enabled: bool) {
         self.sm_enabled = enabled;
+    }
+
+    /// Opt-in test-host bypass that mirrors executor-scoped contract transfer authorization.
+    pub fn set_allow_contract_runtime_asset_transfer_bypass(&mut self, enabled: bool) {
+        self.allow_contract_runtime_asset_transfer_bypass = enabled;
+    }
+
+    #[must_use]
+    pub fn contract_runtime_asset_transfer_bypass_enabled(&self) -> bool {
+        self.allow_contract_runtime_asset_transfer_bypass
     }
 
     fn load_state_value(vm: &mut IVM, stored: &[u8]) -> Result<(), VMError> {
@@ -2461,12 +2492,13 @@ impl WsvHost {
             return Err(VMError::DecodeError);
         }
         for (from, to, asset, amount) in entries {
-            if !self.wsv.transfer(
+            if !self.wsv.transfer_with_permission_bypass(
                 &self.caller,
                 from.clone(),
                 to.clone(),
                 asset.clone(),
                 amount,
+                self.allow_contract_runtime_asset_transfer_bypass,
             ) {
                 return Err(VMError::PermissionDenied);
             }
@@ -2491,12 +2523,13 @@ impl WsvHost {
         for entry in batch.entries() {
             let from = Self::materialize_subject_account(&mut self.wsv, entry.from());
             let to = Self::materialize_subject_account(&mut self.wsv, entry.to());
-            if !self.wsv.transfer(
+            if !self.wsv.transfer_with_permission_bypass(
                 &self.caller,
                 from,
                 to,
                 entry.asset_definition().clone(),
                 entry.amount().clone(),
+                self.allow_contract_runtime_asset_transfer_bypass,
             ) {
                 return Err(VMError::PermissionDenied);
             }
@@ -4558,6 +4591,7 @@ impl IVMHost for WsvHost {
                                             asset_s.parse().map_err(|_| VMError::NoritoInvalid)?;
                                         if MockWorldStateView::account_subject(&self.caller)
                                             != MockWorldStateView::account_subject(&from)
+                                            && !self.allow_contract_runtime_asset_transfer_bypass
                                         {
                                             let token =
                                                 PermissionToken::TransferAsset(asset.clone());
@@ -4565,12 +4599,13 @@ impl IVMHost for WsvHost {
                                                 return Err(VMError::PermissionDenied);
                                             }
                                         }
-                                        let ok = self.wsv.transfer(
+                                        let ok = self.wsv.transfer_with_permission_bypass(
                                             &self.caller,
                                             from,
                                             to,
                                             asset,
                                             amount,
+                                            self.allow_contract_runtime_asset_transfer_bypass,
                                         );
                                         return if ok {
                                             Ok(0)
@@ -5543,16 +5578,21 @@ impl IVMHost for WsvHost {
                     let amount = self.decode_numeric_reg(vm, 13)?;
                     if MockWorldStateView::account_subject(&from_id)
                         != MockWorldStateView::account_subject(&self.caller)
+                        && !self.allow_contract_runtime_asset_transfer_bypass
                     {
                         let token = PermissionToken::TransferAsset(asset_id.clone());
                         if !self.wsv.has_permission(&self.caller, &token) {
                             return Err(VMError::PermissionDenied);
                         }
                     }
-                    if self
-                        .wsv
-                        .transfer(&self.caller, from_id, to_id, asset_id, amount)
-                    {
+                    if self.wsv.transfer_with_permission_bypass(
+                        &self.caller,
+                        from_id,
+                        to_id,
+                        asset_id,
+                        amount,
+                        self.allow_contract_runtime_asset_transfer_bypass,
+                    ) {
                         Ok(0)
                     } else {
                         Err(VMError::PermissionDenied)

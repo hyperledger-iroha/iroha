@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` `iroha` CLI ይጠቀልላል፡-
   - `audit.json` - ከ I18NI0000009X የተዋቀረ ውፅዓት።
-  - `normalized.txt` — የተቀየረ ተመራጭ I105/ሁለተኛ-ምርጥ የታመቀ (`sora`) ቃል በቃል ለእያንዳንዱ የአካባቢ-ጎራ መራጭ።
+  - `normalized.txt` — የተቀየረ ተመራጭ i105/ሁለተኛ-ምርጥ የታመቀ (`sora`) ቃል በቃል ለእያንዳንዱ የአካባቢ-ጎራ መራጭ።
 - ስክሪፕቱን ከአድራሻ ኢንጌስት ዳሽቦርድ (`dashboards/grafana/address_ingest.json`) ጋር ያጣምሩ
   እና የአለርትማኔጀር ደንቦች (`dashboards/alerts/address_ingest_rules.yml`) የአካባቢ-8 / ለማረጋገጥ
   የአካባቢ-12 መቁረጫ ደህንነቱ የተጠበቀ ነው። የአካባቢ-8 እና የአካባቢ-12 የግጭት ፓነሎች እና የ
@@ -37,7 +37,7 @@ scripts/address_local_toolkit.sh \
 
 አማራጮች፡-
 
-- `--format i105` ለ `i105` ውፅዓት ከ I105 ይልቅ።
+- `--format i105` ለ `i105` ውፅዓት ከ i105 ይልቅ።
 - ባዶ ቃል በቃል ለመልቀቅ `domainless output (default)`።
 - የልወጣ ደረጃን ለመዝለል `--audit-only`።
 - `--allow-errors` የተበላሹ ረድፎች ሲታዩ መቃኘቱን ለመቀጠል (ከ CLI ባህሪ ጋር ይዛመዳል)።

@@ -1,0 +1,16 @@
+[package]
+name = "gpuzstd_cuda"
+version.workspace = true
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+
+[dependencies]
+gpuzstd_metal = { path = "../gpuzstd_metal", default-features = false }
+
+[dev-dependencies]
+zstd.workspace = true

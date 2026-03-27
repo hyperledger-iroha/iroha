@@ -80,7 +80,7 @@ use iroha_data_model::{
     },
     nft::{NftEntry, NftValue},
     offline::{
-        OfflineAllowanceRecord, OfflineReserveOperationResult, OfflineReserveRecord,
+        OfflineAllowanceRecord, OfflineLineageOperationResult, OfflineLineageRecord,
         OfflineTransferRecord, OfflineTransferStatus, OfflineVerdictRevocation,
     },
     oracle::{
@@ -95,6 +95,7 @@ use iroha_data_model::{
     ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
     repo::{RepoAgreement, RepoAgreementId},
     role::RoleId,
+    rwa::{RwaEntry, RwaId, RwaValue},
     social::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget},
     soracloud::{
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
@@ -356,6 +357,7 @@ macro_rules! build_world_block {
             domain_account_subjects: $state.domain_account_subjects.$method(),
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
+            account_aliases_by_account: $state.account_aliases_by_account.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
@@ -364,12 +366,15 @@ macro_rules! build_world_block {
             asset_definitions: $state.asset_definitions.$method(),
             asset_definition_aliases: $state.asset_definition_aliases.$method(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.$method(),
+            contract_aliases: $state.contract_aliases.$method(),
+            contract_alias_bindings: $state.contract_alias_bindings.$method(),
             domain_asset_definitions: $state.domain_asset_definitions.$method(),
             asset_definition_holders: $state.asset_definition_holders.$method(),
             asset_definition_assets: $state.asset_definition_assets.$method(),
             assets: $state.assets.$method(),
             asset_metadata: $state.asset_metadata.$method(),
             nfts: $state.nfts.$method(),
+            rwas: $state.rwas.$method(),
             roles: $state.roles.$method(),
             account_permissions: $state.account_permissions.$method(),
             account_roles: $state.account_roles.$method(),
@@ -484,8 +489,8 @@ macro_rules! build_world_block {
             repo_agreements: $state.repo_agreements.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
             offline_allowances: $state.offline_allowances.$method(),
-            offline_reserves: $state.offline_reserves.$method(),
-            offline_reserve_operation_results: $state.offline_reserve_operation_results.$method(),
+            offline_lineages: $state.offline_lineages.$method(),
+            offline_lineage_operation_results: $state.offline_lineage_operation_results.$method(),
             offline_verdict_revocations: $state.offline_verdict_revocations.$method(),
             offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.$method(),
             offline_to_online_transfers: $state.offline_to_online_transfers.$method(),
@@ -536,6 +541,7 @@ macro_rules! build_world_transaction {
             domain_account_subjects: $state.domain_account_subjects.transaction(),
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
+            account_aliases_by_account: $state.account_aliases_by_account.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
@@ -544,12 +550,15 @@ macro_rules! build_world_transaction {
             asset_definitions: $state.asset_definitions.transaction(),
             asset_definition_aliases: $state.asset_definition_aliases.transaction(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.transaction(),
+            contract_aliases: $state.contract_aliases.transaction(),
+            contract_alias_bindings: $state.contract_alias_bindings.transaction(),
             domain_asset_definitions: $state.domain_asset_definitions.transaction(),
             asset_definition_holders: $state.asset_definition_holders.transaction(),
             asset_definition_assets: $state.asset_definition_assets.transaction(),
             assets: $state.assets.transaction(),
             asset_metadata: $state.asset_metadata.transaction(),
             nfts: $state.nfts.transaction(),
+            rwas: $state.rwas.transaction(),
             roles: $state.roles.transaction(),
             account_permissions: $state.account_permissions.transaction(),
             account_roles: $state.account_roles.transaction(),
@@ -670,9 +679,9 @@ macro_rules! build_world_transaction {
             repo_agreements: $state.repo_agreements.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
             offline_allowances: $state.offline_allowances.transaction(),
-            offline_reserves: $state.offline_reserves.transaction(),
-            offline_reserve_operation_results: $state
-                .offline_reserve_operation_results
+            offline_lineages: $state.offline_lineages.transaction(),
+            offline_lineage_operation_results: $state
+                .offline_lineage_operation_results
                 .transaction(),
             offline_verdict_revocations: $state.offline_verdict_revocations.transaction(),
             offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.transaction(),
@@ -912,6 +921,7 @@ struct AccountPermissionSummary {
 
 fn parse_permission_account_field(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     payload: &iroha_primitives::json::Json,
     field: &str,
 ) -> Option<iroha_data_model::account::AccountId> {
@@ -925,7 +935,8 @@ fn parse_permission_account_field(
         norito::json::Value::String(value) => value.as_str(),
         _ => return None,
     };
-    crate::block::parse_account_literal_with_world(world, literal).map(Into::into)
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+        .map(Into::into)
 }
 
 impl AccountPermissionSummary {
@@ -936,12 +947,20 @@ impl AccountPermissionSummary {
         self.fee_sponsors.clear();
     }
 
-    fn apply_grant(&mut self, world: &impl WorldReadOnly, permission: &Permission) {
+    fn apply_grant(
+        &mut self,
+        world: &impl WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+        permission: &Permission,
+    ) {
         match permission.name() {
             "CanRegisterTrigger" => {
-                if let Some(authority) =
-                    parse_permission_account_field(world, permission.payload(), "authority")
-                {
+                if let Some(authority) = parse_permission_account_field(
+                    world,
+                    dataspace_catalog,
+                    permission.payload(),
+                    "authority",
+                ) {
                     self.reg_trigger_authorities.insert(authority);
                 }
             }
@@ -954,9 +973,12 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Some(sponsor) =
-                    parse_permission_account_field(world, permission.payload(), "sponsor")
-                {
+                if let Some(sponsor) = parse_permission_account_field(
+                    world,
+                    dataspace_catalog,
+                    permission.payload(),
+                    "sponsor",
+                ) {
                     self.fee_sponsors.insert(sponsor);
                 }
             }
@@ -1396,9 +1418,12 @@ pub struct World {
     /// Index from UAID to bound account (1:1).
     #[norito(skip)]
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
+    /// Index from account alias to canonical I105 account id.
     #[norito(skip)]
     pub(crate) account_aliases: Storage<AccountLabel, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    #[norito(skip)]
+    pub(crate) account_aliases_by_account: Storage<AccountId, BTreeSet<AccountLabel>>,
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
@@ -1418,6 +1443,11 @@ pub struct World {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         Storage<AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    #[norito(skip)]
+    pub(crate) contract_aliases: Storage<ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings: Storage<ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     #[norito(skip)]
     pub(crate) domain_asset_definitions: Storage<DomainId, BTreeSet<AssetDefinitionId>>,
@@ -1433,6 +1463,8 @@ pub struct World {
     pub(crate) asset_metadata: Storage<AssetId, Metadata>,
     /// Non fungible assets.
     pub(crate) nfts: Storage<NftId, NftValue>,
+    /// Registered real-world asset lots.
+    pub(crate) rwas: Storage<RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: Storage<RoleId, Role>,
     /// Permission tokens of an account.
@@ -1706,10 +1738,10 @@ pub struct World {
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: Storage<Hash, OfflineAllowanceRecord>,
-    /// Shared offline reserve records keyed by stable reserve id.
-    pub(crate) offline_reserves: Storage<String, OfflineReserveRecord>,
-    /// Replayable reserve operation results keyed by `kind:operation_id`.
-    pub(crate) offline_reserve_operation_results: Storage<String, OfflineReserveOperationResult>,
+    /// Shared offline lineage records keyed by stable lineage id.
+    pub(crate) offline_lineages: Storage<String, OfflineLineageRecord>,
+    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
+    pub(crate) offline_lineage_operation_results: Storage<String, OfflineLineageOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: Storage<Hash, OfflineVerdictRevocation>,
     /// Consumed build-claim identifiers used for replay protection across pruning.
@@ -1803,8 +1835,10 @@ pub struct WorldBlock<'world> {
     pub(crate) domain_account_subjects: StorageBlock<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
+    /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountLabel>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -1823,6 +1857,11 @@ pub struct WorldBlock<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageBlock<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    pub(crate) contract_aliases: StorageBlock<'world, ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings:
+        StorageBlock<'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions:
         StorageBlock<'world, DomainId, BTreeSet<AssetDefinitionId>>,
@@ -1837,6 +1876,8 @@ pub struct WorldBlock<'world> {
     pub(crate) asset_metadata: StorageBlock<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageBlock<'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageBlock<'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageBlock<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2095,11 +2136,11 @@ pub struct WorldBlock<'world> {
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: StorageBlock<'world, Hash, OfflineAllowanceRecord>,
-    /// Shared offline reserve records keyed by stable reserve id.
-    pub(crate) offline_reserves: StorageBlock<'world, String, OfflineReserveRecord>,
-    /// Replayable reserve operation results keyed by `kind:operation_id`.
-    pub(crate) offline_reserve_operation_results:
-        StorageBlock<'world, String, OfflineReserveOperationResult>,
+    /// Shared offline lineage records keyed by stable lineage id.
+    pub(crate) offline_lineages: StorageBlock<'world, String, OfflineLineageRecord>,
+    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
+    pub(crate) offline_lineage_operation_results:
+        StorageBlock<'world, String, OfflineLineageOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: StorageBlock<'world, Hash, OfflineVerdictRevocation>,
     /// Consumed build-claim identifiers used for replay protection across pruning.
@@ -2208,6 +2249,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.assets, Asset);
         collect_reverts!(self.asset_metadata, AssetMetadata);
         collect_reverts!(self.nfts, Nft);
+        collect_reverts!(self.rwas, Rwa);
         collect_reverts!(self.roles, Role);
         collect_reverts!(self.account_permissions, AccountPermission);
         collect_reverts!(self.account_roles, AccountRole);
@@ -2231,10 +2273,10 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
         collect_reverts!(self.offline_allowances, OfflineAllowance);
-        collect_reverts!(self.offline_reserves, OfflineReserve);
+        collect_reverts!(self.offline_lineages, OfflineLineage);
         collect_reverts!(
-            self.offline_reserve_operation_results,
-            OfflineReserveOperationResult
+            self.offline_lineage_operation_results,
+            OfflineLineageOperationResult
         );
         collect_reverts!(self.offline_verdict_revocations, OfflineVerdictRevocation);
         collect_reverts!(
@@ -2265,6 +2307,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.assets, Asset);
         collect_payload!(self.asset_metadata, AssetMetadata);
         collect_payload!(self.nfts, Nft);
+        collect_payload!(self.rwas, Rwa);
         collect_payload!(self.roles, Role);
         collect_payload!(self.account_permissions, AccountPermission);
         collect_payload!(self.account_roles, AccountRole);
@@ -2288,10 +2331,10 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
         collect_payload!(self.offline_allowances, OfflineAllowance);
-        collect_payload!(self.offline_reserves, OfflineReserve);
+        collect_payload!(self.offline_lineages, OfflineLineage);
         collect_payload!(
-            self.offline_reserve_operation_results,
-            OfflineReserveOperationResult
+            self.offline_lineage_operation_results,
+            OfflineLineageOperationResult
         );
         collect_payload!(self.offline_verdict_revocations, OfflineVerdictRevocation);
         collect_payload!(
@@ -2342,8 +2385,11 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
+    /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountLabel, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    pub(crate) account_aliases_by_account:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountLabel>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
@@ -2368,6 +2414,11 @@ pub struct WorldTransaction<'block, 'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    pub(crate) contract_aliases: StorageTransaction<'block, 'world, ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings:
+        StorageTransaction<'block, 'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions:
         StorageTransaction<'block, 'world, DomainId, BTreeSet<AssetDefinitionId>>,
@@ -2383,6 +2434,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_metadata: StorageTransaction<'block, 'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageTransaction<'block, 'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageTransaction<'block, 'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageTransaction<'block, 'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2685,11 +2738,11 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: StorageTransaction<'block, 'world, Hash, OfflineAllowanceRecord>,
-    /// Shared offline reserve records keyed by stable reserve id.
-    pub(crate) offline_reserves: StorageTransaction<'block, 'world, String, OfflineReserveRecord>,
-    /// Replayable reserve operation results keyed by `kind:operation_id`.
-    pub(crate) offline_reserve_operation_results:
-        StorageTransaction<'block, 'world, String, OfflineReserveOperationResult>,
+    /// Shared offline lineage records keyed by stable lineage id.
+    pub(crate) offline_lineages: StorageTransaction<'block, 'world, String, OfflineLineageRecord>,
+    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
+    pub(crate) offline_lineage_operation_results:
+        StorageTransaction<'block, 'world, String, OfflineLineageOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations:
         StorageTransaction<'block, 'world, Hash, OfflineVerdictRevocation>,
@@ -2767,6 +2820,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) internal_event_buf: Vec<Arc<DataEvent>>,
 }
 
+#[allow(single_use_lifetimes)]
 impl<'block, 'world> WorldTransaction<'block, 'world> {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
@@ -2774,6 +2828,45 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<'block, 'world, Name, Vec<u8>> {
         &mut self.smart_contract_state
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to account-alias bindings for tests and API scaffolding.
+    pub fn account_aliases_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::rekey::AccountLabel,
+        iroha_data_model::account::AccountId,
+    > {
+        &mut self.account_aliases
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to reverse account-alias bindings for tests and API scaffolding.
+    pub fn account_aliases_by_account_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::AccountId,
+        BTreeSet<iroha_data_model::account::rekey::AccountLabel>,
+    > {
+        &mut self.account_aliases_by_account
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to account rekey records for tests and API scaffolding.
+    pub fn account_rekey_records_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::rekey::AccountLabel,
+        iroha_data_model::account::rekey::AccountRekeyRecord,
+    > {
+        &mut self.account_rekey_records
     }
 
     /// Record that the given asset definition belongs to its domain.
@@ -2976,6 +3069,77 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
         expired
     }
+
+    /// Bind or update a contract alias record and keep both alias indexes consistent.
+    ///
+    /// # Errors
+    /// Returns an error when the requested alias is already bound to a different contract.
+    pub fn bind_contract_alias(
+        &mut self,
+        contract_address: &ContractAddress,
+        alias: ContractAlias,
+        lease_expiry_ms: Option<u64>,
+        grace_until_ms: Option<u64>,
+        bound_at_ms: u64,
+    ) -> Result<(), Error> {
+        if let Some(existing_contract) = self.contract_aliases.get(&alias).cloned()
+            && existing_contract != *contract_address
+        {
+            return Err(Error::InvariantViolation(
+                format!("contract alias `{alias}` is already bound").into(),
+            ));
+        }
+
+        if let Some(existing_binding) = self.contract_alias_bindings.get(contract_address).cloned()
+            && existing_binding.alias != alias
+        {
+            self.contract_aliases.remove(existing_binding.alias.clone());
+        }
+
+        self.contract_aliases
+            .insert(alias.clone(), contract_address.clone());
+        self.contract_alias_bindings.insert(
+            contract_address.clone(),
+            ContractAliasBindingRecord {
+                alias,
+                lease_expiry_ms,
+                grace_until_ms,
+                bound_at_ms,
+            },
+        );
+        Ok(())
+    }
+
+    /// Remove the alias binding for a contract and keep indexes consistent.
+    pub fn clear_contract_alias(&mut self, contract_address: &ContractAddress) {
+        if let Some(existing) = self
+            .contract_alias_bindings
+            .remove(contract_address.clone())
+        {
+            self.contract_aliases.remove(existing.alias);
+        }
+    }
+
+    /// Remove contract aliases whose grace window has elapsed.
+    ///
+    /// Returns canonical contract addresses that were unbound.
+    pub fn sweep_expired_contract_aliases(&mut self, now_ms: u64) -> Vec<ContractAddress> {
+        let expired: Vec<ContractAddress> = self
+            .contract_alias_bindings
+            .iter()
+            .filter_map(|(contract_address, binding)| {
+                binding
+                    .is_grace_expired_at(now_ms)
+                    .then_some(contract_address.clone())
+            })
+            .collect();
+
+        for contract_address in &expired {
+            self.clear_contract_alias(contract_address);
+        }
+
+        expired
+    }
 }
 
 /// Consistent point in time view of the [`World`]
@@ -2996,8 +3160,10 @@ pub struct WorldView<'world> {
     pub(crate) domain_account_subjects: StorageView<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
+    /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    pub(crate) account_aliases_by_account: StorageView<'world, AccountId, BTreeSet<AccountLabel>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -3016,6 +3182,11 @@ pub struct WorldView<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageView<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    pub(crate) contract_aliases: StorageView<'world, ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings:
+        StorageView<'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions: StorageView<'world, DomainId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
@@ -3029,6 +3200,8 @@ pub struct WorldView<'world> {
     pub(crate) asset_metadata: StorageView<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageView<'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageView<'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageView<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -3311,11 +3484,11 @@ pub struct WorldView<'world> {
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: StorageView<'world, Hash, OfflineAllowanceRecord>,
-    /// Shared offline reserve records keyed by stable reserve id.
-    pub(crate) offline_reserves: StorageView<'world, String, OfflineReserveRecord>,
-    /// Replayable reserve operation results keyed by `kind:operation_id`.
-    pub(crate) offline_reserve_operation_results:
-        StorageView<'world, String, OfflineReserveOperationResult>,
+    /// Shared offline lineage records keyed by stable lineage id.
+    pub(crate) offline_lineages: StorageView<'world, String, OfflineLineageRecord>,
+    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
+    pub(crate) offline_lineage_operation_results:
+        StorageView<'world, String, OfflineLineageOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: StorageView<'world, Hash, OfflineVerdictRevocation>,
     /// Consumed build-claim identifiers used for replay protection across pruning.
@@ -4912,6 +5085,68 @@ impl AssetDefinitionAliasBindingRecord {
     }
 }
 
+/// Public status of a contract alias lease at a specific observation time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContractAliasLeaseStatus {
+    /// Alias has no expiry and resolves permanently until explicitly cleared.
+    Permanent,
+    /// Alias lease has not reached its expiry timestamp yet.
+    LeasedActive,
+    /// Alias lease expired, but the alias still resolves during the grace window.
+    LeasedGrace,
+    /// Alias lease and grace both elapsed, but the sweep has not removed the binding yet.
+    ExpiredPendingCleanup,
+}
+
+/// On-chain alias lease metadata for a contract address.
+#[derive(
+    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+)]
+pub struct ContractAliasBindingRecord {
+    /// Bound alias literal (`<name>::<domain>.<dataspace>` or `<name>::<dataspace>`).
+    pub alias: ContractAlias,
+    /// Lease expiry timestamp (unix ms). `None` means non-expiring binding.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub lease_expiry_ms: Option<u64>,
+    /// End of the grace period (unix ms). Alias is removed once `now_ms > grace_until_ms`.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub grace_until_ms: Option<u64>,
+    /// Timestamp when the binding was recorded.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub bound_at_ms: u64,
+}
+
+impl ContractAliasBindingRecord {
+    /// Classify the binding at `now_ms`.
+    #[must_use]
+    pub fn status_at(&self, now_ms: u64) -> ContractAliasLeaseStatus {
+        match self.lease_expiry_ms {
+            None => ContractAliasLeaseStatus::Permanent,
+            Some(lease_expiry_ms) if now_ms < lease_expiry_ms => {
+                ContractAliasLeaseStatus::LeasedActive
+            }
+            Some(_)
+                if self
+                    .grace_until_ms
+                    .is_some_and(|grace_until| now_ms <= grace_until) =>
+            {
+                ContractAliasLeaseStatus::LeasedGrace
+            }
+            Some(_) => ContractAliasLeaseStatus::ExpiredPendingCleanup,
+        }
+    }
+
+    /// Return `true` when the alias should be unbound at `now_ms`.
+    #[must_use]
+    pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
+        self.grace_until_ms
+            .is_some_and(|grace_until| now_ms > grace_until)
+    }
+}
+
 /// Citizenship registry entry (bonded amount held in escrow).
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
@@ -6153,6 +6388,8 @@ pub struct StateTransaction<'block, 'state> {
     /// Hash of the current transaction entrypoint (`call_hash`), when executing a transaction.
     /// Not set for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
+    /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
+    pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
     pub(crate) executor_fuel_remaining: Option<u64>,
     /// Optional view of block-level preverified proofs (`proof_hash` -> ok)
@@ -8015,6 +8252,17 @@ mod storage_migration_tests {
             world.account_aliases.view().get(&bound_label),
             Some(&account_id),
             "additional bound alias should survive rebuild"
+        );
+        let reverse = world
+            .account_aliases_by_account
+            .view()
+            .get(&account_id)
+            .cloned()
+            .expect("reverse alias index should exist");
+        assert_eq!(
+            reverse,
+            BTreeSet::from([bound_label, primary_label]),
+            "reverse alias index should include both primary and bound aliases"
         );
     }
 
@@ -10378,12 +10626,15 @@ impl World {
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings: Storage::default(),
+            contract_aliases: Storage::default(),
+            contract_alias_bindings: Storage::default(),
             domain_asset_definitions: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
             assets,
             asset_metadata: Storage::default(),
             nfts,
+            rwas: Storage::default(),
             proofs: Storage::default(),
             contract_manifests: Storage::default(),
             contract_code: Storage::default(),
@@ -10405,8 +10656,8 @@ impl World {
             repo_agreements: Storage::default(),
             settlement_ledgers: Storage::default(),
             offline_to_online_transfers: Storage::default(),
-            offline_reserves: Storage::default(),
-            offline_reserve_operation_results: Storage::default(),
+            offline_lineages: Storage::default(),
+            offline_lineage_operation_results: Storage::default(),
             governance_proposals: Storage::default(),
             governance_referenda: Storage::default(),
             governance_stage_approvals: Storage::default(),
@@ -10433,6 +10684,9 @@ impl World {
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
+        world
+            .rebuild_contract_alias_indexes()
+            .expect("duplicate contract alias in world constructor");
         world.rebuild_asset_definition_indexes();
         world
             .rebuild_opaque_uaid_index()
@@ -10591,6 +10845,7 @@ impl World {
 
     fn rebuild_account_alias_index(&mut self) -> Result<(), String> {
         let mut index = BTreeMap::new();
+        let mut reverse = BTreeMap::<AccountId, BTreeSet<AccountLabel>>::new();
         let existing_bindings: Vec<_> = self
             .account_aliases
             .view()
@@ -10624,6 +10879,10 @@ impl World {
                 }
                 continue;
             }
+            reverse
+                .entry(account_id.clone())
+                .or_default()
+                .insert(label.clone());
             index.insert(label, account_id);
         }
         for (account_id, value) in view.iter() {
@@ -10650,9 +10909,14 @@ impl World {
                 }
                 continue;
             }
+            reverse
+                .entry(account_id.clone())
+                .or_default()
+                .insert(label.clone());
             index.insert(label.clone(), account_id.clone());
         }
         self.account_aliases = index.into_iter().collect();
+        self.account_aliases_by_account = reverse.into_iter().collect();
         Ok(())
     }
 
@@ -10755,45 +11019,44 @@ impl World {
         }
 
         for (definition_id, definition) in definitions.iter() {
-            if by_definition.contains_key(definition_id) {
-                continue;
-            }
-
-            let Some(alias) = definition.alias().as_ref().cloned() else {
-                continue;
-            };
-            if let Some(existing) = by_alias.get(&alias)
-                && existing != definition_id
-            {
+            if let Some(alias) = definition.alias().as_ref() {
                 return Err(format!(
-                    "Asset alias `{alias}` already bound to asset definition {existing}"
+                    "Asset definition {definition_id} stores inline alias `{alias}`; persist aliases only in asset_definition_alias_bindings"
                 ));
             }
-            by_alias.insert(alias.clone(), definition_id.clone());
-            by_definition.insert(
-                definition_id.clone(),
-                AssetDefinitionAliasBindingRecord {
-                    alias: alias.clone(),
-                    lease_expiry_ms: None,
-                    grace_until_ms: None,
-                    bound_at_ms: 0,
-                },
-            );
         }
         self.asset_definition_aliases = by_alias.into_iter().collect();
         let normalized_definitions: BTreeMap<AssetDefinitionId, AssetDefinition> = definitions
             .iter()
-            .map(|(definition_id, definition)| {
-                let mut definition = definition.clone();
-                definition.alias = None;
-                (definition_id.clone(), definition)
-            })
+            .map(|(definition_id, definition)| (definition_id.clone(), definition.clone()))
             .collect();
         if normalized_definitions.len() != definitions.iter().count() {
             return Err("asset definition rebuild lost entries".to_owned());
         }
         self.asset_definition_alias_bindings = by_definition.into_iter().collect();
         self.asset_definitions = normalized_definitions.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_contract_alias_indexes(&mut self) -> Result<(), String> {
+        let mut by_alias = BTreeMap::new();
+        let mut by_contract = BTreeMap::<ContractAddress, ContractAliasBindingRecord>::new();
+
+        for (contract_address, binding) in self.contract_alias_bindings.view().iter() {
+            if let Some(existing) = by_alias.get(&binding.alias)
+                && existing != contract_address
+            {
+                return Err(format!(
+                    "Contract alias `{}` already bound to contract {existing}",
+                    binding.alias
+                ));
+            }
+            by_alias.insert(binding.alias.clone(), contract_address.clone());
+            by_contract.insert(contract_address.clone(), binding.clone());
+        }
+
+        self.contract_aliases = by_alias.into_iter().collect();
+        self.contract_alias_bindings = by_contract.into_iter().collect();
         Ok(())
     }
 
@@ -11007,6 +11270,7 @@ impl World {
             domain_account_subjects: self.domain_account_subjects.view(),
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
+            account_aliases_by_account: self.account_aliases_by_account.view(),
             opaque_uaids: self.opaque_uaids.view(),
             ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
@@ -11015,12 +11279,15 @@ impl World {
             asset_definitions: self.asset_definitions.view(),
             asset_definition_aliases: self.asset_definition_aliases.view(),
             asset_definition_alias_bindings: self.asset_definition_alias_bindings.view(),
+            contract_aliases: self.contract_aliases.view(),
+            contract_alias_bindings: self.contract_alias_bindings.view(),
             domain_asset_definitions: self.domain_asset_definitions.view(),
             asset_definition_holders: self.asset_definition_holders.view(),
             asset_definition_assets: self.asset_definition_assets.view(),
             assets: self.assets.view(),
             asset_metadata: self.asset_metadata.view(),
             nfts: self.nfts.view(),
+            rwas: self.rwas.view(),
             roles: self.roles.view(),
             account_permissions: self.account_permissions.view(),
             account_roles: self.account_roles.view(),
@@ -11127,8 +11394,8 @@ impl World {
             repo_agreements: self.repo_agreements.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
             offline_allowances: self.offline_allowances.view(),
-            offline_reserves: self.offline_reserves.view(),
-            offline_reserve_operation_results: self.offline_reserve_operation_results.view(),
+            offline_lineages: self.offline_lineages.view(),
+            offline_lineage_operation_results: self.offline_lineage_operation_results.view(),
             offline_verdict_revocations: self.offline_verdict_revocations.view(),
             offline_consumed_build_claim_ids: self.offline_consumed_build_claim_ids.view(),
             offline_to_online_transfers: self.offline_to_online_transfers.view(),
@@ -11199,6 +11466,10 @@ pub trait WorldReadOnly {
     fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId>;
     /// Account alias index (read-only).
     fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId>;
+    /// Reverse account alias index (read-only).
+    fn account_aliases_by_account(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountLabel>>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
     /// Global RAM-LFE program policy registry (read-only).
@@ -11258,6 +11529,13 @@ pub trait WorldReadOnly {
     fn asset_definition_alias_bindings(
         &self,
     ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord>;
+    /// Alias index mapping `<name>::<domain>.<dataspace>` or `<name>::<dataspace>` to canonical
+    /// contract addresses.
+    fn contract_aliases(&self) -> &impl StorageReadOnly<ContractAlias, ContractAddress>;
+    /// Alias lease metadata keyed by canonical contract address.
+    fn contract_alias_bindings(
+        &self,
+    ) -> &impl StorageReadOnly<ContractAddress, ContractAliasBindingRecord>;
     /// Asset-definition ids grouped by domain.
     fn domain_asset_definitions(
         &self,
@@ -11276,6 +11554,8 @@ pub trait WorldReadOnly {
     fn asset_metadata(&self) -> &impl StorageReadOnly<AssetId, Metadata>;
     /// NFT storage (read-only).
     fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue>;
+    /// RWA storage (read-only).
+    fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue>;
     /// Role storage (read-only).
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     /// Account permissions mapping (read-only).
@@ -11533,12 +11813,12 @@ pub trait WorldReadOnly {
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
     /// Registered offline allowances (read-only).
     fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord>;
-    /// Shared offline reserve records keyed by reserve id (read-only).
-    fn offline_reserves(&self) -> &impl StorageReadOnly<String, OfflineReserveRecord>;
-    /// Completed reserve operation results keyed by `kind:operation_id` (read-only).
-    fn offline_reserve_operation_results(
+    /// Shared offline lineage records keyed by lineage id (read-only).
+    fn offline_lineages(&self) -> &impl StorageReadOnly<String, OfflineLineageRecord>;
+    /// Completed offline cash mutation results keyed by `kind:operation_id` (read-only).
+    fn offline_lineage_operation_results(
         &self,
-    ) -> &impl StorageReadOnly<String, OfflineReserveOperationResult>;
+    ) -> &impl StorageReadOnly<String, OfflineLineageOperationResult>;
     /// Recorded verdict revocations (read-only).
     fn offline_verdict_revocations(&self) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation>;
     /// Consumed build-claim identifiers (read-only).
@@ -11807,6 +12087,33 @@ pub trait WorldReadOnly {
         }
     }
 
+    /// Resolve a contract alias to a canonical contract address using the world-state alias index.
+    #[inline]
+    fn contract_address_by_alias(&self, alias: &ContractAlias) -> Option<ContractAddress> {
+        self.contract_aliases().get(alias).cloned()
+    }
+
+    /// Resolve a contract alias to a canonical contract address at a specific observation time.
+    ///
+    /// Expired aliases stop resolving once their grace window has elapsed, even if the sweep has
+    /// not removed the stale binding yet.
+    #[inline]
+    fn contract_address_by_alias_at(
+        &self,
+        alias: &ContractAlias,
+        now_ms: u64,
+    ) -> Option<ContractAddress> {
+        let contract_address = self.contract_aliases().get(alias)?.clone();
+        let binding = self.contract_alias_bindings().get(&contract_address);
+        match binding {
+            Some(binding) if binding.alias == *alias && !binding.is_grace_expired_at(now_ms) => {
+                Some(contract_address)
+            }
+            Some(_) => None,
+            None => Some(contract_address),
+        }
+    }
+
     /// Iterate holders tracked for an asset definition.
     fn asset_definition_holders_iter<'a>(
         &'a self,
@@ -12057,6 +12364,31 @@ pub trait WorldReadOnly {
             .map(|(id, value)| NftEntry::new(id, value))
     }
 
+    /// Get `Rwa` immutable view.
+    ///
+    /// # Errors
+    /// - RWA entry not found
+    fn rwa<'a>(&'a self, rwa_id: &'a RwaId) -> Result<RwaEntry<'a>, FindError> {
+        self.rwas()
+            .get(rwa_id)
+            .map(|value| RwaEntry::new(rwa_id, value))
+            .ok_or_else(|| FindError::Rwa(rwa_id.clone()))
+    }
+
+    /// Returns reference for RWAs map.
+    #[inline]
+    fn rwas_iter(&self) -> impl Iterator<Item = RwaEntry<'_>> {
+        self.rwas()
+            .iter()
+            .map(|(id, value)| RwaEntry::new(id, value))
+    }
+
+    /// Iterate RWAs in domain.
+    fn rwas_in_domain_iter<'a>(&'a self, id: &'a DomainId) -> impl Iterator<Item = RwaEntry<'a>> {
+        self.rwas_iter()
+            .filter(move |entry| entry.id().domain() == id)
+    }
+
     // Role-related methods
 
     /// Get `Role` and return reference to it.
@@ -12122,6 +12454,11 @@ macro_rules! impl_world_ro {
             fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId> {
                 &self.account_aliases
             }
+            fn account_aliases_by_account(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountLabel>> {
+                &self.account_aliases_by_account
+            }
             fn opaque_uaids(
                 &self,
             ) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId> {
@@ -12160,6 +12497,14 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord> {
                 &self.asset_definition_alias_bindings
             }
+            fn contract_aliases(&self) -> &impl StorageReadOnly<ContractAlias, ContractAddress> {
+                &self.contract_aliases
+            }
+            fn contract_alias_bindings(
+                &self,
+            ) -> &impl StorageReadOnly<ContractAddress, ContractAliasBindingRecord> {
+                &self.contract_alias_bindings
+            }
             fn domain_asset_definitions(
                 &self,
             ) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetDefinitionId>> {
@@ -12183,6 +12528,9 @@ macro_rules! impl_world_ro {
             }
             fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue> {
                 &self.nfts
+            }
+            fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue> {
+                &self.rwas
             }
             fn roles(&self) -> &impl StorageReadOnly<RoleId, Role> {
                 &self.roles
@@ -12514,13 +12862,13 @@ macro_rules! impl_world_ro {
             fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord> {
                 &self.offline_allowances
             }
-            fn offline_reserves(&self) -> &impl StorageReadOnly<String, OfflineReserveRecord> {
-                &self.offline_reserves
+            fn offline_lineages(&self) -> &impl StorageReadOnly<String, OfflineLineageRecord> {
+                &self.offline_lineages
             }
-            fn offline_reserve_operation_results(
+            fn offline_lineage_operation_results(
                 &self,
-            ) -> &impl StorageReadOnly<String, OfflineReserveOperationResult> {
-                &self.offline_reserve_operation_results
+            ) -> &impl StorageReadOnly<String, OfflineLineageOperationResult> {
+                &self.offline_lineage_operation_results
             }
             fn offline_verdict_revocations(
                 &self,
@@ -12861,6 +13209,7 @@ impl<'world> WorldBlock<'world> {
             domain_account_subjects,
             uaid_accounts,
             account_aliases,
+            account_aliases_by_account,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -12869,6 +13218,8 @@ impl<'world> WorldBlock<'world> {
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            contract_aliases,
+            contract_alias_bindings,
             domain_asset_definitions,
             asset_definition_holders,
             asset_definition_assets,
@@ -12973,8 +13324,8 @@ impl<'world> WorldBlock<'world> {
             repo_agreements,
             settlement_ledgers,
             offline_allowances,
-            offline_reserves,
-            offline_reserve_operation_results,
+            offline_lineages,
+            offline_lineage_operation_results,
             offline_verdict_revocations,
             offline_consumed_build_claim_ids,
             offline_to_online_transfers,
@@ -13081,8 +13432,8 @@ impl<'world> WorldBlock<'world> {
         repo_agreements.commit();
         settlement_ledgers.commit();
         offline_allowances.commit();
-        offline_reserves.commit();
-        offline_reserve_operation_results.commit();
+        offline_lineages.commit();
+        offline_lineage_operation_results.commit();
         offline_verdict_revocations.commit();
         offline_consumed_build_claim_ids.commit();
         offline_to_online_transfers.commit();
@@ -13143,6 +13494,8 @@ impl<'world> WorldBlock<'world> {
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
         asset_definition_aliases.commit();
+        contract_alias_bindings.commit();
+        contract_aliases.commit();
         asset_definition_assets.commit();
         asset_definition_holders.commit();
         domain_asset_definitions.commit();
@@ -13152,6 +13505,7 @@ impl<'world> WorldBlock<'world> {
         domain_account_subjects.commit();
         uaid_accounts.commit();
         account_aliases.commit();
+        account_aliases_by_account.commit();
         opaque_uaids.commit();
         domains.commit();
         domain_selectors.commit();
@@ -13177,6 +13531,71 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     > {
         &mut self.runtime_upgrades
+    }
+
+    fn add_account_alias_to_reverse_index(&mut self, account_id: &AccountId, label: &AccountLabel) {
+        if self.account_aliases_by_account.get(account_id).is_none() {
+            self.account_aliases_by_account
+                .insert(account_id.clone(), BTreeSet::new());
+        }
+        if let Some(labels) = self.account_aliases_by_account.get_mut(account_id) {
+            labels.insert(label.clone());
+        }
+    }
+
+    fn remove_account_alias_from_reverse_index(
+        &mut self,
+        account_id: &AccountId,
+        label: &AccountLabel,
+    ) {
+        let mut remove_entry = false;
+        if let Some(labels) = self.account_aliases_by_account.get_mut(account_id) {
+            labels.remove(label);
+            remove_entry = labels.is_empty();
+        }
+        if remove_entry {
+            self.account_aliases_by_account.remove(account_id.clone());
+        }
+    }
+
+    pub(crate) fn insert_account_alias_binding(
+        &mut self,
+        label: AccountLabel,
+        account_id: AccountId,
+    ) -> Option<AccountId> {
+        let previous = self
+            .account_aliases
+            .insert(label.clone(), account_id.clone());
+        if let Some(previous_account) = previous.as_ref() {
+            self.remove_account_alias_from_reverse_index(previous_account, &label);
+        }
+        self.add_account_alias_to_reverse_index(&account_id, &label);
+        previous
+    }
+
+    pub(crate) fn remove_account_alias_binding(
+        &mut self,
+        label: &AccountLabel,
+    ) -> Option<AccountId> {
+        let removed = self.account_aliases.remove(label.clone());
+        if let Some(account_id) = removed.as_ref() {
+            self.remove_account_alias_from_reverse_index(account_id, label);
+        }
+        removed
+    }
+
+    pub(crate) fn remove_account_alias_bindings_for_account(
+        &mut self,
+        account_id: &AccountId,
+    ) -> BTreeSet<AccountLabel> {
+        let labels = self
+            .account_aliases_by_account
+            .remove(account_id.clone())
+            .unwrap_or_default();
+        for label in &labels {
+            self.account_aliases.remove(label.clone());
+        }
+        labels
     }
 
     fn update_parameters_from_executor(&mut self, prev_executor_data_model: &ExecutorDataModel) {
@@ -13913,6 +14332,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domain_account_subjects,
             uaid_accounts,
             account_aliases,
+            account_aliases_by_account,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -13921,6 +14341,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            contract_aliases,
+            contract_alias_bindings,
             domain_asset_definitions,
             asset_definition_holders,
             asset_definition_assets,
@@ -14004,8 +14426,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             replication_orders,
             settlement_ledgers,
             offline_allowances,
-            offline_reserves,
-            offline_reserve_operation_results,
+            offline_lineages,
+            offline_lineage_operation_results,
             offline_verdict_revocations,
             offline_consumed_build_claim_ids,
             offline_to_online_transfers,
@@ -14110,8 +14532,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_history_len.apply();
         settlement_ledgers.apply();
         offline_allowances.apply();
-        offline_reserves.apply();
-        offline_reserve_operation_results.apply();
+        offline_lineages.apply();
+        offline_lineage_operation_results.apply();
         offline_verdict_revocations.apply();
         offline_consumed_build_claim_ids.apply();
         offline_to_online_transfers.apply();
@@ -14171,6 +14593,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         assets.apply();
         asset_definition_alias_bindings.apply();
         asset_definition_aliases.apply();
+        contract_alias_bindings.apply();
+        contract_aliases.apply();
         asset_definition_assets.apply();
         asset_definition_holders.apply();
         domain_asset_definitions.apply();
@@ -14180,6 +14604,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         domain_account_subjects.apply();
         uaid_accounts.apply();
         account_aliases.apply();
+        account_aliases_by_account.apply();
         opaque_uaids.apply();
         domains.apply();
         domain_selectors.apply();
@@ -14647,6 +15072,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.nfts
             .get_mut(id)
             .ok_or_else(|| FindError::Nft(id.clone()))
+    }
+
+    /// Get mutable reference to [`Rwa`].
+    ///
+    /// # Errors
+    /// If RWA not found
+    pub fn rwa_mut(&mut self, id: &RwaId) -> Result<&mut RwaValue, FindError> {
+        self.rwas
+            .get_mut(id)
+            .ok_or_else(|| FindError::Rwa(id.clone()))
     }
 
     /// Set executor data model.
@@ -20696,6 +21131,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_tx: 0,
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
+            rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
             preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
@@ -21589,18 +22025,21 @@ impl<'state> StateBlock<'state> {
             .external_event_buf
             .mutate_vec(|events| events.push(time_event.into()));
 
-        // Time-trigger phase maintenance: unbind asset aliases whose grace window elapsed.
+        // Time-trigger phase maintenance: unbind aliases whose grace window elapsed.
         {
             let mut maintenance_tx = self.transaction();
             let now_ms = maintenance_tx.block_unix_timestamp_ms();
-            let removed = maintenance_tx
+            let removed_asset_aliases = maintenance_tx
                 .world
                 .sweep_expired_asset_definition_aliases(now_ms);
-            if !removed.is_empty() {
+            let removed_contract_aliases =
+                maintenance_tx.world.sweep_expired_contract_aliases(now_ms);
+            if !removed_asset_aliases.is_empty() || !removed_contract_aliases.is_empty() {
                 iroha_logger::info!(
-                    removed = removed.len(),
+                    removed_asset_aliases = removed_asset_aliases.len(),
+                    removed_contract_aliases = removed_contract_aliases.len(),
                     now_ms,
-                    "expired asset aliases were unbound during time-trigger maintenance"
+                    "expired aliases were unbound during time-trigger maintenance"
                 );
                 maintenance_tx.apply();
             }
@@ -24322,8 +24761,16 @@ mod permission_cache_tests {
             let mut block = state.block(next_header);
             let mut stx = block.transaction();
             let mut summary = AccountPermissionSummary::default();
-            summary.apply_grant(&stx.world, &Permission::from(permission_register.clone()));
-            summary.apply_grant(&stx.world, &Permission::from(permission_execute.clone()));
+            summary.apply_grant(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &Permission::from(permission_register.clone()),
+            );
+            summary.apply_grant(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &Permission::from(permission_execute.clone()),
+            );
             stx.perm_cache.insert_summary(registrar.clone(), summary);
             assert!(
                 stx.can_register_trigger_for(&registrar, &owner),
@@ -24970,6 +25417,29 @@ impl StateTransaction<'_, '_> {
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
+    }
+
+    /// Generate the next canonical RWA identifier for this transaction scope.
+    ///
+    /// The id is derived from the current transaction entrypoint hash when available and
+    /// falls back to a deterministic synthetic batch hash for ad-hoc execution contexts.
+    #[must_use]
+    pub fn next_generated_rwa_id(&mut self, domain: &DomainId, purpose: &str) -> RwaId {
+        let batch_hash = self
+            .tx_call_hash
+            .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+        let ordinal = self.rwa_generated_id_ordinal;
+        self.rwa_generated_id_ordinal = self.rwa_generated_id_ordinal.saturating_add(1);
+
+        let mut bytes = Vec::with_capacity(
+            b"iroha:rwa:id:v2|".len() + purpose.len() + batch_hash.as_ref().len() + 8,
+        );
+        bytes.extend_from_slice(b"iroha:rwa:id:v2|");
+        bytes.extend_from_slice(purpose.as_bytes());
+        bytes.push(0xff);
+        bytes.extend_from_slice(batch_hash.as_ref());
+        bytes.extend_from_slice(&ordinal.to_le_bytes());
+        RwaId::generated(domain.clone(), Hash::new(bytes))
     }
 
     /// Record a completed AXT envelope for persistence within the current block.
@@ -25700,12 +26170,16 @@ impl StateTransaction<'_, '_> {
                     }
                     if let Err(e) = run_result {
                         return Err(
-                            crate::smartcontracts::ivm::map_vm_error_to_validation(&e).into()
+                            crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                                &cached_runtime.vm,
+                                &e,
+                            )
+                            .into(),
                         );
                     }
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
-                    let artifacts = host.into_execution_artifacts()?;
+                    let artifacts = host.into_execution_artifacts(None)?;
                     iroha_logger::info!(
                         trigger_id = %id,
                         authority = %authority,
@@ -25826,9 +26300,10 @@ impl StateTransaction<'_, '_> {
 
     fn build_permission_summary(&mut self, account: &AccountId) -> AccountPermissionSummary {
         let world = &self.world;
+        let dataspace_catalog = &self.nexus.dataspace_catalog;
         let mut summary = AccountPermissionSummary::default();
         let mut merge_permission = |permission: &Permission| {
-            summary.apply_grant(world, permission);
+            summary.apply_grant(world, dataspace_catalog, permission);
         };
         if let Some(perms) = world.account_permissions.get(account) {
             for permission in perms {
@@ -26343,6 +26818,8 @@ pub(crate) mod deserialize {
         let account_subject_domains = take_optional_default(&mut map, "account_subject_domains")?;
         let domain_account_subjects = take_optional_default(&mut map, "domain_account_subjects")?;
         let account_aliases = take_optional_default(&mut map, "account_aliases")?;
+        let account_aliases_by_account =
+            take_optional_default(&mut map, "account_aliases_by_account")?;
         let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
@@ -26350,10 +26827,12 @@ pub(crate) mod deserialize {
             take_required(&mut map, "asset_definitions")?;
         let asset_definition_alias_bindings =
             take_optional_default(&mut map, "asset_definition_alias_bindings")?;
+        let contract_alias_bindings = take_optional_default(&mut map, "contract_alias_bindings")?;
         let assets: Storage<AssetId, AssetValue> = take_required(&mut map, "assets")?;
         let account_rekey_records = take_optional_default(&mut map, "account_rekey_records")?;
         let asset_metadata = take_optional_default(&mut map, "asset_metadata")?;
         let nfts: Storage<NftId, NftValue> = take_required(&mut map, "nfts")?;
+        let rwas: Storage<RwaId, RwaValue> = take_optional_default(&mut map, "rwas")?;
         let roles: Storage<RoleId, Role> = take_required(&mut map, "roles")?;
         let account_permissions: Storage<AccountId, Permissions> =
             take_required(&mut map, "account_permissions")?;
@@ -26466,9 +26945,9 @@ pub(crate) mod deserialize {
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
         let offline_allowances = take_optional_default(&mut map, "offline_allowances")?;
-        let offline_reserves = take_optional_default(&mut map, "offline_reserves")?;
-        let offline_reserve_operation_results =
-            take_optional_default(&mut map, "offline_reserve_operation_results")?;
+        let offline_lineages = take_optional_default(&mut map, "offline_lineages")?;
+        let offline_lineage_operation_results =
+            take_optional_default(&mut map, "offline_lineage_operation_results")?;
         let offline_verdict_revocations =
             take_optional_default(&mut map, "offline_verdict_revocations")?;
         let offline_consumed_build_claim_ids =
@@ -26497,6 +26976,7 @@ pub(crate) mod deserialize {
             domain_account_subjects,
             uaid_accounts: Storage::default(),
             account_aliases,
+            account_aliases_by_account,
             opaque_uaids: Storage::default(),
             ram_lfe_program_policies,
             identifier_policies,
@@ -26505,12 +26985,15 @@ pub(crate) mod deserialize {
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings,
+            contract_aliases: Storage::default(),
+            contract_alias_bindings,
             domain_asset_definitions: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,
@@ -26608,8 +27091,8 @@ pub(crate) mod deserialize {
             repo_agreements,
             settlement_ledgers,
             offline_allowances,
-            offline_reserves,
-            offline_reserve_operation_results,
+            offline_lineages,
+            offline_lineage_operation_results,
             offline_verdict_revocations,
             offline_consumed_build_claim_ids,
             offline_to_online_transfers,
@@ -26671,6 +27154,12 @@ pub(crate) mod deserialize {
             .rebuild_asset_definition_alias_indexes()
             .map_err(|message| json::Error::InvalidField {
                 field: "asset_definition_aliases".into(),
+                message,
+            })?;
+        world
+            .rebuild_contract_alias_indexes()
+            .map_err(|message| json::Error::InvalidField {
+                field: "contract_aliases".into(),
                 message,
             })?;
         world.rebuild_asset_definition_indexes();
@@ -27361,25 +27850,20 @@ mod tests {
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
 
-    fn asset_alias_test_world(
-        alias: Option<AssetDefinitionAlias>,
-    ) -> (World, AssetDefinitionId, AssetDefinitionAlias) {
+    fn asset_alias_test_world() -> (World, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "issuer".parse().expect("domain");
         let definition_id =
             AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
-        let mut definition = AssetDefinition::numeric(definition_id.clone())
+        let definition = AssetDefinition::numeric(definition_id.clone())
             .with_name("usd".to_owned())
             .build(&authority);
-        let legacy_alias = alias.unwrap_or_else(|| "usd#legacy".parse().expect("legacy alias"));
-        definition.alias = Some(legacy_alias.clone());
 
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
         (
             World::with([domain], [account], [definition]),
             definition_id,
-            legacy_alias,
         )
     }
 
@@ -27451,7 +27935,7 @@ mod tests {
 
     #[test]
     fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
-        let (mut world, definition_id, legacy_alias) = asset_alias_test_world(None);
+        let (mut world, definition_id) = asset_alias_test_world();
         let persisted_alias: AssetDefinitionAlias = "usd#canonical".parse().expect("alias");
         let binding = AssetDefinitionAliasBindingRecord {
             alias: persisted_alias.clone(),
@@ -27463,16 +27947,6 @@ mod tests {
         world.asset_definition_aliases = Storage::default();
         world.asset_definition_alias_bindings =
             std::iter::once((definition_id.clone(), binding.clone())).collect();
-        let mut stored_definition = world
-            .asset_definitions
-            .view()
-            .get(&definition_id)
-            .expect("stored definition")
-            .clone();
-        stored_definition.alias = Some(legacy_alias.clone());
-        world
-            .asset_definitions
-            .insert(definition_id.clone(), stored_definition);
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("rebuild should succeed");
@@ -27481,10 +27955,6 @@ mod tests {
         assert_eq!(
             view.asset_definition_aliases().get(&persisted_alias),
             Some(&definition_id)
-        );
-        assert!(
-            view.asset_definition_aliases().get(&legacy_alias).is_none(),
-            "stale inline alias must not override the persisted binding"
         );
         assert_eq!(
             view.asset_definition_alias_bindings()
@@ -27507,13 +27977,14 @@ mod tests {
                 .expect("stored definition")
                 .alias()
                 .is_none(),
-            "stored asset definition alias must be derived from bindings"
+            "stored asset definition alias must stay empty; bindings drive alias reads"
         );
     }
 
     #[test]
-    fn rebuild_asset_definition_alias_indexes_synthesizes_legacy_bindings() {
-        let (mut world, definition_id, legacy_alias) = asset_alias_test_world(None);
+    fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_without_binding() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let legacy_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("legacy alias");
         world.asset_definition_aliases = Storage::default();
         world.asset_definition_alias_bindings = Storage::default();
         let mut stored_definition = world
@@ -27527,45 +27998,57 @@ mod tests {
             .asset_definitions
             .insert(definition_id.clone(), stored_definition);
 
-        world
+        let err = world
             .rebuild_asset_definition_alias_indexes()
-            .expect("rebuild should synthesize a permanent binding");
-        let view = world.view();
+            .expect_err("rebuild must reject inline asset-definition aliases");
+        assert_eq!(
+            err,
+            format!(
+                "Asset definition {definition_id} stores inline alias `{legacy_alias}`; persist aliases only in asset_definition_alias_bindings"
+            )
+        );
+    }
 
-        let binding = view
-            .asset_definition_alias_bindings()
+    #[test]
+    fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_even_with_binding() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let inline_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("inline alias");
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings = std::iter::once((
+            definition_id.clone(),
+            AssetDefinitionAliasBindingRecord {
+                alias: "usd#canonical".parse().expect("persisted alias"),
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        let mut stored_definition = world
+            .asset_definitions
+            .view()
             .get(&definition_id)
-            .expect("binding");
-        assert_eq!(binding.alias, legacy_alias);
-        assert_eq!(binding.lease_expiry_ms, None);
-        assert_eq!(binding.grace_until_ms, None);
-        assert_eq!(binding.bound_at_ms, 0);
+            .expect("stored definition")
+            .clone();
+        stored_definition.alias = Some(inline_alias.clone());
+        world
+            .asset_definitions
+            .insert(definition_id.clone(), stored_definition);
+
+        let err = world
+            .rebuild_asset_definition_alias_indexes()
+            .expect_err("rebuild must reject inline asset-definition aliases");
         assert_eq!(
-            view.asset_definition_aliases().get(&legacy_alias),
-            Some(&definition_id)
-        );
-        assert_eq!(
-            view.asset_definition(&definition_id)
-                .expect("definition")
-                .alias()
-                .as_ref(),
-            Some(&legacy_alias)
-        );
-        assert!(
-            world
-                .asset_definitions
-                .view()
-                .get(&definition_id)
-                .expect("stored definition")
-                .alias()
-                .is_none(),
-            "stored asset definition alias must be normalized away"
+            err,
+            format!(
+                "Asset definition {definition_id} stores inline alias `{inline_alias}`; persist aliases only in asset_definition_alias_bindings"
+            )
         );
     }
 
     #[test]
     fn asset_definition_alias_lookup_stops_after_grace_even_before_sweep() {
-        let (mut world, definition_id, _) = asset_alias_test_world(None);
+        let (mut world, definition_id) = asset_alias_test_world();
         let alias: AssetDefinitionAlias = "usd#lease".parse().expect("alias");
         world.asset_definition_aliases = Storage::default();
         world.asset_definition_alias_bindings = std::iter::once((
@@ -27605,7 +28088,7 @@ mod tests {
 
     #[test]
     fn asset_definition_alias_bindings_roundtrip_through_state_json() {
-        let (mut world, definition_id, _) = asset_alias_test_world(None);
+        let (mut world, definition_id) = asset_alias_test_world();
         let alias: AssetDefinitionAlias = "usd#durable".parse().expect("alias");
         let binding = AssetDefinitionAliasBindingRecord {
             alias: alias.clone(),
@@ -28101,12 +28584,14 @@ mod tests {
         let mut summary = AccountPermissionSummary::default();
         summary.apply_grant(
             &world_view,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
             &Permission::from(CanRegisterTrigger {
                 authority: account_id.clone(),
             }),
         );
         summary.apply_grant(
             &world_view,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
             &Permission::from(CanUseFeeSponsor {
                 sponsor: account_id.clone(),
             }),

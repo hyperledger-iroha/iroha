@@ -19,7 +19,7 @@ Percorre le cycle de vie d'un NFT au début du programme : gestion du don, du tr
 
 ## Roteiro do livro razão
 
-- Garantit que la définition du NFT (par exemple `n0#wonderland`) existe avec les données de don/destination utilisées pas (`i105...`, `i105...`).
+- Garantit que la définition du NFT (par exemple `n0#wonderland`) existe avec les données de don/destination utilisées pas (`<i105-account-id>`, `<i105-account-id>`).
 - Appelez le point d'entrée `nft_issue_and_transfer` pour trouver NFT, transférez Alice à Bob et ajoutez le signal des métadonnées qui sont affichées à l'émission.
 - Inspectez l'état du livre de NFT avec `iroha_cli ledger nfts list --account <id>` ou les équivalents du SDK pour vérifier le transfert, après avoir confirmé que l'activité est supprimée lorsque l'instruction de cette opération est effectuée.
 
@@ -35,11 +35,11 @@ Percorre le cycle de vie d'un NFT au début du programme : gestion du don, du tr
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("i105...");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

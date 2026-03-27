@@ -86,26 +86,10 @@ export class ValidationError extends TypeError {
   readonly cause?: unknown;
 }
 
-export type AccountAddressDomainKind = "default" | "local12" | "global" | "unknown";
-
-export interface AccountAddressDomainSelector {
-  tag: number | null;
-  digestHex: string | null;
-  registryId: number | null;
-  label: string | null;
-}
-
-export interface AccountAddressDomainSummary {
-  kind: AccountAddressDomainKind;
-  warning: string | null;
-  selector: AccountAddressDomainSelector;
-}
-
 export interface AccountAddressDisplay {
   i105: string;
   chainDiscriminant: number;
   i105Warning: string;
-  domainSummary: AccountAddressDomainSummary;
 }
 
 export interface CurveSupportOptions {
@@ -119,14 +103,6 @@ export function configureCurveSupport(options?: CurveSupportOptions): void;
 export class AccountAddress {
   static fromAccount(
     options: {
-      domain: string;
-      publicKey: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView | number[] | string;
-      algorithm?: string;
-    },
-  ): AccountAddress;
-  static fromAccount(
-    options: {
-      registryId: number | string | bigint;
       publicKey: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView | number[] | string;
       algorithm?: string;
     },
@@ -138,19 +114,15 @@ export class AccountAddress {
     encoded: string,
     expectedPrefix?: number | string | bigint,
   ): AccountAddress;
-  static fromI105Default(encoded: string): AccountAddress;
   static parseEncoded(
     input: string,
     expectedPrefix?: number | string | bigint,
-    expectedDomain?: string,
   ): { address: AccountAddress; chainDiscriminant?: number };
   canonicalBytes(): Uint8Array;
   canonicalHex(): string;
   toI105(prefix?: number | string | bigint): string;
-  toI105Default(): string;
   toString(): string;
   displayFormats(chainDiscriminant?: number | string | bigint): AccountAddressDisplay;
-  domainSummary(): AccountAddressDomainSummary;
 }
 
 export function encodeI105AccountAddress(
@@ -169,11 +141,9 @@ export interface InspectAccountIdOptions {
 
 export interface AccountIdInspection {
   detectedFormat: { kind: string; chainDiscriminant?: number };
-  domain: { kind: string; warning: string | null };
   canonicalHex: string;
   i105: { value: string; chainDiscriminant: number };
   i105Warning: string;
-  inputDomain: string | null;
   warnings: string[];
 }
 
@@ -181,8 +151,6 @@ export function inspectAccountId(
   accountId: string,
   options?: InspectAccountIdOptions,
 ): AccountIdInspection;
-
-export const DEFAULT_DOMAIN_NAME: string;
 
 export interface MultisigProposalTtlPreview {
   effectiveTtlMs: number;
@@ -441,17 +409,29 @@ export interface ProofAttachmentInput {
 }
 
 /**
- * Canonicalise an account identifier to I105.
+ * Canonicalise an account identifier to i105.
  *
- * Accepts only encoded I105 account IDs.
+ * Accepts only encoded i105 account ids.
  * Domain-suffixed literals (`<id>@domain`) and canonical-hex account literals are rejected.
  */
 export function normalizeAccountId(value: string, name?: string): string;
 
 /**
- * Canonicalise an asset identifier, including embedded account components.
+ * Canonicalise a public asset identifier to bare Base58 form.
+ * Asset aliases (`name#dataspace` / `name#domain.dataspace`) must be resolved first.
  */
 export function normalizeAssetId(value: string, name?: string): string;
+
+/**
+ * Canonicalise an internal asset-holding identifier in
+ * `<base58-asset-definition-id>#<i105-account-id>` form.
+ */
+export function normalizeAssetHoldingId(value: string, name?: string): string;
+
+/**
+ * Canonicalise an RWA identifier in `<64-hex-hash>$<domain>` form.
+ */
+export function normalizeRwaId(value: string, name?: string): string;
 
 export interface ConfidentialGasSchedule {
   proofBase: number;
@@ -575,6 +555,21 @@ export interface ExplorerNftListOptions {
 }
 
 export interface ExplorerNftIteratorOptions extends ExplorerNftListOptions {
+  pageSize?: NumericLike;
+  maxItems?: NumericLike;
+}
+
+export interface ExplorerRwaListOptions {
+  page?: NumericLike;
+  perPage?: NumericLike;
+  limit?: NumericLike;
+  offset?: NumericLike;
+  ownedBy?: string;
+  domainId?: string;
+  signal?: AbortSignal;
+}
+
+export interface ExplorerRwaIteratorOptions extends ExplorerRwaListOptions {
   pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
@@ -865,6 +860,9 @@ export interface ToriiAssetDefinitionListItem {
 export interface ToriiNftListItem {
   id: string;
 }
+export interface ToriiRwaListItem {
+  id: string;
+}
 export interface ToriiAccountAssetItem {
   asset_id: string;
   quantity: string;
@@ -1095,6 +1093,23 @@ export interface ToriiExplorerNft {
 export interface ToriiExplorerNftsPage {
   pagination: ToriiExplorerPaginationMeta;
   items: ReadonlyArray<ToriiExplorerNft>;
+}
+
+export interface ToriiExplorerRwa {
+  id: string;
+  ownedBy: string;
+  quantity: string;
+  heldQuantity: string;
+  primaryReference: string;
+  status: string | null;
+  isFrozen: boolean;
+  metadata: Record<string, JsonValue>;
+  raw: Record<string, JsonValue>;
+}
+
+export interface ToriiExplorerRwasPage {
+  pagination: ToriiExplorerPaginationMeta;
+  items: ReadonlyArray<ToriiExplorerRwa>;
 }
 
 export interface ToriiExplorerBlock {
@@ -4240,18 +4255,18 @@ type DomainMintSpec = {
 
 type AssetDefinitionMintSpec = {
   accountId?: string;
-  assetId?: string;
+  assetHoldingId?: string;
   quantity: NumericLike;
 };
 
 type MintTransferSpec = {
-  sourceAssetId?: string;
+  sourceAssetHoldingId?: string;
   quantity: NumericLike;
   destinationAccountId: string;
 };
 
 type AccountTransferSpec = {
-  sourceAssetId: string;
+  sourceAssetHoldingId: string;
   quantity: NumericLike;
   destinationAccountId: string;
 };
@@ -4300,7 +4315,7 @@ export interface TransactionAssemblyInput {
 export interface MintAssetInput {
   chainId: string;
   authority: string;
-  assetId: string;
+  assetHoldingId: string;
   quantity: NumericLike;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -4312,7 +4327,7 @@ export interface MintAssetInput {
 export interface BurnAssetInput {
   chainId: string;
   authority: string;
-  assetId: string;
+  assetHoldingId: string;
   quantity: NumericLike;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -4348,7 +4363,7 @@ export interface BurnTriggerInput {
 export interface TransferAssetInput {
   chainId: string;
   authority: string;
-  sourceAssetId: string;
+  sourceAssetHoldingId: string;
   quantity: NumericLike;
   destinationAccountId: string;
   metadata?: MetadataLike;
@@ -4397,17 +4412,186 @@ export interface TransferNftInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
+export interface RwaParentRefInput {
+  rwa?: string;
+  rwaId?: string;
+  quantity: NumericLike;
+}
+
+export interface RwaControlPolicyInput {
+  controllerAccounts?: ReadonlyArray<string> | null;
+  controller_accounts?: ReadonlyArray<string> | null;
+  controllerRoles?: ReadonlyArray<string> | null;
+  controller_roles?: ReadonlyArray<string> | null;
+  freezeEnabled?: boolean | null;
+  freeze_enabled?: boolean | null;
+  holdEnabled?: boolean | null;
+  hold_enabled?: boolean | null;
+  forceTransferEnabled?: boolean | null;
+  force_transfer_enabled?: boolean | null;
+  redeemEnabled?: boolean | null;
+  redeem_enabled?: boolean | null;
+}
+
+export interface RegisterRwaPayloadInput {
+  domain: string;
+  quantity: NumericLike;
+  spec?: Record<string, unknown> | null;
+  primaryReference?: string;
+  primary_reference?: string;
+  status?: string | null;
+  metadata?: Record<string, JsonValue> | null;
+  parents?: ReadonlyArray<RwaParentRefInput> | null;
+  controls?: RwaControlPolicyInput | null;
+}
+
+export interface MergeRwasPayloadInput {
+  parents: ReadonlyArray<RwaParentRefInput>;
+  primaryReference?: string;
+  primary_reference?: string;
+  status?: string | null;
+  metadata?: Record<string, JsonValue> | null;
+}
+
+export interface RegisterRwaInput {
+  chainId: string;
+  authority: string;
+  rwa?: RegisterRwaPayloadInput | string;
+  rwaJson?: RegisterRwaPayloadInput | string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface TransferRwaInput {
+  chainId: string;
+  authority: string;
+  sourceAccountId: string;
+  rwaId: string;
+  quantity: NumericLike;
+  destinationAccountId: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface MergeRwasInput {
+  chainId: string;
+  authority: string;
+  merge?: MergeRwasPayloadInput | string;
+  mergeJson?: MergeRwasPayloadInput | string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface RedeemRwaInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  quantity: NumericLike;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface FreezeRwaInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface UnfreezeRwaInput extends FreezeRwaInput {}
+
+export interface HoldRwaInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  quantity: NumericLike;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface ReleaseRwaInput extends HoldRwaInput {}
+
+export interface ForceTransferRwaInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  quantity: NumericLike;
+  destinationAccountId: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface SetRwaControlsInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  controls?: RwaControlPolicyInput | string;
+  controlsJson?: RwaControlPolicyInput | string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface SetRwaKeyValueInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  key: string;
+  value: JsonValue;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface RemoveRwaKeyValueInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  key: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
 /**
  * Parameters for {@link buildMintAndTransferTransaction}. Provide either
- * `transfer` or `transfers`; when `sourceAssetId` is omitted on a transfer the
- * helper reuses `mint.assetId` and enforces that at least one transfer is
+ * `transfer` or `transfers`; when `sourceAssetHoldingId` is omitted on a transfer the
+ * helper reuses `mint.assetHoldingId` and enforces that at least one transfer is
  * present.
  */
 interface MintAndTransferInputBase {
   chainId: string;
   authority: string;
   mint: {
-    assetId: string;
+    assetHoldingId: string;
     quantity: NumericLike;
   };
   metadata?: MetadataLike;
@@ -4487,9 +4671,9 @@ export type RegisterAccountAndTransferInput =
 
 /**
  * Parameters for {@link buildRegisterAssetDefinitionAndMintTransaction}. Supply
- * either `mint` or `mints`. When `assetId` is omitted the helper derives it as
- * the canonical public asset id for `assetDefinitionId + accountId`, and
- * enforces that any provided `assetId` matches the derived value.
+ * either `mint` or `mints`. When `assetHoldingId` is omitted the helper derives it as
+ * the canonical asset-holding id for `assetDefinitionId + accountId`, and
+ * enforces that any provided `assetHoldingId` matches the derived value.
  */
 interface RegisterAssetDefinitionAndMintInputBase {
   chainId: string;
@@ -4522,7 +4706,7 @@ export type RegisterAssetDefinitionAndMintInput =
 /**
  * Extends {@link RegisterAssetDefinitionAndMintInput} with optional transfer
  * descriptors. Provide either `transfer` or `transfers`; when a transfer omits
- * `sourceAssetId` the helper reuses the first minted asset destination.
+ * `sourceAssetHoldingId` the helper reuses the first minted asset destination.
  */
 type RegisterAssetDefinitionMintRequired = ExclusiveSingleOrMany<
   "mint",
@@ -6229,6 +6413,36 @@ export declare class ToriiClient {
   iterateNftsQuery<T = ToriiNftListItem>(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
+  listRwas<T = ToriiRwaListItem>(
+    options?: IterableListOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryRwas<T = ToriiRwaListItem>(
+    options?: IterableQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  iterateRwas<T = ToriiRwaListItem>(
+    options?: PaginationIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  iterateRwasQuery<T = ToriiRwaListItem>(
+    options?: PaginationIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  listExplorerRwas<T = ToriiExplorerRwa>(
+    options?: ExplorerRwaListOptions,
+  ): Promise<ToriiExplorerRwasPage>;
+  getExplorerRwaDetail<T = ToriiExplorerRwa>(
+    rwaId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<T | null>;
+  iterateExplorerRwas<T = ToriiExplorerRwa>(
+    options?: ExplorerRwaIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  listAccountRwas<T = ToriiExplorerRwa>(
+    accountId: string,
+    options?: ExplorerRwaListOptions,
+  ): Promise<ToriiExplorerRwasPage>;
+  iterateAccountRwas<T = ToriiExplorerRwa>(
+    accountId: string,
+    options?: ExplorerRwaIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
   listExplorerNfts<T = ToriiExplorerNft>(
     options?: ExplorerNftListOptions,
   ): Promise<ToriiExplorerNftsPage>;
@@ -7738,9 +7952,45 @@ export function buildTransferDomainTransaction(
 export function buildTransferNftTransaction(
   input: TransferNftInput,
 ): SignedTransactionResult;
+export function buildRegisterRwaTransaction(
+  input: RegisterRwaInput,
+): SignedTransactionResult;
+export function buildTransferRwaTransaction(
+  input: TransferRwaInput,
+): SignedTransactionResult;
+export function buildMergeRwasTransaction(
+  input: MergeRwasInput,
+): SignedTransactionResult;
+export function buildRedeemRwaTransaction(
+  input: RedeemRwaInput,
+): SignedTransactionResult;
+export function buildFreezeRwaTransaction(
+  input: FreezeRwaInput,
+): SignedTransactionResult;
+export function buildUnfreezeRwaTransaction(
+  input: UnfreezeRwaInput,
+): SignedTransactionResult;
+export function buildHoldRwaTransaction(
+  input: HoldRwaInput,
+): SignedTransactionResult;
+export function buildReleaseRwaTransaction(
+  input: ReleaseRwaInput,
+): SignedTransactionResult;
+export function buildForceTransferRwaTransaction(
+  input: ForceTransferRwaInput,
+): SignedTransactionResult;
+export function buildSetRwaControlsTransaction(
+  input: SetRwaControlsInput,
+): SignedTransactionResult;
+export function buildSetRwaKeyValueTransaction(
+  input: SetRwaKeyValueInput,
+): SignedTransactionResult;
+export function buildRemoveRwaKeyValueTransaction(
+  input: RemoveRwaKeyValueInput,
+): SignedTransactionResult;
 /**
  * Compose a mint followed by one or more transfers. Provide either `transfer`
- * or `transfers`; transfers without an explicit `sourceAssetId` reuse the mint's
+ * or `transfers`; transfers without an explicit `sourceAssetHoldingId` reuse the mint's
  * destination asset identifier.
  */
 export function buildMintAndTransferTransaction(
@@ -7762,15 +8012,15 @@ export function buildRegisterAccountAndTransferTransaction(
 ): SignedTransactionResult;
 /**
  * Register an asset definition and optionally mint initial supply. When both
- * `accountId` and `assetId` are provided the helper validates that they match
- * the canonical public asset id derived from `assetDefinitionId + accountId`.
+ * `accountId` and `assetHoldingId` are provided the helper validates that they match
+ * the canonical asset-holding id derived from `assetDefinitionId + accountId`.
  */
 export function buildRegisterAssetDefinitionAndMintTransaction(
   input: RegisterAssetDefinitionAndMintInput,
 ): SignedTransactionResult;
 /**
  * Register an asset definition, mint supply, and optionally fan-out transfers.
- * When a transfer omits `sourceAssetId` the helper reuses the first minted
+ * When a transfer omits `sourceAssetHoldingId` the helper reuses the first minted
  * destination identifier.
  */
 export function buildRegisterAssetDefinitionMintAndTransferTransaction(
@@ -7987,11 +8237,11 @@ export function buildProposeMultisigInstruction({
 }): object;
 
 export function buildTransferAssetInstruction({
-  sourceAssetId,
+  sourceAssetHoldingId,
   quantity,
   destinationAccountId,
 }: {
-  sourceAssetId: string;
+  sourceAssetHoldingId: string;
   quantity: NumericLike;
   destinationAccountId: string;
 }): object;
@@ -8024,6 +8274,90 @@ export function buildTransferNftInstruction({
   sourceAccountId: string;
   nftId: string;
   destinationAccountId: string;
+}): object;
+
+export function buildRegisterRwaInstruction(options: {
+  rwa?: RegisterRwaPayloadInput | string;
+  rwaJson?: RegisterRwaPayloadInput | string;
+} | RegisterRwaPayloadInput): object;
+
+export function buildTransferRwaInstruction({
+  sourceAccountId,
+  rwaId,
+  quantity,
+  destinationAccountId,
+}: {
+  sourceAccountId: string;
+  rwaId: string;
+  quantity: NumericLike;
+  destinationAccountId: string;
+}): object;
+
+export function buildMergeRwasInstruction(options: {
+  merge?: MergeRwasPayloadInput | string;
+  mergeJson?: MergeRwasPayloadInput | string;
+} | MergeRwasPayloadInput): object;
+
+export function buildRedeemRwaInstruction({
+  rwaId,
+  quantity,
+}: {
+  rwaId: string;
+  quantity: NumericLike;
+}): object;
+
+export function buildFreezeRwaInstruction({ rwaId }: { rwaId: string }): object;
+
+export function buildUnfreezeRwaInstruction({ rwaId }: { rwaId: string }): object;
+
+export function buildHoldRwaInstruction({
+  rwaId,
+  quantity,
+}: {
+  rwaId: string;
+  quantity: NumericLike;
+}): object;
+
+export function buildReleaseRwaInstruction({
+  rwaId,
+  quantity,
+}: {
+  rwaId: string;
+  quantity: NumericLike;
+}): object;
+
+export function buildForceTransferRwaInstruction({
+  rwaId,
+  quantity,
+  destinationAccountId,
+}: {
+  rwaId: string;
+  quantity: NumericLike;
+  destinationAccountId: string;
+}): object;
+
+export function buildSetRwaControlsInstruction(options: {
+  rwaId: string;
+  controls?: RwaControlPolicyInput | string;
+  controlsJson?: RwaControlPolicyInput | string;
+}): object;
+
+export function buildSetRwaKeyValueInstruction({
+  rwaId,
+  key,
+  value,
+}: {
+  rwaId: string;
+  key: string;
+  value: JsonValue;
+}): object;
+
+export function buildRemoveRwaKeyValueInstruction({
+  rwaId,
+  key,
+}: {
+  rwaId: string;
+  key: string;
 }): object;
 
 export function buildCreateKaigiInstruction(call: CreateKaigiInput): object;

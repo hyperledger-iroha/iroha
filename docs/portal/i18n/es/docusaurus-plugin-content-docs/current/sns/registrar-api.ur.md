@@ -113,7 +113,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTENER | -- | `SuffixPolicyV1` Memoria caché ہے (almacenable en caché) ۔ |
 | `/v1/sns/names/{namespace}/{literal}` | OBTENER | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
 
-**Codificación del selector:** `{selector}` segmento de ruta I105, comprimido (`sora`) یا canónico hexadecimal ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalizar کرتا ہے۔**Modelo de error:** Puntos finales de actualización Norito JSON `code`, `message`, `details` y کرتے ہیں۔ Códigos میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
+**Codificación del selector:** `{selector}` segmento de ruta i105, comprimido (`sora`) یا canónico hexadecimal ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalizar کرتا ہے۔**Modelo de error:** Puntos finales de actualización Norito JSON `code`, `message`, `details` y کرتے ہیں۔ Códigos میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
 
 ### 3.1 CLI helpers (N0 registrador دستی ضرورت)
 
@@ -157,7 +157,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -215,7 +215,7 @@ Comprobaciones fallidas `sns_err_governance_missing` واپس کرتے ہیں۔
 
 ### 6.1 Registro estándar1. Cliente `/v1/sns/policies/{suffix_id}` کو consulta کرتا ہے تاکہ precios, gracia اور دستیاب niveles حاصل کرے۔
 2. Cliente `RegisterNameRequestV1` بناتا ہے:
-   - `selector` ترجیحی I105 یا segunda mejor etiqueta comprimida (`sora`) سے derivada ہے۔
+   - `selector` ترجیحی i105 یا segunda mejor etiqueta comprimida (`sora`) سے derivada ہے۔
    - `term_years` پالیسی حدود میں۔
    - Transferencia del divisor de tesorería/administrador `payment` کو consulte کرتا ہے۔
 3. Torii valida کرتا ہے:

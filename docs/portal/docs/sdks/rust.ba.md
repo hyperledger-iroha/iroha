@@ -144,7 +144,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -153,7 +153,7 @@ fn download_qr() -> eyre::Result<()> {
 ```
 
 ер өҫтө: ул канонлы иҫәп id инә, туранан-тура күрһәтелгән менән
-канон I105 literal, селтәр префикс/хата-коррекция метамағлүмәттәре, QR үлсәмдәре һәм
+канон i105 literal, селтәр префикс/хата-коррекция метамағлүмәттәре, QR үлсәмдәре һәм
 рәтле SVG файҙалы йөк, тип янсыҡтар/тикшерелгән туранан-тура встраиваемый ала. Ҡотолоу
 
 ## 7. Ваҡиғаларға яҙылығыҙ

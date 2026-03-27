@@ -117,7 +117,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | Busca `SuffixPolicyV1` 実物 (cacheavel)。 |
 | `/v1/sns/names/{namespace}/{literal}` |入手 | -- | Retorna `NameRecordV1` atual + estado efetivo (アクティブ、グレースなど)。 |
 
-**セレクターコード:** セグメント `{selector}` ACEITA I105、ADDR-5 に準拠した 16 進数の互換性。 Torii は `NameSelectorV1` 経由で正規化されます。
+**セレクターコード:** セグメント `{selector}` ACEITA i105、ADDR-5 に準拠した 16 進数の互換性。 Torii は `NameSelectorV1` 経由で正規化されます。
 
 **モデルエラー:** todos os エンドポイント retornam Norito JSON com `code`、`message`、`details`。 OS コードには、`sns_err_reserved`、`sns_err_payment_mismatch`、`sns_err_policy_violation`、`sns_err_governance_missing` が含まれます。
 
@@ -163,7 +163,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -223,7 +223,7 @@ Torii verifica as provas conferindo:
 
 1. お客様は、事前の手続き、猶予期間の拒否について `/v1/sns/policies/{suffix_id}` にご相談ください。
 2. クライアント モンタ `RegisterNameRequestV1`:
-   - `selector` ラベル I105 (preferido) または comprimido (segunda melhor opcao) のデリバド。
+   - `selector` ラベル i105 (preferido) または comprimido (segunda melhor opcao) のデリバド。
    - `term_years` 政治の限界を超えてください。
    - `payment` 参照、転送、スプリッター tesouraria/スチュワード。
 3. Torii の有効性:

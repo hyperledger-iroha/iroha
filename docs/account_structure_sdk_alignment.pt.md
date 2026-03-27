@@ -1,28 +1,38 @@
-# Nota de implantação do I105 para responsáveis por SDK e codecs
+# Account/Asset Hard-Cut Alignment
 
-Equipes: SDK Rust, SDK TypeScript/JavaScript, SDK Python, SDK Kotlin, ferramentas de codec
+Teams: Rust runtime, Rust/Swift/Android/JS SDKs, bridge/codec tooling.
 
-Contexto: `docs/account_structure.md` agora reflete a implementação de AccountId I105 em produção.
-Alinhem o comportamento e os testes dos SDKs com a especificação canônica.
+This repository ships strict first-release semantics. There is no compatibility
+path for legacy account/asset literals.
 
-Referências-chave:
-- Codec de endereço + layout do cabeçalho — `docs/account_structure.md` §2
-- Registro de curvas — `docs/source/references/address_curve_registry.md`
-- Tratamento de domínio Norm v1 — `docs/source/references/address_norm_v1.md`
-- Vetores de fixtures — `fixtures/account/address_vectors.json`
+## Required behavior
+1. **Account parser contract (strict):**
+   - Accept only canonical I105 account literals.
+   - Reject all of:
+     - any `@domain` suffix
+     - alias literals
+     - canonical hex account literals in parser input
+    - non-canonical/legacy i105 literals
+     - legacy `norito:<hex>` account literals
+     - `uaid:` / `opaque:` account parser forms
+2. **Account identity surface:**
+   - Account-facing APIs are domainless and operate on subject identity.
+   - Domain context is represented only via explicit scoped/link records where needed.
+3. **Asset parser contract (strict):**
+   - Accept only canonical Base58 `AssetDefinitionId` values as public asset IDs.
+   - Accept asset aliases only in `name#domain.dataspace` / `name#dataspace` form, and resolve
+     them on-chain to a canonical Base58 asset-definition id.
+   - Treat `<base58-asset-definition-id>#<i105-account-id>[#dataspace:<id>]` as an
+     asset-holding identifier, not as a public asset id or alias target.
+   - Reject all prefixed/legacy forms (`norito:<hex>`, `aid:<hex>`,
+     owner-qualified asset-holding literals, `asset#domain#account`, `asset##account`, etc.).
+4. **Canonical output:**
+   - Render account IDs as canonical I105 in user-facing output.
+   - Canonical hex remains envelope/debug-only and is not accepted as parser input.
+5. **Compatibility policy:**
+   - No parser fallback branches.
+   - No parse-any account/asset entrypoints in runtime SDK paths.
 
-Ações:
-1. **Saída canônica:** `AccountId::to_string()`/Display DEVE emitir apenas I105
-   (sem sufixo `@domain`). O hex canônico é para depuração (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
-3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
-4. **Checksum I105:** use Blake2b-512 sobre `I105PRE || prefix || payload`,
-   pegue os primeiros 2 bytes. A base do alfabeto comprimido é **105**.
-5. **Gate de curvas:** SDKs são Ed25519-only por padrão. Forneça opt-in explícito
-   para ML‑DSA/GOST/SM (flags de build no Swift; `configureCurveSupport` em JS/Android).
-   Não assuma secp256k1 habilitado por padrão fora de Rust.
-6. **Sem CAIP-10:** ainda não há mapeamento CAIP‑10 entregue; não exponha nem
-   dependa de conversões CAIP‑10.
-
-Por favor confirmem quando codecs/testes estiverem atualizados; dúvidas podem
-ser acompanhadas no tópico do RFC de endereçamento de contas.
+## Validation closure
+- Include explicit rejection tests for all forbidden literal forms.
+- Keep legacy forms only in negative-path tests.

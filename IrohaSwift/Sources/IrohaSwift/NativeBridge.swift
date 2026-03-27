@@ -49,6 +49,10 @@ enum NoritoBridgeLoader {
         let hashes: [String: String]
     }
 
+    private static func packagedBinaryRelativePaths(for identifier: String = currentIdentifier()) -> [String] {
+        return ["libNoritoBridge.a", "NoritoBridge.framework/NoritoBridge"]
+    }
+
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {
         // Xcode 26 debug-dylib: app code lives in <name>.debug.dylib, not the main executable.
         // dlopen(nil) returns a handle to the 57 KB stub. The stub may re-export a few symbols
@@ -176,19 +180,51 @@ enum NoritoBridgeLoader {
     }
 
     private static func artifactManifest(near binaryURL: URL) -> ArtifactManifest? {
-        let frameworkDir = binaryURL.deletingLastPathComponent()
-        let platformDir = frameworkDir.deletingLastPathComponent()
-        let xcframeworkDir = platformDir.deletingLastPathComponent()
-        let candidates = [
-            xcframeworkDir.appendingPathComponent("NoritoBridge.artifacts.json"),
-            xcframeworkDir.deletingLastPathComponent().appendingPathComponent("NoritoBridge.artifacts.json")
-        ]
+        let candidates = candidateArtifactManifestURLs(near: binaryURL)
         for candidate in candidates {
             if let manifest = parseArtifactManifest(at: candidate) {
                 return manifest
             }
         }
         return nil
+    }
+
+    private static func candidateArtifactManifestURLs(near binaryURL: URL) -> [URL] {
+        var seen = Set<String>()
+        var candidates: [URL] = []
+        var cursor = binaryURL.deletingLastPathComponent()
+
+        while true {
+            if cursor.pathExtension == "xcframework" {
+                let urls = [
+                    cursor.appendingPathComponent("NoritoBridge.artifacts.json"),
+                    cursor.deletingLastPathComponent().appendingPathComponent("NoritoBridge.artifacts.json")
+                ]
+                for url in urls where !seen.contains(url.path) {
+                    seen.insert(url.path)
+                    candidates.append(url)
+                }
+            }
+            let parent = cursor.deletingLastPathComponent()
+            if parent.path == cursor.path {
+                break
+            }
+            cursor = parent
+        }
+
+        if candidates.isEmpty {
+            let fallback = [
+                binaryURL.deletingLastPathComponent().appendingPathComponent("NoritoBridge.artifacts.json"),
+                binaryURL.deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent("NoritoBridge.artifacts.json")
+            ]
+            for url in fallback where !seen.contains(url.path) {
+                seen.insert(url.path)
+                candidates.append(url)
+            }
+        }
+
+        return candidates
     }
 
     private static func parseArtifactManifest(at url: URL) -> ArtifactManifest? {
@@ -256,7 +292,9 @@ enum NoritoBridgeLoader {
         }
 
         for root in trustedSearchRoots() {
-            addIfExisting(root.appendingPathComponent("NoritoBridge.framework/NoritoBridge"))
+            for relativePath in packagedBinaryRelativePaths() {
+                addIfExisting(root.appendingPathComponent(relativePath))
+            }
         }
 
         return paths
@@ -325,11 +363,16 @@ enum NoritoBridgeLoader {
         for _ in 0..<4 {
             root.deleteLastPathComponent()
         }
-        return root
+        let sliceRoot = root
             .appendingPathComponent("dist/NoritoBridge.xcframework")
             .appendingPathComponent(currentIdentifier())
-            .appendingPathComponent("NoritoBridge.framework/NoritoBridge")
-            .path
+        for relativePath in packagedBinaryRelativePaths() {
+            let candidate = sliceRoot.appendingPathComponent(relativePath)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate.path
+            }
+        }
+        return sliceRoot.appendingPathComponent(packagedBinaryRelativePaths().first ?? "libNoritoBridge.a").path
     }
 }
 
@@ -390,7 +433,6 @@ struct NativeAccountAddressParseResult {
 struct NativeAccountAddressRenderResult {
     let canonicalHex: String
     let i105: String
-    let i105Default: String
 }
 
 enum NativeBridgeError: Error, Equatable {
@@ -1192,7 +1234,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt16,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?
     ) -> Int32
 
@@ -1866,14 +1907,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     private func inferredAuthorityDiscriminant(_ authority: String) -> UInt16? {
-        #if canImport(Darwin)
-        guard let parsed = try? parseAccountAddress(literal: authority, expectedPrefix: nil) else {
-            return nil
-        }
-        return parsed.networkPrefix
-        #else
-        return nil
-        #endif
+        fallbackAccountAddressDiscriminant(authority)
     }
 
     private func withAuthorityChainDiscriminant<R>(
@@ -2711,13 +2745,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     var isAccountAddressCodecAvailable: Bool {
-        #if canImport(Darwin)
-        return accountAddressParseFn != nil
-            && accountAddressRenderFn != nil
-            && freeFn != nil
-        #else
-        return false
-        #endif
+        true
     }
 
     var isConnectCodecAvailable: Bool {
@@ -2866,55 +2894,93 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
     #endif
 
+    private func fallbackAccountAddressDiscriminant(_ literal: String) -> UInt16? {
+        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("sora") {
+            return 753
+        }
+        if trimmed.hasPrefix("test") {
+            return 0x0171
+        }
+        if trimmed.hasPrefix("dev") {
+            return 0
+        }
+        guard trimmed.hasPrefix("n") else {
+            return nil
+        }
+        let digits = trimmed.dropFirst().prefix { $0.isASCII && $0.isNumber }
+        guard !digits.isEmpty else {
+            return nil
+        }
+        return UInt16(String(digits))
+    }
+
     func parseAccountAddress(
         literal: String,
         expectedPrefix: UInt16?
     ) throws -> NativeAccountAddressParseResult? {
         #if canImport(Darwin)
-        guard let accountAddressParseFn else { return nil }
-        var canonicalPtr: UnsafeMutablePointer<UInt8>? = nil
-        var canonicalLen: UInt = 0
-        var networkPrefix: UInt16 = 0
-        var errorPtr: UnsafeMutablePointer<UInt8>? = nil
-        var errorLen: UInt = 0
-        let prefixFlag: UInt8 = expectedPrefix == nil ? 0 : 1
-        let prefixValue = expectedPrefix ?? 0
+        if let accountAddressParseFn {
+            var canonicalPtr: UnsafeMutablePointer<UInt8>? = nil
+            var canonicalLen: UInt = 0
+            var networkPrefix: UInt16 = 0
+            var errorPtr: UnsafeMutablePointer<UInt8>? = nil
+            var errorLen: UInt = 0
+            let prefixFlag: UInt8 = expectedPrefix == nil ? 0 : 1
+            let prefixValue = expectedPrefix ?? 0
 
-        let status = literal.withCString { cString in
-            accountAddressParseFn(
-                cString,
-                UInt(literal.utf8.count),
-                prefixValue,
-                prefixFlag,
-                &canonicalPtr,
-                &canonicalLen,
-                &networkPrefix,
-                &errorPtr,
-                &errorLen
-            )
-        }
-
-        if status == 0 {
-            guard let canonicalPtr,
-                  let canonical = takeData(pointer: canonicalPtr, length: canonicalLen)
-            else {
-                return nil
+            let status = literal.withCString { cString in
+                accountAddressParseFn(
+                    cString,
+                    UInt(literal.utf8.count),
+                    prefixValue,
+                    prefixFlag,
+                    &canonicalPtr,
+                    &canonicalLen,
+                    &networkPrefix,
+                    &errorPtr,
+                    &errorLen
+                )
             }
-            return NativeAccountAddressParseResult(
-                canonicalBytes: canonical,
-                networkPrefix: networkPrefix
-            )
+
+            if status == 0 {
+                guard let canonicalPtr,
+                      let canonical = takeData(pointer: canonicalPtr, length: canonicalLen)
+                else {
+                    return nil
+                }
+                return NativeAccountAddressParseResult(
+                    canonicalBytes: canonical,
+                    networkPrefix: networkPrefix
+                )
+            }
+
+            if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
+                throw error
+            }
+            if let canonicalPtr {
+                freeFn?(canonicalPtr)
+            }
+            return nil
         }
 
-        if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
-            throw error
-        }
-        if let canonicalPtr {
-            freeFn?(canonicalPtr)
-        }
-        return nil
+        let address = try AccountAddress.parseEncodedSwiftOnly(
+            literal,
+            expectedPrefix: expectedPrefix
+        )
+        return NativeAccountAddressParseResult(
+            canonicalBytes: try address.canonicalBytes(),
+            networkPrefix: expectedPrefix ?? fallbackAccountAddressDiscriminant(literal)
+        )
         #else
-        return nil
+        let address = try AccountAddress.parseEncodedSwiftOnly(
+            literal,
+            expectedPrefix: expectedPrefix
+        )
+        return NativeAccountAddressParseResult(
+            canonicalBytes: try address.canonicalBytes(),
+            networkPrefix: expectedPrefix ?? fallbackAccountAddressDiscriminant(literal)
+        )
         #endif
     }
 
@@ -2923,60 +2989,63 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         networkPrefix: UInt16
     ) throws -> NativeAccountAddressRenderResult? {
         #if canImport(Darwin)
-        guard let accountAddressRenderFn else { return nil }
-        var hexPtr: UnsafeMutablePointer<UInt8>? = nil
-        var hexLen: UInt = 0
-        var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
-        var i105Len: UInt = 0
-        var i105DefaultPtr: UnsafeMutablePointer<UInt8>? = nil
-        var i105DefaultLen: UInt = 0
-        var errorPtr: UnsafeMutablePointer<UInt8>? = nil
-        var errorLen: UInt = 0
+        if let accountAddressRenderFn {
+            var hexPtr: UnsafeMutablePointer<UInt8>? = nil
+            var hexLen: UInt = 0
+            var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
+            var i105Len: UInt = 0
+            var errorPtr: UnsafeMutablePointer<UInt8>? = nil
+            var errorLen: UInt = 0
 
-        let status = canonicalBytes.withUnsafeBytes { buffer in
-            accountAddressRenderFn(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(canonicalBytes.count),
-                networkPrefix,
-                &hexPtr,
-                &hexLen,
-                &i105Ptr,
-                &i105Len,
-                &i105DefaultPtr,
-                &i105DefaultLen,
-                &errorPtr,
-                &errorLen
-            )
-        }
-
-        if status == 0 {
-            guard
-                let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
-                let i105 = takeString(pointer: i105Ptr, length: i105Len),
-                let i105Default = takeString(pointer: i105DefaultPtr, length: i105DefaultLen)
-            else {
-                return nil
+            let status = canonicalBytes.withUnsafeBytes { buffer in
+                accountAddressRenderFn(
+                    buffer.bindMemory(to: UInt8.self).baseAddress,
+                    UInt(canonicalBytes.count),
+                    networkPrefix,
+                    &hexPtr,
+                    &hexLen,
+                    &i105Ptr,
+                    &i105Len,
+                    &errorPtr,
+                    &errorLen
+                )
             }
-            return NativeAccountAddressRenderResult(
-                canonicalHex: canonicalHex,
-                i105: i105,
-                i105Default: i105Default
-            )
-        }
 
-        if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
+            if status == 0 {
+                guard
+                    let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
+                    let i105 = takeString(pointer: i105Ptr, length: i105Len)
+                else {
+                    return nil
+                }
+                return NativeAccountAddressRenderResult(
+                    canonicalHex: canonicalHex,
+                    i105: i105
+                )
+            }
+
+            if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
+                if let hexPtr { freeFn?(hexPtr) }
+                if let i105Ptr { freeFn?(i105Ptr) }
+                throw error
+            }
+
             if let hexPtr { freeFn?(hexPtr) }
             if let i105Ptr { freeFn?(i105Ptr) }
-            if let i105DefaultPtr { freeFn?(i105DefaultPtr) }
-            throw error
+            return nil
         }
 
-        if let hexPtr { freeFn?(hexPtr) }
-        if let i105Ptr { freeFn?(i105Ptr) }
-        if let i105DefaultPtr { freeFn?(i105DefaultPtr) }
-        return nil
+        let address = try AccountAddress.fromCanonicalBytes(canonicalBytes)
+        return NativeAccountAddressRenderResult(
+            canonicalHex: try address.canonicalHex(),
+            i105: try address.toI105(networkPrefix: networkPrefix)
+        )
         #else
-        return nil
+        let address = try AccountAddress.fromCanonicalBytes(canonicalBytes)
+        return NativeAccountAddressRenderResult(
+            canonicalHex: try address.canonicalHex(),
+            i105: try address.toI105(networkPrefix: networkPrefix)
+        )
         #endif
     }
 

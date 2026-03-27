@@ -1305,7 +1305,7 @@ impl SupervisorBuilder {
         )?;
 
         for spec in &specs {
-            spec.write_config(&chain_id, &genesis, &specs, &peer_config_overrides)?;
+            spec.write_config(&chain_id, &genesis, &specs, &peer_config_overrides, &[])?;
         }
 
         let peers = specs
@@ -2041,6 +2041,47 @@ impl Supervisor {
         peer.stop()
     }
 
+    /// Re-render a single peer config with temporary overlays and restart that peer.
+    pub fn restart_peer_with_extra_layers(
+        &mut self,
+        alias: &str,
+        extra_layers: &[toml::Table],
+    ) -> Result<()> {
+        let index = self
+            .peers
+            .iter()
+            .position(|peer| peer.alias() == alias)
+            .ok_or_else(|| SupervisorError::PeerUnknown {
+                alias: alias.to_owned(),
+            })?;
+
+        let specs = self
+            .peers
+            .iter()
+            .map(|peer| peer.spec.clone())
+            .collect::<Vec<_>>();
+        let spec = specs
+            .get(index)
+            .cloned()
+            .expect("peer index should remain valid");
+
+        let _ = self.peers[index].stop();
+        spec.write_config(
+            &self.chain_id,
+            &self.genesis,
+            &specs,
+            &self.peer_config_overrides,
+            extra_layers,
+        )?;
+
+        let irohad_path = self.irohad_path()?;
+        let peer = self
+            .peers
+            .get_mut(index)
+            .expect("peer index should remain valid");
+        peer.start(&irohad_path, StartReason::Manual)
+    }
+
     /// Export the current network state into a timestamped snapshot directory.
     ///
     /// The snapshot contains peer storage directories, rendered configs, and
@@ -2308,6 +2349,7 @@ impl Supervisor {
                 &genesis,
                 &specs,
                 &self.peer_config_overrides,
+                &[],
             )?;
         }
 
@@ -2930,6 +2972,7 @@ impl PeerSpec {
         genesis: &GenesisMaterial,
         all_peers: &[PeerSpec],
         config_overrides: &PeerConfigOverrides,
+        extra_layers: &[toml::Table],
     ) -> Result<()> {
         let mut root = toml::Table::new();
         root.insert("chain".into(), toml::Value::String(chain_id.to_owned()));
@@ -3041,6 +3084,10 @@ impl PeerSpec {
             && !table.is_empty()
         {
             root.insert("nexus".into(), toml::Value::Table(table.clone()));
+        }
+
+        for overlay in extra_layers {
+            merge_table(&mut root, overlay);
         }
 
         let header = Self::config_header(
@@ -5477,7 +5524,7 @@ JSON
             torii: None,
         };
         let specs = vec![spec.clone()];
-        spec.write_config("demo-chain", &genesis, &specs, &overrides)
+        spec.write_config("demo-chain", &genesis, &specs, &overrides, &[])
             .expect("write config");
 
         let contents = fs::read_to_string(&spec.config_path).expect("read config");
@@ -5565,7 +5612,7 @@ JSON
             torii: None,
         };
         let specs = vec![spec.clone()];
-        spec.write_config("demo-chain", &genesis, &specs, &overrides)
+        spec.write_config("demo-chain", &genesis, &specs, &overrides, &[])
             .expect("write config");
 
         let contents = fs::read_to_string(&spec.config_path).expect("read config");
@@ -5619,7 +5666,7 @@ JSON
             torii: Some(torii),
         };
         let specs = vec![spec.clone()];
-        spec.write_config("demo-chain", &genesis, &specs, &overrides)
+        spec.write_config("demo-chain", &genesis, &specs, &overrides, &[])
             .expect("write config");
 
         let contents = fs::read_to_string(&spec.config_path).expect("read config");
@@ -5685,7 +5732,7 @@ JSON
             torii: None,
         };
         let specs = vec![spec.clone()];
-        spec.write_config("demo-chain", &genesis, &specs, &overrides)
+        spec.write_config("demo-chain", &genesis, &specs, &overrides, &[])
             .expect("write config");
 
         let contents = fs::read_to_string(&spec.config_path).expect("read config");

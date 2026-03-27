@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`- မည်သည့် ID အတွက်မဆို ပေါင်းလဒ်အမျိုးအစား စာအိတ် (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, Norito, Norito `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`)။ generic flows နှင့် Norito encoding အမျိုးအစားတစ်ခုတည်းအတွက် အသုံးဝင်သည်။
 - `ChainId`- အရောင်းအ၀ယ်များတွင် ပြန်ဖွင့်ခြင်းအား အကာအကွယ်အတွက် အသုံးပြုသော ရောင်စုံကွင်းဆက်အမှတ်အသား။ID လိုင်းပုံစံများ (`Display`/`FromStr` ဖြင့် အသွားအပြန်သုံးနိုင်သော)
 - `DomainId`: `name` (e.g., `wonderland`)။
-- `AccountId`- I105 အဖြစ် `AccountAddress` မှတဆင့် ကုဒ်လုပ်ထားသော canonical domainless အကောင့် identifier ပါဆာထည့်သွင်းမှုများသည် Canonical I105 ဖြစ်ရပါမည်။ domain suffixes (`@domain`)၊ canonical I105 literals၊ alias literals၊ canonical hex parser input၊ legacy `norito:` payloads နှင့် `uaid:`/Norito များသည် forms
+- `AccountId`- i105 အဖြစ် `AccountAddress` မှတဆင့် ကုဒ်လုပ်ထားသော canonical domainless အကောင့် identifier ပါဆာထည့်သွင်းမှုများသည် Canonical I105 ဖြစ်ရပါမည်။ domain suffixes (`@domain`)၊ canonical I105 literals၊ alias literals၊ canonical hex parser input၊ legacy `norito:` payloads နှင့် `uaid:`/Norito များသည် forms
 - `AssetDefinitionId`- canonical `unprefixed Base58 address with versioning and checksum` (UUID-v4 bytes)။
-- `AssetId`- canonical encoded ပကတိ `<asset-definition-id>#<account-id>` (ပထမထုတ်ဝေမှုတွင် အမွေအနှစ်စာသားပုံစံများကို ပံ့ပိုးမထားပါ။)
+- `AssetId`- canonical encoded ပကတိ `<canonical-base58-asset-definition-id>` (ပထမထုတ်ဝေမှုတွင် အမွေအနှစ်စာသားပုံစံများကို ပံ့ပိုးမထားပါ။)
 - `NftId`: `nft$domain` (e.g., `rose$garden`)။
 - `PeerId`: `public_key` (ရွယ်တူတန်းတူရေးသည် အများသူငှာသော့အားဖြင့်)။
 
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```ပြောင်းရွှေ့မှုမှတ်စု-
 - `name#domain` ပိုင်ဆိုင်မှု-အဓိပ္ပါယ်ဖွင့်ဆိုချက် ID အဟောင်းများကို v1 တွင် လက်မခံပါ။
-- mint/burn/transfer အတွက် ပိုင်ဆိုင်မှု ID များသည် canonical `<asset-definition-id>#<account-id>` တွင် ရှိနေသည် ။ ၎င်းတို့ကို တည်ဆောက်ပါ-
+- mint/burn/transfer အတွက် ပိုင်ဆိုင်မှု ID များသည် canonical `<canonical-base58-asset-definition-id>` တွင် ရှိနေသည် ။ ၎င်းတို့ကို တည်ဆောက်ပါ-
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - သို့မဟုတ် `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`။
 

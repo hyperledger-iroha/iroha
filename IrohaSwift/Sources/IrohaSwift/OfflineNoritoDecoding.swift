@@ -89,12 +89,10 @@ extension OfflineNorito {
         guard !trimmed.isEmpty else {
             return nil
         }
-        if AssetDefinitionAddress.decode(trimmed) != nil {
-            return trimmed
-        }
-        guard let canonical = try? OfflineNorito.canonicalAssetIdLiteral(trimmed) else {
+        guard !trimmed.contains("#"),
+              AssetDefinitionAddress.decode(trimmed) != nil else {
             return nil
         }
-        return canonical.split(separator: "#", omittingEmptySubsequences: false).first.map(String.init)
+        return trimmed
     }
 }

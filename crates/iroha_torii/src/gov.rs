@@ -3,8 +3,8 @@
 //!
 //! This module hosts minimal DTOs and handlers for governance endpoints
 //! described in `gov.md` and `docs/source/contract_deployment.md`.
-//! Handlers validate inputs, build instruction skeletons, and optionally submit
-//! signed transactions when `authority`/`private_key` are provided.
+//! Handlers validate inputs, build instruction skeletons, and reject legacy
+//! `private_key` payloads so callers must submit locally signed transactions.
 //!
 //! Notes
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
@@ -36,7 +36,7 @@ use norito::{
 use crate::{
     JsonBody, NoritoJson, NoritoJsonWithBytes, NoritoQuery,
     json_macros::{JsonDeserialize, JsonSerialize},
-    routing::{MaybeTelemetry, parse_account_literal},
+    routing::{MaybeTelemetry, parse_account_literal_with_state},
 };
 
 const CONTEXT_GOV_PROPOSE_DEPLOY_AUTHORITY: &str = "/v1/gov/proposals/deploy-contract#authority";
@@ -50,6 +50,8 @@ const CONTEXT_GOV_FINALIZE_AUTHORITY: &str = "/v1/gov/finalize#authority";
 const CONTEXT_GOV_ENACT_AUTHORITY: &str = "/v1/gov/enact#authority";
 const CONTEXT_GOV_COUNCIL_PERSIST_CANDIDATE_ACCOUNT: &str =
     "/v1/gov/council/persist#candidate.account_id";
+const CONTEXT_GOV_COUNCIL_DERIVE_CANDIDATE_ACCOUNT: &str =
+    "/v1/gov/council/derive-vrf#candidate.account_id";
 const CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY: &str = "/v1/gov/council/persist#authority";
 const CONTEXT_GOV_COUNCIL_REPLACE_MISSING: &str = "/v1/gov/council/replace#missing";
 const CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY: &str = "/v1/gov/council/replace#authority";
@@ -163,10 +165,10 @@ pub struct ProposeDeployContractDto {
     /// Optional manifest provenance (public key + signature over the manifest payload).
     #[norito(default)]
     pub manifest_provenance: Option<ManifestProvenance>,
-    /// Optional authority (AccountId string) to submit the proposal directly.
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
-    /// Optional private key (multihash string) to sign and submit the proposal.
+    /// Legacy private key field; rejected when provided.
     #[norito(default)]
     pub private_key: Option<String>,
 }
@@ -209,7 +211,7 @@ pub struct ProposeDeployContractResponse {
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 /// Request body for submitting a zero-knowledge ballot.
 pub struct ZkBallotDto {
-    /// Authority submitting the ballot (AccountId string)
+    /// Authority as canonical I105 or on-chain account alias.
     pub authority: String,
     /// Chain id to build the transaction skeleton for
     pub chain_id: String,
@@ -251,11 +253,12 @@ impl<'de> norito::core::NoritoDeserialize<'de> for ZkBallotDto {
 #[derive(Debug, JsonDeserialize, JsonSerialize)]
 /// Request body for submitting a plain (non-ZK) quadratic ballot.
 pub struct PlainBallotDto {
-    /// Authority casting the ballot (AccountId string)
+    /// Authority as canonical I105 or on-chain account alias.
     pub authority: String,
     /// Chain id to build the transaction skeleton for
     pub chain_id: String,
     pub referendum_id: String,
+    /// Owner as canonical I105 or on-chain account alias.
     pub owner: String,
     /// Token amount as decimal string to avoid JSON f64 issues
     pub amount: String,
@@ -340,9 +343,9 @@ fn reject_zk_public_input_aliases(map: &json::Map) -> Result<(), String> {
 
 fn ensure_owner_canonical(owner: &str) -> Result<(), String> {
     let canonical = iroha_data_model::account::AccountId::canonicalize(owner)
-        .map_err(|_| "owner must be a canonical account id".to_string())?;
+        .map_err(|_| "owner must be a canonical I105 account id".to_string())?;
     if canonical != owner {
-        return Err("owner must use canonical account id form".to_string());
+        return Err("owner must use canonical I105 account id form".to_string());
     }
     Ok(())
 }
@@ -356,7 +359,7 @@ fn reject_zk_public_input_owner(map: &json::Map) -> Result<(), String> {
     }
     let owner = value
         .as_str()
-        .ok_or_else(|| "owner must be a canonical account id".to_string())?;
+        .ok_or_else(|| "owner must be a canonical I105 account id".to_string())?;
     ensure_owner_canonical(owner)
 }
 
@@ -492,7 +495,7 @@ pub struct ZkBallotV1BallotProofDto {
 #[cfg(feature = "zk-ballot")]
 /// POST /v1/gov/ballots/zk-v1 — accept BallotProof-like DTO and build an instruction skeleton.
 ///
-/// If `private_key` is provided, Torii signs and submits the ballot transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for invalid chain id or authority. Invalid payloads are
@@ -523,6 +526,7 @@ pub async fn handle_gov_ballot_zk_v1(
     }
     ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
     let authority_id = parse_authority_literal(
+        state.as_ref(),
         body.authority.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_ZK_V1_AUTHORITY,
@@ -611,7 +615,7 @@ pub async fn handle_gov_ballot_zk_v1(
 #[cfg(feature = "zk-ballot")]
 /// POST /v1/gov/ballots/zk-v1/ballot-proof — accept BallotProof JSON and build instruction skeleton.
 ///
-/// If `private_key` is provided, Torii signs and submits the ballot transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for invalid chain id or authority. Malformed payloads are
@@ -636,6 +640,7 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
     }
     ensure_chain_id_matches(chain_id.as_ref(), &body.chain_id)?;
     let authority_id = parse_authority_literal(
+        state.as_ref(),
         body.authority.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_ZK_V1_BALLOT_PROOF_AUTHORITY,
@@ -738,6 +743,7 @@ pub struct CouncilCurrentResponse {
 #[cfg(feature = "gov_vrf")]
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 pub struct VrfCandidateDto {
+    /// Candidate as canonical I105 or on-chain account alias.
     pub account_id: String,
     /// Variant: "Normal" (pk in G1, sig in G2) or "Small" (pk in G2, sig in G1)
     pub variant: String,
@@ -758,13 +764,14 @@ struct ParsedCandidate {
 
 #[cfg(feature = "gov_vrf")]
 fn parse_candidate_account_id(
+    state: &iroha_core::state::State,
     account_id: &str,
     index: usize,
     telemetry: Option<(&MaybeTelemetry, &'static str)>,
 ) -> Result<iroha_data_model::account::AccountId, crate::Error> {
     if let Some((telemetry, context)) = telemetry {
-        return parse_account_literal(account_id, telemetry, context)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        return parse_account_literal_with_state(state, account_id, telemetry, context)
+            .map(|(account_id, _)| account_id)
             .map_err(|err| {
                 crate::routing::conversion_error(format!(
                     "invalid candidates[{index}].account_id: {}",
@@ -773,24 +780,30 @@ fn parse_candidate_account_id(
             });
     }
 
-    iroha_data_model::account::AccountId::parse_encoded(account_id)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| {
-            crate::routing::conversion_error(format!(
-                "invalid candidates[{index}].account_id: {}",
-                err.reason()
-            ))
-        })
+    parse_account_literal_with_state(
+        state,
+        account_id,
+        &MaybeTelemetry::disabled(),
+        CONTEXT_GOV_COUNCIL_DERIVE_CANDIDATE_ACCOUNT,
+    )
+    .map(|(account_id, _)| account_id)
+    .map_err(|err| {
+        crate::routing::conversion_error(format!(
+            "invalid candidates[{index}].account_id: {}",
+            err.reason()
+        ))
+    })
 }
 
 #[cfg(feature = "gov_vrf")]
 fn parse_candidates(
     dtos: &[VrfCandidateDto],
+    state: &iroha_core::state::State,
     telemetry: Option<(&MaybeTelemetry, &'static str)>,
 ) -> Result<Vec<ParsedCandidate>, crate::Error> {
     let mut parsed = Vec::with_capacity(dtos.len());
     for (index, dto) in dtos.iter().enumerate() {
-        let account_id = parse_candidate_account_id(&dto.account_id, index, telemetry)?;
+        let account_id = parse_candidate_account_id(state, &dto.account_id, index, telemetry)?;
         let variant = CandidateVariant::from_str(dto.variant.as_str()).map_err(|_| {
             crate::routing::conversion_error(format!(
                 "invalid candidates[{index}].variant `{}`: expected `Normal` or `Small`",
@@ -895,7 +908,7 @@ pub async fn handle_gov_council_derive_vrf(
             .max(committee_size)
     });
 
-    let parsed = parse_candidates(&body.candidates, None)?;
+    let parsed = parse_candidates(&body.candidates, state.as_ref(), None)?;
     let candidate_refs = parsed.iter().map(|candidate| CandidateRef {
         account_id: &candidate.account_id,
         variant: candidate.variant,
@@ -1032,87 +1045,61 @@ fn ensure_chain_id_matches(
     Ok(())
 }
 
+fn parse_account_literal_from_state(
+    state: &iroha_core::state::State,
+    raw: &str,
+    telemetry: &MaybeTelemetry,
+    context: &'static str,
+) -> Result<iroha_data_model::account::AccountId, iroha_data_model::error::ParseError> {
+    parse_account_literal_with_state(state, raw, telemetry, context)
+        .map(|(account_id, _)| account_id)
+}
+
 fn parse_authority_literal(
+    state: &iroha_core::state::State,
     raw: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<iroha_data_model::account::AccountId, crate::Error> {
-    parse_account_literal(raw, telemetry, context)
-        .map_err(|err| {
-            crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
-        })
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+    parse_account_literal_from_state(state, raw, telemetry, context).map_err(|err| {
+        crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
+    })
 }
 
-fn parse_private_key_literal(raw: &str) -> Result<iroha_crypto::PrivateKey, crate::Error> {
-    let trimmed = raw.trim();
-    trimmed
-        .parse::<iroha_crypto::PrivateKey>()
-        .map_err(|err| crate::routing::conversion_error(format!("invalid private_key: {err}")))
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn submit_signed_instructions(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
-    state: Arc<iroha_core::state::State>,
-    telemetry: MaybeTelemetry,
-    authority: iroha_data_model::account::AccountId,
-    private_key: iroha_crypto::PrivateKey,
-    instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
-    endpoint: &'static str,
-) -> Result<(), crate::Error> {
-    use iroha_data_model::prelude as dm;
-
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
-        .with_instructions(instructions)
-        .sign(&private_key);
-    crate::routing::handle_transaction_with_metrics(
-        chain_id, queue, state, tx, telemetry, endpoint,
-    )
-    .await?;
-    Ok(())
+fn reject_server_side_signing(endpoint: &'static str) -> crate::Error {
+    crate::routing::conversion_error(format!(
+        "{endpoint} no longer accepts private_key payloads; submit a locally signed transaction instead"
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn maybe_submit_with_authority(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
-    state: Arc<iroha_core::state::State>,
-    telemetry: MaybeTelemetry,
+    _chain_id: Arc<iroha_data_model::ChainId>,
+    _queue: Arc<iroha_core::queue::Queue>,
+    _state: Arc<iroha_core::state::State>,
+    _telemetry: MaybeTelemetry,
     authority: &iroha_data_model::account::AccountId,
     private_key: Option<&str>,
-    instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
+    _instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
     endpoint: &'static str,
 ) -> Result<bool, crate::Error> {
-    let Some(private_key) = private_key else {
+    let Some(_private_key) = private_key else {
         return Ok(false);
     };
-    let private_key = parse_private_key_literal(private_key)?;
-    submit_signed_instructions(
-        chain_id,
-        queue,
-        state,
-        telemetry,
-        authority.clone(),
-        private_key,
-        instructions,
-        endpoint,
-    )
-    .await?;
-    Ok(true)
+    let _ = authority;
+    Err(reject_server_side_signing(endpoint))
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn maybe_submit_optional_signer(
-    chain_id: Arc<iroha_data_model::ChainId>,
-    queue: Arc<iroha_core::queue::Queue>,
+    _chain_id: Arc<iroha_data_model::ChainId>,
+    _queue: Arc<iroha_core::queue::Queue>,
     state: Arc<iroha_core::state::State>,
     telemetry: MaybeTelemetry,
     authority: Option<&str>,
     private_key: Option<&str>,
     authority_context: &'static str,
-    instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
+    _instructions: impl IntoIterator<Item = iroha_data_model::isi::InstructionBox>,
     endpoint: &'static str,
 ) -> Result<bool, crate::Error> {
     match (authority, private_key) {
@@ -1120,21 +1107,10 @@ async fn maybe_submit_optional_signer(
         (Some(_), None) | (None, Some(_)) => Err(crate::routing::conversion_error(
             "authority and private_key must be provided together".into(),
         )),
-        (Some(authority), Some(private_key)) => {
-            let authority_id = parse_authority_literal(authority, &telemetry, authority_context)?;
-            let private_key = parse_private_key_literal(private_key)?;
-            submit_signed_instructions(
-                chain_id,
-                queue,
-                state,
-                telemetry,
-                authority_id,
-                private_key,
-                instructions,
-                endpoint,
-            )
-            .await?;
-            Ok(true)
+        (Some(authority), Some(_private_key)) => {
+            let _authority_id =
+                parse_authority_literal(state.as_ref(), authority, &telemetry, authority_context)?;
+            Err(reject_server_side_signing(endpoint))
         }
     }
 }
@@ -1418,10 +1394,10 @@ pub struct FinalizeDto {
     pub referendum_id: String,
     /// Proposal id (hex 64)
     pub proposal_id: String,
-    /// Optional authority (AccountId string) to submit the finalize transaction.
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
-    /// Optional private key (multihash string) to sign and submit.
+    /// Legacy private key field; rejected when provided.
     #[norito(default)]
     pub private_key: Option<String>,
 }
@@ -1437,7 +1413,7 @@ pub struct FinalizeResponse {
 
 /// Handler for finalizing a referendum (draft transaction).
 ///
-/// If `authority` and `private_key` are provided, Torii submits the transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when `proposal_id` is not 32-byte hex.
@@ -1502,10 +1478,10 @@ pub struct EnactDto {
     /// Optional enactment window to encode in the instruction
     #[norito(default)]
     pub window: Option<AtWindowDto>,
-    /// Optional authority (AccountId string) to submit the enact transaction.
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
-    /// Optional private key (multihash string) to sign and submit.
+    /// Legacy private key field; rejected when provided.
     #[norito(default)]
     pub private_key: Option<String>,
 }
@@ -1519,7 +1495,7 @@ pub struct EnactResponse {
 
 /// Handler for building an enactment transaction (draft only).
 ///
-/// If `authority` and `private_key` are provided, Torii submits the transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the proposal or preimage hashes are not 32-byte hex strings.
@@ -1835,8 +1811,8 @@ pub struct InstancesQuery {
 
 /// POST /v1/gov/propose-deploy — build a proposal id and instruction skeleton.
 ///
-/// If `authority` and `private_key` are provided, Torii signs and submits the
-/// transaction before returning the draft instructions.
+/// Legacy `private_key` payloads are rejected; callers must submit locally
+/// signed transactions after building the draft instructions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the namespace, contract id, hashes, ABI version, or request
@@ -1987,7 +1963,7 @@ pub async fn handle_gov_propose_deploy(
 
 /// POST /v1/gov/ballot/zk — accept a ZK ballot and build an instruction skeleton.
 ///
-/// If `private_key` is provided, Torii signs and submits the ballot transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for invalid chain id or authority. Invalid proofs result in an
@@ -2023,6 +1999,7 @@ pub async fn handle_gov_ballot_zk(
     } = body;
     ensure_chain_id_matches(chain_id.as_ref(), &body_chain_id)?;
     let authority_id = parse_authority_literal(
+        state.as_ref(),
         authority.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_ZK_AUTHORITY,
@@ -2086,7 +2063,7 @@ pub async fn handle_gov_ballot_zk(
 
 /// POST /v1/gov/ballot/plain — accept a plain quadratic ballot and build an instruction skeleton.
 ///
-/// If `private_key` is provided, Torii signs and submits the ballot transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the ballot fields fail validation (direction, authority,
@@ -2122,22 +2099,22 @@ pub async fn handle_gov_ballot_plain_with_policy(
         return Err(crate::routing::conversion_error("invalid direction".into()));
     }
     // Parse authority and owner; require equality for plain ballots
-    let authority_id = parse_account_literal(
+    let authority_id = parse_account_literal_from_state(
+        state.as_ref(),
         body.authority.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_PLAIN_AUTHORITY,
     )
     .map_err(|err| {
         crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
-    })?
-    .into_account_id();
-    let owner = parse_account_literal(
+    })?;
+    let owner = parse_account_literal_from_state(
+        state.as_ref(),
         body.owner.as_str(),
         &telemetry,
         CONTEXT_GOV_BALLOT_PLAIN_OWNER,
     )
-    .map_err(|err| crate::routing::conversion_error(format!("invalid owner: {}", err.reason())))?
-    .into_account_id();
+    .map_err(|err| crate::routing::conversion_error(format!("invalid owner: {}", err.reason())))?;
     if owner != authority_id {
         return Err(crate::routing::conversion_error(
             "authority must equal owner".into(),
@@ -2329,7 +2306,7 @@ pub struct CouncilPersistRequest {
     pub epoch: Option<u64>,
     /// Candidate set with VRF proofs
     pub candidates: Vec<VrfCandidateDto>,
-    /// Optional authority to submit an on-chain transaction (preferred)
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
     /// Optional private key (hex) for signing the on-chain transaction
@@ -2353,12 +2330,12 @@ pub struct CouncilPersistResponse {
 #[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 /// Request to replace a council member with the next available alternate.
 pub struct CouncilReplaceRequest {
-    /// Account id of the member to replace.
+    /// Member to replace, as canonical I105 or on-chain account alias.
     pub missing: String,
     /// Optional epoch override; defaults to the latest persisted epoch.
     #[norito(default)]
     pub epoch: Option<u64>,
-    /// Optional authority to submit an on-chain transaction (preferred)
+    /// Optional authority as canonical I105 or on-chain account alias.
     #[norito(default)]
     pub authority: Option<String>,
     /// Optional private key (hex) for signing the on-chain transaction
@@ -2410,6 +2387,7 @@ pub async fn handle_gov_council_persist(
 
     let parsed = parse_candidates(
         &body.candidates,
+        state.as_ref(),
         Some((&telemetry, CONTEXT_GOV_COUNCIL_PERSIST_CANDIDATE_ACCOUNT)),
     )?;
     let candidate_refs = parsed.iter().map(|candidate| CandidateRef {
@@ -2447,33 +2425,17 @@ pub async fn handle_gov_council_persist(
     if let (Some(authority), Some(private_key)) =
         (body.authority.as_deref(), body.private_key.as_deref())
     {
-        // Preferred path: submit signed transaction
-        use iroha_data_model::prelude as dm;
-        let authority: iroha_data_model::account::AccountId =
-            parse_account_literal(authority, &telemetry, CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|err| {
-                    crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
-                })?;
-        let pk: iroha_crypto::PrivateKey = private_key.parse().map_err(|_| {
-            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid private_key".into(),
-                ),
-            ))
-        })?;
-        let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
-            .with_instructions(core::iter::once(dm::InstructionBox::from(instr)))
-            .sign(&pk);
-        crate::routing::handle_transaction_with_metrics(
-            chain_id,
-            queue,
-            state,
-            tx,
-            telemetry,
-            "/v1/gov/council/persist",
+        let _authority: iroha_data_model::account::AccountId = parse_account_literal_from_state(
+            state.as_ref(),
+            authority,
+            &telemetry,
+            CONTEXT_GOV_COUNCIL_PERSIST_AUTHORITY,
         )
-        .await?;
+        .map_err(|err| {
+            crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
+        })?;
+        let _ = private_key;
+        return Err(reject_server_side_signing("/v1/gov/council/persist"));
     } else {
         // Fallback: direct WSV mutation (admin/testing only)
         #[cfg(feature = "council_direct_wsv")]
@@ -2505,7 +2467,7 @@ pub async fn handle_gov_council_persist(
             return Err(crate::Error::Query(
                 iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "authority/private_key required for on-chain persistence".into(),
+                        "direct persistence unavailable; submit a locally signed transaction instead".into(),
                     ),
                 ),
             ));
@@ -2558,12 +2520,12 @@ pub async fn handle_gov_council_replace(
         (target_epoch, term)
     };
 
-    let missing: iroha_data_model::account::AccountId = parse_account_literal(
+    let missing: iroha_data_model::account::AccountId = parse_account_literal_from_state(
+        state.as_ref(),
         &body.missing,
         &telemetry,
         CONTEXT_GOV_COUNCIL_REPLACE_MISSING,
     )
-    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
     .map_err(|err| {
         crate::routing::conversion_error(format!("invalid missing account id: {}", err.reason()))
     })?;
@@ -2590,32 +2552,17 @@ pub async fn handle_gov_council_replace(
     if let (Some(authority), Some(private_key)) =
         (body.authority.as_deref(), body.private_key.as_deref())
     {
-        use iroha_data_model::prelude as dm;
-        let authority: iroha_data_model::account::AccountId =
-            parse_account_literal(authority, &telemetry, CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|err| {
-                    crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
-                })?;
-        let pk: iroha_crypto::PrivateKey = private_key.parse().map_err(|_| {
-            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "invalid private_key".into(),
-                ),
-            ))
-        })?;
-        let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority)
-            .with_instructions(core::iter::once(dm::InstructionBox::from(instr)))
-            .sign(&pk);
-        crate::routing::handle_transaction_with_metrics(
-            chain_id,
-            queue,
-            state,
-            tx,
-            telemetry,
-            "/v1/gov/council/replace",
+        let _authority: iroha_data_model::account::AccountId = parse_account_literal_from_state(
+            state.as_ref(),
+            authority,
+            &telemetry,
+            CONTEXT_GOV_COUNCIL_REPLACE_AUTHORITY,
         )
-        .await?;
+        .map_err(|err| {
+            crate::routing::conversion_error(format!("invalid authority: {}", err.reason()))
+        })?;
+        let _ = private_key;
+        return Err(reject_server_side_signing("/v1/gov/council/replace"));
     } else {
         #[cfg(feature = "council_direct_wsv")]
         {
@@ -2636,7 +2583,7 @@ pub async fn handle_gov_council_replace(
             return Err(crate::Error::Query(
                 iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "authority/private_key required for on-chain persistence".into(),
+                        "direct persistence unavailable; submit a locally signed transaction instead".into(),
                     ),
                 ),
             ));
@@ -2768,12 +2715,15 @@ mod tests {
     };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::ALICE_ID;
+    use nonzero_ext::nonzero;
 
     use super::*;
     use crate::routing::MaybeTelemetry;
 
-    const ACCOUNT_AUTHORITY: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
-    const ACCOUNT_OWNER_ALT: &str = "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
+    const ACCOUNT_AUTHORITY: &str =
+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+    const ACCOUNT_OWNER_ALT: &str =
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
 
     #[test]
     fn hint_present_handles_nulls() {
@@ -2801,13 +2751,15 @@ mod tests {
     #[cfg(feature = "gov_vrf")]
     #[test]
     fn parse_candidates_rejects_invalid_account_id_literal() {
+        let (state, _, _) = mk_basic_context();
         let candidates = vec![VrfCandidateDto {
-            account_id: "not-an-i105@invalid-domain".to_string(),
+            account_id: "not-an-i105@hbl.dataspace".to_string(),
             variant: "Normal".to_string(),
             pk_b64: "AQ==".to_string(),
             proof_b64: "AQ==".to_string(),
         }];
-        let err = parse_candidates(&candidates, None).expect_err("candidate parse must fail");
+        let err = parse_candidates(&candidates, state.as_ref(), None)
+            .expect_err("candidate parse must fail");
         let message = conversion_message(err);
         assert!(
             message.contains("candidates[0].account_id"),
@@ -2818,18 +2770,41 @@ mod tests {
     #[cfg(feature = "gov_vrf")]
     #[test]
     fn parse_candidates_rejects_invalid_proof_base64() {
+        let (state, _, _) = mk_basic_context();
         let candidates = vec![VrfCandidateDto {
             account_id: ACCOUNT_AUTHORITY.to_string(),
             variant: "Normal".to_string(),
             pk_b64: "AQ==".to_string(),
             proof_b64: "*".to_string(),
         }];
-        let err = parse_candidates(&candidates, None).expect_err("candidate parse must fail");
+        let err = parse_candidates(&candidates, state.as_ref(), None)
+            .expect_err("candidate parse must fail");
         let message = conversion_message(err);
         assert!(
             message.contains("candidates[0].proof_b64"),
             "unexpected message: {message}"
         );
+    }
+
+    #[cfg(feature = "gov_vrf")]
+    #[test]
+    fn parse_candidates_accepts_account_alias_and_resolves_to_canonical_i105() {
+        let (state, _, _) = mk_basic_context();
+        let account_id = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
+            .expect("account parses")
+            .into_account_id();
+        bind_account_alias_for_test(&state, &account_id, "council@universal");
+        let candidates = vec![VrfCandidateDto {
+            account_id: "council@universal".to_string(),
+            variant: "Normal".to_string(),
+            pk_b64: "AQ==".to_string(),
+            proof_b64: "AQ==".to_string(),
+        }];
+
+        let parsed =
+            parse_candidates(&candidates, state.as_ref(), None).expect("candidate parse succeeds");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].account_id, account_id);
     }
 
     fn canonical_literal(raw: &str) -> String {
@@ -2840,13 +2815,10 @@ mod tests {
     }
 
     fn noncanonical_literal(raw: &str) -> String {
-        let account_id = AccountId::parse_encoded(raw)
+        AccountId::parse_encoded(raw)
             .expect("literal parses")
-            .into_account_id();
-        account_id
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("non-canonical I105 literal")
+            .canonical()
+            .replacen("sora", "ｓｏｒａ", 1)
     }
 
     fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {
@@ -2860,6 +2832,36 @@ mod tests {
         ));
         let chain_id: ChainId = "chain".parse().expect("chain id");
         (state, queue, Arc::new(chain_id))
+    }
+
+    fn bind_account_alias_for_test(state: &Arc<State>, account_id: &AccountId, alias: &str) {
+        let label = iroha_data_model::account::rekey::AccountLabel::from_literal(
+            alias,
+            &state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("valid account alias");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let world = tx.world_mut_for_testing();
+        world
+            .account_aliases_mut_for_testing()
+            .insert(label.clone(), account_id.clone());
+        let mut labels = world
+            .account_aliases_by_account_mut_for_testing()
+            .get(account_id)
+            .cloned()
+            .unwrap_or_default();
+        labels.insert(label.clone());
+        world
+            .account_aliases_by_account_mut_for_testing()
+            .insert(account_id.clone(), labels);
+        world.account_rekey_records_mut_for_testing().insert(
+            label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
+        tx.apply();
+        block.commit().expect("commit account alias for test");
     }
 
     struct GovHarness {
@@ -3217,6 +3219,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ballot_plain_accepts_account_aliases() {
+        let (state, queue, chain_id) = mk_basic_context();
+        let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
+            .expect("account parses")
+            .into_account_id();
+        bind_account_alias_for_test(&state, &authority, "ballot@universal");
+        let chain_id_str = chain_id.as_str().to_string();
+        let body = crate::json_object(vec![
+            crate::json_entry("authority", "ballot@universal"),
+            crate::json_entry("chain_id", chain_id_str),
+            crate::json_entry("referendum_id", "r1"),
+            crate::json_entry("owner", "ballot@universal"),
+            crate::json_entry("amount", "100"),
+            crate::json_entry("duration_blocks", 600u64),
+            crate::json_entry("direction", "Aye"),
+        ]);
+        let parsed: PlainBallotDto =
+            norito::json::from_str(&norito::json::to_json(&body).unwrap()).unwrap();
+        let res = handle_gov_ballot_plain_with_policy(
+            chain_id,
+            queue,
+            state,
+            NoritoJson(parsed),
+            MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok");
+        assert!(res.0.ok);
+        assert!(res.0.accepted);
+        assert_eq!(res.0.tx_instructions.len(), 1);
+    }
+
+    #[tokio::test]
     async fn ballot_plain_rejects_authority_mismatch() {
         let (state, queue, chain_id) = mk_basic_context();
         let canonical_authority = canonical_literal(ACCOUNT_AUTHORITY);
@@ -3403,7 +3438,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical account id form")
+            Some("owner must use canonical I105 account id form")
         );
     }
 
@@ -4082,7 +4117,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical account id form")
+            Some("owner must use canonical I105 account id form")
         );
     }
 
@@ -4275,7 +4310,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical account id form")
+            Some("owner must use canonical I105 account id form")
         );
     }
 
@@ -4290,7 +4325,11 @@ mod tests {
             backend: "halo2/ipa".into(),
             envelope_bytes: vec![1u8, 2, 3, 4],
             root_hint: None,
-            owner: Some(ACCOUNT_AUTHORITY.parse().expect("valid account id")),
+            owner: Some(
+                AccountId::parse_encoded(ACCOUNT_AUTHORITY)
+                    .expect("valid account id")
+                    .into_account_id(),
+            ),
             nullifier: None,
             amount: None,
             duration_blocks: None,

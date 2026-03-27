@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh`-ը փաթաթում է `iroha` CLI-ն՝ արտադրելու համար.
   - `audit.json` — կառուցվածքային ելք `iroha tools address audit --format json`-ից:
-  - `normalized.txt` — փոխարկված նախընտրելի I105 / երկրորդ լավագույն սեղմված (`sora`) բառացիները տեղական տիրույթի յուրաքանչյուր ընտրողի համար:
+  - `normalized.txt` — փոխարկված նախընտրելի i105 / երկրորդ լավագույն սեղմված (`sora`) բառացիները տեղական տիրույթի յուրաքանչյուր ընտրողի համար:
 - Զուգակցել սկրիպտը հասցեի մուտքագրման վահանակի հետ (`dashboards/grafana/address_ingest.json`)
   և Alertmanager կանոնները (`dashboards/alerts/address_ingest_rules.yml`)՝ տեղական-8-ն ապացուցելու համար
   Local-12 cutover-ը անվտանգ է: Դիտեք Local-8 և Local-12 բախման վահանակները, գումարած
@@ -37,7 +37,7 @@ scripts/address_local_toolkit.sh \
 
 Ընտրանքներ:
 
-- `--format i105` `i105` ելքի համար՝ I105-ի փոխարեն:
+- `--format i105` `i105` ելքի համար՝ i105-ի փոխարեն:
 - `domainless output (default)` բաց բառացի արտանետելու համար:
 - `--audit-only`՝ փոխակերպման քայլը բաց թողնելու համար:
 - `--allow-errors`՝ շարունակելու սկանավորումը, երբ սխալ տողեր են հայտնվում (համապատասխանում է CLI-ի վարքագծին):

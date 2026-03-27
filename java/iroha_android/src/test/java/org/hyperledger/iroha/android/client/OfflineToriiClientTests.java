@@ -8,7 +8,6 @@ import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceCommitment;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
@@ -29,6 +28,7 @@ import org.hyperledger.iroha.android.offline.OfflineTransferList;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificate;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
 import org.hyperledger.iroha.android.offline.OfflineWalletPolicy;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -36,6 +36,19 @@ import org.hyperledger.iroha.android.tx.SignedTransaction;
 public final class OfflineToriiClientTests {
 
   private OfflineToriiClientTests() {}
+
+  private static void assertServerSideSigningRemoved(
+      final String endpoint, final Runnable action) {
+    try {
+      action.run();
+    } catch (final UnsupportedOperationException expected) {
+      assert expected.getMessage().contains(endpoint) : "missing endpoint in error message";
+      assert expected.getMessage().contains("locally signed transaction")
+          : "missing remediation in error message";
+      return;
+    }
+    throw new AssertionError("Expected " + endpoint + " to reject server-side signing");
+  }
 
   public static void main(final String[] args) {
     listAllowancesParsesResponse();
@@ -71,7 +84,7 @@ public final class OfflineToriiClientTests {
   }
 
   private static void listAllowancesParsesResponse() {
-    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
+    final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
     final StubExecutor executor =
         new StubExecutor(
             200,
@@ -81,8 +94,8 @@ public final class OfflineToriiClientTests {
               "items": [
                 {
                   "certificate_id_hex": "deadbeef",
-                  "controller_id": "alice@wonderland",
-                  "controller_display": "alice@wonderland",
+                  "controller_id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+                  "controller_display": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
                   "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
                   "asset_definition_id": "%s",
                   "asset_definition_name": "USD",
@@ -113,7 +126,7 @@ public final class OfflineToriiClientTests {
                 OfflineListParams.builder()
                     .limit(5L)
                     .offset(10L)
-                    .assetId("usd##alice@wonderland")
+                    .assetId("7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
                     .certificateExpiresBeforeMs(1_000L)
                     .certificateExpiresAfterMs(500L)
                     .policyExpiresBeforeMs(2_000L)
@@ -123,7 +136,7 @@ public final class OfflineToriiClientTests {
                     .build())
             .join();
     assert list.total() == 1 : "allowance total mismatch";
-    assert "alice@wonderland".equals(list.items().get(0).controllerId())
+    assert "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".equals(list.items().get(0).controllerId())
         : "allowance controller mismatch";
     assert assetDefinitionId.equals(list.items().get(0).assetDefinitionId())
         : "allowance asset definition id mismatch";
@@ -139,7 +152,7 @@ public final class OfflineToriiClientTests {
         .contains("limit=5") : "limit query missing";
     final String query = executor.lastRequest.uri().getQuery();
     assert query.contains("offset=10") : "offset query missing";
-    assert query.contains("asset_id=usd##alice@wonderland") : "asset_id missing";
+    assert query.contains("asset_id=7EAD8EFYUx1aVKZPUU1fyKvr8dF1") : "asset_id missing";
     assert query.contains("certificate_expires_before_ms=1000")
         : "certificate_expires_before_ms missing";
     assert query.contains("certificate_expires_after_ms=500")
@@ -191,7 +204,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     try {
-      client.submitSettlement(Map.of("bundle_id", "deadbeef"), "merchant@wonderland", "deadbeef")
+      client.submitSettlement(Map.of("bundle_id", "deadbeef"), "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", "deadbeef")
           .join();
     } catch (final CompletionException ex) {
       assert ex.getCause() instanceof OfflineToriiException : "expected OfflineToriiException";
@@ -280,21 +293,17 @@ public final class OfflineToriiClientTests {
   }
 
   private static void submitSettlementRejectsInsecureTransportForPrivateKeyBody() {
-    final StubExecutor executor = new StubExecutor(200, "{}");
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new StubExecutor(200, "{}"))
             .baseUri(URI.create("http://example.com"))
             .build();
-    try {
-      client.submitSettlement(Map.of("bundle_id", "deadbeef"), "merchant@wonderland", "deadbeef")
-          .join();
-    } catch (final IllegalArgumentException expected) {
-      assert expected.getMessage().contains("refuses insecure transport")
-          : "expected insecure transport rejection";
-      return;
-    }
-    throw new AssertionError("Expected insecure settlement submission to be rejected");
+    assertServerSideSigningRemoved(
+        "/v1/offline/settlements",
+        () ->
+            client
+                .submitSettlement(Map.of("bundle_id", "deadbeef"), "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", "deadbeef")
+                .join());
   }
 
   private static void queryTransfersUsesPostBody() {
@@ -306,7 +315,7 @@ public final class OfflineToriiClientTests {
             .build();
     final OfflineQueryEnvelope envelope =
         OfflineQueryEnvelope.builder()
-            .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"merchant@wonderland\"]}")
+            .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D\"]}")
             .setLimit(5L)
             .build();
     client.queryTransfers(envelope).join();
@@ -315,13 +324,13 @@ public final class OfflineToriiClientTests {
     assert "application/json".equals(firstHeader(executor.lastRequest, "Content-Type"))
         : "content type missing";
     assert executor.lastBody.contains("\"limit\":5") : "limit missing in body";
-    assert executor.lastBody.contains("merchant@wonderland") : "filter missing in body";
+    assert executor.lastBody.contains("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D") : "filter missing in body";
   }
 
   private static void queryEnvelopeFromParamsParsesJson() {
     final OfflineListParams params =
         OfflineListParams.builder()
-            .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"merchant@wonderland\"]}")
+            .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D\"]}")
             .limit(10L)
             .build();
     final OfflineQueryEnvelope envelope = OfflineQueryEnvelope.fromListParams(params);
@@ -379,53 +388,26 @@ public final class OfflineToriiClientTests {
   }
 
   private static void submitSettlementPostsBodyAndParsesResponse() {
-    final StubExecutor executor =
-        new StubExecutor(
-            200,
-            """
-            {
-              "bundle_id_hex": "deadbeef",
-              "transaction_hash_hex": "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe"
-            }
-            """);
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new StubExecutor(200, "{}"))
             .baseUri(URI.create("https://example.com"))
             .build();
-    final OfflineSettlementSubmitResponse response =
-        client
-            .submitSettlement(
-                Map.of("bundle_id", "deadbeef", "receipts", List.of()), "merchant@wonderland", "deadbeef")
-            .join();
-    assert "deadbeef".equals(response.bundleIdHex()) : "bundle id mismatch";
-    assert response.transactionHashHex().startsWith("cafebabe") : "tx hash mismatch";
-    assert "POST".equals(executor.lastRequest.method()) : "expected POST";
-    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/settlements")
-        : "settlement submit path mismatch";
-    assert executor.lastBody.contains("\"authority\":\"merchant@wonderland\"")
-        : "authority missing";
-    assert executor.lastBody.contains("\"private_key\":\"deadbeef\"") : "private key missing";
-    assert executor.lastBody.contains("\"transfer\"") : "transfer missing";
-    assert !executor.lastBody.contains("\"build_claim_overrides\"")
-        : "unexpected default build claim overrides";
-    assert !executor.lastBody.contains("\"repair_existing_build_claims\"")
-        : "unexpected default repair flag";
+    assertServerSideSigningRemoved(
+        "/v1/offline/settlements",
+        () ->
+            client
+                .submitSettlement(
+                    Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "deadbeef")
+                .join());
   }
 
   private static void submitSettlementSupportsBuildClaimOverridesAndRepairFlag() {
-    final StubExecutor executor =
-        new StubExecutor(
-            200,
-            """
-            {
-              "bundle_id_hex": "deadbeef",
-              "transaction_hash_hex": "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe"
-            }
-            """);
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new StubExecutor(200, "{}"))
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineSettlementBuildClaimOverride claimOverride =
@@ -437,24 +419,17 @@ public final class OfflineToriiClientTests {
             .expiresAtMs(1_700_000_100_000L)
             .build();
 
-    client
-        .submitSettlement(
-            Map.of("bundle_id", "deadbeef", "receipts", List.of()),
-            "merchant@wonderland",
-            "deadbeef",
-            List.of(claimOverride),
-            true)
-        .join();
-    assert executor.lastBody.contains("\"build_claim_overrides\"")
-        : "build_claim_overrides missing";
-    assert executor.lastBody.contains("\"tx_id_hex\":\"" + "ab".repeat(32) + "\"")
-        : "override tx_id_hex missing";
-    assert executor.lastBody.contains("\"app_id\":\"com.example.android\"")
-        : "override app_id missing";
-    assert executor.lastBody.contains("\"build_number\":77")
-        : "override build_number missing";
-    assert executor.lastBody.contains("\"repair_existing_build_claims\":true")
-        : "repair flag missing";
+    assertServerSideSigningRemoved(
+        "/v1/offline/settlements",
+        () ->
+            client
+                .submitSettlement(
+                    Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "deadbeef",
+                    List.of(claimOverride),
+                    true)
+                .join());
   }
 
   private static void submitSettlementRejectsInvalidBuildClaimOverrideTxId() {
@@ -469,162 +444,91 @@ public final class OfflineToriiClientTests {
   }
 
   private static void submitSettlementAndWaitPollsTransactionStatus() {
-    final String txHashHex = "ca".repeat(32);
-    final StubExecutor executor =
-        new StubExecutor(
-            200,
-            """
-            {
-              "bundle_id_hex": "deadbeef",
-              "transaction_hash_hex": "%s"
-            }
-            """
-                .formatted(txHashHex));
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new StubExecutor(200, "{}"))
             .baseUri(URI.create("https://example.com"))
             .build();
     final StubStatusClient statusClient = StubStatusClient.success(Map.of("status", "Committed"));
     final PipelineStatusOptions options =
         PipelineStatusOptions.builder().intervalMillis(50L).maxAttempts(5).build();
-
-    final OfflineSettlementSubmitResponse response =
-        client
-            .submitSettlementAndWait(
-                Map.of("bundle_id", "deadbeef", "receipts", List.of()),
-                "merchant@wonderland",
-                "deadbeef",
-                statusClient,
-                options)
-            .join();
-
-    assert "deadbeef".equals(response.bundleIdHex()) : "bundle id mismatch";
-    assert txHashHex.equals(response.transactionHashHex()) : "tx hash mismatch";
-    assert statusClient.waitCalls == 1 : "status poll should be called once";
-    assert txHashHex.equals(statusClient.lastHashHex) : "status poll hash mismatch";
-    assert statusClient.lastOptions == options : "status options mismatch";
+    assertServerSideSigningRemoved(
+        "/v1/offline/settlements",
+        () ->
+            client
+                .submitSettlementAndWait(
+                    Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "deadbeef",
+                    statusClient,
+                    options)
+                .join());
+    assert statusClient.waitCalls == 0 : "status polling should not start";
   }
 
   private static void submitSettlementAndWaitUsesDefaultStatusOptionsWhenOmitted() {
-    final String txHashHex = "cd".repeat(32);
-    final StubExecutor executor =
-        new StubExecutor(
-            200,
-            """
-            {
-              "bundle_id_hex": "deadbeef",
-              "transaction_hash_hex": "%s"
-            }
-            """
-                .formatted(txHashHex));
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new StubExecutor(200, "{}"))
             .baseUri(URI.create("https://example.com"))
             .build();
     final StubStatusClient statusClient = StubStatusClient.success(Map.of("status", "Committed"));
-
-    final OfflineSettlementSubmitResponse response =
-        client
-            .submitSettlementAndWait(
-                Map.of("bundle_id", "deadbeef", "receipts", List.of()),
-                "merchant@wonderland",
-                "deadbeef",
-                statusClient)
-            .join();
-
-    assert "deadbeef".equals(response.bundleIdHex()) : "bundle id mismatch";
-    assert txHashHex.equals(response.transactionHashHex()) : "tx hash mismatch";
-    assert statusClient.waitCalls == 1 : "status poll should be called once";
-    assert txHashHex.equals(statusClient.lastHashHex) : "status poll hash mismatch";
-    assert statusClient.lastOptions == null : "status options should default to null";
+    assertServerSideSigningRemoved(
+        "/v1/offline/settlements",
+        () ->
+            client
+                .submitSettlementAndWait(
+                    Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "deadbeef",
+                    statusClient)
+                .join());
+    assert statusClient.waitCalls == 0 : "status polling should not start";
   }
 
   private static void submitSettlementAndWaitPropagatesTransactionStatusFailure() {
-    final String txHashHex = "cb".repeat(32);
-    final StubExecutor executor =
-        new StubExecutor(
-            200,
-            """
-            {
-              "bundle_id_hex": "deadbeef",
-              "transaction_hash_hex": "%s"
-            }
-            """
-                .formatted(txHashHex));
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new StubExecutor(200, "{}"))
             .baseUri(URI.create("https://example.com"))
             .build();
     final TransactionStatusException statusFailure =
         new TransactionStatusException(
-            txHashHex, "Rejected", "build_claim_missing", Map.of("kind", "Transaction"));
+            "cb".repeat(32), "Rejected", "build_claim_missing", Map.of("kind", "Transaction"));
     final StubStatusClient statusClient = StubStatusClient.failure(statusFailure);
-
-    boolean threw = false;
-    try {
-      client
-          .submitSettlementAndWait(
-              Map.of("bundle_id", "deadbeef", "receipts", List.of()),
-              "merchant@wonderland",
-              "deadbeef",
-              statusClient,
-              PipelineStatusOptions.builder().intervalMillis(1L).maxAttempts(2).build())
-          .join();
-    } catch (final CompletionException exception) {
-      threw = true;
-      assert exception.getCause() instanceof TransactionStatusException
-          : "unexpected failure type";
-      final TransactionStatusException error = (TransactionStatusException) exception.getCause();
-      assert "Rejected".equals(error.status()) : "status mismatch";
-      assert "build_claim_missing".equals(error.rejectionReason().orElse(null))
-          : "rejection reason mismatch";
-      assert error.getMessage().contains("build_claim_missing")
-          : "error message should include rejection reason";
-    }
-    assert threw : "expected submitSettlementAndWait to propagate status failure";
-    assert statusClient.waitCalls == 1 : "status poll should be called once";
-    assert txHashHex.equals(statusClient.lastHashHex) : "status poll hash mismatch";
+    assertServerSideSigningRemoved(
+        "/v1/offline/settlements",
+        () ->
+            client
+                .submitSettlementAndWait(
+                    Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "deadbeef",
+                    statusClient,
+                    PipelineStatusOptions.builder().intervalMillis(1L).maxAttempts(2).build())
+                .join());
+    assert statusClient.waitCalls == 0 : "status polling should not start";
   }
 
   private static void submitSettlementAndWaitPropagatesCancellation() {
-    final String txHashHex = "ce".repeat(32);
-    final StubExecutor executor =
-        new StubExecutor(
-            200,
-            """
-            {
-              "bundle_id_hex": "deadbeef",
-              "transaction_hash_hex": "%s"
-            }
-            """
-                .formatted(txHashHex));
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new StubExecutor(200, "{}"))
             .baseUri(URI.create("https://example.com"))
             .build();
-    final CancellationException cancellation = new CancellationException("poll cancelled");
-    final StubStatusClient statusClient = StubStatusClient.failure(cancellation);
-
-    try {
-      client
-          .submitSettlementAndWait(
-              Map.of("bundle_id", "deadbeef", "receipts", List.of()),
-              "merchant@wonderland",
-              "deadbeef",
-              statusClient)
-          .join();
-      throw new AssertionError("expected submitSettlementAndWait to propagate cancellation");
-    } catch (final CancellationException direct) {
-      assert direct == cancellation : "cancellation instance mismatch";
-    } catch (final CompletionException wrapped) {
-      assert wrapped.getCause() == cancellation : "unexpected wrapped cancellation cause";
-    }
-    assert statusClient.waitCalls == 1 : "status poll should be called once";
-    assert txHashHex.equals(statusClient.lastHashHex) : "status poll hash mismatch";
+    final StubStatusClient statusClient =
+        StubStatusClient.failure(new CancellationException("poll cancelled"));
+    assertServerSideSigningRemoved(
+        "/v1/offline/settlements",
+        () ->
+            client
+                .submitSettlementAndWait(
+                    Map.of("bundle_id", "deadbeef", "receipts", List.of()),
+                    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "deadbeef",
+                    statusClient)
+                .join());
+    assert statusClient.waitCalls == 0 : "status polling should not start";
   }
 
   private static void getSettlementFetchesDetail() {
@@ -634,10 +538,10 @@ public final class OfflineToriiClientTests {
             """
             {
               "bundle_id_hex": "deadbeef",
-              "receiver_id": "merchant@wonderland",
-              "receiver_display": "merchant@wonderland",
-              "deposit_account_id": "merchant@wonderland",
-              "deposit_account_display": "merchant@wonderland",
+              "receiver_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "receiver_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "deposit_account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "deposit_account_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
               "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "receipt_count": 1,
               "total_amount": "5",
@@ -747,8 +651,8 @@ public final class OfflineToriiClientTests {
             {
               "certificate_id_hex": "deadbeef",
               "certificate": {
-                "controller": "alice@wonderland",
-                "operator": "alice@wonderland",
+                "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+                "operator": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
                 "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
                 "spend_public_key": "ed0120deadbeef",
                 "attestation_report": [3, 4],
@@ -773,7 +677,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
-            "alice@wonderland",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -786,7 +690,7 @@ public final class OfflineToriiClientTests {
             null);
     final OfflineCertificateIssueResponse response = client.issueCertificate(draft).join();
     assert response.certificateIdHex().equals("deadbeef") : "certificate id mismatch";
-    assert response.certificate().controller().equals("alice@wonderland")
+    assert response.certificate().controller().equals("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
         : "certificate controller mismatch";
     assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/certificates/issue")
         : "certificate issue path mismatch";
@@ -873,8 +777,8 @@ public final class OfflineToriiClientTests {
             {
               "certificate_id_hex": "deadbeef",
               "certificate": {
-                "controller": "alice@wonderland",
-                "operator": "alice@wonderland",
+                "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+                "operator": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
                 "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
                 "spend_public_key": "ed0120deadbeef",
                 "attestation_report": [3, 4],
@@ -899,7 +803,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
-            "alice@wonderland",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -920,17 +824,9 @@ public final class OfflineToriiClientTests {
   }
 
   private static void registerAllowancePostsCertificate() {
-    final StubExecutor executor =
-        new StubExecutor(
-            200,
-            """
-            {
-              "certificate_id_hex": "deadbeef"
-            }
-            """);
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new StubExecutor(200, "{}"))
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
@@ -942,8 +838,8 @@ public final class OfflineToriiClientTests {
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     final OfflineWalletCertificate certificate =
         new OfflineWalletCertificate(
-            "alice@wonderland",
-            "alice@wonderland",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -955,37 +851,15 @@ public final class OfflineToriiClientTests {
             verdictId,
             attestationNonce,
             null);
-    client.registerAllowance(certificate, "treasury@wonderland", "deadbeef").join();
-    assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/allowances")
-        : "allowance register path mismatch";
-    assert executor.lastBody.contains("\"authority\":\"treasury@wonderland\"")
-        : "authority missing from body";
-    assert executor.lastBody.contains("\"private_key\":\"deadbeef\"")
-        : "private key missing from body";
-    assert executor.lastBody.contains("\"operator_signature\"")
-        : "operator signature missing from body";
-    assert executor.lastBody.contains("\"verdict_id\":\"hash:")
-        : "verdict id missing from body";
-    assert executor.lastBody.contains(verdictId.toUpperCase())
-        : "verdict id not normalized in body";
-    assert executor.lastBody.contains("\"attestation_nonce\":\"hash:")
-        : "attestation nonce missing from body";
-    assert executor.lastBody.contains(attestationNonce.toUpperCase())
-        : "attestation nonce not normalized in body";
+    assertServerSideSigningRemoved(
+        "/v1/offline/allowances",
+        () -> client.registerAllowance(certificate, "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", "deadbeef").join());
   }
 
   private static void registerAllowanceParsesResponse() {
-    final StubExecutor executor =
-        new StubExecutor(
-            200,
-            """
-            {
-              "certificate_id_hex": "cafebabe"
-            }
-            """);
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new StubExecutor(200, "{}"))
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
@@ -993,8 +867,8 @@ public final class OfflineToriiClientTests {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificate certificate =
         new OfflineWalletCertificate(
-            "alice@wonderland",
-            "alice@wonderland",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -1006,47 +880,18 @@ public final class OfflineToriiClientTests {
             null,
             null,
             null);
-    final OfflineAllowanceRegisterResponse response =
-        client.registerAllowanceDetailed(certificate, "treasury@wonderland", "deadbeef").join();
-    assert "cafebabe".equals(response.certificateIdHex()) : "register response id mismatch";
+    assertServerSideSigningRemoved(
+        "/v1/offline/allowances",
+        () ->
+            client
+                .registerAllowanceDetailed(certificate, "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", "deadbeef")
+                .join());
   }
 
   private static void topUpAllowanceChainsIssueAndRegister() {
-    final SequencedExecutor executor =
-        new SequencedExecutor(
-            List.of(
-                new StubResponse(
-                    200,
-                    """
-                    {
-                      "certificate_id_hex": "deadbeef",
-                      "certificate": {
-                        "controller": "alice@wonderland",
-                        "operator": "alice@wonderland",
-                        "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
-                        "spend_public_key": "ed0120deadbeef",
-                        "attestation_report": [3, 4],
-                        "issued_at_ms": 100,
-                        "expires_at_ms": 200,
-                        "policy": { "max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200 },
-                        "operator_signature": "AA",
-                        "metadata": {},
-                        "verdict_id": null,
-                        "attestation_nonce": null,
-                        "refresh_at_ms": null
-                      }
-                    }
-                    """),
-                new StubResponse(
-                    200,
-                    """
-                    {
-                      "certificate_id_hex": "deadbeef"
-                    }
-                    """)));
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new SequencedExecutor(List.of()))
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
@@ -1054,7 +899,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
-            "alice@wonderland",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -1065,57 +910,15 @@ public final class OfflineToriiClientTests {
             null,
             null,
             null);
-    final OfflineTopUpResponse response =
-        client.topUpAllowance(draft, "treasury@wonderland", "deadbeef").join();
-    assert response.certificate().certificateIdHex().equals("deadbeef") : "issue id mismatch";
-    assert response.registration().certificateIdHex().equals("deadbeef") : "register id mismatch";
-    assert executor.requests.size() == 2 : "expected two requests";
-    assert executor.requests.get(0).uri().getPath().endsWith("/v1/offline/certificates/issue")
-        : "issue path mismatch";
-    assert executor.requests.get(1).uri().getPath().endsWith("/v1/offline/allowances")
-        : "register path mismatch";
-    assert !executor.bodies.get(0).contains("\"operator\"")
-        : "top-up issue draft must omit operator";
-    assert executor.bodies.get(1).contains("\"private_key\":\"deadbeef\"")
-        : "private key missing in register body";
+    assertServerSideSigningRemoved(
+        "/v1/offline/allowances",
+        () -> client.topUpAllowance(draft, "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", "deadbeef").join());
   }
 
   private static void topUpAllowanceRenewalChainsIssueAndRegister() {
-    final SequencedExecutor executor =
-        new SequencedExecutor(
-            List.of(
-                new StubResponse(
-                    200,
-                    """
-                    {
-                      "certificate_id_hex": "beadfeed",
-                      "certificate": {
-                        "controller": "alice@wonderland",
-                        "operator": "alice@wonderland",
-                        "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
-                        "spend_public_key": "ed0120deadbeef",
-                        "attestation_report": [3, 4],
-                        "issued_at_ms": 100,
-                        "expires_at_ms": 200,
-                        "policy": { "max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200 },
-                        "operator_signature": "AA",
-                        "metadata": {},
-                        "verdict_id": null,
-                        "attestation_nonce": null,
-                        "refresh_at_ms": null
-                      }
-                    }
-                    """),
-                new StubResponse(
-                    200,
-                    """
-                    {
-                      "certificate_id_hex": "beadfeed"
-                    }
-                    """)));
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
-            .executor(executor)
+            .executor(new SequencedExecutor(List.of()))
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
@@ -1123,7 +926,7 @@ public final class OfflineToriiClientTests {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
-            "alice@wonderland",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             allowance,
             "ed0120deadbeef",
             new byte[] {3, 4},
@@ -1134,14 +937,12 @@ public final class OfflineToriiClientTests {
             null,
             null,
             null);
-    client.topUpAllowanceRenewal("deadbeef", draft, "treasury@wonderland", "deadbeef").join();
-    assert executor.requests.size() == 2 : "expected two requests";
-    assert executor.requests.get(0).uri().getPath().endsWith("/v1/offline/certificates/deadbeef/renew/issue")
-        : "renew issue path mismatch";
-    assert executor.requests.get(1).uri().getPath().endsWith("/v1/offline/allowances/deadbeef/renew")
-        : "renew register path mismatch";
-    assert !executor.bodies.get(0).contains("\"operator\"")
-        : "top-up renewal issue draft must omit operator";
+    assertServerSideSigningRemoved(
+        "/v1/offline/allowances/deadbeef/renew",
+        () ->
+            client
+                .topUpAllowanceRenewal("deadbeef", draft, "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", "deadbeef")
+                .join());
   }
 
   private static final class StubExecutor implements HttpTransportExecutor {

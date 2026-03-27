@@ -43,9 +43,9 @@ fn soranet_gateway_billing_runs_end_to_end() {
             "--output-dir",
             out_dir.to_str().expect("utf8"),
             "--payer",
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
             "--treasury",
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
             "--asset",
             "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
         ])

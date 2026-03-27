@@ -11,13 +11,13 @@ function ed25519PublicKeyBytes() {
   return new Uint8Array(der.subarray(der.length - 32));
 }
 
-function demoAccountId(domain) {
-  const address = AccountAddress.fromAccount({ domain, publicKey: ed25519PublicKeyBytes() });
+function demoAccountId() {
+  const address = AccountAddress.fromAccount({ publicKey: ed25519PublicKeyBytes() });
   return address.toI105();
 }
 
-const VALID_ACCOUNT_ID = demoAccountId("wonderland");
-const ALT_ACCOUNT_ID = demoAccountId("uk");
+const VALID_ACCOUNT_ID = demoAccountId();
+const ALT_ACCOUNT_ID = demoAccountId();
 
 function jsonResponse(status, body) {
   return new Response(body == null ? null : JSON.stringify(body), {
@@ -158,4 +158,72 @@ test("resolveAliasByIndex forwards service errors", async () => {
     () => client.resolveAliasByIndex(9),
     /ISO bridge runtime is disabled/,
   );
+});
+
+test("lookupAliasesByAccount posts canonical account ids with optional filters", async () => {
+  let lastRequest = null;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async (input, init) => {
+      lastRequest = { input, init };
+      const parsed = JSON.parse(init.body);
+      assert.equal(parsed.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
+      assert.equal(parsed.dataspace, "sbp");
+      assert.equal(parsed.domain, "hbl");
+      return jsonResponse(200, {
+        account_id: VALID_ACCOUNT_ID,
+        total: "1",
+        items: [
+          {
+            alias: "merchant@hbl.sbp",
+            dataspace: "sbp",
+            domain: "hbl",
+            is_primary: true,
+          },
+        ],
+      });
+    },
+  });
+
+  const result = await client.lookupAliasesByAccount(VALID_ACCOUNT_ID, {
+    dataspace: "sbp",
+    domain: "hbl",
+  });
+  assert.equal(result.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
+  assert.equal(result.total, 1);
+  assert.deepEqual(result.items, [
+    {
+      alias: "merchant@hbl.sbp",
+      dataspace: "sbp",
+      domain: "hbl",
+      is_primary: true,
+    },
+  ]);
+  const url = new URL(lastRequest.input);
+  assert.equal(url.pathname, "/v1/aliases/by_account");
+  assert.equal(lastRequest.init.method, "POST");
+});
+
+test("lookupAliasesByAccount returns null for missing accounts", async () => {
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => jsonResponse(404, {}),
+  });
+
+  const result = await client.lookupAliasesByAccount(ALT_ACCOUNT_ID);
+  assert.equal(result, null);
+});
+
+test("lookupAliasesByAccount validates options before issuing requests", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse(200, {});
+    },
+  });
+
+  await assert.rejects(
+    () => client.lookupAliasesByAccount(VALID_ACCOUNT_ID, { unexpected: true }),
+    /unsupported/i,
+  );
+  assert.equal(fetchCalls, 0);
 });

@@ -1,220 +1,243 @@
----
-lang: zh-hans
-direction: ltr
-source: docs/source/data_model_and_isi_spec.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 2077d985b10b26b29b821646b435cc8850cbc6c842d372de6c9c4523ee95a5b7
-source_last_modified: "2026-03-12T11:24:34.970622+00:00"
-translation_last_reviewed: 2026-03-12
-translator: machine-google-reviewed
----
+# Iroha v2 Data Model and ISI — Implementation‑Derived Spec
 
-# Iroha v2 数据模型和 ISI — 实现衍生规范
+This specification is reverse‑engineered from the current implementation across `iroha_data_model` and `iroha_core` to aid design review. Paths in backticks point to the authoritative code.
 
-该规范是根据 `iroha_data_model` 和 `iroha_core` 的当前实现进行逆向工程的，以帮助设计审查。反引号中的路径指向权威代码。
+## Scope
+- Defines canonical entities (domains, accounts, assets, NFTs, roles, permissions, peers, triggers) and their identifiers.
+- Describes state‑changing instructions (ISI): types, parameters, preconditions, state transitions, emitted events, and error conditions.
+- Summarizes parameter management, transactions, and instruction serialization.
 
-## 范围
-- 定义规范实体（域、帐户、资产、NFT、角色、权限、对等点、触发器）及其标识符。
-- 描述状态更改指令 (ISI)：类型、参数、前提条件、状态转换、发出的事件和错误条件。
-- 总结参数管理、事务和指令序列化。
-
-确定性：所有指令语义都是纯粹的状态转换，没有依赖于硬件的行为。序列化使用Norito； VM 字节码使用 IVM，并在链上执行之前经过主机端验证。
+Determinism: All instruction semantics are pure state transitions without hardware‑dependent behavior. Serialization uses Norito; VM bytecode uses the IVM and is validated host‑side before on‑chain execution.
 
 ---
 
-## 实体和标识符
-ID 具有稳定的字符串形式，可进行 `Display`/`FromStr` 往返。名称规则禁止空格和保留的 `@ # $` 字符。- `Name` — 经过验证的文本标识符。规则：`crates/iroha_data_model/src/name.rs`。
-- `DomainId` — `name`。域名：`{ id, logo, metadata, owned_by }`。建造者：`NewDomain`。代码：`crates/iroha_data_model/src/domain.rs`。
-- `AccountId` — 规范地址通过 `AccountAddress`（I105 / 十六进制）生成，Torii 通过 `AccountAddress::parse_encoded` 标准化输入。 I105是首选账户格式； I105 表格仅适用于 Sora UX。熟悉的 `alias`（已拒绝的旧格式）字符串仅保留作为路由别名。帐号：`{ id, metadata }`。代码：`crates/iroha_data_model/src/account.rs`。- 帐户准入策略 — 域通过在元数据密钥 `iroha:account_admission_policy` 下存储 Norito-JSON `AccountAdmissionPolicy` 来控制隐式帐户创建。当密钥不存在时，链级自定义参数`iroha:default_account_admission_policy`提供默认值；当它也不存在时，硬默认值是 `ImplicitReceive`（第一个版本）。策略标签 `mode`（`ExplicitOnly` 或 `ImplicitReceive`）加上可选的每笔交易（默认 `16`）和每块创建上限、可选的 `implicit_creation_fee`（销毁或接收帐户）、每个资产定义的 `min_initial_amounts` 和可选的`default_role_on_create`（在 `AccountCreated` 之后授予，如果缺失，则以 `DefaultRoleError` 拒绝）。 Genesis 无法选择加入；禁用/无效策略拒绝针对 `InstructionExecutionError::AccountAdmission` 的未知帐户的收据式指令。隐式账户在 `AccountCreated` 之前标记元数据 `iroha:created_via="implicit"`；默认角色发出后续 `AccountRoleGranted`，执行者所有者基线规则让新账户无需额外角色即可使用自己的资产/NFT。代码：`crates/iroha_data_model/src/account/admission.rs`、`crates/iroha_core/src/smartcontracts/isi/account_admission.rs`。
-- `AssetDefinitionId` — 规范 `unprefixed Base58 address with versioning and checksum`（UUID-v4 字节）。定义：`{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`。 `alias` 文字必须是 `<name>#<domain>.<dataspace>` 或 `<name>#<dataspace>`，其中 `<name>` 等于资产定义名称。代码：`crates/iroha_data_model/src/asset/definition.rs`。
+## Entities and Identifiers
+IDs have stable string forms with `Display`/`FromStr` round‑trip. Name rules forbid whitespace and the reserved `@ # $` characters.
 
-  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`：规范编码文字 `<asset-definition-id>#<account-id>`（第一个版本不支持旧文本形式）。- `NftId` — `nft$domain`。 NFT：`{ id, content: Metadata, owned_by }`。代码：`crates/iroha_data_model/src/nft.rs`。
-- `RoleId` — `name`。角色：`{ id, permissions: BTreeSet<Permission> }` 和构建器 `NewRole { inner: Role, grant_to }`。代码：`crates/iroha_data_model/src/role.rs`。
-- `Permission` — `{ name: Ident, payload: Json }`。代码：`crates/iroha_data_model/src/permission.rs`。
-- `PeerId`/`Peer` — 对等身份（公钥）和地址。代码：`crates/iroha_data_model/src/peer.rs`。
-- `TriggerId` — `name`。触发器：`{ id, action }`。行动：`{ executable, repeats, authority, filter, metadata }`。代码：`crates/iroha_data_model/src/trigger/`。
-- `Metadata` — `BTreeMap<Name, Json>` 已检查插入/删除。代码：`crates/iroha_data_model/src/metadata.rs`。
-- 订阅模式（应用层）：计划是带有 `subscription_plan` 元数据的 `AssetDefinition` 条目；订阅是带有 `subscription` 元数据的 `Nft` 记录；计费由引用订阅 NFT 的时间触发器执行。请参阅 `docs/source/subscriptions_api.md` 和 `crates/iroha_data_model/src/subscription.rs`。
-- **加密原语**（功能 `sm`）：
-  - `Sm2PublicKey` / `Sm2Signature` 镜像 SM2 的规范 SEC1 点 + 固定宽度 `r∥s` 编码。构造函数强制执行曲线成员资格和区分 ID 语义 (`DEFAULT_DISTID`)，而验证则拒绝格式错误或高范围标量。代码：`crates/iroha_crypto/src/sm.rs` 和 `crates/iroha_data_model/src/crypto/mod.rs`。
-  - `Sm3Hash` 将 GM/T 0004 摘要公开为 Norito 可序列化的 `[u8; 32]` 新类型，只要散列出现在清单或遥测中，就会使用该新类型。代码：`crates/iroha_data_model/src/crypto/hash.rs`。- `Sm4Key` 表示 128 位 SM4 密钥，并在主机系统调用和数据模型装置之间共享。代码：`crates/iroha_data_model/src/crypto/symmetric.rs`。
-  这些类型与现有的 Ed25519/BLS/ML-DSA 原语并存，一旦启用 `sm` 功能，数据模型使用者（Torii、SDK、创世工具）就可以使用这些类型。
-- 数据空间派生的关系存储（`space_directory_manifests`、`uaid_dataspaces`、`axt_policies`、`axt_replay_ledger`、通道中继紧急覆盖注册表）和数据空间目标权限（帐户/角色权限存储中的 `CanPublishSpaceDirectoryManifest{dataspace: ...}`）被修剪当数据空间从活动 `dataspace_catalog` 中消失时，`State::set_nexus(...)`，防止运行时目录更新后出现过时的数据空间引用。当通道退役或重新分配给不同的数据空间时，通道范围的 DA/中继缓存（`lane_relays`、`da_commitments`、`da_confidential_compute`、`da_pin_intents`）也会被修剪，因此通道本地状态不会在数据空间迁移中泄漏。空间目录 ISI（`PublishSpaceDirectoryManifest`、`RevokeSpaceDirectoryManifest`、`ExpireSpaceDirectoryManifest`）还会根据活动目录验证 `dataspace`，并使用 `InvalidParameter` 拒绝未知 ID。
+- `Name` — validated textual identifier. Rules: `crates/iroha_data_model/src/name.rs`.
+- `DomainId` — `name`. Domain: `{ id, logo, metadata, owned_by }`. Builders: `NewDomain`. Code: `crates/iroha_data_model/src/domain.rs`.
+- `AccountId` — canonical addresses are produced via `AccountAddress` as I105 and Torii normalises inputs through `AccountAddress::parse_encoded`. Strict runtime parsing accepts only canonical I105. On-chain account aliases use `name@domain.dataspace` or `name@dataspace` and resolve to canonical `AccountId` values; they are not accepted by strict `AccountId` parsers. Account: `{ id, metadata }`. Code: `crates/iroha_data_model/src/account.rs`.
+- Account admission policy — domains control implicit account creation by storing a Norito-JSON `AccountAdmissionPolicy` under metadata key `iroha:account_admission_policy`. When the key is absent, the chain-level custom parameter `iroha:default_account_admission_policy` provides the default; when that is also absent, the hard default is `ImplicitReceive` (first release). The policy tags `mode` (`ExplicitOnly` or `ImplicitReceive`) plus optional per-transaction (default `16`) and per-block creation caps, an optional `implicit_creation_fee` (burn or sink account), `min_initial_amounts` per asset definition, and an optional `default_role_on_create` (granted after `AccountCreated`, rejects with `DefaultRoleError` if missing). Genesis cannot opt in; disabled/invalid policies reject receipt-style instructions for unknown accounts with `InstructionExecutionError::AccountAdmission`. Implicit accounts stamp metadata `iroha:created_via="implicit"` before `AccountCreated`; default roles emit a follow-up `AccountRoleGranted`, and executor owner-baseline rules let the new account spend its own assets/NFTs without extra roles. Code: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
+- `AssetDefinitionId` — canonical unprefixed Base58 address over the canonical asset-definition bytes. This is the public asset ID. Definition: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` literals must be `<name>#<domain>.<dataspace>` or `<name>#<dataspace>`, with `<name>` equal to the asset definition name, and they resolve only to the canonical Base58 asset ID. Code: `crates/iroha_data_model/src/asset/definition.rs`.
+  - Alias lease metadata is persisted separately from the stored asset-definition row. Core/Torii materialize `alias` from the binding record when definitions are read.
+  - Torii asset-definition responses expose `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`.
+  - Alias selectors resolve against the latest committed block creation time. After `grace_until_ms`, alias selectors stop resolving even if background sweep has not yet removed the stale binding; direct definition reads may still report the stale binding as `expired_pending_cleanup`.
+- `AssetId`: public asset identifier in canonical bare Base58 form. Asset aliases like `name#dataspace` or `name#domain.dataspace` resolve to `AssetId`. Internal ledger holdings may additionally expose split `asset + account + optional dataspace` fields where needed, but that composite shape is not the public `AssetId`.
+- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Code: `crates/iroha_data_model/src/nft.rs`.
+- `RoleId` — `name`. Role: `{ id, permissions: BTreeSet<Permission> }` with builder `NewRole { inner: Role, grant_to }`. Code: `crates/iroha_data_model/src/role.rs`.
+- `Permission` — `{ name: Ident, payload: Json }`. Code: `crates/iroha_data_model/src/permission.rs`.
+- `PeerId`/`Peer` — peer identity (public key) and address. Code: `crates/iroha_data_model/src/peer.rs`.
+- `TriggerId` — `name`. Trigger: `{ id, action }`. Action: `{ executable, repeats, authority, filter, metadata }`. Code: `crates/iroha_data_model/src/trigger/`.
+- `Metadata` — `BTreeMap<Name, Json>` with checked insert/remove. Code: `crates/iroha_data_model/src/metadata.rs`.
+- Subscription pattern (application layer): plans are `AssetDefinition` entries with `subscription_plan` metadata; subscriptions are `Nft` records with `subscription` metadata; billing is executed by time triggers referencing subscription NFTs. See `docs/source/subscriptions_api.md` and `crates/iroha_data_model/src/subscription.rs`.
+- **Cryptographic primitives** (feature `sm`):
+  - `Sm2PublicKey` / `Sm2Signature` mirror the canonical SEC1 point + fixed-width `r∥s` encoding for SM2. Constructors enforce curve membership and distinguishing ID semantics (`DEFAULT_DISTID`), while verification rejects malformed or high-range scalars. Code: `crates/iroha_crypto/src/sm.rs` and `crates/iroha_data_model/src/crypto/mod.rs`.
+  - `Sm3Hash` exposes the GM/T 0004 digest as a Norito-serialisable `[u8; 32]` newtype used wherever hashes appear in manifests or telemetry. Code: `crates/iroha_data_model/src/crypto/hash.rs`.
+  - `Sm4Key` represents 128-bit SM4 keys and is shared between host syscalls and data-model fixtures. Code: `crates/iroha_data_model/src/crypto/symmetric.rs`.
+  These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and are available to data-model consumers (Torii, SDKs, genesis tooling) once the `sm` feature is enabled.
+- Dataspace-derived relation stores (`space_directory_manifests`, `uaid_dataspaces`, `axt_policies`, `axt_replay_ledger`, lane-relay emergency override registry) and dataspace-target permissions (`CanPublishSpaceDirectoryManifest{dataspace: ...}` in account/role permission stores) are pruned on `State::set_nexus(...)` when dataspaces disappear from the active `dataspace_catalog`, preventing stale dataspace references after runtime catalog updates. Lane-scoped DA/relay caches (`lane_relays`, `da_commitments`, `da_confidential_compute`, `da_pin_intents`) are also pruned when a lane is retired or reassigned to a different dataspace so lane-local state cannot leak across dataspace migrations. Space Directory ISIs (`PublishSpaceDirectoryManifest`, `RevokeSpaceDirectoryManifest`, `ExpireSpaceDirectoryManifest`) also validate `dataspace` against the active catalog and reject unknown IDs with `InvalidParameter`.
 
-重要特征：`Identifiable`、`Registered`/`Registrable`（构建器模式）、`HasMetadata`、`IntoKeyValue`。代码：`crates/iroha_data_model/src/lib.rs`。
+Important traits: `Identifiable`, `Registered`/`Registrable` (builder pattern), `HasMetadata`, `IntoKeyValue`. Code: `crates/iroha_data_model/src/lib.rs`.
 
-事件：每个实体都有在突变时发出的事件（创建/删除/所有者更改/元数据更改等）。代码：`crates/iroha_data_model/src/events/`。
-
----## 参数（链配置）
-- 系列：`SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`、`BlockParameters { max_transactions }`、`TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`、`SmartContractParameters { fuel, memory, execution_depth }` 以及 `custom: BTreeMap`。
-- 差异的单个枚举：`SumeragiParameter`、`BlockParameter`、`TransactionParameter`、`SmartContractParameter`。聚合器：`Parameters`。代码：`crates/iroha_data_model/src/parameter/system.rs`。
-
-设置参数（ISI）：`SetParameter(Parameter)` 更新相应字段并发出 `ConfigurationEvent::Changed`。代码：`crates/iroha_data_model/src/isi/transparent.rs`，执行者在`crates/iroha_core/src/smartcontracts/isi/world.rs`。
-
----
-
-## 指令序列化和注册
-- 核心特征：`Instruction: Send + Sync + 'static` 与 `dyn_encode()`、`as_any()`、稳定 `id()`（默认为具体类型名称）。
-- `InstructionBox`：`Box<dyn Instruction>` 包装器。 Clone/Eq/Ord 在 `(type_id, encoded_bytes)` 上运行，因此相等是按值计算的。
-- `InstructionBox` 的 Norito Serde 序列化为 `(String wire_id, Vec<u8> payload)`（如果没有线 ID，则回退到 `type_name`）。反序列化使用全局 `InstructionRegistry` 将标识符映射到构造函数。默认注册表包括所有内置 ISI。代码：`crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`。
+Events: Every entity has events emitted on mutations (create/delete/owner changed/metadata changed, etc.). Code: `crates/iroha_data_model/src/events/`.
 
 ---
 
-## ISI：类型、语义、错误
-执行是通过 `iroha_core::smartcontracts::isi` 中的 `Execute for <Instruction>` 实现的。下面列出了公共效果、先决条件、发出的事件和错误。
+## Parameters (Chain Configuration)
+- Families: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, `SmartContractParameters { fuel, memory, execution_depth }`, plus `custom: BTreeMap`.
+- Single enums for diffs: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. Aggregator: `Parameters`. Code: `crates/iroha_data_model/src/parameter/system.rs`.
 
-### 注册/取消注册
-类型：`Register<T: Registered>` 和 `Unregister<T: Identifiable>`，总和类型 `RegisterBox`/`UnregisterBox` 覆盖具体目标。- 注册对等点：插入到世界对等点集中。
-  - 前提条件：必须不存在。
-  - 事件：`PeerEvent::Added`。
-  - 错误：`Repetition(Register, PeerId)`（如果重复）；查找时为 `FindError`。代码：`core/.../isi/world.rs`。
+Setting parameters (ISI): `SetParameter(Parameter)` updates the corresponding field and emits `ConfigurationEvent::Changed`. Code: `crates/iroha_data_model/src/isi/transparent.rs`, executor in `crates/iroha_core/src/smartcontracts/isi/world.rs`.
 
-- 注册域：从 `NewDomain` 和 `owned_by = authority` 构建。不允许：`genesis` 域。
-  - 前提条件：域名不存在；不是 `genesis`。
-  - 事件：`DomainEvent::Created`。
-  - 错误：`Repetition(Register, DomainId)`、`InvariantViolation("Not allowed to register genesis domain")`。代码：`core/.../isi/world.rs`。
+---
 
-- 注册帐户：从 `NewAccount` 构建，在 `genesis` 域中不允许； `genesis` 账户无法注册。
-  - 前提条件：域名必须存在；账户不存在；不在创世域中。
-  - 事件：`DomainEvent::Account(AccountEvent::Created)`。
-  - 错误：`Repetition(Register, AccountId)`、`InvariantViolation("Not allowed to register account in genesis domain")`。代码：`core/.../isi/domain.rs`。
+## Instruction Serialization and Registry
+- Core trait: `Instruction: Send + Sync + 'static` with `dyn_encode()`, `as_any()`, stable `id()` (defaults to concrete type name).
+- `InstructionBox`: `Box<dyn Instruction>` wrapper. Clone/Eq/Ord operate on `(type_id, encoded_bytes)` so equality is by value.
+- Norito serde for `InstructionBox` serializes as `(String wire_id, Vec<u8> payload)` (falls back to `type_name` if no wire ID). Deserialization uses a global `InstructionRegistry` mapping identifiers to constructors. Default registry includes all built‑in ISI. Code: `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`.
 
-- 注册AssetDefinition：从构建器构建；设置 `owned_by = authority`。
-  - 前提条件：定义不存在；域存在； `name` 为必填项，修剪后必须为非空，且不得包含 `#`/`@`。
-  - 事件：`DomainEvent::AssetDefinition(AssetDefinitionEvent::Created)`。
-  - 错误：`Repetition(Register, AssetDefinitionId)`。代码：`core/.../isi/domain.rs`。
+---
 
-- 注册NFT：由构建者构建；设置 `owned_by = authority`。
-  - 前提条件：NFT 不存在；域存在。
-  - 事件：`DomainEvent::Nft(NftEvent::Created)`。
-  - 错误：`Repetition(Register, NftId)`。代码：`core/.../isi/nft.rs`。- 注册角色：从 `NewRole { inner, grant_to }`（通过帐户角色映射记录的第一个所有者）构建，存储 `inner: Role`。
-  - 前提条件：角色不存在。
-  - 事件：`RoleEvent::Created`。
-  - 错误：`Repetition(Register, RoleId)`。代码：`core/.../isi/world.rs`。
+## ISI: Types, Semantics, Errors
+Execution is implemented via `Execute for <Instruction>` in `iroha_core::smartcontracts::isi`. Below lists the public effects, preconditions, emitted events, and errors.
 
-- 注册触发器：将触发器存储在按过滤器类型设置的适当触发器中。
-  - 前提条件：如果过滤器不可铸造，则 `action.repeats` 必须是 `Exactly(1)`（否则为 `MathError::Overflow`）。禁止重复 ID。
-  - 事件：`TriggerEvent::Created(TriggerId)`。
-  - 错误：转换/验证失败时出现 `Repetition(Register, TriggerId)`、`InvalidParameterError::SmartContract(..)`。代码：`core/.../isi/triggers/mod.rs`。- 注销Peer/Domain/Account/AssetDefinition/NFT/Role/Trigger：删除目标；发出删除事件。额外的级联删除：- 取消注册域：删除域实体及其选择器/认可策略状态；删除域中的资产定义（以及由这些定义键入的机密 `zk_assets` 侧面状态）、这些定义的资产（以及每个资产元数据）、域中的 NFT 以及域范围内的帐户标签/别名投影。它还会取消幸存帐户与已删除域的链接，并修剪引用已删除域或随其删除的资源的帐户/角色范围权限条目（域权限、已删除定义的资产定义/资产权限以及已删除 NFT ID 的 NFT 权限）。域删除不会删除全局 `AccountId`、其 tx 序列/UAID 状态、外部资产或 NFT 所有权、触发权限或指向幸存帐户的其他外部审计/配置引用。护栏：当回购协议、结算分类账、公共通道奖励/索赔、离线津贴/转账、结算回购默认（`settlement.repo.eligible_collateral`、`settlement.repo.collateral_substitution_matrix`）、治理配置的投票/公民身份/议会资格/病毒奖励资产定义引用、配置的预言机经济仍然引用域中的任何资产定义时，拒绝奖励/斜线/争议债券资产定义参考，或 Nexus 费用/质押资产定义参考（`nexus.fees.fee_asset_id`、`nexus.staking.stake_asset_id`）。事件：`DomainEvent::Deleted`，加上每个项目的删除关于已删除的域范围资源的事件。错误：`FindError::Domain`（如果缺失）； `InvariantViolation` 保留资产定义引用冲突。代码：`core/.../isi/world.rs`。- Unregister Account: removes account’s permissions, roles, tx-sequence counter, account label mapping, and UAID bindings;删除帐户拥有的资产（以及每个资产的元数据）；删除该账户拥有的 NFT；删除权限为该帐户的触发器；修剪引用已删除帐户的帐户/角色范围权限条目、已删除拥有的 NFT ID 的帐户/角色范围 NFT 目标权限以及已删除触发器的帐户/角色范围触发器目标权限。防护栏：如果帐户仍然拥有域、资产定义、SoraFS 提供商绑定、活跃公民记录、公共通道质押/奖励状态（包括帐户显示为索赔人或奖励资产所有者的奖励领取密钥）、活跃预言机状态（包括预言机提要历史记录提供商条目、Twitter 绑定提供商记录或预言机经济学配置的奖励/斜杠帐户引用）、活跃，则拒绝Nexus 费用/质押账户引用（`nexus.fees.fee_sink_account_id`、`nexus.staking.stake_escrow_account_id`、`nexus.staking.slash_sink_account_id`；解析为规范的无域账户标识符，并在无效文字时拒绝失败关闭）、活动回购协议状态、活动结算账本状态、活动离线津贴/转移或离线判决撤销状态、活动离线活动资产定义的托管账户配置参考 (`settlement.offline.escrow_accounts`)、活动治理状态（提案/阶段批准als/locks/slashes/council/parliament 名册、提案议会快照、运行时升级提案者记录、治理配置的托管/slash-receiver/viral-pool 帐户引用、通过 `gov.sorafs_telemetry.submitters` / `gov.sorafs_telemetry.per_provider_submitters` 的治理 SoraFS 遥测提交者引用，或治理配置SoraFS 提供商所有者引用（通过 `gov.sorafs_provider_owners`）、配置的内容发布允许列表帐户引用 (`content.publish_allow_accounts`)、活动社交托管发件人状态、活动内容包创建者状态、活动 DA pin 意图所有者状态、活动通道中继紧急验证器覆盖状态或活动 SoraFS pin 注册表发行者/绑定者记录（pin 清单、清单别名、复制顺序）。事件：`AccountEvent::Deleted`，加上每个删除的 NFT 的 `NftEvent::Deleted`。错误：`FindError::Account`（如果缺失）； `InvariantViolation` 所有权孤儿。代码：`core/.../isi/domain.rs`。- 取消注册 AssetDefinition：删除该定义的所有资产及其每个资产的元数据，并删除由该定义键入的机密 `zk_assets` 侧面状态；还会修剪匹配的 `settlement.offline.escrow_accounts` 条目和引用已删除资产定义或其资产实例的帐户/角色范围权限条目。护栏：当回购协议、结算账本、公共通道奖励/索赔、离线津贴/转移状态、结算回购默认值（`settlement.repo.eligible_collateral`、`settlement.repo.collateral_substitution_matrix`）、治理配置的投票/公民身份/议会资格/病毒奖励资产定义引用、配置的预言机经济仍然引用定义时拒绝奖励/斜杠/争议债券资产定义参考，或 Nexus 费用/质押资产定义参考（`nexus.fees.fee_asset_id`、`nexus.staking.stake_asset_id`）。事件：每个资产 `AssetDefinitionEvent::Deleted` 和 `AssetEvent::Deleted`。错误：引用冲突时出现 `FindError::AssetDefinition`、`InvariantViolation`。代码：`core/.../isi/domain.rs`。
-  - 取消注册 NFT：删除 NFT 并删除引用已删除 NFT 的账户/角色范围权限条目。事件：`NftEvent::Deleted`。错误：`FindError::Nft`。代码：`core/.../isi/nft.rs`。
-  - 注销角色：先从所有账户中注销该角色；然后删除该角色。事件：`RoleEvent::Deleted`。错误：`FindError::Role`。代码：`core/.../isi/world.rs`。- 取消注册触发器：删除触发器（如果存在）并删除引用已删除触发器的帐户/角色范围权限条目；重复注销会产生 `Repetition(Unregister, TriggerId)`。事件：`TriggerEvent::Deleted`。代码：`core/.../isi/triggers/mod.rs`。
+### Register / Unregister
+Types: `Register<T: Registered>` and `Unregister<T: Identifiable>`, with sum types `RegisterBox`/`UnregisterBox` covering concrete targets.
 
-### 薄荷/燃烧
-类型：`Mint<O, D: Identifiable>` 和 `Burn<O, D: Identifiable>`，盒装为 `MintBox`/`BurnBox`。
+- Register Peer: inserts into world peers set.
+  - Preconditions: must not already exist.
+  - Events: `PeerEvent::Added`.
+  - Errors: `Repetition(Register, PeerId)` if duplicate; `FindError` on lookups. Code: `core/.../isi/world.rs`.
 
-- 资产（数字）铸造/销毁：调整余额和定义的 `total_quantity`。
-  - 前提条件：`Numeric`值必须满足`AssetDefinition.spec()`； `mintable` 允许的薄荷：
-    - `Infinitely`：始终允许。
-    - `Once`：仅允许一次；第一个铸币厂将 `mintable` 翻转为 `Not` 并发出 `AssetDefinitionEvent::MintabilityChanged`，以及用于可审计的详细 `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }`。
-    - `Limited(n)`：允许 `n` 额外的铸造操作。每个成功的铸币厂都会减少计数器；当它达到零时，定义翻转到 `Not` 并发出与上面相同的 `MintabilityChanged` 事件。
-    - `Not`：错误 `MintabilityError::MintUnmintable`。
-  - 状态变化：如果铸币厂丢失则创建资产；如果销毁时余额变为零，则删除资产条目。
-  - 事件：`AssetEvent::Added`/`AssetEvent::Removed`、`AssetDefinitionEvent::MintabilityChanged`（当 `Once` 或 `Limited(n)` 耗尽其配额时）。
-  - 错误：`TypeError::AssetNumericSpec(Mismatch)`、`MathError::Overflow`/`NotEnoughQuantity`。代码：`core/.../isi/asset.rs`。- 触发重复薄荷/燃烧：更改触发的 `action.repeats` 计数。
-  - 前提条件：在薄荷上，过滤器必须是可薄荷的；算术不能溢出/下溢。
-  - 事件：`TriggerEvent::Extended`/`TriggerEvent::Shortened`。
-  - 错误：`MathError::Overflow` 无效铸币； `FindError::Trigger`（如果丢失）。代码：`core/.../isi/triggers/mod.rs`。
+- Register Domain: builds from `NewDomain` with `owned_by = authority`. Disallowed: `genesis` domain.
+  - Preconditions: domain non‑existence; not `genesis`.
+  - Events: `DomainEvent::Created`.
+  - Errors: `Repetition(Register, DomainId)`, `InvariantViolation("Not allowed to register genesis domain")`. Code: `core/.../isi/world.rs`.
 
-### 转移
-类型：`Transfer<S: Identifiable, O, D: Identifiable>`，盒装为 `TransferBox`。
+- Register Account: builds from `NewAccount`, disallowed in `genesis` domain; `genesis` account cannot be registered.
+  - Preconditions: domain must exist; account non‑existence; not in genesis domain.
+  - Events: `DomainEvent::Account(AccountEvent::Created)`.
+  - Errors: `Repetition(Register, AccountId)`, `InvariantViolation("Not allowed to register account in genesis domain")`. Code: `core/.../isi/domain.rs`.
 
-- 资产（数字）：从源 `AssetId` 中减去，添加到目标 `AssetId`（相同定义，不同帐户）。删除归零的源资产。
-  - 前提条件：源资产存在；值满足 `spec`。
-  - 事件：`AssetEvent::Removed`（源）、`AssetEvent::Added`（目标）。
-  - 错误：`FindError::Asset`、`TypeError::AssetNumericSpec`、`MathError::NotEnoughQuantity/Overflow`。代码：`core/.../isi/asset.rs`。
+- Register AssetDefinition: builds from builder; sets `owned_by = authority`.
+  - Preconditions: definition non‑existence; domain exists; `name` is required, must be non-empty after trim, and must not contain `#`/`@`.
+  - Events: `DomainEvent::AssetDefinition(AssetDefinitionEvent::Created)`.
+  - Errors: `Repetition(Register, AssetDefinitionId)`. Code: `core/.../isi/domain.rs`.
 
-- 域所有权：将 `Domain.owned_by` 更改为目标帐户。
-  - 前提条件：两个账户都存在；域存在。
-  - 事件：`DomainEvent::OwnerChanged`。
-  - 错误：`FindError::Account/Domain`。代码：`core/.../isi/domain.rs`。
+- Register NFT: builds from builder; sets `owned_by = authority`.
+  - Preconditions: NFT non‑existence; domain exists.
+  - Events: `DomainEvent::Nft(NftEvent::Created)`.
+  - Errors: `Repetition(Register, NftId)`. Code: `core/.../isi/nft.rs`.
 
-- AssetDefinition 所有权：将 `AssetDefinition.owned_by` 更改为目标帐户。
-  - 前提条件：两个账户都存在；定义存在；来源当前必须拥有它；权限必须是源帐户、源域所有者或资产定义域所有者。
-  - 事件：`AssetDefinitionEvent::OwnerChanged`。
-  - 错误：`FindError::Account/AssetDefinition`。代码：`core/.../isi/account.rs`。- NFT 所有权：将 `Nft.owned_by` 更改为目标账户。
-  - 前提条件：两个账户都存在； NFT 存在；来源当前必须拥有它；权限必须是源帐户、源域所有者、NFT 域所有者或持有该 NFT 的 `CanTransferNft`。
-  - 事件：`NftEvent::OwnerChanged`。
-  - 错误：`FindError::Account/Nft`、`InvariantViolation`（如果来源不拥有 NFT）。代码：`core/.../isi/nft.rs`。
+- Register Role: builds from `NewRole { inner, grant_to }` (first owner recorded via account‑role mapping), stores `inner: Role`.
+  - Preconditions: role non‑existence.
+  - Events: `RoleEvent::Created`.
+  - Errors: `Repetition(Register, RoleId)`. Code: `core/.../isi/world.rs`.
 
-### 元数据：设置/删除键值
-类型：`SetKeyValue<T>` 和 `RemoveKeyValue<T>` 以及 `T ∈ { Domain, Account, AssetDefinition, Nft, Trigger }`。提供盒装枚举。
+- Register Trigger: stores the trigger in the appropriate trigger set by filter kind.
+  - Preconditions: If filter is not mintable, `action.repeats` must be `Exactly(1)` (otherwise `MathError::Overflow`). Duplicate IDs prohibited.
+  - Events: `TriggerEvent::Created(TriggerId)`.
+  - Errors: `Repetition(Register, TriggerId)`, `InvalidParameterError::SmartContract(..)` on conversion/validation failures. Code: `core/.../isi/triggers/mod.rs`.
 
-- 设置：插入或替换 `Metadata[key] = Json(value)`。
-- 移除：移除钥匙；如果丢失则出错。
-- 事件：`<Target>Event::MetadataInserted` / `MetadataRemoved` 以及旧/新值。
-- 错误：如果目标不存在，则为 `FindError::<Target>`； `FindError::MetadataKey` 缺少用于移除的钥匙。代码：`crates/iroha_data_model/src/isi/transparent.rs` 和每个目标的执行器实现。
+- Unregister Peer/Domain/Account/AssetDefinition/NFT/Role/Trigger: removes the target; emits deletion events. Additional cascading removals:
+  - Unregister Domain: removes the domain entity plus its selector/endorsement-policy state; deletes asset definitions in the domain (and confidential `zk_assets` side-state keyed by those definitions), assets of those definitions (and per-asset metadata), NFTs in the domain, and domain-scoped account-label/alias projections. It also unlinks surviving accounts from the removed domain and prunes account-/role-scoped permission entries that reference the removed domain or resources deleted with it (domain permissions, asset-definition/asset permissions for removed definitions, and NFT permissions for removed NFT IDs). Domain removal does not delete the global `AccountId`, its tx-sequence/UAID state, foreign asset or NFT ownership, trigger authority, or other external audit/config references that point to the surviving account. Guard rails: rejects when any asset definition in the domain is still referenced by repo-agreement, settlement-ledger, public-lane reward/claim, offline allowance/transfer, settlement repo defaults (`settlement.repo.eligible_collateral`, `settlement.repo.collateral_substitution_matrix`), governance-configured voting/citizenship/parliament-eligibility/viral-reward asset-definition references, oracle-economics configured reward/slash/dispute-bond asset-definition references, or Nexus fee/staking asset-definition references (`nexus.fees.fee_asset_id`, `nexus.staking.stake_asset_id`). Events: `DomainEvent::Deleted`, plus per-item deletion events for removed domain-scoped resources. Errors: `FindError::Domain` if missing; `InvariantViolation` on retained asset-definition reference conflicts. Code: `core/.../isi/world.rs`.
+  - Unregister Account: removes account’s permissions, roles, tx-sequence counter, account label mapping, and UAID bindings; deletes assets owned by the account (and per-asset metadata); deletes NFTs owned by the account; removes triggers whose authority is that account; prunes account-/role-scoped permission entries that reference the removed account, account-/role-scoped NFT-target permissions for removed owned NFT IDs, and account-/role-scoped trigger-target permissions for removed triggers. Guard rails: rejects if the account still owns a domain, asset definition, SoraFS provider binding, active citizenship record, public-lane staking/reward state (including reward-claim keys where the account appears as claimant or reward-asset owner), active oracle state (including oracle feed-history provider entries, twitter-binding provider records, or oracle-economics configured reward/slash account references), active Nexus fee/staking account references (`nexus.fees.fee_sink_account_id`, `nexus.staking.stake_escrow_account_id`, `nexus.staking.slash_sink_account_id`; parsed as canonical domainless account identifiers and rejected fail-closed on invalid literals), active repo-agreement state, active settlement-ledger state, active offline allowance/transfer or offline verdict-revocation state, active offline escrow-account config references for active asset definitions (`settlement.offline.escrow_accounts`), active governance state (proposal/stage approvals/locks/slashes/council/parliament rosters, proposal parliament snapshots, runtime-upgrade proposer records, governance-configured escrow/slash-receiver/viral-pool account references, governance SoraFS telemetry submitter references via `gov.sorafs_telemetry.submitters` / `gov.sorafs_telemetry.per_provider_submitters`, or governance-configured SoraFS provider-owner references via `gov.sorafs_provider_owners`), configured content publish allow-list account references (`content.publish_allow_accounts`), active social escrow sender state, active content-bundle creator state, active DA pin-intent owner state, active lane-relay emergency validator override state, or active SoraFS pin-registry issuer/binder records (pin manifests, manifest aliases, replication orders). Events: `AccountEvent::Deleted`, plus `NftEvent::Deleted` per removed NFT. Errors: `FindError::Account` if missing; `InvariantViolation` on ownership orphans. Code: `core/.../isi/domain.rs`.
+  - Unregister AssetDefinition: deletes all assets of that definition and their per-asset metadata, and removes confidential `zk_assets` side-state keyed by that definition; also prunes the matching `settlement.offline.escrow_accounts` entry and account-/role-scoped permission entries that reference the removed asset definition or its asset instances. Guard rails: rejects when the definition is still referenced by repo-agreement, settlement-ledger, public-lane reward/claim, offline allowance/transfer state, settlement repo defaults (`settlement.repo.eligible_collateral`, `settlement.repo.collateral_substitution_matrix`), governance-configured voting/citizenship/parliament-eligibility/viral-reward asset-definition references, oracle-economics configured reward/slash/dispute-bond asset-definition references, or Nexus fee/staking asset-definition references (`nexus.fees.fee_asset_id`, `nexus.staking.stake_asset_id`). Events: `AssetDefinitionEvent::Deleted` and `AssetEvent::Deleted` per asset. Errors: `FindError::AssetDefinition`, `InvariantViolation` on reference conflicts. Code: `core/.../isi/domain.rs`.
+  - Unregister NFT: removes NFT and prunes account-/role-scoped permission entries that reference the removed NFT. Events: `NftEvent::Deleted`. Errors: `FindError::Nft`. Code: `core/.../isi/nft.rs`.
+  - Unregister Role: revokes the role from all accounts first; then removes the role. Events: `RoleEvent::Deleted`. Errors: `FindError::Role`. Code: `core/.../isi/world.rs`.
+  - Unregister Trigger: removes trigger if present and prunes account-/role-scoped permission entries that reference the removed trigger; duplicate unregister yields `Repetition(Unregister, TriggerId)`. Events: `TriggerEvent::Deleted`. Code: `core/.../isi/triggers/mod.rs`.
 
-### 权限和角色：授予/撤销
-类型：`Grant<O, D>` 和 `Revoke<O, D>`，以及 `Permission`/`Role` 与 `Account` 之间的盒装枚举，以及 `Permission` 与 `Role` 之间的盒装枚举。- 授予帐户权限：添加 `Permission`，除非已经固有。事件：`AccountEvent::PermissionAdded`。错误：`Repetition(Grant, Permission)`（如果重复）。代码：`core/.../isi/account.rs`。
-- 撤销帐户的权限：如果存在则删除。事件：`AccountEvent::PermissionRemoved`。错误：`FindError::Permission`（如果不存在）。代码：`core/.../isi/account.rs`。
-- 将角色授予帐户：插入 `(account, role)` 映射（如果不存在）。事件：`AccountEvent::RoleGranted`。错误：`Repetition(Grant, RoleId)`。代码：`core/.../isi/account.rs`。
-- 从帐户中撤销角色：删除映射（如果存在）。事件：`AccountEvent::RoleRevoked`。错误：`FindError::Role`（如果不存在）。代码：`core/.../isi/account.rs`。
-- 授予角色权限：重建角色并添加权限。事件：`RoleEvent::PermissionAdded`。错误：`Repetition(Grant, Permission)`。代码：`core/.../isi/world.rs`。
-- 撤销角色的权限：在没有该权限的情况下重建角色。事件：`RoleEvent::PermissionRemoved`。错误：`FindError::Permission`（如果不存在）。代码：`core/.../isi/world.rs`。### 触发器：执行
-类型：`ExecuteTrigger { trigger: TriggerId, args: Json }`。
-- 行为：为触发子系统排队 `ExecuteTriggerEvent { trigger_id, authority, args }`。仅允许调用触发手动执行（`ExecuteTrigger` 过滤器）；过滤器必须匹配，并且调用者必须是触发操作权限或持有该权限的 `CanExecuteTrigger`。当用户提供的执行器处于活动状态时，触发器执行由运行时执行器验证，并消耗事务的执行器燃料预算（基本 `executor.fuel` 加上可选元数据 `additional_fuel`）。
-- 错误：如果未注册，则为 `FindError::Trigger`； `InvariantViolation`（如果由非权威机构调用）。代码：`core/.../isi/triggers/mod.rs`（并在 `core/.../smartcontracts/isi/mod.rs` 中进行测试）。
+### Mint / Burn
+Types: `Mint<O, D: Identifiable>` and `Burn<O, D: Identifiable>`, boxed as `MintBox`/`BurnBox`.
 
-### 升级并登录
-- `Upgrade { executor }`：使用提供的 `Executor` 字节码迁移执行器，更新执行器及其数据模型，发出 `ExecutorEvent::Upgraded`。错误：迁移失败时包装为 `InvalidParameterError::SmartContract`。代码：`core/.../isi/world.rs`。
-- `Log { level, msg }`：发出给定级别的节点日志；没有状态改变。代码：`core/.../isi/world.rs`。
+- Asset (Numeric) mint/burn: adjusts balances and definition’s `total_quantity`.
+  - Preconditions: `Numeric` value must satisfy `AssetDefinition.spec()`; mint allowed by `mintable`:
+    - `Infinitely`: always allowed.
+    - `Once`: allowed exactly once; the first mint flips `mintable` to `Not` and emits `AssetDefinitionEvent::MintabilityChanged`, plus a detailed `AssetDefinitionEvent::MintabilityChangedDetailed { asset_definition, minted_amount, authority }` for auditability.
+    - `Limited(n)`: allows `n` additional mint operations. Each successful mint decrements the counter; when it reaches zero the definition flips to `Not` and emits the same `MintabilityChanged` events as above.
+    - `Not`: error `MintabilityError::MintUnmintable`.
+  - State changes: creates asset if missing on mint; removes asset entry if balance becomes zero on burn.
+  - Events: `AssetEvent::Added`/`AssetEvent::Removed`, `AssetDefinitionEvent::MintabilityChanged` (when `Once` or `Limited(n)` exhausts its allowance).
+  - Errors: `TypeError::AssetNumericSpec(Mismatch)`, `MathError::Overflow`/`NotEnoughQuantity`. Code: `core/.../isi/asset.rs`.
 
-### 错误模型
-通用信封：`InstructionExecutionError`，包含评估错误、查询失败、转换、未找到实体、重复、可铸造性、数学、无效参数和不变违规等变体。枚举和帮助程序位于 `crates/iroha_data_model/src/isi/mod.rs` 下的 `pub mod error` 中。
+- Trigger repetitions mint/burn: changes `action.repeats` count for a trigger.
+  - Preconditions: on mint, filter must be mintable; arithmetic must not overflow/underflow.
+  - Events: `TriggerEvent::Extended`/`TriggerEvent::Shortened`.
+  - Errors: `MathError::Overflow` on invalid mint; `FindError::Trigger` if missing. Code: `core/.../isi/triggers/mod.rs`.
 
----## 事务和可执行文件
-- `Executable`：`Instructions(ConstVec<InstructionBox>)` 或 `Ivm(IvmBytecode)`；字节码序列化为 base64。代码：`crates/iroha_data_model/src/transaction/executable.rs`。
-- `TransactionBuilder`/`SignedTransaction`：使用元数据、`chain_id`、`authority`、`creation_time_ms`、可选的 `ttl_ms` 和 `nonce` 构造、签署和打包可执行文件。代码：`crates/iroha_data_model/src/transaction/`。
-- 在运行时，`iroha_core` 通过 `Execute for InstructionBox` 执行 `InstructionBox` 批次，向下转换为适当的 `*Box` 或具体指令。代码：`crates/iroha_core/src/smartcontracts/isi/mod.rs`。
-- 运行时执行器验证预算（用户提供的执行器）：来自参数的基础 `executor.fuel` 加上可选的事务元数据 `additional_fuel` (`u64`)，在事务内的指令/触发器验证之间共享。
+### Transfer
+Types: `Transfer<S: Identifiable, O, D: Identifiable>`, boxed as `TransferBox`.
 
----## 不变量和注释（来自测试和防护）
-- 创世保护：无法注册 `genesis` 域或 `genesis` 域中的帐户； `genesis` 账户无法注册。代码/测试：`core/.../isi/world.rs`、`core/.../smartcontracts/isi/mod.rs`。
-- 数字资产在铸造/转移/销毁时必须满足 `NumericSpec` 要求；规格不匹配产生 `TypeError::AssetNumericSpec`。
-- 可铸造性：`Once` 允许单次铸造，然后翻转至 `Not`； `Limited(n)` 在翻转到 `Not` 之前正好允许 `n` 薄荷糖。尝试禁止在 `Infinitely` 上铸造会导致 `MintabilityError::ForbidMintOnMintable`，配置 `Limited(0)` 会产生 `MintabilityError::InvalidMintabilityTokens`。
-- 元数据操作是关键精确的；删除不存在的密钥是一个错误。
-- 触发过滤器可以是不可铸造的；那么 `Register<Trigger>` 只允许 `Exactly(1)` 重复。
-- 触发元数据键 `__enabled` (bool) 门执行；缺少默认启用的触发器，并且禁用的触发器会在数据/时间/按调用路径上跳过。
-- 确定性：所有算术都使用检查操作；下溢/溢出返回键入的数学错误；零余额会删除资产条目（无隐藏状态）。
+- Asset (Numeric): subtract from source `AssetId`, add to destination `AssetId` (same definition, different account). Delete zeroed source asset.
+  - Preconditions: source asset exists; value satisfies `spec`.
+  - Events: `AssetEvent::Removed` (source), `AssetEvent::Added` (destination).
+  - Errors: `FindError::Asset`, `TypeError::AssetNumericSpec`, `MathError::NotEnoughQuantity/Overflow`. Code: `core/.../isi/asset.rs`.
 
----## 实际例子
-- 铸造和转让：
-  - `Mint::asset_numeric(10, asset_id)` → 如果规格/可铸造性允许，则增加 10；事件：`AssetEvent::Added`。
-  - `Transfer::asset_numeric(asset_id, 5, to_account)` → 移动 5；删除/添加事件。
-- 元数据更新：
-  - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → 更新插入；通过 `RemoveKeyValue::account(...)` 删除。
-- 角色/权限管理：
-  - `Grant::account_role(role_id, account)`、`Grant::role_permission(perm, role)` 及其 `Revoke` 对应项。
-- 触发器生命周期：
-  - `Register::trigger(Trigger::new(id, Action::new(exec, repeats, authority, filter)))`，带有过滤器暗示的可铸造性检查； `ExecuteTrigger::new(id).with_args(&args)` 必须与配置的权限匹配。
-  - 可以通过将元数据键 `__enabled` 设置为 `false` 来禁用触发器（缺少默认启用）；通过 `SetKeyValue::trigger` 或 IVM `set_trigger_enabled` 系统调用进行切换。
-  - 加载时修复触发器存储：删除重复的 id、不匹配的 id 以及引用丢失字节码的触发器；重新计算字节码引用计数。
-  - 如果触发器的 IVM 字节码在执行时丢失，则触发器将被删除，并且执行将被视为具有失败结果的无操作。
-  - 耗尽的触发器立即被移除；如果在执行过程中遇到耗尽的条目，则会将其修剪并视为丢失。
-- 参数更新：
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` 更新并发出 `ConfigurationEvent::Changed`。CLI / Torii 资产定义 ID + 别名示例：
-- 使用规范辅助+显式名称+长别名进行注册：
+- Domain ownership: changes `Domain.owned_by` to destination account.
+  - Preconditions: both accounts exist; domain exists.
+  - Events: `DomainEvent::OwnerChanged`.
+  - Errors: `FindError::Account/Domain`. Code: `core/.../isi/domain.rs`.
+
+- AssetDefinition ownership: changes `AssetDefinition.owned_by` to destination account.
+  - Preconditions: both accounts exist; definition exists; source must currently own it; authority must be source account, source-domain owner, or asset-definition-domain owner.
+  - Events: `AssetDefinitionEvent::OwnerChanged`.
+  - Errors: `FindError::Account/AssetDefinition`. Code: `core/.../isi/account.rs`.
+
+- NFT ownership: changes `Nft.owned_by` to destination account.
+  - Preconditions: both accounts exist; NFT exists; source must currently own it; authority must be source account, source-domain owner, NFT-domain owner, or hold `CanTransferNft` for that NFT.
+  - Events: `NftEvent::OwnerChanged`.
+  - Errors: `FindError::Account/Nft`, `InvariantViolation` if source doesn’t own the NFT. Code: `core/.../isi/nft.rs`.
+
+### Metadata: Set/Remove Key‑Value
+Types: `SetKeyValue<T>` and `RemoveKeyValue<T>` with `T ∈ { Domain, Account, AssetDefinition, Nft, Trigger }`. Boxed enums provided.
+
+- Set: inserts or replaces `Metadata[key] = Json(value)`.
+- Remove: removes the key; error if missing.
+- Events: `<Target>Event::MetadataInserted` / `MetadataRemoved` with the old/new values.
+- Errors: `FindError::<Target>` if the target doesn’t exist; `FindError::MetadataKey` on missing key for removal. Code: `crates/iroha_data_model/src/isi/transparent.rs` and executor impls per target.
+
+### Permissions and Roles: Grant / Revoke
+Types: `Grant<O, D>` and `Revoke<O, D>`, with boxed enums for `Permission`/`Role` to/from `Account`, and `Permission` to/from `Role`.
+
+- Grant Permission to Account: adds `Permission` unless already inherent. Events: `AccountEvent::PermissionAdded`. Errors: `Repetition(Grant, Permission)` if duplicate. Code: `core/.../isi/account.rs`.
+- Revoke Permission from Account: removes if present. Events: `AccountEvent::PermissionRemoved`. Errors: `FindError::Permission` if absent. Code: `core/.../isi/account.rs`.
+- Grant Role to Account: inserts `(account, role)` mapping if absent. Events: `AccountEvent::RoleGranted`. Errors: `Repetition(Grant, RoleId)`. Code: `core/.../isi/account.rs`.
+- Revoke Role from Account: removes mapping if present. Events: `AccountEvent::RoleRevoked`. Errors: `FindError::Role` if absent. Code: `core/.../isi/account.rs`.
+- Grant Permission to Role: rebuilds role with permission added. Events: `RoleEvent::PermissionAdded`. Errors: `Repetition(Grant, Permission)`. Code: `core/.../isi/world.rs`.
+- Revoke Permission from Role: rebuilds role without that permission. Events: `RoleEvent::PermissionRemoved`. Errors: `FindError::Permission` if absent. Code: `core/.../isi/world.rs`.
+
+### Triggers: Execute
+Type: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
+- Behavior: enqueues an `ExecuteTriggerEvent { trigger_id, authority, args }` for the trigger subsystem. Manual execution is allowed only for by-call triggers (`ExecuteTrigger` filter); the filter must match and the caller must be the trigger action authority or hold `CanExecuteTrigger` for that authority. When a user-provided executor is active, trigger execution is validated by the runtime executor and consumes the transaction’s executor fuel budget (base `executor.fuel` plus optional metadata `additional_fuel`).
+- Errors: `FindError::Trigger` if not registered; `InvariantViolation` if called by non‑authority. Code: `core/.../isi/triggers/mod.rs` (and tests in `core/.../smartcontracts/isi/mod.rs`).
+
+### Upgrade and Log
+- `Upgrade { executor }`: migrates the executor using provided `Executor` bytecode, updates executor and its data model, emits `ExecutorEvent::Upgraded`. Errors: wrapped as `InvalidParameterError::SmartContract` on migration failure. Code: `core/.../isi/world.rs`.
+- `Log { level, msg }`: emits a node log with the given level; no state changes. Code: `core/.../isi/world.rs`.
+
+### Error Model
+Common envelope: `InstructionExecutionError` with variants for evaluation errors, query failures, conversions, entity not found, repetition, mintability, math, invalid parameter, and invariant violation. Enumerations and helpers are in `crates/iroha_data_model/src/isi/mod.rs` under `pub mod error`.
+
+---
+
+## Transactions and Executables
+- `Executable`: either `Instructions(ConstVec<InstructionBox>)` or `Ivm(IvmBytecode)`; bytecode serializes as base64. Code: `crates/iroha_data_model/src/transaction/executable.rs`.
+- `TransactionBuilder`/`SignedTransaction`: constructs, signs, and packages an executable with metadata, `chain_id`, `authority`, `creation_time_ms`, optional `ttl_ms`, and `nonce`. Code: `crates/iroha_data_model/src/transaction/`.
+- At runtime, `iroha_core` executes `InstructionBox` batches via `Execute for InstructionBox`, downcasting to the appropriate `*Box` or concrete instruction. Code: `crates/iroha_core/src/smartcontracts/isi/mod.rs`.
+- Runtime executor validation budget (user-provided executor): base `executor.fuel` from parameters plus optional transaction metadata `additional_fuel` (`u64`), shared across instruction/trigger validations within the transaction.
+
+---
+
+## Invariants and Notes (from tests and guards)
+- Genesis protections: cannot register the `genesis` domain or accounts in `genesis` domain; `genesis` account cannot be registered. Code/tests: `core/.../isi/world.rs`, `core/.../smartcontracts/isi/mod.rs`.
+- Numeric assets must satisfy their `NumericSpec` on mint/transfer/burn; spec mismatch yields `TypeError::AssetNumericSpec`.
+- Mintability: `Once` allows a single mint and then flips to `Not`; `Limited(n)` allows exactly `n` mints before flipping to `Not`. Attempts to forbid minting on `Infinitely` cause `MintabilityError::ForbidMintOnMintable`, and configuring `Limited(0)` yields `MintabilityError::InvalidMintabilityTokens`.
+- Metadata operations are key‑exact; removing a non‑existent key is an error.
+- Trigger filters can be non‑mintable; then `Register<Trigger>` only permits `Exactly(1)` repeats.
+- Trigger metadata key `__enabled` (bool) gates execution; missing defaults to enabled, and disabled triggers are skipped across data/time/by-call paths.
+- Determinism: all arithmetic uses checked operations; under/overflow returns typed math errors; zero balances drop asset entries (no hidden state).
+
+---
+
+## Practical Examples
+- Minting and transfer:
+  - `Mint::asset_numeric(10, asset_id)` → adds 10 if allowed by spec/mintability; events: `AssetEvent::Added`.
+  - `Transfer::asset_numeric(asset_id, 5, to_account)` → moves 5; events for removal/addition.
+- Metadata updates:
+  - `SetKeyValue::account(account_id, "avatar".parse()?, json)` → upsert; removal via `RemoveKeyValue::account(...)`.
+- Role/permission management:
+  - `Grant::account_role(role_id, account)`, `Grant::role_permission(perm, role)`, and their `Revoke` counterparts.
+- Trigger lifecycle:
+  - `Register::trigger(Trigger::new(id, Action::new(exec, repeats, authority, filter)))` with mintability check implied by filter; `ExecuteTrigger::new(id).with_args(&args)` must match configured authority.
+  - Triggers can be disabled by setting metadata key `__enabled` to `false` (missing defaults to enabled); toggle via `SetKeyValue::trigger` or the IVM `set_trigger_enabled` syscall.
+  - Trigger storage is repaired on load: duplicate ids, mismatched ids, and triggers referencing missing bytecode are dropped; bytecode reference counts are recomputed.
+  - If a trigger's IVM bytecode is missing at execution time, the trigger is removed and the execution is treated as a no-op with a failure outcome.
+  - Depleted triggers are removed immediately; if a depleted entry is encountered during execution it is pruned and treated as missing.
+- Parameter update:
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` updates and emits `ConfigurationEvent::Changed`.
+
+CLI / Torii asset-definition id + alias examples:
+- Register with canonical Base58 id + explicit name + long alias:
   - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
-- 使用规范辅助+显式名称+短别名进行注册：
+- Register with canonical Base58 id + explicit name + short alias:
   - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
-- 由别名 + 帐户组成的 Mint：
+- Mint by alias + account components:
   - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
-- 将别名解析为规范 Base58 ID：
-  - `POST /v1/assets/aliases/resolve` 与 JSON `{ "alias": "pkr#ubl.sbp" }`
+- Resolve alias to canonical Base58 id:
+  - `POST /v1/assets/aliases/resolve` with JSON `{ "alias": "pkr#ubl.sbp" }`
 
-迁移注意事项：
-- `name#domain` 在第一个版本中故意不支持文本资产定义 ID。
-- 铸造/销毁/转移边界的资产 ID 保持规范 `<asset-definition-id>#<account-id>`；将 `iroha tools encode asset-id` 与 `--definition <base58-asset-definition-id>` 或 `--alias ...` 加 `--account` 结合使用。
+Migration note:
+- `name#domain` textual asset-definition IDs remain intentionally unsupported in the first release; use canonical Base58 IDs or resolve a dotted alias.
+- Public asset selectors use canonical Base58 asset-definition ids plus split ownership fields (`account`, optional `scope`). Raw encoded `AssetId` literals remain internal helpers and are not part of the Torii/CLI selector surface.
+- Asset-definition list/query filters and sorts additionally accept `alias_binding.status`, `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms`, and `alias_binding.bound_at_ms`.
 
 ---
 
-## 可追溯性（选定来源）
- - 数据模型核心：`crates/iroha_data_model/src/{account.rs,domain.rs,asset/**,nft.rs,role.rs,permission.rs,metadata.rs,trigger/**,parameter/**}`。
- - ISI 定义和注册表：`crates/iroha_data_model/src/isi/{mod.rs,register.rs,transfer.rs,mint_burn.rs,transparent.rs,registry.rs}`。
- - ISI 执行：`crates/iroha_core/src/smartcontracts/isi/{mod.rs,world.rs,domain.rs,account.rs,asset.rs,nft.rs,triggers/**}`。
- - 事件：`crates/iroha_data_model/src/events/**`。
- - 交易：`crates/iroha_data_model/src/transaction/**`。
+## Traceability (selected sources)
+ - Data model core: `crates/iroha_data_model/src/{account.rs,domain.rs,asset/**,nft.rs,role.rs,permission.rs,metadata.rs,trigger/**,parameter/**}`.
+ - ISI definitions and registry: `crates/iroha_data_model/src/isi/{mod.rs,register.rs,transfer.rs,mint_burn.rs,transparent.rs,registry.rs}`.
+ - ISI execution: `crates/iroha_core/src/smartcontracts/isi/{mod.rs,world.rs,domain.rs,account.rs,asset.rs,nft.rs,triggers/**}`.
+ - Events: `crates/iroha_data_model/src/events/**`.
+ - Transactions: `crates/iroha_data_model/src/transaction/**`.
 
-如果您希望将此规范扩展为呈现的 API/行为表或交叉链接到每个具体事件/错误，请说出这个词，我将扩展它。
+If you want this spec expanded into a rendered API/behavior table or cross‑linked to every concrete event/error, say the word and I’ll extend it.

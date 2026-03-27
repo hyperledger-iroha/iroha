@@ -81,7 +81,7 @@ Quando as variaveis OAuth estao presentes, o sandbox renderiza um botao **Sign i
 4. Escolha o tipo de conteudo `application/x-norito` na gaveta "Try it", clique em **Choose File** e selecione seu payload. O proxy reescreve a requisicao para `/proxy/v1/pipeline/submit` e marca com `X-TryIt-Client=docs-portal-rapidoc`.
 5. Para baixar respostas Norito, defina `Accept: application/x-norito`. Swagger/RapiDoc exibem o seletor de cabecalho na mesma gaveta e retransmitem o binario de volta pelo proxy.
 
-Para rotas somente JSON, o sandbox Try it embutido costuma ser mais rapido: informe o caminho (por exemplo, `/v1/accounts/i105.../assets`), selecione o metodo HTTP, cole um corpo JSON quando necessario e clique em **Send request** para inspecionar cabecalhos, duracao e payloads no proprio painel.
+Para rotas somente JSON, o sandbox Try it embutido costuma ser mais rapido: informe o caminho (por exemplo, `/v1/accounts/<i105-account-id>/assets`), selecione o metodo HTTP, cole um corpo JSON quando necessario e clique em **Send request** para inspecionar cabecalhos, duracao e payloads no proprio painel.
 
 ## Solucao de problemas
 

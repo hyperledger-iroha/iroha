@@ -21,8 +21,8 @@ slug: /norito/ምሳሌዎች/ጥሪ-ማስተላለፍ-ንብረት
 
 ## የመመዝገቢያ መመሪያ
 
-- የኮንትራቱን ባለስልጣን (ለምሳሌ `i105...`) በንብረቱ ያዋዋል እና ለባለሥልጣኑ የ `CanTransfer` ሚና ወይም ተመጣጣኝ ፈቃድ ይሰጣል።
-- በሰንሰለት አውቶማቲክ የአስተናጋጅ ጥሪዎችን መጠቅለል የሚችልበትን መንገድ በማንጸባረቅ 5 ክፍሎችን ከኮንትራቱ መለያ ወደ `i105...` ለማዛወር ወደ `call_transfer_asset` መግቢያ ነጥብ ይደውሉ።
+- የኮንትራቱን ባለስልጣን (ለምሳሌ `<i105-account-id>`) በንብረቱ ያዋዋል እና ለባለሥልጣኑ የ `CanTransfer` ሚና ወይም ተመጣጣኝ ፈቃድ ይሰጣል።
+- በሰንሰለት አውቶማቲክ የአስተናጋጅ ጥሪዎችን መጠቅለል የሚችልበትን መንገድ በማንጸባረቅ 5 ክፍሎችን ከኮንትራቱ መለያ ወደ `<i105-account-id>` ለማዛወር ወደ `call_transfer_asset` መግቢያ ነጥብ ይደውሉ።
 - ቀሪ ሂሳቦችን በI18NI0000016X ወይም I18NI0000017X በኩል ያረጋግጡ እና የሜታዳታ ጠባቂ የዝውውር አውድ መግባቱን ለማረጋገጥ ክስተቶችን ይፈትሹ።
 
 ## ተዛማጅ የኤስዲኬ መመሪያዎች
@@ -38,8 +38,8 @@ slug: /norito/ምሳሌዎች/ጥሪ-ማስተላለፍ-ንብረት
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

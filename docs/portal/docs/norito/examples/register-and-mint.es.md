@@ -20,9 +20,9 @@ Demuestra la creación de dominios con permisos, el registro de activos y la acu
 
 ## Recorrido del libro mayor
 
-- Asegúrate de que exista la cuenta de destino (por ejemplo `i105...`), reflejando la fase de configuración en cada quickstart del SDK.
+- Asegúrate de que exista la cuenta de destino (por ejemplo `<i105-account-id>`), reflejando la fase de configuración en cada quickstart del SDK.
 - Invoca el entrypoint `register_and_mint` para crear la definición de activo ROSE y acuñar 250 unidades para Alice en una sola transacción.
-- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account i105...` para confirmar que la acuñación tuvo éxito.
+- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account <i105-account-id>` para confirmar que la acuñación tuvo éxito.
 
 ## Guías de SDK relacionadas
 
@@ -44,7 +44,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

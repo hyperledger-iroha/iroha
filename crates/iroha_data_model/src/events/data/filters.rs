@@ -36,6 +36,8 @@ mod model {
         AssetDefinition(AssetDefinitionEventFilter),
         /// Matches [`NftEvent`]s
         Nft(NftEventFilter),
+        /// Matches [`RwaEvent`]s
+        Rwa(RwaEventFilter),
         /// Matches [`TriggerEvent`]s
         Trigger(TriggerEventFilter),
         /// Matches [`RoleEvent`]s
@@ -234,6 +236,16 @@ mod model {
         pub(super) event_set: NftEventSet,
     }
 
+    /// An event filter for [`RwaEvent`]s
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct RwaEventFilter {
+        /// If specified matches only events originating from this RWA lot.
+        pub(super) id_matcher: Option<RwaId>,
+        /// Matches only events from this set.
+        pub(super) event_set: RwaEventSet,
+    }
+
     /// An event filter for [`TriggerEvent`]s
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -284,6 +296,7 @@ impl_json_via_norito_bytes!(
     AssetEventFilter,
     AssetDefinitionEventFilter,
     NftEventFilter,
+    RwaEventFilter,
     TriggerEventFilter,
     RoleEventFilter,
     ConfigurationEventFilter,
@@ -1274,6 +1287,48 @@ impl EventFilter for NftEventFilter {
     }
 }
 
+impl RwaEventFilter {
+    /// Creates a new [`RwaEventFilter`] accepting all [`RwaEvent`]s.
+    pub const fn new() -> Self {
+        Self {
+            id_matcher: None,
+            event_set: RwaEventSet::all(),
+        }
+    }
+
+    /// Modifies a [`RwaEventFilter`] to accept only events originating from `id_matcher`.
+    #[must_use]
+    pub fn for_rwa(mut self, id_matcher: RwaId) -> Self {
+        self.id_matcher = Some(id_matcher);
+        self
+    }
+
+    /// Modifies a [`RwaEventFilter`] to accept only [`RwaEvent`]s in `event_set`.
+    #[must_use]
+    pub const fn for_events(mut self, event_set: RwaEventSet) -> Self {
+        self.event_set = event_set;
+        self
+    }
+}
+
+impl Default for RwaEventFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "transparent_api")]
+impl EventFilter for RwaEventFilter {
+    type Event = RwaEvent;
+
+    fn matches(&self, event: &Self::Event) -> bool {
+        self.id_matcher
+            .as_ref()
+            .is_none_or(|id| id == event.origin())
+            && self.event_set.matches(event)
+    }
+}
+
 impl TriggerEventFilter {
     /// Creates a new [`TriggerEventFilter`] accepting all [`TriggerEvent`]s.
     pub const fn new() -> Self {
@@ -1497,6 +1552,9 @@ impl EventFilter for DataEventFilter {
             (DataEventFilter::Nft(filter), DataEvent::Domain(DomainEvent::Nft(nft_event))) => {
                 filter.matches(nft_event)
             }
+            (DataEventFilter::Rwa(filter), DataEvent::Domain(DomainEvent::Rwa(rwa_event))) => {
+                filter.matches(rwa_event)
+            }
             (DataEventFilter::Trigger(filter), DataEvent::Trigger(trigger_event)) => {
                 filter.matches(trigger_event)
             }
@@ -1606,7 +1664,7 @@ pub mod prelude {
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
         ConfidentialEventFilter, ConfigurationEventFilter, DataEventFilter, DomainEventFilter,
         ExecutorEventFilter, NftEventFilter, OfflineTransferEventFilter, OracleEventFilter,
-        PeerEventFilter, ProofEventFilter, RoleEventFilter, SocialEventFilter,
+        PeerEventFilter, ProofEventFilter, RoleEventFilter, RwaEventFilter, SocialEventFilter,
         SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, TriggerEventFilter,
         VerifyingKeyEventFilter,
     };
@@ -1830,10 +1888,11 @@ mod tests {
             offline::{AndroidIntegrityPolicy, OfflinePlatformTokenSnapshot},
         };
 
-        let controller =
-            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
-                .map(crate::account::ParsedAccountId::into_account_id)
-                .unwrap();
+        let controller = AccountId::parse_encoded(
+            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+        )
+        .map(crate::account::ParsedAccountId::into_account_id)
+        .unwrap();
         let receiver = AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()

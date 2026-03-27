@@ -234,7 +234,7 @@ Todas as chaves serializam usando tuplas Norito para manter o hash determinísti
 Gateways assinam `RegistryEventV1` e sincronizam DNS/SoraFS ao:
 
 1. Buscar o último `NameRecordV1` referenciado pela sequência de eventos.
-2. Regenerar templates de resolvedor (endereços I105 preferidos + compactados (`sora`) como segunda opção, registros de texto).
+2. Regenerar templates de resolvedor (endereços i105 preferidos + compactados (`sora`) como segunda opção, registros de texto).
 3. Pinar dados de zona atualizados por meio do fluxo SoraDNS descrito em [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantias de entrega de eventos:
@@ -254,7 +254,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "i105...",
+    owner: "<i105-account-id>",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -281,7 +281,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "i105...",
+    steward: "<i105-account-id>",
     status: Active,
     payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
     pricing: [
@@ -294,10 +294,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("<i105-account-id>"), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "i105...",
+    fund_splitter_account: "<i105-account-id>",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

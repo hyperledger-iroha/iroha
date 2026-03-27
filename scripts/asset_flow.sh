@@ -5,9 +5,10 @@ set -euo pipefail
 IROHA_BIN="${IROHA_BIN:-target/release/iroha}"
 TORII0="${TORII0:-http://127.0.0.1:8080/}"
 TORII1="${TORII1:-http://127.0.0.1:8081/}"
-ASSET_DEFINITION_ID="${ASSET_DEFINITION_ID:-62Fk4FPcMuLvW5QjDGNF2a4jAmjM}"
-SENDER_ACCOUNT="${SENDER_ACCOUNT:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
-RECIPIENT_ACCOUNT="${RECIPIENT_ACCOUNT:-6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ}"
+ASSET_DEFINITION_ID="${ASSET_DEFINITION_ID:-7EAD8EFYUx1aVKZPUU1fyKvr8dF1}"
+ASSET_DEFINITION_NAME="${ASSET_DEFINITION_NAME:-USD}"
+SENDER_ACCOUNT="${SENDER_ACCOUNT:-sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D}"
+RECIPIENT_ACCOUNT="${RECIPIENT_ACCOUNT:-sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB}"
 ASSET_ID="${ASSET_ID:-${ASSET_DEFINITION_ID}#${SENDER_ACCOUNT}}"
 MINT_QTY="${MINT_QTY:-100}"
 XFER_QTY="${XFER_QTY:-25}"
@@ -18,7 +19,7 @@ if [ ! -x "$IROHA_BIN" ]; then
 fi
 
 echo "[1/4] Register asset definition: $ASSET_DEFINITION_ID"
-"$IROHA_BIN" --config defaults/client.toml asset definition register --id "$ASSET_DEFINITION_ID" -t Numeric || true
+"$IROHA_BIN" --config defaults/client.toml asset definition register --id "$ASSET_DEFINITION_ID" --name "$ASSET_DEFINITION_NAME" --scale 0 || true
 
 echo "[2/4] Mint $MINT_QTY to $SENDER_ACCOUNT"
 "$IROHA_BIN" --config defaults/client.toml --torii-url "$TORII0" asset mint --id "$ASSET_ID" --quantity "$MINT_QTY"

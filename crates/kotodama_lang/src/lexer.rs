@@ -7,6 +7,7 @@
 pub enum TokenKind {
     Fn,
     Let,
+    Const,
     Return,
     Break,
     Continue,
@@ -28,6 +29,8 @@ pub enum TokenKind {
     Kaizen,
     /// Public function modifier ("kotoage" or "言挙げ")
     Kotoage,
+    /// Read-only public function modifier (`view`).
+    View,
     True,
     False,
     Arrow,
@@ -517,6 +520,7 @@ impl<'a> Lexer<'a> {
         let kind = match ident.as_str() {
             "fn" => TokenKind::Fn,
             "let" => TokenKind::Let,
+            "const" => TokenKind::Const,
             "return" => TokenKind::Return,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
@@ -533,6 +537,7 @@ impl<'a> Lexer<'a> {
             "hajimari" | "始まり" => TokenKind::Hajimari,
             "kaizen" | "改善" => TokenKind::Kaizen,
             "kotoage" | "言挙げ" => TokenKind::Kotoage,
+            "view" => TokenKind::View,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "this" => TokenKind::This,

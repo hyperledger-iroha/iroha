@@ -116,7 +116,7 @@ class OperatorConsoleViewModel(application: Application) : AndroidViewModel(appl
         try {
             val payload =
                 TransactionPayload.builder()
-                    .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+                    .setAuthority("sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
                     .putMetadata("sample", "operator-console")
                     .build()
             val signed =

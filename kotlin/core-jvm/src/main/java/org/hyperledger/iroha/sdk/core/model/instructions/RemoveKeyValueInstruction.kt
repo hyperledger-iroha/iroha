@@ -28,6 +28,7 @@ class RemoveKeyValueInstruction private constructor(
         ACCOUNT("RemoveAccountKeyValue", "account"),
         ASSET_DEFINITION("RemoveAssetDefinitionKeyValue", "definition"),
         NFT("RemoveNftKeyValue", "nft"),
+        RWA("RemoveRwaKeyValue", "rwa"),
         TRIGGER("RemoveTriggerKeyValue", "trigger");
 
         companion object {
@@ -47,6 +48,7 @@ class RemoveKeyValueInstruction private constructor(
         fun setAccountId(accountId: String) = setTarget(Target.ACCOUNT, accountId)
         fun setAssetDefinitionId(assetDefinitionId: String) = setTarget(Target.ASSET_DEFINITION, assetDefinitionId)
         fun setNftId(nftId: String) = setTarget(Target.NFT, nftId)
+        fun setRwaId(rwaId: String) = setTarget(Target.RWA, rwaId)
         fun setTriggerId(triggerId: String) = setTarget(Target.TRIGGER, triggerId)
 
         internal fun setTarget(target: Target, id: String) = apply {

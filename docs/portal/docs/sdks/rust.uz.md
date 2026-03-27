@@ -150,7 +150,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -160,7 +160,7 @@ fn download_qr() -> eyre::Result<()> {
 
 `ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON-ni aks ettiradi
 sirt: u kanonik hisob identifikatorini o'z ichiga oladi, literal bilan ko'rsatilgan
-kanonik I105 literal, tarmoq prefiksi/xatoni tuzatish metama'lumotlari, QR o'lchamlari va
+kanonik i105 literal, tarmoq prefiksi/xatoni tuzatish metama'lumotlari, QR o'lchamlari va
 hamyonlar/tadqiqchilar to'g'ridan-to'g'ri joylashtirishi mumkin bo'lgan inline SVG foydali yuk.
 
 ## 7. Tadbirlarga obuna bo'ling

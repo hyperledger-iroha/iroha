@@ -7,7 +7,7 @@ import { noritoEncodeInstruction, noritoDecodeInstruction } from "../src/norito.
 import { makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
-const ACCOUNT_ID = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+const ACCOUNT_ID = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
 const REGISTER_DOMAIN = {
   Register: {
@@ -129,7 +129,7 @@ test("norito encode/decode supports transfer asset instructions", () => {
   assert.deepEqual(decoded, instruction);
 });
 
-test("noritoDecodeInstruction keeps canonical public asset ids without @domain rewrites", () => {
+test("noritoDecodeInstruction keeps canonical asset-holding ids without @domain rewrites", () => {
   const bytes = loadInstructionBytes("mint_asset_numeric.json");
   const decoded = noritoDecodeInstruction(bytes);
   const assetId = decoded?.Mint?.Asset?.destination;
@@ -138,7 +138,7 @@ test("noritoDecodeInstruction keeps canonical public asset ids without @domain r
   assert.equal(assetId.includes("@"), false);
 });
 
-test("noritoDecodeInstruction preserves nested public asset identifiers", () => {
+test("noritoDecodeInstruction preserves nested asset-holding identifiers", () => {
   const bytes = loadInstructionBytes("burn_asset_numeric.json");
   const decoded = noritoDecodeInstruction(bytes);
   const assetId = decoded?.Burn?.Asset?.destination;

@@ -170,7 +170,7 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
         return try {
             val alias = "retail-wallet-demo"
             val payload = TransactionPayload.builder()
-                .setAuthority("6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV")
+                .setAuthority("sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53")
                 .putMetadata("scenario", "preview")
                 .build()
             val options = OfflineEnvelopeOptions.builder()
@@ -216,7 +216,6 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
             val formats = accountAddress.displayFormats(networkPrefix)
             AddressDisplay(
                 i105 = formats.i105,
-                i105Default = formats.i105Default,
                 i105Warning = formats.i105Warning,
                 defaultDomain = AccountAddress.DEFAULT_DOMAIN_NAME,
                 implicitDefault = true,
@@ -225,7 +224,6 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
         } catch (ex: AccountAddressException) {
             AddressDisplay(
                 i105 = "address-unavailable",
-                i105Default = "sora-unavailable",
                 i105Warning = AccountAddress.i105WarningMessage(),
                 defaultDomain = AccountAddress.DEFAULT_DOMAIN_NAME,
                 implicitDefault = true,
@@ -242,7 +240,6 @@ class WalletPreviewViewModel(application: Application) : AndroidViewModel(applic
 
     data class AddressDisplay(
         val i105: String,
-        val i105Default: String,
         val i105Warning: String,
         val defaultDomain: String,
         val implicitDefault: Boolean,

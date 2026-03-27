@@ -43,7 +43,8 @@ Options:
   --public-host <HOST>       Public host (default: 127.0.0.1)
   --release                  Build and run release binaries
   --no-sample-asset          Do not include kagami's sample asset
-  --asset-id <ID>            Asset definition to register (default: rose#wonderland)
+  --asset-id <ID>            Canonical Base58 asset definition id to register (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
+  --asset-name <NAME>        Asset definition name to register (default: USD)
   --skip-asset-register      Skip asset definition registration
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
@@ -65,7 +66,8 @@ BIND_HOST="127.0.0.1"
 PUBLIC_HOST="127.0.0.1"
 PROFILE="debug"
 SAMPLE_ASSET=true
-ASSET_ID="rose#wonderland"
+ASSET_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+ASSET_NAME="USD"
 SKIP_ASSET_REGISTER=false
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30
@@ -172,6 +174,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --asset-id)
       ASSET_ID="$2"
+      shift 2
+      ;;
+    --asset-name)
+      ASSET_NAME="$2"
       shift 2
       ;;
     --skip-asset-register)
@@ -657,7 +663,7 @@ CFG="$OUT_DIR/client.toml"
 if [[ "$SKIP_ASSET_REGISTER" != true ]]; then
   echo ""
   echo "Registering asset definition $ASSET_ID..."
-  "$CLI_BIN" --config "$CFG" asset definition register --id "$ASSET_ID"
+  "$CLI_BIN" --config "$CFG" asset definition register --id "$ASSET_ID" --name "$ASSET_NAME" --scale 0
 fi
 
 echo ""

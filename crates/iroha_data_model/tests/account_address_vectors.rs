@@ -82,7 +82,6 @@ struct Member {
 struct Encodings {
     canonical_hex: String,
     i105: I105Encoding,
-    i105_default: String,
 }
 
 #[allow(dead_code)]
@@ -177,21 +176,6 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
     assert_eq!(
         case.encodings.i105.prefix, default_prefix,
         "{} i105 uses unexpected prefix",
-        case.case_id
-    );
-
-    // Default-discriminant I105 decoding.
-    let compressed_addr =
-        AccountAddress::from_i105(&case.encodings.i105_default).expect("default i105 decode");
-    assert_eq!(
-        compressed_addr, canonical_address,
-        "{} i105_default payload mismatch",
-        case.case_id
-    );
-    assert_eq!(
-        canonical_bytes_from_address(&compressed_addr),
-        canonical_bytes,
-        "{} i105_default canonical mismatch",
         case.case_id
     );
 
@@ -345,10 +329,6 @@ fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
             let err =
                 AccountAddress::from_i105_for_discriminant(&case.input, Some(expected_prefix))
                     .expect_err("i105 case should fail");
-            assert_error(&err, &case.expected_error, &case.case_id);
-        }
-        "i105_default" => {
-            let err = AccountAddress::from_i105(&case.input).expect_err("i105 case should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }
         "canonical_hex" => {

@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -165,11 +165,11 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 5,
   assetId,
 });
@@ -277,7 +277,7 @@ Explorer テレメトリは、`/v1/explorer/metrics` および
 `/v1/explorer/accounts/{account_id}/qr` エンドポイント。ダッシュボードで
 ポータルを強化するのと同じスナップショット。 `getExplorerMetrics()` は、
 ペイロードをロードし、ルートが無効な場合は `null` を返します。と組み合わせてください
-I105 (推奨)/sora (2 番目に優れた) リテラルとインラインが必要な場合は常に `getExplorerAccountQr()`
+i105 (推奨)/sora (2 番目に優れた) リテラルとインラインが必要な場合は常に `getExplorerAccountQr()`
 共有ボタンの SVG。
 
 ```ts
@@ -292,14 +292,14 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
   `qr metadata v${qr.qrVersion} ec=${qr.errorCorrection} prefix=${qr.networkPrefix}`,
 );
-````I105` を渡すと、エクスプローラーのデフォルトの圧縮ファイルが反映されます。
-セレクター;優先 I105 出力のオーバーライドを省略するか、`i105_qr` を要求します
+````i105` を渡すと、エクスプローラーのデフォルトの圧縮ファイルが反映されます。
+セレクター;優先 i105 出力のオーバーライドを省略するか、`i105_qr` を要求します
 QRセーフバリアントが必要な場合。圧縮リテラルは 2 番目に優れたものです
 Sora 専用の UX オプション。ヘルパーは常に正規の識別子を返します。
 選択したリテラル、およびメタデータ (ネットワーク プレフィックス、QR バージョン/モジュール、エラー)
@@ -516,7 +516,7 @@ Space Directory API は、ユニバーサル アカウント ID (UAID) のライ
   正規のアカウント ID ごとに資産保有をグループ化します。 `assetId` を渡してフィルタリングします。
   ポートフォリオを単一の資産インスタンスにまで落とし込みます。
 - `getUaidBindings(uaid)` はすべてのデータスペース ↔ アカウントを列挙します
-  バインディング (`I105` は `i105` リテラルを返します)。
+  バインディング (`i105` は `i105` リテラルを返します)。
 - `getUaidManifests(uaid, { dataspaceId })` は各機能マニフェストを返します。
   ライフサイクル ステータス、および監査用にバインドされたアカウント。
 
@@ -561,7 +561,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -571,7 +571,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

@@ -76,9 +76,9 @@ Em outra versão do script, selecione o manifesto de agregação:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ Em outra versão do script, selecione o manifesto de agregação:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ filtrado por `release`, seus auditores podem usar um programa CSV.
 - **Análise de metadados/governança:** JSON inline парсится напрямую; ссылки на файлы
   разрешаются относительно CSV. Os metadados não são fornecidos para validação.
 - **Controladores:** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  Eu tenho controladores espiões (por exemplo `i105...;i105...`) para não ser proprietário.
+  Eu tenho controladores espiões (por exemplo `<i105-account-id>;<i105-account-id>`) para não ser proprietário.
 
 Ошибки сообщаются сонтекстными номерами строк (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script é usado com o código `1`

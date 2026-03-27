@@ -19,9 +19,9 @@ fuente: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 ## جولة دفتر الأستاذ
 
-- Utilice el cable de alimentación (`i105...`) para conectar el cable y el conector de `CanTransfer` y el cable de alimentación.
-- Presione el botón `call_transfer_asset` para 5 veces el conector `i105...`, y luego presione el botón `i105...`. الأتمتة على السلسلة لنداءات المضيف.
-- Para cambiar la configuración de `FindAccountAssets` o `iroha_cli ledger assets list --account i105...` y de las opciones de configuración سياق النقل.
+- Utilice el cable de alimentación (`<i105-account-id>`) para conectar el cable y el conector de `CanTransfer` y el cable de alimentación.
+- Presione el botón `call_transfer_asset` para 5 veces el conector `<i105-account-id>`, y luego presione el botón `<i105-account-id>`. الأتمتة على السلسلة لنداءات المضيف.
+- Para cambiar la configuración de `FindAccountAssets` o `iroha_cli ledger assets list --account <i105-account-id>` y de las opciones de configuración سياق النقل.
 
 ## أدلة SDK ذات صلة
 
@@ -36,8 +36,8 @@ fuente: crates/ivm/docs/examples/08_call_transfer_asset.ko
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

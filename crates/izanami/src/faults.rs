@@ -27,16 +27,43 @@ use tracing::{debug, error, info, warn};
 /// Configuration for periodic fault injection.
 #[derive(Clone, Debug)]
 pub struct FaultConfig {
+    /// Delay range between injected fault actions.
     pub interval: RangeInclusive<Duration>,
+    /// Optional network-latency fault settings.
     pub network_latency: Option<NetworkLatencyConfig>,
+    /// Optional network-partition fault settings.
     pub network_partition: Option<NetworkPartitionConfig>,
+    /// Optional CPU pressure settings.
     pub cpu_stress: Option<CpuStressConfig>,
+    /// Optional disk-pressure settings.
     pub disk_saturation: Option<DiskSaturationConfig>,
 }
 
+/// A single fault action that can be applied directly to a peer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum FaultScenarioKind {
+    /// Kill a peer, wait briefly, then restart it.
+    CrashRestart,
+    /// Stop a peer, wipe storage, then restart it.
+    WipeStorage,
+    /// Submit obviously invalid traffic to the peer.
+    SpamInvalidTransactions,
+    /// Restart with exaggerated gossip delays for a short period.
+    NetworkLatencySpike,
+    /// Restart with an empty trusted peer roster for a short period.
+    NetworkPartition,
+    /// Burn CPU locally for a short period.
+    CpuStress,
+    /// Fill a small local file to emulate storage pressure.
+    DiskSaturation,
+}
+
+/// Settings for a temporary gossip-delay spike.
 #[derive(Clone, Debug)]
 pub struct NetworkLatencyConfig {
+    /// How long the latency injection should remain active.
     pub duration: RangeInclusive<Duration>,
+    /// Artificial gossip delay applied while the fault is active.
     pub gossip_delay: RangeInclusive<Duration>,
 }
 
@@ -49,8 +76,10 @@ impl Default for NetworkLatencyConfig {
     }
 }
 
+/// Settings for a temporary trusted-peer partition.
 #[derive(Clone, Debug)]
 pub struct NetworkPartitionConfig {
+    /// How long the partition should remain active.
     pub duration: RangeInclusive<Duration>,
 }
 
@@ -62,9 +91,12 @@ impl Default for NetworkPartitionConfig {
     }
 }
 
+/// Settings for a local CPU pressure burst.
 #[derive(Clone, Debug)]
 pub struct CpuStressConfig {
+    /// How long the CPU workers should run.
     pub duration: RangeInclusive<Duration>,
+    /// Range of worker-thread counts to start.
     pub workers: RangeInclusive<usize>,
 }
 
@@ -77,9 +109,12 @@ impl Default for CpuStressConfig {
     }
 }
 
+/// Settings for a local disk saturation burst.
 #[derive(Clone, Debug)]
 pub struct DiskSaturationConfig {
+    /// How long the write pressure should remain active.
     pub duration: RangeInclusive<Duration>,
+    /// Range of bytes to write during the fault.
     pub bytes: RangeInclusive<u64>,
 }
 
@@ -102,6 +137,7 @@ impl AsRef<Table> for TableRef<'_> {
 }
 
 impl FaultConfig {
+    /// Sample a deterministic delay between fault actions from the configured interval.
     pub fn sample_interval<R: Rng>(&self, rng: &mut R) -> Duration {
         let start = *self.interval.start();
         let end = *self.interval.end();
@@ -114,6 +150,7 @@ impl FaultConfig {
     }
 }
 
+/// Run repeated randomized fault scenarios against a peer until the deadline or stop signal.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_fault_loop<P: FaultPeer>(
     peer: P,
@@ -175,6 +212,20 @@ enum FaultScenario {
     NetworkPartition,
     CpuStress,
     DiskSaturation,
+}
+
+impl From<FaultScenarioKind> for FaultScenario {
+    fn from(value: FaultScenarioKind) -> Self {
+        match value {
+            FaultScenarioKind::CrashRestart => Self::CrashRestart,
+            FaultScenarioKind::WipeStorage => Self::WipeStorage,
+            FaultScenarioKind::SpamInvalidTransactions => Self::SpamInvalidTransactions,
+            FaultScenarioKind::NetworkLatencySpike => Self::NetworkLatencySpike,
+            FaultScenarioKind::NetworkPartition => Self::NetworkPartition,
+            FaultScenarioKind::CpuStress => Self::CpuStress,
+            FaultScenarioKind::DiskSaturation => Self::DiskSaturation,
+        }
+    }
 }
 
 struct FaultApplyCtx<'a, P: FaultPeer> {
@@ -268,6 +319,31 @@ impl FaultScenario {
             }
         }
     }
+}
+
+/// Apply a single fault scenario to a peer using the supplied deterministic seed.
+pub async fn apply_fault_scenario<P: FaultPeer>(
+    scenario: FaultScenarioKind,
+    peer: &P,
+    config: &FaultConfig,
+    config_layers: &Arc<Vec<Table>>,
+    genesis: &Arc<GenesisBlock>,
+    base_domain: &DomainId,
+    deadline: Instant,
+    seed: u64,
+) -> Result<()> {
+    let mut rng = StdRng::seed_from_u64(seed);
+    FaultScenario::from(scenario)
+        .apply(FaultApplyCtx {
+            peer,
+            config,
+            config_layers,
+            genesis,
+            base_domain,
+            rng: &mut rng,
+            deadline,
+        })
+        .await
 }
 
 async fn crash_and_restart<P: FaultPeer>(
@@ -578,7 +654,9 @@ fn sample_u64<R: Rng>(rng: &mut R, range: &RangeInclusive<u64>) -> u64 {
     rng.random_range(start..=end)
 }
 
+/// Minimal client surface used by fault helpers that need to submit invalid traffic.
 pub trait FaultClient: Clone + Send + Sync + 'static {
+    /// Submit one instruction and surface any failure to the fault harness.
     fn submit_instruction<I>(&self, instruction: I) -> Result<()>
     where
         I: Into<InstructionBox>;
@@ -593,14 +671,22 @@ impl FaultClient for iroha::client::Client {
     }
 }
 
+/// Abstraction over a peer that fault helpers can stop, restart, and inspect.
 pub trait FaultPeer: Clone + Send + Sync + 'static {
+    /// Client type used for instruction submission faults.
     type Client: FaultClient;
 
+    /// Stable human-readable identifier for logs and status output.
     fn mnemonic(&self) -> &str;
+    /// Filesystem directory that stores the peer's local block/state data.
     fn kura_store_dir(&self) -> PathBuf;
+    /// Client handle for submitting invalid traffic during a fault run.
     fn client(&self) -> Self::Client;
+    /// The peer's current trusted-peer roster expressed as TOML values.
     fn trusted_peers_pop_entries(&self) -> Result<Vec<Value>>;
+    /// Stop the peer process and return once shutdown has been requested.
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
+    /// Restart the peer using the supplied config layers and overlay tables.
     fn restart_with_layers<'a>(
         &'a self,
         config_layers: &'a Arc<Vec<Table>>,

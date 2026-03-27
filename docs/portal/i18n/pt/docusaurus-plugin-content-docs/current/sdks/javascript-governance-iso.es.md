@@ -56,7 +56,7 @@ node javascript/iroha_js/recipes/governance.mjs
 
 # Submit + fetch using live credentials.
 TORII_URL=https://torii.testnet.sora \
-AUTHORITY=i105... \
+AUTHORITY=<i105-account-id> \
 PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)" \
 CHAIN_ID=7f2c...-prod \
 GOV_SUBMIT=1 GOV_FETCH=1 \
@@ -172,7 +172,7 @@ Use um `AbortController` quando precisar cancelar ou enviar envios de governanç
 aceita um objeto `{ signal }` opcional para cada auxiliar POST mostrado abaixo.
 
 ```ts
-const authority = "i105...";
+const authority = "<i105-account-id>";
 const privateKey = Buffer.alloc(32, 0xaa);
 
 // All governance writes accept optional `{ signal }` options for cancellation.
@@ -201,7 +201,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected", ballot.reason);
 }
 
-const zkOwner = "i105..."; // canonical I105 account id for ZK public inputs
+const zkOwner = "<i105-account-id>"; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -229,7 +229,7 @@ const derived = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "i105...",
+      accountId: "<i105-account-id>",
       variant: "Normal",
       pk: validatorPk,
       proof: validatorProof,
@@ -276,9 +276,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "i105..." },
+  creditorAccount: { otherId: "<i105-account-id>" },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "i105...", leg: "delivery" },
+  supplementaryData: { account_id: "<i105-account-id>", leg: "delivery" },
 });
 ```
 

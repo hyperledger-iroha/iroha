@@ -19,6 +19,7 @@ pub mod oracle;
 pub mod query;
 pub mod ram_lfe;
 pub mod repo;
+pub mod rwa;
 pub mod settlement;
 /// SNS-backed ownership query handlers.
 pub mod sns;
@@ -105,6 +106,17 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::ReverseRepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoMarginCallIsi>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::RwaInstructionBox>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::RegisterRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::TransferRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::MergeRwas>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::RedeemRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::FreezeRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::UnfreezeRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::HoldRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::ReleaseRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::ForceTransferRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::SetRwaControls>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest>,
@@ -124,6 +136,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::domain_link::LinkAccountDomain>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::BindAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountLabel>,
+    dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::UnlinkAccountDomain>,
     dispatch_instruction::<iroha_data_model::isi::identifier::RegisterIdentifierPolicy>,
     dispatch_instruction::<iroha_data_model::isi::identifier::ActivateIdentifierPolicy>,
@@ -133,14 +146,14 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineReserve>,
-    dispatch_instruction::<iroha_data_model::isi::offline::CommitOfflineReserveOperation>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineLineage>,
+    dispatch_instruction::<iroha_data_model::isi::offline::CommitOfflineLineageOperation>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineAllowance>,
     dispatch_instruction::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>,
     dispatch_instruction::<iroha_data_model::isi::offline::ReclaimExpiredOfflineAllowance>,
-    dispatch_instruction::<iroha_data_model::isi::offline::ReserveOfflineEscrowBalance>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RefundOfflineEscrowBalance>,
+    dispatch_instruction::<iroha_data_model::isi::offline::LoadOfflineEscrowBalance>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RedeemOfflineEscrowBalance>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,
     dispatch_instruction::<iroha_data_model::isi::social::CancelTwitterEscrow>,
@@ -406,6 +419,29 @@ impl Execute for RemoveKeyValueBox {
             Self::AssetDefinition(isi) => isi.execute(authority, state_transaction),
             Self::Nft(isi) => isi.execute(authority, state_transaction),
             Self::Trigger(isi) => isi.execute(authority, state_transaction),
+        }
+    }
+}
+
+impl Execute for iroha_data_model::isi::rwa::RwaInstructionBox {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Register(isi) => isi.execute(authority, state_transaction),
+            Self::Transfer(isi) => isi.execute(authority, state_transaction),
+            Self::Merge(isi) => isi.execute(authority, state_transaction),
+            Self::Redeem(isi) => isi.execute(authority, state_transaction),
+            Self::Freeze(isi) => isi.execute(authority, state_transaction),
+            Self::Unfreeze(isi) => isi.execute(authority, state_transaction),
+            Self::Hold(isi) => isi.execute(authority, state_transaction),
+            Self::Release(isi) => isi.execute(authority, state_transaction),
+            Self::ForceTransfer(isi) => isi.execute(authority, state_transaction),
+            Self::SetControls(isi) => isi.execute(authority, state_transaction),
+            Self::SetKeyValue(isi) => isi.execute(authority, state_transaction),
+            Self::RemoveKeyValue(isi) => isi.execute(authority, state_transaction),
         }
     }
 }

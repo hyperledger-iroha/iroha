@@ -23,7 +23,7 @@ class AccountIdLiteralTest {
     fun rejectsDomainSuffixedLiterals() {
         val address = sampleI105(0x33)
         val error = assertFailsWith<IllegalArgumentException> {
-            requireCanonicalI105Address("$address@wonderland", "accountId")
+            requireCanonicalI105Address("$address@hbl.dataspace", "accountId")
         }
         assertEquals(
             "accountId must use canonical I105 encoded account without @domain",
@@ -58,6 +58,22 @@ class AccountIdLiteralTest {
             requireCanonicalI105Address("   ", "accountId")
         }
         assertEquals("accountId must not be blank", error.message)
+    }
+
+    @Test
+    fun parseEncodedRejectsFullwidthSentinelLiteral() {
+        val canonical = sampleI105(0x55)
+        val noncanonical = canonical.replaceFirst("sora", "ｓｏｒａ")
+
+        val parseError = assertFailsWith<AccountAddressException> {
+            AccountAddress.parseEncoded(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        }
+        assertEquals(AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, parseError.code)
+
+        val fromI105Error = assertFailsWith<AccountAddressException> {
+            AccountAddress.fromI105(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        }
+        assertEquals(AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, fromI105Error.code)
     }
 
     private fun sampleI105(fill: Int): String = AccountAddress

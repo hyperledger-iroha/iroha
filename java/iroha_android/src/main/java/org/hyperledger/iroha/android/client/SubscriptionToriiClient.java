@@ -63,10 +63,7 @@ public final class SubscriptionToriiClient {
 
   public CompletableFuture<SubscriptionPlanCreateResponse> createSubscriptionPlan(
       final SubscriptionPlanCreateRequest request) {
-    Objects.requireNonNull(request, "request");
-    final TransportRequest transport = buildPostRequest(PLANS_PATH, request.toJsonBytes());
-    notifyRequest(transport);
-    return executeHttpRequest(transport, SubscriptionJsonParser::parsePlanCreateResponse);
+    return unsupportedServerSideSigning("/v1/subscriptions/plans");
   }
 
   public CompletableFuture<SubscriptionListResponse> listSubscriptions(
@@ -79,11 +76,7 @@ public final class SubscriptionToriiClient {
 
   public CompletableFuture<SubscriptionCreateResponse> createSubscription(
       final SubscriptionCreateRequest request) {
-    Objects.requireNonNull(request, "request");
-    final TransportRequest transport =
-        buildPostRequest(SUBSCRIPTIONS_PATH, request.toJsonBytes());
-    notifyRequest(transport);
-    return executeHttpRequest(transport, SubscriptionJsonParser::parseSubscriptionCreateResponse);
+    return unsupportedServerSideSigning("/v1/subscriptions");
   }
 
   /**
@@ -101,38 +94,32 @@ public final class SubscriptionToriiClient {
 
   public CompletableFuture<SubscriptionActionResponse> pauseSubscription(
       final String subscriptionId, final SubscriptionActionRequest request) {
-    return executeSubscriptionAction(subscriptionId, "pause", request);
+    return unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/pause");
   }
 
   public CompletableFuture<SubscriptionActionResponse> resumeSubscription(
       final String subscriptionId, final SubscriptionActionRequest request) {
-    return executeSubscriptionAction(subscriptionId, "resume", request);
+    return unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/resume");
   }
 
   public CompletableFuture<SubscriptionActionResponse> cancelSubscription(
       final String subscriptionId, final SubscriptionActionRequest request) {
-    return executeSubscriptionAction(subscriptionId, "cancel", request);
+    return unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/cancel");
   }
 
   public CompletableFuture<SubscriptionActionResponse> keepSubscription(
       final String subscriptionId, final SubscriptionActionRequest request) {
-    return executeSubscriptionAction(subscriptionId, "keep", request);
+    return unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/keep");
   }
 
   public CompletableFuture<SubscriptionActionResponse> chargeSubscriptionNow(
       final String subscriptionId, final SubscriptionActionRequest request) {
-    return executeSubscriptionAction(subscriptionId, "charge-now", request);
+    return unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/charge-now");
   }
 
   public CompletableFuture<SubscriptionActionResponse> recordSubscriptionUsage(
       final String subscriptionId, final SubscriptionUsageRequest request) {
-    Objects.requireNonNull(request, "request");
-    final String normalizedId = requireNonBlank(subscriptionId, "subscription_id");
-    final String encodedId = urlEncode(normalizedId);
-    final String path = SUBSCRIPTIONS_PATH + "/" + encodedId + "/usage";
-    final TransportRequest transport = buildPostRequest(path, request.toJsonBytes());
-    notifyRequest(transport);
-    return executeHttpRequest(transport, SubscriptionJsonParser::parseActionResponse);
+    return unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/usage");
   }
 
   /** Exposes the underlying executor so auxiliary clients can share the same HTTP transport. */
@@ -269,6 +256,12 @@ public final class SubscriptionToriiClient {
     for (final ClientObserver observer : observers) {
       observer.onFailure(request, error);
     }
+  }
+
+  private <T> CompletableFuture<T> unsupportedServerSideSigning(final String endpoint) {
+    throw new UnsupportedOperationException(
+        endpoint
+            + " no longer accepts server-side signing inputs; submit a locally signed transaction instead.");
   }
 
   private <T> CompletableFuture<T> executeHttpRequest(

@@ -10,13 +10,13 @@ translation_last_reviewed: 2026-01-30
 ---
 
 ---
-title: I105 Network Prefix Registry
-description: Authoritative mapping between Iroha chain discriminants and I105 address prefixes.
+title: i105 Network Prefix Registry
+description: Authoritative mapping between Iroha chain discriminants and i105 address prefixes.
 ---
 
-# I105 Network Prefix Registry
+# i105 Network Prefix Registry
 
-The I105 encoding reserves a 6‑bit–to–14‑bit prefix that identifies the
+The i105 encoding reserves a 6‑bit–to–14‑bit prefix that identifies the
 originating chain. Each network MUST register a unique prefix so wallets,
 relays, and admission pipelines can detect cross-network mismatches before
 processing transactions. This registry is the authoritative source for the
@@ -30,22 +30,22 @@ changes.
 
 ## Registered Prefixes
 
-| Network | Chain ID | Chain Discriminant | I105 Prefix | Status | Notes |
+| Network | Chain ID | Chain Discriminant | i105 Prefix | Status | Notes |
 |---------|----------|--------------------|-------------|--------|-------|
 | Sora Nexus (Global) | `sora:nexus:global` | `0x02F1` (753) | `0x02F1` (753) | Production | Canonical prefix for the global Nexus network. Matches the Sora `chain_discriminant`; all production SDK builds MUST default to this value. |
-| Sora Testus (Testnet) | `809574f5-fee7-5e69-bfcf-52451e42d50f` | `0x0171` (369) | `0x0171` (369) | Testnet | Canonical prefix for the public Testus network. Use this prefix when validating addresses and emitting I105 strings for Testus deployments. |
+| Sora Testus (Testnet) | `809574f5-fee7-5e69-bfcf-52451e42d50f` | `0x0171` (369) | `0x0171` (369) | Testnet | Canonical prefix for the public Testus network. Use this prefix when validating addresses and emitting i105 strings for Testus deployments. |
 | Development (local) | `dev.local` | `0x0000` (0) | `0x0000` (0) | Reserved | Convenience prefix for single-node or CI environments. Never use on public networks; collisions are expected. |
 
 ### Usage Guidelines
 
-- **Consistency:** Always derive I105 prefixes directly from the chain
+- **Consistency:** Always derive i105 prefixes directly from the chain
   discriminant published in manifests and configuration files. Hard-coding
   divergent values will cause Torii admission to reject requests with
   `ERR_UNEXPECTED_NETWORK_PREFIX`.
 - **Collision avoidance:** Prefix assignments are globally unique. Before
   onboarding a new chain, file a registration entry in this document (and the
   accompanying JSON) and ensure downstream SDKs include the mapping.
-- **Validation:** Wallets and relays SHOULD compare the I105 prefix in incoming
+- **Validation:** Wallets and relays SHOULD compare the i105 prefix in incoming
   addresses against the expected chain discriminant before submitting requests.
 - **Change management:** Any update that modifies an existing prefix MUST be
   coordinated across the governance council and SDK maintainers. Add a new row

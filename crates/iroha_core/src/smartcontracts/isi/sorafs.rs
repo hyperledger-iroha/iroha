@@ -213,6 +213,7 @@ fn same_account_subject(left: &AccountId, right: &AccountId) -> bool {
 
 fn enforce_provider_owner(
     world: &impl crate::state::WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     authority: &AccountId,
     metadata: &Metadata,
     provider_hex: &str,
@@ -231,7 +232,9 @@ fn enforce_provider_owner(
     })?;
 
     let owner_literal = owner_str.trim();
-    if let Some(owner) = crate::block::parse_account_literal_with_world(world, owner_literal) {
+    if let Some(owner) =
+        crate::block::parse_account_literal_with_world(world, dataspace_catalog, owner_literal)
+    {
         if same_account_subject(&owner, authority) {
             return Ok(());
         }
@@ -245,7 +248,7 @@ fn enforce_provider_owner(
     }
 
     Err(invalid_parameter(format!(
-        "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a valid account id matching the submitting authority"
+        "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a canonical I105 account id or on-chain alias matching the submitting authority"
     )))
 }
 
@@ -253,9 +256,16 @@ fn ensure_provider_owner_matches_authority(
     authority: &AccountId,
     record: &CapacityDeclarationRecord,
     world: &impl crate::state::WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
 ) -> Result<(), InstructionExecutionError> {
     let provider_hex = hex::encode(record.provider_id.as_bytes());
-    enforce_provider_owner(world, authority, &record.metadata, &provider_hex)
+    enforce_provider_owner(
+        world,
+        dataspace_catalog,
+        authority,
+        &record.metadata,
+        &provider_hex,
+    )
 }
 
 fn ensure_provider_owner_registered(
@@ -1283,6 +1293,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
         )?;
         enforce_provider_owner(
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             authority,
             &record.metadata,
             &provider_hex,
@@ -1390,6 +1401,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             authority,
             declaration_record,
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
         )?;
         if let Some(owner) = state_transaction.world.provider_owners.get(&provider_id)
             && !same_account_subject(owner, authority)

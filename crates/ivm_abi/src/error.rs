@@ -28,6 +28,72 @@ impl BitOr for Perm {
     }
 }
 
+/// High-level trap category captured alongside the raw [`VMError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VmTrapKind {
+    OutOfGas,
+    OutOfMemory,
+    MemoryFault,
+    DecodeError,
+    InvalidOpcode,
+    UnknownSyscall,
+    NotImplemented,
+    AssertionFailed,
+    ExceededMaxCycles,
+    InvalidMetadata,
+    PermissionDenied,
+    PrivacyViolation,
+    RegisterOutOfBounds,
+    HTMAbort,
+    NoritoInvalid,
+    AbiTypeNotAllowed,
+    AmxBudgetExceeded,
+    Other,
+}
+
+/// Source location mapped from compiler-emitted debug metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmSourceLocation {
+    pub function: Option<String>,
+    pub path: Option<String>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+/// Budget-related execution snapshot captured at trap time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmBudgetSnapshot {
+    pub gas_limit: u64,
+    pub gas_remaining: u64,
+    pub gas_used: u64,
+    pub cycles: u64,
+    pub max_cycles: u64,
+    pub stack_limit_bytes: u64,
+    pub stack_bytes_used: u64,
+}
+
+/// Additional execution context captured at trap time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmExecutionContext {
+    pub entrypoint_pc: Option<u64>,
+    pub current_function: Option<String>,
+    pub opcode: Option<u16>,
+    pub syscall: Option<u32>,
+    pub predecoded_loaded: bool,
+    pub predecoded_hit: Option<bool>,
+}
+
+/// Structured runtime diagnostic emitted as a side channel when execution traps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmExecutionDiagnostic {
+    pub trap_kind: VmTrapKind,
+    pub message: String,
+    pub pc: u64,
+    pub source: Option<VmSourceLocation>,
+    pub budget: VmBudgetSnapshot,
+    pub context: VmExecutionContext,
+}
+
 /// VM errors.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum VMError {

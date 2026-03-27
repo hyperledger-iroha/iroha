@@ -54,43 +54,11 @@ impl Permission {
 }
 
 #[cfg(feature = "json")]
-fn minify_json_whitespace(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut in_string = false;
-    let mut escaped = false;
-
-    for ch in raw.chars() {
-        if in_string {
-            out.push(ch);
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' => {
-                in_string = true;
-                out.push(ch);
-            }
-            ' ' | '\n' | '\r' | '\t' => {}
-            _ => out.push(ch),
-        }
-    }
-
-    out
-}
-
-#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for Permission {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        use norito::json::{MapVisitor, RawValue};
+        use norito::json::{MapVisitor, Value};
 
         let mut visitor = MapVisitor::new(parser)?;
         let mut name: Option<Ident> = None;
@@ -108,10 +76,8 @@ impl norito::json::JsonDeserialize for Permission {
                     if payload.is_some() {
                         return Err(norito::json::Error::duplicate_field("payload"));
                     }
-                    let raw = visitor.parse_value::<RawValue>()?;
-                    payload = Some(Json::from_string_unchecked(minify_json_whitespace(
-                        raw.as_str(),
-                    )));
+                    let value = visitor.parse_value::<Value>()?;
+                    payload = Some(Json::from(value));
                 }
                 _ => visitor.skip_value()?,
             }
@@ -147,36 +113,36 @@ mod tests {
     }
 
     #[test]
-    fn permission_deserialization_minifies_payload_whitespace() {
+    fn permission_deserialization_canonicalizes_payload_json() {
         let decoded: Permission = norito::json::from_str(
             r#"{
                 "name": "CanDoThing",
-                "payload": {  "k" : 1 }
+                "payload": { "z": "\u0041", "a": 1 }
             }"#,
         )
         .expect("deserialize permission");
         let canonical = Permission::new(
             "CanDoThing".into(),
-            Json::from_string_unchecked("{\"k\":1}".to_owned()),
+            Json::from_string_unchecked("{\"a\":1,\"z\":\"A\"}".to_owned()),
         );
 
-        assert_eq!(decoded.payload().get(), "{\"k\":1}");
+        assert_eq!(decoded.payload().get(), "{\"a\":1,\"z\":\"A\"}");
         assert_eq!(decoded, canonical);
     }
 
     #[test]
-    fn permission_deserialization_keeps_duplicate_payload_keys_distinct() {
+    fn permission_deserialization_canonicalizes_object_key_order() {
         let stored =
-            deserialize_permission_with_parser(r#"{"name":"CanDoThing","payload":{"k":0,"k":1}}"#)
+            deserialize_permission_with_parser(r#"{"name":"CanDoThing","payload":{"z":0,"a":1}}"#)
                 .expect("deserialize permission");
         let canonical = Permission::new(
             "CanDoThing".into(),
-            Json::from_string_unchecked("{\"k\":1}".to_owned()),
+            Json::from_string_unchecked("{\"a\":1,\"z\":0}".to_owned()),
         );
 
-        assert_eq!(stored.payload().get(), "{\"k\":0,\"k\":1}");
-        assert_ne!(stored, canonical);
-        assert!(!BTreeSet::from([stored]).contains(&canonical));
+        assert_eq!(stored.payload().get(), "{\"a\":1,\"z\":0}");
+        assert_eq!(stored, canonical);
+        assert!(BTreeSet::from([stored]).contains(&canonical));
     }
 
     #[test]

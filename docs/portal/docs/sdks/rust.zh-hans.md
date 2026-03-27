@@ -150,7 +150,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -160,7 +160,7 @@ fn download_qr() -> eyre::Result<()> {
 
 `ExplorerAccountQrSnapshot` 镜像 `/v1/explorer/accounts/{id}/qr` JSON
 表面：它包括规范的帐户ID，用
-规范 I105 字面量、网络前缀/纠错元数据、QR 尺寸以及
+规范 i105 字面量、网络前缀/纠错元数据、QR 尺寸以及
 钱包/浏览器可以直接嵌入的内联 SVG 有效负载。
 
 ## 7. 订阅事件

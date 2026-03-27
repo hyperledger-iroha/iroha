@@ -25,11 +25,12 @@ use iroha_data_model::{
     permission,
     prelude::*,
     role::RoleId,
+    rwa::RwaId,
     smart_contract::manifest::{ContractManifest, EntrypointDescriptor, MANIFEST_METADATA_KEY},
     state::{
         AccountMetadataKey, AccountRoleKey, AssetDefinitionMetadataKey, AssetMetadataKey,
-        CanonicalStateKey, DomainMetadataKey, NftMetadataKey, StateAccessSetAdvisory,
-        TriggerMetadataKey, TxQueueKey,
+        CanonicalStateKey, DomainMetadataKey, NftMetadataKey, RwaMetadataKey,
+        StateAccessSetAdvisory, TriggerMetadataKey, TxQueueKey,
     },
     transaction::SignedTransaction,
 };
@@ -48,7 +49,7 @@ use crate::{
 /// Canonical string key used for conflict detection (Norito-like ordering).
 ///
 /// Keys are generated deterministically from data model identifiers such as
-/// `AccountId`, `DomainId`, `AssetDefinitionId`, `AssetId`, and `NftId`.
+/// `AccountId`, `DomainId`, `AssetDefinitionId`, `AssetId`, `NftId`, and `RwaId`.
 pub type AccessKey = String;
 
 /// Access set with separate read and write collections.
@@ -542,6 +543,13 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             canonical.push(CanonicalStateKey::NftMetadata(NftMetadataKey { id, key }));
             return Some(());
         }
+        if let Some(rest) = raw.strip_prefix("rwa.detail:") {
+            let (id, key) = rest.split_once(':')?;
+            let id: RwaId = id.parse().ok()?;
+            let key: Name = key.parse().ok()?;
+            canonical.push(CanonicalStateKey::RwaMetadata(RwaMetadataKey { id, key }));
+            return Some(());
+        }
         if let Some(rest) = raw.strip_prefix("trigger.detail:") {
             let (id, key) = rest.split_once(':')?;
             let id: TriggerId = id.parse().ok()?;
@@ -613,6 +621,11 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             canonical.push(CanonicalStateKey::Nft(id));
             return Some(());
         }
+        if let Some(rest) = raw.strip_prefix("rwa:") {
+            let id: RwaId = rest.parse().ok()?;
+            canonical.push(CanonicalStateKey::Rwa(id));
+            return Some(());
+        }
         if let Some(rest) = raw.strip_prefix("trigger:") {
             let id: TriggerId = rest.parse().ok()?;
             canonical.push(CanonicalStateKey::Trigger(id));
@@ -647,6 +660,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             CanonicalStateKey::Asset(id) => format!("asset:{id}"),
             CanonicalStateKey::AssetDefinition(id) => format!("asset_def:{id}"),
             CanonicalStateKey::Nft(id) => format!("nft:{id}"),
+            CanonicalStateKey::Rwa(id) => format!("rwa:{id}"),
             CanonicalStateKey::Trigger(id) => format!("trigger:{id}"),
             CanonicalStateKey::Role(id) => format!("role:{id}"),
             CanonicalStateKey::AccountPermissions(id) => format!("perm.account:{id}"),
@@ -665,6 +679,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             }
             CanonicalStateKey::AssetMetadata(key) => format!("asset.detail:{}:{}", key.id, key.key),
             CanonicalStateKey::NftMetadata(key) => format!("nft.detail:{}:{}", key.id, key.key),
+            CanonicalStateKey::RwaMetadata(key) => format!("rwa.detail:{}:{}", key.id, key.key),
             CanonicalStateKey::TriggerMetadata(key) => {
                 format!("trigger.detail:{}:{}", key.id, key.key)
             }
@@ -900,6 +915,39 @@ where
                 add_account_r(&mut set, &t.source);
                 add_account_r(&mut set, &t.destination);
             }
+        }
+        return set;
+    }
+
+    if let Some(rb) = any.downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>() {
+        use iroha_data_model::isi::rwa::RwaInstructionBox;
+
+        match rb {
+            RwaInstructionBox::Register(r) => {
+                add_domain_rw(&mut set, r.rwa.domain());
+            }
+            RwaInstructionBox::Transfer(t) => {
+                add_rwa_rw(&mut set, t.rwa());
+                add_account_r(&mut set, t.source());
+                add_account_r(&mut set, t.destination());
+            }
+            RwaInstructionBox::Merge(m) => {
+                for parent in m.parents() {
+                    add_rwa_rw(&mut set, parent.rwa());
+                }
+            }
+            RwaInstructionBox::Redeem(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::Freeze(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::Unfreeze(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::Hold(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::Release(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::ForceTransfer(r) => {
+                add_rwa_rw(&mut set, r.rwa());
+                add_account_r(&mut set, r.destination());
+            }
+            RwaInstructionBox::SetControls(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::SetKeyValue(r) => add_rwa_detail_rw(&mut set, &r.object, &r.key),
+            RwaInstructionBox::RemoveKeyValue(r) => add_rwa_detail_rw(&mut set, &r.object, &r.key),
         }
         return set;
     }
@@ -1195,6 +1243,12 @@ fn key_nft(id: &NftId) -> AccessKey {
 fn key_nft_detail(id: &NftId, key: &Name) -> AccessKey {
     format!("nft.detail:{id}:{key}")
 }
+fn key_rwa(id: &RwaId) -> AccessKey {
+    format!("rwa:{id}")
+}
+fn key_rwa_detail(id: &RwaId, key: &Name) -> AccessKey {
+    format!("rwa.detail:{id}:{key}")
+}
 
 fn add_account_r(set: &mut AccessSet, id: &AccountId) {
     set.add_read(key_account(id));
@@ -1257,6 +1311,17 @@ fn add_nft_rw(set: &mut AccessSet, id: &NftId) {
 fn add_nft_detail_rw(set: &mut AccessSet, id: &NftId, key: &Name) {
     set.add_read(key_nft(id));
     let d = key_nft_detail(id, key);
+    set.add_read(d.clone());
+    set.add_write(d);
+}
+fn add_rwa_rw(set: &mut AccessSet, id: &RwaId) {
+    let k = key_rwa(id);
+    set.add_read(k.clone());
+    set.add_write(k);
+}
+fn add_rwa_detail_rw(set: &mut AccessSet, id: &RwaId, key: &Name) {
+    set.add_read(key_rwa(id));
+    let d = key_rwa_detail(id, key);
     set.add_read(d.clone());
     set.add_write(d);
 }
@@ -2079,6 +2144,8 @@ mod tests {
             EntrypointDescriptor {
                 name: "main".to_owned(),
                 kind: EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: vec!["state:alpha".to_owned()],
                 write_keys: vec!["state:beta".to_owned()],
@@ -2089,6 +2156,8 @@ mod tests {
             EntrypointDescriptor {
                 name: "run".to_owned(),
                 kind: EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: vec!["state:run-read".to_owned()],
                 write_keys: vec!["state:run-write".to_owned()],
@@ -2165,6 +2234,8 @@ mod tests {
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: vec!["state:alpha".to_owned()],
             write_keys: vec!["state:beta".to_owned()],
@@ -2242,6 +2313,8 @@ mod tests {
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],

@@ -1218,7 +1218,7 @@ mod committed_tx_predicate_tests {
             MerkleProof::from_audit_path(0, vec![]);
 
         let authority = account::AccountId::parse_encoded(
-            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
         )
         .expect("valid authority")
         .into_account_id();
@@ -1586,6 +1586,27 @@ impl EvaluateSelector<crate::nft::Nft> for () {
         batch: impl Iterator<Item = crate::nft::Nft>,
     ) -> Result<crate::query::QueryOutputBatchBox, crate::query::error::QueryExecutionFail> {
         let ids: Vec<crate::nft::NftId> = batch.map(|n| n.id().clone()).collect();
+        Ok(crate::query::QueryOutputBatchBox::from(ids))
+    }
+}
+
+#[cfg(feature = "ids_projection")]
+impl EvaluateSelector<crate::rwa::Rwa> for () {
+    fn project_clone<'a, I>(
+        &self,
+        batch: I,
+    ) -> Result<crate::query::QueryOutputBatchBox, crate::query::error::QueryExecutionFail>
+    where
+        I: Iterator<Item = &'a crate::rwa::Rwa> + 'a,
+    {
+        let ids: Vec<crate::rwa::RwaId> = batch.map(|rwa| rwa.id().clone()).collect();
+        Ok(crate::query::QueryOutputBatchBox::from(ids))
+    }
+    fn project(
+        &self,
+        batch: impl Iterator<Item = crate::rwa::Rwa>,
+    ) -> Result<crate::query::QueryOutputBatchBox, crate::query::error::QueryExecutionFail> {
+        let ids: Vec<crate::rwa::RwaId> = batch.map(|rwa| rwa.id().clone()).collect();
         Ok(crate::query::QueryOutputBatchBox::from(ids))
     }
 }

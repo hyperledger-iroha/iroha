@@ -240,7 +240,7 @@ belong to that slice. Downstream components use this ledger-backed view:
   reloading manifest JSON.
 - Torii now exposes `GET /v1/space-directory/uaids/{uaid}` for operators and
   SDKs that need to introspect bindings directly. Append
-  `canonical I105 output` if you need the I105 literals for QR
+  `canonical I105 output` if you need the i105 literals for QR
   payloads; I105 strings remain the default.【docs/source/torii/portfolio_api.md】
 
 ### 5.1 CLI manifest & binding inspectors
@@ -329,7 +329,7 @@ canonical `AssetPermissionManifest` JSON:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["i105..."],
+      "accounts": ["<i105-account-id>"],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -387,7 +387,7 @@ Sample request body:
 
 ```jsonc
 {
-  "authority": "i105...",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -444,7 +444,7 @@ Sample JSON body:
 
 ```jsonc
 {
-  "authority": "i105...",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,

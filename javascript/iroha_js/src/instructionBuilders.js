@@ -4,6 +4,8 @@ import {
   ensureCanonicalAccountId,
   normalizeAccountId,
   normalizeAssetId,
+  normalizeAssetHoldingId,
+  normalizeRwaId,
 } from "./normalizers.js";
 import { MultisigSpec, MultisigSpecBuilder } from "./multisig.js";
 import {
@@ -310,6 +312,138 @@ function normalizeMetadata(metadata) {
   }
   const base = assertPlainObject(metadata, "metadata");
   return normalizeJsonValue(base, "metadata");
+}
+
+function normalizeBooleanFlag(value, name) {
+  if (value === undefined || value === null) {
+    return false;
+  }
+  if (typeof value !== "boolean") {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${name} must be a boolean`, name);
+  }
+  return value;
+}
+
+function normalizeJsonObjectLike(value, name) {
+  if (typeof value === "string") {
+    let parsed;
+    try {
+      parsed = JSON.parse(value);
+    } catch (error) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${name} must be a plain object or JSON object string`,
+        name,
+      );
+    }
+    return assertPlainObject(parsed, name);
+  }
+  return assertPlainObject(value, name);
+}
+
+function normalizeOptionalString(value, name) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return assertString(value, name);
+}
+
+function normalizeRwaParentRefs(value, path) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    fail(ValidationErrorCode.INVALID_OBJECT, `${path} must be an array`, path);
+  }
+  return value.map((entry, index) => {
+    const source = normalizeJsonObjectLike(entry, `${path}[${index}]`);
+    return {
+      rwa: normalizeRwaId(source.rwa, `${path}[${index}].rwa`),
+      quantity: asNumericQuantity(source.quantity, `${path}[${index}].quantity`),
+    };
+  });
+}
+
+function normalizeRwaControlPolicy(value, path) {
+  const source =
+    value === undefined || value === null ? {} : normalizeJsonObjectLike(value, path);
+  const controllerAccountsInput =
+    source.controllerAccounts ?? source.controller_accounts ?? [];
+  const controllerRolesInput = source.controllerRoles ?? source.controller_roles ?? [];
+  if (!Array.isArray(controllerAccountsInput)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${path}.controllerAccounts must be an array`,
+      `${path}.controllerAccounts`,
+    );
+  }
+  if (!Array.isArray(controllerRolesInput)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${path}.controllerRoles must be an array`,
+      `${path}.controllerRoles`,
+    );
+  }
+  return {
+    controller_accounts: controllerAccountsInput.map((accountId, index) =>
+      normalizeAccountId(accountId, `${path}.controllerAccounts[${index}]`),
+    ),
+    controller_roles: controllerRolesInput.map((roleId, index) =>
+      assertString(roleId, `${path}.controllerRoles[${index}]`),
+    ),
+    freeze_enabled: normalizeBooleanFlag(
+      source.freezeEnabled ?? source.freeze_enabled,
+      `${path}.freezeEnabled`,
+    ),
+    hold_enabled: normalizeBooleanFlag(
+      source.holdEnabled ?? source.hold_enabled,
+      `${path}.holdEnabled`,
+    ),
+    force_transfer_enabled: normalizeBooleanFlag(
+      source.forceTransferEnabled ?? source.force_transfer_enabled,
+      `${path}.forceTransferEnabled`,
+    ),
+    redeem_enabled: normalizeBooleanFlag(
+      source.redeemEnabled ?? source.redeem_enabled,
+      `${path}.redeemEnabled`,
+    ),
+  };
+}
+
+function normalizeRegisterRwaPayload(value, path = "rwa") {
+  const source = normalizeJsonObjectLike(value, path);
+  return {
+    domain: assertString(source.domain, `${path}.domain`),
+    quantity: asNumericQuantity(source.quantity, `${path}.quantity`),
+    spec: normalizeJsonValue(assertPlainObject(source.spec, `${path}.spec`), `${path}.spec`),
+    primary_reference: assertString(
+      source.primaryReference ?? source.primary_reference,
+      `${path}.primaryReference`,
+    ),
+    status: normalizeOptionalString(source.status, `${path}.status`),
+    metadata:
+      source.metadata === undefined || source.metadata === null
+        ? {}
+        : normalizeJsonValue(assertPlainObject(source.metadata, `${path}.metadata`), `${path}.metadata`),
+    parents: normalizeRwaParentRefs(source.parents, `${path}.parents`),
+    controls: normalizeRwaControlPolicy(source.controls, `${path}.controls`),
+  };
+}
+
+function normalizeMergeRwasPayload(value, path = "merge") {
+  const source = normalizeJsonObjectLike(value, path);
+  return {
+    parents: normalizeRwaParentRefs(source.parents, `${path}.parents`),
+    primary_reference: assertString(
+      source.primaryReference ?? source.primary_reference,
+      `${path}.primaryReference`,
+    ),
+    status: normalizeOptionalString(source.status, `${path}.status`),
+    metadata:
+      source.metadata === undefined || source.metadata === null
+        ? {}
+        : normalizeJsonValue(assertPlainObject(source.metadata, `${path}.metadata`), `${path}.metadata`),
+  };
 }
 
 function normalizeMultisigSpecPayload(spec, path) {
@@ -1680,11 +1814,14 @@ function normalizeAccountIds(values, name, { allowEmpty = false } = {}) {
 
 /**
  * Build a `Mint::Asset` instruction payload.
- * @param {{ assetId: string, quantity: string|number|bigint }} options
+ * @param {{ assetHoldingId: string, quantity: string|number|bigint }} options
  * @returns {{Mint: {Asset: {object: string, destination: string}}}}
  */
-export function buildMintAssetInstruction({ assetId, quantity }) {
-  const destination = normalizeAssetId(assetId, "assetId");
+export function buildMintAssetInstruction({ assetHoldingId, assetId, quantity }) {
+  const destination = normalizeAssetHoldingId(
+    assetHoldingId ?? assetId,
+    assetHoldingId !== undefined ? "assetHoldingId" : "assetId",
+  );
   const object = asNumericQuantity(quantity, "quantity");
   return {
     Mint: {
@@ -1698,11 +1835,14 @@ export function buildMintAssetInstruction({ assetId, quantity }) {
 
 /**
  * Build a `Burn::Asset` instruction payload.
- * @param {{ assetId: string, quantity: string|number|bigint }} options
+ * @param {{ assetHoldingId: string, quantity: string|number|bigint }} options
  * @returns {{Burn: {Asset: {object: string, destination: string}}}}
  */
-export function buildBurnAssetInstruction({ assetId, quantity }) {
-  const destination = normalizeAssetId(assetId, "assetId");
+export function buildBurnAssetInstruction({ assetHoldingId, assetId, quantity }) {
+  const destination = normalizeAssetHoldingId(
+    assetHoldingId ?? assetId,
+    assetHoldingId !== undefined ? "assetHoldingId" : "assetId",
+  );
   const object = asNumericQuantity(quantity, "quantity");
   return {
     Burn: {
@@ -1758,15 +1898,19 @@ export function buildBurnTriggerRepetitionsInstruction({
 
 /**
  * Build a `Transfer::Asset` instruction payload.
- * @param {{ sourceAssetId: string, quantity: string|number|bigint, destinationAccountId: string }} options
+ * @param {{ sourceAssetHoldingId: string, quantity: string|number|bigint, destinationAccountId: string }} options
  * @returns {{Transfer: {Asset: {source: string, object: string, destination: string}}}}
  */
 export function buildTransferAssetInstruction({
+  sourceAssetHoldingId,
   sourceAssetId,
   quantity,
   destinationAccountId,
 }) {
-  const source = normalizeAssetId(sourceAssetId, "sourceAssetId");
+  const source = normalizeAssetHoldingId(
+    sourceAssetHoldingId ?? sourceAssetId,
+    sourceAssetHoldingId !== undefined ? "sourceAssetHoldingId" : "sourceAssetId",
+  );
   const destination = normalizeAccountId(
     destinationAccountId,
     "destinationAccountId",
@@ -1860,6 +2004,190 @@ export function buildTransferNftInstruction({
         object,
         destination,
       },
+    },
+  };
+}
+
+/**
+ * Build a `RegisterRwa` instruction payload.
+ * @param {object} options
+ * @returns {{RegisterRwa: {rwa: object}}}
+ */
+export function buildRegisterRwaInstruction(options) {
+  const source = assertPlainObject(options, "registerRwa");
+  return {
+    RegisterRwa: {
+      rwa: normalizeRegisterRwaPayload(source.rwa ?? source.rwaJson ?? source, "registerRwa.rwa"),
+    },
+  };
+}
+
+/**
+ * Build a `TransferRwa` instruction payload.
+ * @param {{ sourceAccountId: string, rwaId: string, quantity: string|number|bigint, destinationAccountId: string }} options
+ * @returns {{TransferRwa: {source: string, rwa: string, quantity: string, destination: string}}}
+ */
+export function buildTransferRwaInstruction({
+  sourceAccountId,
+  rwaId,
+  quantity,
+  destinationAccountId,
+}) {
+  return {
+    TransferRwa: {
+      source: normalizeAccountId(sourceAccountId, "sourceAccountId"),
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+      quantity: asNumericQuantity(quantity, "quantity"),
+      destination: normalizeAccountId(destinationAccountId, "destinationAccountId"),
+    },
+  };
+}
+
+/**
+ * Build a `MergeRwas` instruction payload.
+ * @param {object} options
+ * @returns {{MergeRwas: object}}
+ */
+export function buildMergeRwasInstruction(options) {
+  const source = assertPlainObject(options, "mergeRwas");
+  return {
+    MergeRwas: normalizeMergeRwasPayload(
+      source.merge ?? source.mergeJson ?? source,
+      "mergeRwas.merge",
+    ),
+  };
+}
+
+/**
+ * Build a `RedeemRwa` instruction payload.
+ * @param {{ rwaId: string, quantity: string|number|bigint }} options
+ * @returns {{RedeemRwa: {rwa: string, quantity: string}}}
+ */
+export function buildRedeemRwaInstruction({ rwaId, quantity }) {
+  return {
+    RedeemRwa: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+      quantity: asNumericQuantity(quantity, "quantity"),
+    },
+  };
+}
+
+/**
+ * Build a `FreezeRwa` instruction payload.
+ * @param {{ rwaId: string }} options
+ * @returns {{FreezeRwa: {rwa: string}}}
+ */
+export function buildFreezeRwaInstruction({ rwaId }) {
+  return {
+    FreezeRwa: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+    },
+  };
+}
+
+/**
+ * Build an `UnfreezeRwa` instruction payload.
+ * @param {{ rwaId: string }} options
+ * @returns {{UnfreezeRwa: {rwa: string}}}
+ */
+export function buildUnfreezeRwaInstruction({ rwaId }) {
+  return {
+    UnfreezeRwa: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+    },
+  };
+}
+
+/**
+ * Build a `HoldRwa` instruction payload.
+ * @param {{ rwaId: string, quantity: string|number|bigint }} options
+ * @returns {{HoldRwa: {rwa: string, quantity: string}}}
+ */
+export function buildHoldRwaInstruction({ rwaId, quantity }) {
+  return {
+    HoldRwa: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+      quantity: asNumericQuantity(quantity, "quantity"),
+    },
+  };
+}
+
+/**
+ * Build a `ReleaseRwa` instruction payload.
+ * @param {{ rwaId: string, quantity: string|number|bigint }} options
+ * @returns {{ReleaseRwa: {rwa: string, quantity: string}}}
+ */
+export function buildReleaseRwaInstruction({ rwaId, quantity }) {
+  return {
+    ReleaseRwa: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+      quantity: asNumericQuantity(quantity, "quantity"),
+    },
+  };
+}
+
+/**
+ * Build a `ForceTransferRwa` instruction payload.
+ * @param {{ rwaId: string, quantity: string|number|bigint, destinationAccountId: string }} options
+ * @returns {{ForceTransferRwa: {rwa: string, quantity: string, destination: string}}}
+ */
+export function buildForceTransferRwaInstruction({
+  rwaId,
+  quantity,
+  destinationAccountId,
+}) {
+  return {
+    ForceTransferRwa: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+      quantity: asNumericQuantity(quantity, "quantity"),
+      destination: normalizeAccountId(destinationAccountId, "destinationAccountId"),
+    },
+  };
+}
+
+/**
+ * Build a `SetRwaControls` instruction payload.
+ * @param {{ rwaId: string, controls?: object|string, controlsJson?: string }} options
+ * @returns {{SetRwaControls: {rwa: string, controls: object}}}
+ */
+export function buildSetRwaControlsInstruction(options) {
+  const source = assertPlainObject(options, "setRwaControls");
+  return {
+    SetRwaControls: {
+      rwa: normalizeRwaId(source.rwaId, "rwaId"),
+      controls: normalizeRwaControlPolicy(
+        source.controls ?? source.controlsJson,
+        "setRwaControls.controls",
+      ),
+    },
+  };
+}
+
+/**
+ * Build a `SetRwaKeyValue` instruction payload.
+ * @param {{ rwaId: string, key: string, value: unknown }} options
+ * @returns {{SetRwaKeyValue: {rwa: string, key: string, value: unknown}}}
+ */
+export function buildSetRwaKeyValueInstruction({ rwaId, key, value }) {
+  return {
+    SetRwaKeyValue: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+      key: assertString(key, "key"),
+      value: normalizeJsonValue(value, "value"),
+    },
+  };
+}
+
+/**
+ * Build a `RemoveRwaKeyValue` instruction payload.
+ * @param {{ rwaId: string, key: string }} options
+ * @returns {{RemoveRwaKeyValue: {rwa: string, key: string}}}
+ */
+export function buildRemoveRwaKeyValueInstruction({ rwaId, key }) {
+  return {
+    RemoveRwaKeyValue: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+      key: assertString(key, "key"),
     },
   };
 }
@@ -2733,7 +3061,7 @@ export function buildFinalizeElectionInstruction(options) {
   };
 }
 
-export { normalizeAccountId, normalizeAssetId };
+export { normalizeAccountId, normalizeAssetId, normalizeAssetHoldingId, normalizeRwaId };
 
 /**
  * Helper that encodes a builder result to ensure structural validity.

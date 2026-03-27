@@ -16,13 +16,13 @@ set -euo pipefail
 #
 # Env vars:
 #   - CLI_CONFIG: optional path to client config TOML (passed via --config)
-#   - AUTHORITY: AccountId for VK ops (e.g., 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
+#   - AUTHORITY: AccountId for VK ops (e.g., sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D)
 #   - PRIVATE_KEY: ExposedPrivateKey for AUTHORITY
 #   - BACKEND: proof backend (default: halo2/ipa)
 #   - ASSET_DEFINITION_ID: canonical public asset definition id (default: 62Fk4FPcMuLvW5QjDGNF2a4jAmjM)
-#   - FROM: debit account for shield (default: 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
+#   - FROM: debit account for shield (default: sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D)
 #   - ASSET_ID: canonical public AssetId (defaults to "${ASSET_DEFINITION_ID}#${FROM}")
-#   - TO: credit account for unshield (default: 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
+#   - TO: credit account for unshield (default: sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D)
 #   - AMOUNT: amount for shield/unshield (default: 1000)
 #   - NOTE_COMMITMENT_HEX: 64-hex for shield (default: 32 zero bytes)
 #   - VK_TRANSFER_NAME: name for transfer VK (default: vk_transfer)
@@ -40,13 +40,13 @@ if [[ -n "${CLI_CONFIG:-}" ]]; then
   CONFIG_FLAG=(--config "$CLI_CONFIG")
 fi
 
-AUTHORITY="${AUTHORITY:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
+AUTHORITY="${AUTHORITY:-sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D}"
 PRIVATE_KEY="${PRIVATE_KEY:-ed0120...}"
 BACKEND="${BACKEND:-halo2/ipa}"
-FROM="${FROM:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
+FROM="${FROM:-sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D}"
 ASSET_DEFINITION_ID="${ASSET_DEFINITION_ID:-62Fk4FPcMuLvW5QjDGNF2a4jAmjM}"
 ASSET_ID="${ASSET_ID:-${ASSET_DEFINITION_ID}#${FROM}}"
-TO="${TO:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
+TO="${TO:-sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D}"
 AMOUNT="${AMOUNT:-1000}"
 NOTE_COMMITMENT_HEX="${NOTE_COMMITMENT_HEX:-0000000000000000000000000000000000000000000000000000000000000000}"
 VK_TRANSFER_NAME="${VK_TRANSFER_NAME:-vk_transfer}"

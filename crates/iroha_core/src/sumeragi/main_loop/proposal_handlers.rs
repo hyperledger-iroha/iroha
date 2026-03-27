@@ -914,6 +914,44 @@ impl Actor {
             .propose
             .authoritative_block_slots
             .insert((height, view), block_hash);
+        self.subsystems
+            .propose
+            .authoritative_block_frontiers
+            .retain(|(entry_height, entry_view, entry_hash), _| {
+                *entry_height != height || *entry_view != view || *entry_hash == block_hash
+            });
+    }
+
+    pub(super) fn authoritative_slot_frontier_info(
+        &self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<super::message::BlockCreatedFrontierInfo> {
+        self.subsystems
+            .propose
+            .authoritative_block_frontiers
+            .get(&(height, view, block_hash))
+            .cloned()
+    }
+
+    fn note_authoritative_slot_frontier_info(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        frontier: super::message::BlockCreatedFrontierInfo,
+    ) {
+        self.subsystems
+            .propose
+            .authoritative_block_frontiers
+            .retain(|(entry_height, entry_view, entry_hash), _| {
+                *entry_height != height || *entry_view != view || *entry_hash == block_hash
+            });
+        self.subsystems
+            .propose
+            .authoritative_block_frontiers
+            .insert((height, view, block_hash), frontier);
     }
 
     fn note_frontier_block_created(
@@ -921,15 +959,29 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
+        frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
         sender: Option<&PeerId>,
         now: Instant,
     ) {
+        if let Some(frontier) = frontier_info.clone() {
+            self.note_authoritative_slot_frontier_info(height, view, block_hash, frontier);
+        }
         let leader = sender
             .cloned()
             .filter(|peer| peer != self.common_config.peer.id());
         let voters = leader.iter().cloned().collect();
         if self.update_frontier_slot(
-            block_hash, height, view, leader, voters, true, true, None, now,
+            block_hash,
+            height,
+            view,
+            leader,
+            voters,
+            /*block_created_seen*/ true,
+            /*exact_fetch_armed*/ true,
+            true,
+            frontier_info,
+            None,
+            now,
         ) {
             self.clear_missing_block_request(
                 &block_hash,
@@ -971,16 +1023,46 @@ impl Actor {
     }
 
     pub(super) fn slot_has_proposal_evidence(&self, height: u64, view: u64) -> bool {
-        self.subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view))
+        self.slot_has_authoritative_payload(height, view)
+            || self
+                .subsystems
+                .propose
+                .proposals_seen
+                .contains(&(height, view))
             || self
                 .subsystems
                 .propose
                 .proposal_cache
                 .get_proposal(height, view)
                 .is_some()
+            || self
+                .authoritative_slot_owner_hash(height, view)
+                .and_then(|block_hash| {
+                    self.authoritative_slot_frontier_info(height, view, block_hash)
+                })
+                .is_some()
+            || self.frontier_slot_has_active_owner_state(height)
+    }
+
+    fn locally_authoritative_frontier_info_for_block(
+        &self,
+        block: &SignedBlock,
+    ) -> Option<super::message::BlockCreatedFrontierInfo> {
+        let header = block.header();
+        self.authoritative_slot_frontier_info(
+            header.height().get(),
+            header.view_change_index(),
+            block.hash(),
+        )
+        .or_else(|| {
+            self.frontier_slot.as_ref().and_then(|slot| {
+                (slot.block_hash == block.hash()
+                    && slot.height == header.height().get()
+                    && slot.view == header.view_change_index())
+                .then(|| slot.frontier_info.clone())
+                .flatten()
+            })
+        })
     }
 
     pub(super) fn frontier_block_created_from_proposal(
@@ -989,18 +1071,134 @@ impl Actor {
         proposal: &crate::sumeragi::consensus::Proposal,
     ) -> Option<super::message::BlockCreated> {
         let header = block.header();
+        let payload_bytes = super::proposals::block_payload_bytes(block);
+        let payload_hash = Hash::new(&payload_bytes);
+        if payload_hash != proposal.payload_hash {
+            debug!(
+                height = header.height().get(),
+                view = header.view_change_index(),
+                block = %block.hash(),
+                expected = ?proposal.payload_hash,
+                observed = ?payload_hash,
+                "skipping frontier BlockCreated manifest build: proposal payload hash mismatches local block payload"
+            );
+            return None;
+        }
+        let header = block.header();
         let key = Self::session_key(
             &block.hash(),
             header.height().get(),
             header.view_change_index(),
         );
-        let init = self.rebuild_rbc_init_from_block(block, key)?;
-        let frontier =
-            super::message::BlockCreatedFrontierInfo::from_proposal_and_rbc_init(proposal, &init);
+        let rebuilt_init = match self.rebuild_rbc_init_from_block(block, key) {
+            Some(init) => init,
+            None => {
+                debug!(
+                    height = header.height().get(),
+                    view = header.view_change_index(),
+                    block = %block.hash(),
+                    "skipping frontier BlockCreated manifest build: deterministic RBC INIT unavailable"
+                );
+                return None;
+            }
+        };
+        if rebuilt_init.payload_hash != payload_hash {
+            debug!(
+                height = header.height().get(),
+                view = header.view_change_index(),
+                block = %block.hash(),
+                expected = ?payload_hash,
+                observed = ?rebuilt_init.payload_hash,
+                "skipping frontier BlockCreated manifest build: rebuilt payload hash mismatches local block payload"
+            );
+            return None;
+        }
+        if rebuilt_init.epoch != proposal.header.epoch {
+            debug!(
+                height = header.height().get(),
+                view = header.view_change_index(),
+                block = %block.hash(),
+                expected_epoch = proposal.header.epoch,
+                observed_epoch = rebuilt_init.epoch,
+                "skipping frontier BlockCreated manifest build: rebuilt epoch mismatches proposal epoch"
+            );
+            return None;
+        }
+        let leader_signature = block
+            .signatures()
+            .find(|signature| signature.index() == u64::from(proposal.header.proposer))
+            .cloned()
+            .or_else(|| {
+                let signature = (rebuilt_init.leader_signature.index()
+                    == u64::from(proposal.header.proposer))
+                .then(|| rebuilt_init.leader_signature.clone())
+                .or_else(|| block.signatures().next().cloned());
+                if signature.is_some() {
+                    debug!(
+                        height = header.height().get(),
+                        view = header.view_change_index(),
+                        block = %block.hash(),
+                        proposer = proposal.header.proposer,
+                        "falling back to first block signature while building frontier BlockCreated manifest"
+                    );
+                }
+                signature
+            })?;
+        let frontier = super::message::BlockCreatedFrontierInfo {
+            highest_qc: proposal.header.highest_qc,
+            payload_hash,
+            proposer: proposal.header.proposer,
+            epoch: proposal.header.epoch,
+            roster_hash: rebuilt_init.roster_hash,
+            total_chunks: rebuilt_init.total_chunks,
+            chunk_digests: rebuilt_init.chunk_digests,
+            chunk_root: rebuilt_init.chunk_root,
+            leader_signature,
+        };
         Some(super::message::BlockCreated::with_frontier(
             block.clone(),
             frontier,
         ))
+    }
+
+    pub(super) fn frontier_block_created_for_proposal_wire(
+        &self,
+        block: &SignedBlock,
+        proposal: &crate::sumeragi::consensus::Proposal,
+    ) -> Option<super::message::BlockCreated> {
+        self.frontier_block_created_from_proposal(block, proposal)
+            .or_else(|| {
+                self.locally_authoritative_frontier_info_for_block(block)
+                    .filter(|frontier| {
+                        frontier.payload_hash == proposal.payload_hash
+                            && frontier.highest_qc == proposal.header.highest_qc
+                            && frontier.proposer == proposal.header.proposer
+                            && frontier.epoch == proposal.header.epoch
+                    })
+                    .map(|frontier| {
+                        super::message::BlockCreated::with_frontier(block.clone(), frontier)
+                    })
+            })
+    }
+
+    pub(super) fn frontier_block_created_for_wire(
+        &self,
+        block: &SignedBlock,
+    ) -> super::message::BlockCreated {
+        let header = block.header();
+        if let Some(created) = self
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(header.height().get(), header.view_change_index())
+            .and_then(|proposal| self.frontier_block_created_for_proposal_wire(block, proposal))
+        {
+            return created;
+        }
+        if let Some(frontier) = self.locally_authoritative_frontier_info_for_block(block) {
+            return super::message::BlockCreated::with_frontier(block.clone(), frontier);
+        }
+        super::message::BlockCreated::from(block)
     }
 
     pub(super) fn prune_proposals_seen_horizon(&mut self, committed_height: u64) {
@@ -1042,7 +1240,19 @@ impl Actor {
         self.subsystems
             .propose
             .authoritative_block_slots
-            .retain(|(entry_height, _), _| *entry_height > committed_height);
+            .retain(|(entry_height, _), _| {
+                *entry_height
+                    >= active_height
+                        .saturating_sub(super::AUTHORITATIVE_FRONTIER_WIRE_HEIGHT_WINDOW)
+            });
+        self.subsystems
+            .propose
+            .authoritative_block_frontiers
+            .retain(|(entry_height, _, _), _| {
+                *entry_height
+                    >= active_height
+                        .saturating_sub(super::AUTHORITATIVE_FRONTIER_WIRE_HEIGHT_WINDOW)
+            });
     }
 
     pub(super) fn missing_proposal_context(
@@ -1098,33 +1308,26 @@ impl Actor {
         if height <= 1 {
             return;
         }
-        if self.slot_has_authoritative_payload(height, view) {
+        if self.slot_has_proposal_evidence(height, view) {
             return;
         }
-        if !self
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view))
-        {
-            let context = self.missing_proposal_context(height, view);
-            iroha_logger::error!(
-                height,
-                view,
-                trigger = reason,
-                hint_seen = context.hint_seen,
-                proposal_cached = context.proposal_cached,
-                pending_blocks = context.pending_blocks,
-                pending_match = context.pending_match,
-                pending_gate = ?context.pending_gate,
-                pending_validation = ?context.pending_validation,
-                pending_age_ms = ?context.pending_age_ms,
-                commit_inflight = ?context.commit_inflight,
-                forced_view_after_timeout = ?context.forced_view_after_timeout,
-                da_enabled = context.da_enabled,
-                "no proposal observed for view before changing view"
-            );
-        }
+        let context = self.missing_proposal_context(height, view);
+        iroha_logger::error!(
+            height,
+            view,
+            trigger = reason,
+            hint_seen = context.hint_seen,
+            proposal_cached = context.proposal_cached,
+            pending_blocks = context.pending_blocks,
+            pending_match = context.pending_match,
+            pending_gate = ?context.pending_gate,
+            pending_validation = ?context.pending_validation,
+            pending_age_ms = ?context.pending_age_ms,
+            commit_inflight = ?context.commit_inflight,
+            forced_view_after_timeout = ?context.forced_view_after_timeout,
+            da_enabled = context.da_enabled,
+            "no proposal observed for view before changing view"
+        );
     }
 
     /// Drop cached branch state at `height` that does not extend `locked_parent_hash`.
@@ -1564,247 +1767,257 @@ impl Actor {
         if pending_status.is_some() && !revive_aborted {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
-                let payload_hash = self
-                    .pending
-                    .pending_blocks
-                    .get(&block_hash)
-                    .map(|pending| pending.payload_hash)
-                    .unwrap_or_else(|| Hash::new(&super::proposals::block_payload_bytes(&block)));
-                let rebroadcast_missing_init = self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .pending
-                    .contains_key(&session_key);
-                let mut seed_inflight = false;
-                if let Some(intent) = self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .seed_inflight
-                    .get_mut(&session_key)
-                {
-                    if rebroadcast_missing_init {
-                        intent.rebroadcast_missing_init = true;
-                    }
-                    seed_inflight = true;
-                }
-                let mut queued_seed = false;
-                if !seed_inflight
-                    && !self
+                if self.frontier_slot_is_exact_height(height) {
+                    self.purge_rbc_state(session_key, block_hash, height, view);
+                } else {
+                    let payload_hash = self
+                        .pending
+                        .pending_blocks
+                        .get(&block_hash)
+                        .map(|pending| pending.payload_hash)
+                        .unwrap_or_else(|| {
+                            Hash::new(&super::proposals::block_payload_bytes(&block))
+                        });
+                    let rebroadcast_missing_init = self
                         .subsystems
                         .da_rbc
                         .rbc
-                        .sessions
-                        .contains_key(&session_key)
-                {
-                    if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
-                        let payload_bytes = super::proposals::block_payload_bytes(&block);
-                        let payload_len = payload_bytes.len();
-                        let work = super::rbc::RbcSeedWork {
-                            key: session_key,
-                            payload_hash,
-                            payload_bytes,
-                            chunk_size: self.config.rbc.chunk_max_bytes,
-                            epoch: self.epoch_for_height(height),
-                        };
-                        match seed_tx.try_send(work) {
-                            Ok(()) => {
-                                self.subsystems.da_rbc.rbc.seed_inflight.insert(
-                                    session_key,
-                                    super::RbcSeedIntent {
-                                        rebroadcast_missing_init,
-                                    },
-                                );
-                                match self.insert_stub_rbc_session_from_block(
-                                    session_key,
-                                    &block,
-                                    payload_hash,
-                                    payload_len,
-                                ) {
-                                    Ok(_) => {
-                                        queued_seed = true;
-                                        seed_inflight = true;
-                                    }
-                                    Err(err) => {
-                                        warn!(
-                                            height,
-                                            view,
-                                            block = %block_hash,
-                                            error = %err,
-                                            "failed to insert stub RBC session after seed enqueue"
-                                        );
-                                        self.subsystems
-                                            .da_rbc
-                                            .rbc
-                                            .seed_inflight
-                                            .remove(&session_key);
-                                    }
-                                }
-                            }
-                            Err(mpsc::TrySendError::Full(_work)) => {
-                                debug!(?session_key, "RBC seed queue full; seeding synchronously");
-                            }
-                            Err(mpsc::TrySendError::Disconnected(_work)) => {
-                                warn!(
-                                    ?session_key,
-                                    "RBC seed worker disconnected; seeding synchronously"
-                                );
-                                self.subsystems.da_rbc.rbc.seed_tx = None;
-                                self.subsystems.da_rbc.rbc.seed_rx = None;
-                                self.subsystems.da_rbc.rbc.seed_inflight.clear();
-                            }
-                        }
-                    }
-                    if !queued_seed {
-                        self.seed_rbc_session_from_block(
-                            session_key,
-                            &block,
-                            payload_hash,
-                            rebroadcast_missing_init,
-                        )?;
-                    }
-                }
-                if queued_seed
-                    && self
+                        .pending
+                        .contains_key(&session_key);
+                    let mut seed_inflight = false;
+                    if let Some(intent) = self
                         .subsystems
-                        .da_rbc
-                        .rbc
-                        .sessions
-                        .get(&session_key)
-                        .is_some_and(|session| {
-                            super::rbc_session_needs_payload(session, payload_hash)
-                        })
-                {
-                    let payload_bytes = super::proposals::block_payload_bytes(&block);
-                    self.hydrate_rbc_session_from_block(
-                        session_key,
-                        &payload_bytes,
-                        payload_hash,
-                        sender.as_ref(),
-                    )?;
-                    self.subsystems
                         .da_rbc
                         .rbc
                         .seed_inflight
-                        .remove(&session_key);
-                    seed_inflight = false;
-                    self.retry_rbc_progress_after_block_created_hydration(session_key);
-                    debug!(
-                        height,
-                        view,
-                        block = %block_hash,
-                        "hydrated RBC session inline after seed queueing for duplicate BlockCreated"
-                    );
-                    if rebroadcast_missing_init
-                        && let Some(session) = self
+                        .get_mut(&session_key)
+                    {
+                        if rebroadcast_missing_init {
+                            intent.rebroadcast_missing_init = true;
+                        }
+                        seed_inflight = true;
+                    }
+                    let mut queued_seed = false;
+                    if !seed_inflight
+                        && !self
+                            .subsystems
+                            .da_rbc
+                            .rbc
+                            .sessions
+                            .contains_key(&session_key)
+                    {
+                        if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
+                            let payload_bytes = super::proposals::block_payload_bytes(&block);
+                            let payload_len = payload_bytes.len();
+                            let work = super::rbc::RbcSeedWork {
+                                key: session_key,
+                                payload_hash,
+                                payload_bytes,
+                                chunk_size: self.config.rbc.chunk_max_bytes,
+                                epoch: self.epoch_for_height(height),
+                            };
+                            match seed_tx.try_send(work) {
+                                Ok(()) => {
+                                    self.subsystems.da_rbc.rbc.seed_inflight.insert(
+                                        session_key,
+                                        super::RbcSeedIntent {
+                                            rebroadcast_missing_init,
+                                        },
+                                    );
+                                    match self.insert_stub_rbc_session_from_block(
+                                        session_key,
+                                        &block,
+                                        payload_hash,
+                                        payload_len,
+                                    ) {
+                                        Ok(_) => {
+                                            queued_seed = true;
+                                            seed_inflight = true;
+                                        }
+                                        Err(err) => {
+                                            warn!(
+                                                height,
+                                                view,
+                                                block = %block_hash,
+                                                error = %err,
+                                                "failed to insert stub RBC session after seed enqueue"
+                                            );
+                                            self.subsystems
+                                                .da_rbc
+                                                .rbc
+                                                .seed_inflight
+                                                .remove(&session_key);
+                                        }
+                                    }
+                                }
+                                Err(mpsc::TrySendError::Full(_work)) => {
+                                    debug!(
+                                        ?session_key,
+                                        "RBC seed queue full; seeding synchronously"
+                                    );
+                                }
+                                Err(mpsc::TrySendError::Disconnected(_work)) => {
+                                    warn!(
+                                        ?session_key,
+                                        "RBC seed worker disconnected; seeding synchronously"
+                                    );
+                                    self.subsystems.da_rbc.rbc.seed_tx = None;
+                                    self.subsystems.da_rbc.rbc.seed_rx = None;
+                                    self.subsystems.da_rbc.rbc.seed_inflight.clear();
+                                }
+                            }
+                        }
+                        if !queued_seed {
+                            self.seed_rbc_session_from_block(
+                                session_key,
+                                &block,
+                                payload_hash,
+                                rebroadcast_missing_init,
+                            )?;
+                        }
+                    }
+                    if queued_seed
+                        && self
                             .subsystems
                             .da_rbc
                             .rbc
                             .sessions
                             .get(&session_key)
-                            .cloned()
+                            .is_some_and(|session| {
+                                super::rbc_session_needs_payload(session, payload_hash)
+                            })
                     {
-                        self.rebroadcast_rbc_payload_for_missing_init(session_key, &session);
-                    }
-                }
-                if !seed_inflight
-                    && self
-                        .subsystems
-                        .da_rbc
-                        .rbc
-                        .sessions
-                        .get(&session_key)
-                        .is_some_and(|session| {
-                            super::rbc_session_needs_payload(session, payload_hash)
-                        })
-                {
-                    if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
                         let payload_bytes = super::proposals::block_payload_bytes(&block);
-                        let work = super::rbc::RbcSeedWork {
-                            key: session_key,
+                        self.hydrate_rbc_session_from_block(
+                            session_key,
+                            &payload_bytes,
                             payload_hash,
-                            payload_bytes,
-                            chunk_size: self.config.rbc.chunk_max_bytes,
-                            epoch: self.epoch_for_height(height),
-                        };
-                        match seed_tx.try_send(work) {
-                            Ok(()) => {
-                                self.subsystems.da_rbc.rbc.seed_inflight.insert(
-                                    session_key,
-                                    super::RbcSeedIntent {
-                                        rebroadcast_missing_init,
-                                    },
-                                );
-                                queued_seed = true;
-                            }
-                            Err(mpsc::TrySendError::Full(_work)) => {
-                                debug!(
-                                    ?session_key,
-                                    "RBC seed queue full; hydrating synchronously"
-                                );
-                            }
-                            Err(mpsc::TrySendError::Disconnected(_work)) => {
-                                warn!(
-                                    ?session_key,
-                                    "RBC seed worker disconnected; hydrating synchronously"
-                                );
-                                self.subsystems.da_rbc.rbc.seed_tx = None;
-                                self.subsystems.da_rbc.rbc.seed_rx = None;
-                                self.subsystems.da_rbc.rbc.seed_inflight.clear();
-                            }
-                        }
-                    }
-                    let payload_bytes = super::proposals::block_payload_bytes(&block);
-                    self.hydrate_rbc_session_from_block(
-                        session_key,
-                        &payload_bytes,
-                        payload_hash,
-                        sender.as_ref(),
-                    )?;
-                    self.retry_rbc_progress_after_block_created_hydration(session_key);
-                    if queued_seed {
+                            sender.as_ref(),
+                        )?;
                         self.subsystems
                             .da_rbc
                             .rbc
                             .seed_inflight
                             .remove(&session_key);
+                        seed_inflight = false;
+                        self.retry_rbc_progress_after_block_created_hydration(session_key);
                         debug!(
                             height,
                             view,
                             block = %block_hash,
-                            "hydrated RBC session inline after payload-seed queueing for duplicate BlockCreated"
+                            "hydrated RBC session inline after seed queueing for duplicate BlockCreated"
                         );
+                        if rebroadcast_missing_init
+                            && let Some(session) = self
+                                .subsystems
+                                .da_rbc
+                                .rbc
+                                .sessions
+                                .get(&session_key)
+                                .cloned()
+                        {
+                            self.rebroadcast_rbc_payload_for_missing_init(session_key, &session);
+                        }
                     }
-                    if rebroadcast_missing_init
-                        && let Some(session) = self
+                    if !seed_inflight
+                        && self
                             .subsystems
                             .da_rbc
                             .rbc
                             .sessions
                             .get(&session_key)
-                            .cloned()
+                            .is_some_and(|session| {
+                                super::rbc_session_needs_payload(session, payload_hash)
+                            })
                     {
-                        self.rebroadcast_rbc_payload_for_missing_init(session_key, &session);
+                        if let Some(seed_tx) = self.subsystems.da_rbc.rbc.seed_tx.as_ref() {
+                            let payload_bytes = super::proposals::block_payload_bytes(&block);
+                            let work = super::rbc::RbcSeedWork {
+                                key: session_key,
+                                payload_hash,
+                                payload_bytes,
+                                chunk_size: self.config.rbc.chunk_max_bytes,
+                                epoch: self.epoch_for_height(height),
+                            };
+                            match seed_tx.try_send(work) {
+                                Ok(()) => {
+                                    self.subsystems.da_rbc.rbc.seed_inflight.insert(
+                                        session_key,
+                                        super::RbcSeedIntent {
+                                            rebroadcast_missing_init,
+                                        },
+                                    );
+                                    queued_seed = true;
+                                }
+                                Err(mpsc::TrySendError::Full(_work)) => {
+                                    debug!(
+                                        ?session_key,
+                                        "RBC seed queue full; hydrating synchronously"
+                                    );
+                                }
+                                Err(mpsc::TrySendError::Disconnected(_work)) => {
+                                    warn!(
+                                        ?session_key,
+                                        "RBC seed worker disconnected; hydrating synchronously"
+                                    );
+                                    self.subsystems.da_rbc.rbc.seed_tx = None;
+                                    self.subsystems.da_rbc.rbc.seed_rx = None;
+                                    self.subsystems.da_rbc.rbc.seed_inflight.clear();
+                                }
+                            }
+                        }
+                        let payload_bytes = super::proposals::block_payload_bytes(&block);
+                        self.hydrate_rbc_session_from_block(
+                            session_key,
+                            &payload_bytes,
+                            payload_hash,
+                            sender.as_ref(),
+                        )?;
+                        self.retry_rbc_progress_after_block_created_hydration(session_key);
+                        if queued_seed {
+                            self.subsystems
+                                .da_rbc
+                                .rbc
+                                .seed_inflight
+                                .remove(&session_key);
+                            debug!(
+                                height,
+                                view,
+                                block = %block_hash,
+                                "hydrated RBC session inline after payload-seed queueing for duplicate BlockCreated"
+                            );
+                        }
+                        if rebroadcast_missing_init
+                            && let Some(session) = self
+                                .subsystems
+                                .da_rbc
+                                .rbc
+                                .sessions
+                                .get(&session_key)
+                                .cloned()
+                        {
+                            self.rebroadcast_rbc_payload_for_missing_init(session_key, &session);
+                        }
                     }
-                }
-                let metadata_populated =
-                    self.populate_rbc_session_metadata_from_block(session_key, &block);
-                if metadata_populated
-                    || self
-                        .subsystems
-                        .da_rbc
-                        .rbc
-                        .sessions
-                        .contains_key(&session_key)
-                {
-                    self.retry_rbc_progress_after_block_created_hydration(session_key);
+                    let metadata_populated =
+                        self.populate_rbc_session_metadata_from_block(session_key, &block);
+                    if metadata_populated
+                        || self
+                            .subsystems
+                            .da_rbc
+                            .rbc
+                            .sessions
+                            .contains_key(&session_key)
+                    {
+                        self.retry_rbc_progress_after_block_created_hydration(session_key);
+                    }
                 }
             }
             self.note_frontier_block_created(
                 block_hash,
                 height,
                 view,
+                frontier.clone(),
                 sender.as_ref(),
                 Instant::now(),
             );
@@ -2549,7 +2762,8 @@ impl Actor {
             }
             // Keep processing the payload after invalidating a stale proposal.
         }
-        let (rbc_seed_ms, rbc_hydrate_ms) = if da_enabled {
+        let exact_frontier_block_created = self.frontier_slot_is_exact_height(height);
+        let (rbc_seed_ms, rbc_hydrate_ms) = if da_enabled && !exact_frontier_block_created {
             let mut seed_ms = 0u64;
             let mut hydrate_ms = 0u64;
             let rebroadcast_missing_init = self
@@ -2779,6 +2993,9 @@ impl Actor {
             }
             (seed_ms, hydrate_ms)
         } else {
+            if da_enabled && exact_frontier_block_created {
+                self.purge_rbc_state(session_key, block_hash, height, view);
+            }
             (0, 0)
         };
         if self
@@ -2818,7 +3035,9 @@ impl Actor {
             );
             return Ok(());
         }
-        let _ = self.populate_rbc_session_metadata_from_block(session_key, &block);
+        if da_enabled && !exact_frontier_block_created {
+            let _ = self.populate_rbc_session_metadata_from_block(session_key, &block);
+        }
         match self.pending.pending_blocks.entry(block_hash) {
             Entry::Occupied(mut occ) => {
                 if revive_aborted {
@@ -2848,7 +3067,14 @@ impl Actor {
             self.note_proposal_seen(height, view, payload_hash);
         }
         self.note_authoritative_slot_owner(height, view, block_hash);
-        self.note_frontier_block_created(block_hash, height, view, sender.as_ref(), Instant::now());
+        self.note_frontier_block_created(
+            block_hash,
+            height,
+            view,
+            frontier.clone(),
+            sender.as_ref(),
+            Instant::now(),
+        );
         if height == committed_height.saturating_add(1) {
             self.note_view_change_from_block(height, view);
         }
@@ -2871,105 +3097,110 @@ impl Actor {
             }
         }
 
-        let mut status_update = None;
-        let mut mismatch_expected = None;
-        {
-            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&session_key) {
-                if let Some(expected_hash) = session.payload_hash() {
-                    if expected_hash != payload_hash {
-                        session.invalid = true;
-                        mismatch_expected = Some(expected_hash);
+        if da_enabled && !exact_frontier_block_created {
+            let mut status_update = None;
+            let mut mismatch_expected = None;
+            {
+                if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&session_key) {
+                    if let Some(expected_hash) = session.payload_hash() {
+                        if expected_hash != payload_hash {
+                            session.invalid = true;
+                            mismatch_expected = Some(expected_hash);
+                        }
+                    } else {
+                        session.payload_hash = Some(payload_hash);
                     }
-                } else {
-                    session.payload_hash = Some(payload_hash);
+                    status_update = Some((
+                        session.total_chunks(),
+                        session.received_chunks(),
+                        session.ready_signatures.len() as u64,
+                        session.delivered,
+                        session.payload_hash(),
+                        session.recovered_from_disk(),
+                        session.is_invalid(),
+                    ));
                 }
-                status_update = Some((
-                    session.total_chunks(),
-                    session.received_chunks(),
-                    session.ready_signatures.len() as u64,
-                    session.delivered,
-                    session.payload_hash(),
-                    session.recovered_from_disk(),
-                    session.is_invalid(),
-                ));
             }
-        }
-        if let Some((
-            total_chunks,
-            received_chunks,
-            ready_count,
-            delivered_flag,
-            payload_hash_opt,
-            recovered_flag,
-            invalid_flag,
-        )) = status_update
-        {
-            let (lane_backlog, dataspace_backlog) = self
-                .subsystems
-                .da_rbc
-                .rbc
-                .sessions
-                .get(&session_key)
-                .map_or_else(
-                    || (Vec::new(), Vec::new()),
-                    |session| {
-                        (
-                            session.lane_backlog_entries(),
-                            session.dataspace_backlog_entries(),
-                        )
-                    },
-                );
-            let summary = super::rbc_status::Summary {
-                block_hash: session_key.0,
-                height: session_key.1,
-                view: session_key.2,
+            if let Some((
                 total_chunks,
                 received_chunks,
                 ready_count,
-                delivered: delivered_flag,
-                payload_hash: payload_hash_opt,
-                recovered_from_disk: recovered_flag,
-                invalid: invalid_flag,
-                lane_backlog,
-                dataspace_backlog,
-            };
-            self.subsystems
-                .da_rbc
-                .rbc
-                .status_handle
-                .update(summary, SystemTime::now());
-            if let Some(expected_hash) = mismatch_expected {
-                debug!(
-                    height,
-                    view,
-                    expected = ?expected_hash,
-                    observed = ?payload_hash,
-                    "BlockCreated payload hash mismatches RBC session"
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::BlockCreated,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::PayloadMismatch,
-                );
-                self.invalidate_proposal(
-                    block_hash,
-                    height,
-                    view,
-                    format!(
-                        "payload hash mismatch: expected {expected_hash:?}, observed {payload_hash:?}",
-                    ),
-                    allow_frontier_owner_preserve_on_payload_mismatch
-                        && self.preserve_contiguous_frontier_owner_on_payload_mismatch(height, view),
-                )?;
-                self.clear_payload_mismatch_state(session_key, block_hash, height, view);
-                self.finalize_collector_plan(false);
-                return Ok(());
+                delivered_flag,
+                payload_hash_opt,
+                recovered_flag,
+                invalid_flag,
+            )) = status_update
+            {
+                let (lane_backlog, dataspace_backlog) = self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&session_key)
+                    .map_or_else(
+                        || (Vec::new(), Vec::new()),
+                        |session| {
+                            (
+                                session.lane_backlog_entries(),
+                                session.dataspace_backlog_entries(),
+                            )
+                        },
+                    );
+                let summary = super::rbc_status::Summary {
+                    block_hash: session_key.0,
+                    height: session_key.1,
+                    view: session_key.2,
+                    total_chunks,
+                    received_chunks,
+                    ready_count,
+                    delivered: delivered_flag,
+                    payload_hash: payload_hash_opt,
+                    recovered_from_disk: recovered_flag,
+                    invalid: invalid_flag,
+                    lane_backlog,
+                    dataspace_backlog,
+                };
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .status_handle
+                    .update(summary, SystemTime::now());
+                if let Some(expected_hash) = mismatch_expected {
+                    debug!(
+                        height,
+                        view,
+                        expected = ?expected_hash,
+                        observed = ?payload_hash,
+                        "BlockCreated payload hash mismatches RBC session"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockCreated,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::PayloadMismatch,
+                    );
+                    self.invalidate_proposal(
+                        block_hash,
+                        height,
+                        view,
+                        format!(
+                            "payload hash mismatch: expected {expected_hash:?}, observed {payload_hash:?}",
+                        ),
+                        allow_frontier_owner_preserve_on_payload_mismatch
+                            && self.preserve_contiguous_frontier_owner_on_payload_mismatch(height, view),
+                    )?;
+                    self.clear_payload_mismatch_state(session_key, block_hash, height, view);
+                    self.finalize_collector_plan(false);
+                    return Ok(());
+                }
             }
         }
 
         // Keep proposal context cached for this slot so stalled peers can recover from
         // `BlockCreated` retransmits that race ahead of proposal delivery.
-        if da_enabled && self.promote_rbc_session_roster_and_retry(session_key) {
+        if da_enabled
+            && !exact_frontier_block_created
+            && self.promote_rbc_session_roster_and_retry(session_key)
+        {
             debug!(
                 height,
                 view,

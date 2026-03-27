@@ -6,6 +6,7 @@ package org.hyperledger.iroha.android.address;
 import java.math.BigInteger;
 import java.util.Arrays;
 import org.hyperledger.iroha.android.crypto.Blake3;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 
 public final class AssetDefinitionIdEncoderTests {
   private static final char[] BASE58_ALPHABET =
@@ -14,16 +15,16 @@ public final class AssetDefinitionIdEncoderTests {
   private AssetDefinitionIdEncoderTests() {}
 
   public static void main(final String[] args) {
-    encodeProducesUnprefixedBase58();
-    encodeSetsUuidV4VersionBits();
-    encodeSetsRfc4122VariantBits();
-    encodeIsDeterministic();
-    differentInputsProduceDifferentAddresses();
+    encodeFromBytesProducesUnprefixedBase58();
+    parseAddressBytesExposeUuidV4VersionBits();
+    parseAddressBytesExposeRfc4122VariantBits();
+    encodeFromBytesIsDeterministic();
+    differentCanonicalAddressesRemainDistinct();
     isCanonicalAddressReturnsTrueForValidAddress();
     isCanonicalAddressReturnsFalseForPlainTextString();
     isCanonicalAddressReturnsFalseForMalformedColonString();
     isCanonicalAddressReturnsFalseForNull();
-    parseAddressBytesRoundtripsWithComputeDefinitionBytes();
+    parseAddressBytesRoundtripsWithEncodeFromBytes();
     parseAddressBytesRejectsInvalidFormat();
     parseAddressBytesRejectsInvalidChecksum();
     parseAddressBytesRejectsBadVersionBits();
@@ -31,40 +32,42 @@ public final class AssetDefinitionIdEncoderTests {
     System.out.println("[IrohaAndroid] AssetDefinitionIdEncoder tests passed.");
   }
 
-  private static void encodeProducesUnprefixedBase58() {
-    final String result = AssetDefinitionIdEncoder.encode("pkr", "sbp");
+  private static void encodeFromBytesProducesUnprefixedBase58() {
+    final String result =
+        AssetDefinitionIdEncoder.encodeFromBytes(
+            AssetDefinitionIdEncoder.parseAddressBytes(TestAssetDefinitionIds.TERTIARY));
     assert !result.contains(":") : "encoded result must not contain a legacy prefix";
     assert result.length() >= 20 : "encoded result should be a compact Base58 address";
   }
 
-  private static void encodeSetsUuidV4VersionBits() {
-    final byte[] bytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
+  private static void parseAddressBytesExposeUuidV4VersionBits() {
+    final byte[] bytes = AssetDefinitionIdEncoder.parseAddressBytes(TestAssetDefinitionIds.PRIMARY);
     final int versionNibble = (bytes[6] & 0xF0) >>> 4;
     assert versionNibble == 4 : "byte 6 upper nibble must be 0x4 (UUIDv4 version)";
   }
 
-  private static void encodeSetsRfc4122VariantBits() {
-    final byte[] bytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
+  private static void parseAddressBytesExposeRfc4122VariantBits() {
+    final byte[] bytes = AssetDefinitionIdEncoder.parseAddressBytes(TestAssetDefinitionIds.PRIMARY);
     final int variantBits = (bytes[8] & 0xC0) >>> 6;
     assert variantBits == 2 : "byte 8 upper 2 bits must be 0b10 (RFC4122 variant)";
   }
 
-  private static void encodeIsDeterministic() {
-    final String first = AssetDefinitionIdEncoder.encode("pkr", "sbp");
-    final String second = AssetDefinitionIdEncoder.encode("pkr", "sbp");
-    assert first.equals(second) : "same name#domain must always produce the same address";
+  private static void encodeFromBytesIsDeterministic() {
+    final byte[] bytes = AssetDefinitionIdEncoder.parseAddressBytes(TestAssetDefinitionIds.TERTIARY);
+    final String first = AssetDefinitionIdEncoder.encodeFromBytes(bytes);
+    final String second = AssetDefinitionIdEncoder.encodeFromBytes(bytes);
+    assert first.equals(second) : "same canonical UUIDv4 bytes must always produce the same address";
   }
 
-  private static void differentInputsProduceDifferentAddresses() {
-    final String pkr = AssetDefinitionIdEncoder.encode("pkr", "sbp");
-    final String usd = AssetDefinitionIdEncoder.encode("usd", "sbp");
-    assert !pkr.equals(usd) : "different asset names must produce different addresses";
+  private static void differentCanonicalAddressesRemainDistinct() {
+    assert !TestAssetDefinitionIds.TERTIARY.equals(TestAssetDefinitionIds.SECONDARY)
+        : "different canonical addresses must remain distinct";
   }
 
   private static void isCanonicalAddressReturnsTrueForValidAddress() {
-    final String encoded = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String encoded = TestAssetDefinitionIds.PRIMARY;
     assert AssetDefinitionIdEncoder.isCanonicalAddress(encoded)
-        : "isCanonicalAddress must return true for output of encode()";
+        : "isCanonicalAddress must return true for a canonical fixture address";
   }
 
   private static void isCanonicalAddressReturnsFalseForPlainTextString() {
@@ -82,12 +85,12 @@ public final class AssetDefinitionIdEncoderTests {
         : "isCanonicalAddress must return false for null";
   }
 
-  private static void parseAddressBytesRoundtripsWithComputeDefinitionBytes() {
-    final String encoded = AssetDefinitionIdEncoder.encode("pkr", "sbp");
+  private static void parseAddressBytesRoundtripsWithEncodeFromBytes() {
+    final String encoded = TestAssetDefinitionIds.TERTIARY;
     final byte[] parsed = AssetDefinitionIdEncoder.parseAddressBytes(encoded);
-    final byte[] computed = AssetDefinitionIdEncoder.computeDefinitionBytes("pkr", "sbp");
-    assert Arrays.equals(computed, parsed)
-        : "parseAddressBytes must return the same bytes as computeDefinitionBytes";
+    final String reencoded = AssetDefinitionIdEncoder.encodeFromBytes(parsed);
+    assert encoded.equals(reencoded)
+        : "parseAddressBytes + encodeFromBytes must roundtrip a canonical address";
   }
 
   private static void parseAddressBytesRejectsInvalidFormat() {
@@ -101,7 +104,7 @@ public final class AssetDefinitionIdEncoderTests {
   }
 
   private static void parseAddressBytesRejectsInvalidChecksum() {
-    final String encoded = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String encoded = TestAssetDefinitionIds.PRIMARY;
     final char replacement = encoded.charAt(encoded.length() - 1) == '1' ? '2' : '1';
     final String bad = encoded.substring(0, encoded.length() - 1) + replacement;
     boolean threw = false;
@@ -114,7 +117,7 @@ public final class AssetDefinitionIdEncoderTests {
   }
 
   private static void parseAddressBytesRejectsBadVersionBits() {
-    final byte[] bytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
+    final byte[] bytes = AssetDefinitionIdEncoder.parseAddressBytes(TestAssetDefinitionIds.PRIMARY);
     bytes[6] = (byte) ((bytes[6] & 0x0F) | 0x30); // version 3 instead of 4
     final String bad = addressFromBytesWithChecksum(bytes);
     boolean threw = false;
@@ -127,7 +130,7 @@ public final class AssetDefinitionIdEncoderTests {
   }
 
   private static void parseAddressBytesRejectsBadVariantBits() {
-    final byte[] bytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
+    final byte[] bytes = AssetDefinitionIdEncoder.parseAddressBytes(TestAssetDefinitionIds.PRIMARY);
     bytes[8] = (byte) (bytes[8] & 0x3F); // clear variant bits (00 instead of 10)
     final String bad = addressFromBytesWithChecksum(bytes);
     boolean threw = false;

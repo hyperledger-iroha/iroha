@@ -64,11 +64,8 @@ use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     ChainId,
-    account::{
-        AccountController, AccountId,
-        address::{self, AccountAddress, AccountAddressError},
-    },
-    asset::{AssetDefinitionId, AssetId},
+    account::{AccountController, AccountId, rekey::AccountLabel},
+    asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
         *,
@@ -84,8 +81,8 @@ use iroha_data_model::{
     isi::{InstructionBox, RemoveKeyValueBox, SetKeyValueBox, transfer::TransferBox},
     nexus::{
         AssetHandle, AxtHandleReplayKey, AxtPolicyEntry, AxtProofEnvelope, AxtRejectReason,
-        DataSpaceId, LaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob,
-        proof_matches_manifest,
+        DataSpaceCatalog, DataSpaceId, LaneConfig, LaneFastpqProofMaterial, LaneId,
+        LaneRelayEnvelope, ProofBlob, proof_matches_manifest,
     },
     peer::PeerId,
     transaction::{
@@ -165,6 +162,19 @@ fn map_overlay_error(
             iroha_data_model::ValidationFail::NotPermitted(other.to_string()),
         ),
     }
+}
+
+fn missing_authority_requires_rejection(
+    state_tx: &crate::state::StateTransaction<'_, '_>,
+    tx: &SignedTransaction,
+    authority: &AccountId,
+    overlay_instruction_count: usize,
+    is_genesis: bool,
+) -> bool {
+    overlay_instruction_count > 0
+        && !is_genesis
+        && state_tx.world.accounts.get(authority).is_none()
+        && !crate::tx::allows_unregistered_authority(tx.instructions(), authority)
 }
 
 #[cfg(test)]
@@ -339,6 +349,7 @@ impl SettlementBufferSnapshot {
 
 fn parse_lane_settlement_buffer_config(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &DataSpaceCatalog,
     lane: &LaneConfig,
 ) -> Option<LaneSettlementBufferConfig> {
     let account_raw = lane
@@ -353,7 +364,7 @@ fn parse_lane_settlement_buffer_config(
         _ => return None,
     };
 
-    let account_id = parse_account_literal_with_world(world, account_raw)?;
+    let account_id = parse_account_literal_with_world(world, dataspace_catalog, account_raw)?;
     let asset_definition_id = AssetDefinitionId::parse_address_literal(asset_raw).ok()?;
     let capacity = MicroXor::from(Decimal::from_str(capacity_raw.trim()).ok()?);
 
@@ -369,7 +380,11 @@ fn compute_settlement_buffer_snapshot(
     lane_id: LaneId,
 ) -> Option<SettlementBufferSnapshot> {
     let lane = lane_metadata_by_id(state_block, lane_id)?;
-    let config = parse_lane_settlement_buffer_config(&state_block.world, lane)?;
+    let config = parse_lane_settlement_buffer_config(
+        &state_block.world,
+        &state_block.nexus.dataspace_catalog,
+        lane,
+    )?;
     let asset_id = AssetId::new(
         config.asset_definition_id.clone(),
         config.account_id.clone(),
@@ -765,6 +780,7 @@ fn conflict_rate_bps(vertices: u64, edges: u64) -> u64 {
 
 pub(crate) fn parse_account_literal_with_world(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &DataSpaceCatalog,
     input: &str,
 ) -> Option<AccountId> {
     let literal = input.trim();
@@ -772,52 +788,69 @@ pub(crate) fn parse_account_literal_with_world(
         return None;
     }
 
-    let account = parse_account_literal_relaxed(literal)?;
-
-    let linked_domains = world.domains_for_subject(&account);
-    if linked_domains.len() > 1 {
-        return None;
-    }
-
-    // Some test fixtures construct worlds directly and rely on domain ownership
-    // as the only available domain-disambiguation signal.
-    if linked_domains.is_empty()
-        && world
-            .domains_iter()
-            .filter(|domain| domain.owned_by() == &account)
-            .take(2)
-            .count()
-            > 1
-    {
-        return None;
-    }
-
-    Some(account)
+    AccountId::parse_encoded(literal)
+        .ok()
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .or_else(|| {
+            let alias = AccountLabel::from_literal(literal, dataspace_catalog).ok()?;
+            resolve_account_alias_in_world(world, &alias)
+        })
 }
 
-fn parse_account_literal_relaxed(literal: &str) -> Option<AccountId> {
-    if let Ok(parsed) = AccountId::parse_encoded(literal) {
-        return Some(parsed.into_account_id());
+pub(crate) fn resolve_account_alias_in_world(
+    world: &impl WorldReadOnly,
+    alias: &AccountLabel,
+) -> Option<AccountId> {
+    if let Some(account_id) = world.account_aliases().get(alias).cloned() {
+        return Some(account_id);
     }
 
-    let expected = address::chain_discriminant();
-    let parsed = match AccountAddress::from_i105_for_discriminant(literal, Some(expected)) {
-        Ok(address) => Some(address),
-        Err(AccountAddressError::UnexpectedNetworkPrefix { found, .. }) => {
-            AccountAddress::from_i105_for_discriminant(literal, Some(found)).ok()
+    let mut matched_account_id: Option<AccountId> = None;
+    for (account_id, value) in world.accounts().iter() {
+        if value.as_ref().label() != Some(alias) {
+            continue;
         }
-        Err(_) => None,
-    }?;
+        if let Some(existing) = matched_account_id.as_ref() {
+            if existing != account_id {
+                return None;
+            }
+        } else {
+            matched_account_id = Some(account_id.clone());
+        }
+    }
 
-    parsed.to_account_id().ok()
+    matched_account_id
 }
 
-fn parse_account_from_access_key(world: &impl WorldReadOnly, key: &str) -> Option<AccountId> {
+pub(crate) fn parse_asset_definition_literal_with_world(
+    world: &impl WorldReadOnly,
+    input: &str,
+    now_ms: u64,
+) -> Option<AssetDefinitionId> {
+    let literal = input.trim();
+    if literal.is_empty() {
+        return None;
+    }
+
+    AssetDefinitionId::parse_address_literal(literal)
+        .ok()
+        .or_else(|| {
+            AssetDefinitionAlias::from_str(literal)
+                .ok()
+                .and_then(|alias| world.asset_definition_id_by_alias_at(&alias, now_ms))
+        })
+}
+
+fn parse_account_from_access_key(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &DataSpaceCatalog,
+    key: &str,
+) -> Option<AccountId> {
     if let Some(rest) = key.strip_prefix("account:") {
-        parse_account_literal_with_world(world, rest)
+        parse_account_literal_with_world(world, dataspace_catalog, rest)
     } else if let Some(rest) = key.strip_prefix("account.detail:") {
         let (account_raw, _) = rest.split_once(':')?;
-        parse_account_literal_with_world(world, account_raw)
+        parse_account_literal_with_world(world, dataspace_catalog, account_raw)
     } else {
         None
     }
@@ -882,7 +915,7 @@ mod prefetch_tests {
         domain::{Domain, DomainId},
         isi::{InstructionBox, Log},
         name::Name,
-        nexus::LaneConfig,
+        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneConfig},
         role::RoleId,
     };
     use iroha_logger::Level;
@@ -910,15 +943,26 @@ mod prefetch_tests {
         let expected = alice.clone();
 
         assert_eq!(
-            parse_account_from_access_key(&world_view, &format!("account:{alice}")),
+            parse_account_from_access_key(
+                &world_view,
+                &DataSpaceCatalog::default(),
+                &format!("account:{alice}")
+            ),
             Some(expected.clone())
         );
         assert_eq!(
-            parse_account_from_access_key(&world_view, &detail_key),
+            parse_account_from_access_key(&world_view, &DataSpaceCatalog::default(), &detail_key),
             Some(expected.clone())
         );
         assert_eq!(expected.subject_id(), alice.subject_id());
-        assert!(parse_account_from_access_key(&world_view, "asset:coin#wonderland").is_none());
+        assert!(
+            parse_account_from_access_key(
+                &world_view,
+                &DataSpaceCatalog::default(),
+                "asset:coin#wonderland",
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -934,7 +978,7 @@ mod prefetch_tests {
         let i105 = alice.canonical_i105().expect("i105 encoding");
         let literal = format!("{i105}@{wonderland}");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &literal),
+            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &literal),
             None
         );
     }
@@ -952,13 +996,13 @@ mod prefetch_tests {
 
         let i105 = alice.canonical_i105().expect("i105 encoding");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &i105),
+            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &i105),
             Some(alice)
         );
     }
 
     #[test]
-    fn parse_account_literal_rejects_ambiguous_encoded_subject() {
+    fn parse_account_literal_accepts_canonical_i105_even_for_multi_domain_subject() {
         let signatory = ALICE_ID.signatory().clone();
         let alpha: DomainId = "alpha".parse().expect("alpha domain");
         let beta: DomainId = "beta".parse().expect("beta domain");
@@ -979,16 +1023,16 @@ mod prefetch_tests {
         let encoded = alpha_account
             .account()
             .canonical_i105()
-            .expect("canonical i105 account literal");
+            .expect("canonical I105 account literal");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &encoded),
-            None,
-            "domainless literals must not resolve when a subject exists in multiple domains"
+            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &encoded),
+            Some(alpha_account.account().clone()),
+            "canonical I105 account ids must remain valid even when the subject is linked across domains"
         );
     }
 
     #[test]
-    fn parse_account_literal_rejects_alias_domain_literals() {
+    fn parse_account_literal_resolves_on_chain_alias_literals() {
         let domain_id: DomainId = "ivm".parse().expect("domain");
         let account_id = ScopedAccountId::new(domain_id.clone(), ALICE_ID.signatory().clone());
         let alias = AccountLabel::new(
@@ -1005,8 +1049,55 @@ mod prefetch_tests {
         let world_view = world.view();
 
         assert_eq!(
-            parse_account_literal_with_world(&world_view, "gas@ivm"),
-            None
+            parse_account_literal_with_world(
+                &world_view,
+                &DataSpaceCatalog::default(),
+                "gas@ivm.universal",
+            ),
+            Some(account_id.account().clone()),
+            "account selectors must resolve active on-chain aliases to canonical account ids"
+        );
+    }
+
+    #[test]
+    fn parse_account_literal_resolves_aliases_in_non_default_dataspaces() {
+        let domain_id: DomainId = "ops".parse().expect("domain");
+        let account_id = ScopedAccountId::new(domain_id, ALICE_ID.signatory().clone());
+        let alias = AccountLabel::domainless(
+            Name::from_str("treasury").expect("alias name"),
+            DataSpaceId::new(7),
+        );
+        let world = World::with(
+            [],
+            [Account::new_domainless(account_id.account().clone())
+                .with_label(Some(alias))
+                .build(account_id.account())],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(7),
+                alias: "retail".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let state_view = state.view();
+        let world_view = state_view.world();
+
+        assert_eq!(
+            parse_account_literal_with_world(
+                world_view,
+                &state_view.nexus.dataspace_catalog,
+                "treasury@retail",
+            ),
+            Some(account_id.account().clone()),
+            "account selectors must resolve aliases in non-default dataspaces"
         );
     }
 
@@ -1036,7 +1127,8 @@ mod prefetch_tests {
         );
 
         let parsed =
-            parse_lane_settlement_buffer_config(&world_view, &lane).expect("config parsed");
+            parse_lane_settlement_buffer_config(&world_view, &DataSpaceCatalog::default(), &lane)
+                .expect("config parsed");
         let expected = alice.clone();
         assert_eq!(parsed.account_id, expected);
         assert_eq!(parsed.account_id.subject_id(), alice.subject_id());
@@ -8065,16 +8157,20 @@ pub(crate) mod valid {
                         accounts_to_prefetch.insert(entry.authority.clone());
                         if let Some(access_set) = access.get(entry.idx) {
                             for key in access_set.read_keys.iter() {
-                                if let Some(account) =
-                                    parse_account_from_access_key(&state_block.world, key)
-                                {
+                                if let Some(account) = parse_account_from_access_key(
+                                    &state_block.world,
+                                    &state_block.nexus.dataspace_catalog,
+                                    key,
+                                ) {
                                     accounts_to_prefetch.insert(account);
                                 }
                             }
                             for key in access_set.write_keys.iter() {
-                                if let Some(account) =
-                                    parse_account_from_access_key(&state_block.world, key)
-                                {
+                                if let Some(account) = parse_account_from_access_key(
+                                    &state_block.world,
+                                    &state_block.nexus.dataspace_catalog,
+                                    key,
+                                ) {
                                     accounts_to_prefetch.insert(account);
                                 }
                             }
@@ -8548,10 +8644,13 @@ pub(crate) mod valid {
                                 Some(routing_decisions[idx].dataspace_id);
                             let authority = tx.authority().clone();
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                            if overlay.instruction_count() > 0
-                                && !block.header().is_genesis()
-                                && state_tx.world.accounts.get(&authority).is_none()
-                            {
+                            if missing_authority_requires_rejection(
+                                &state_tx,
+                                tx,
+                                &authority,
+                                overlay.instruction_count(),
+                                block.header().is_genesis(),
+                            ) {
                                 return Err(TransactionRejectionReason::AccountDoesNotExist(
                                     iroha_data_model::query::error::FindError::Account(
                                         authority.clone(),
@@ -8639,9 +8738,15 @@ pub(crate) mod valid {
                                 }
                                 // ensure authority exists
                                 let missing_authority = {
+                                    let tx = txs[p.idx];
                                     let st = state_block.transaction();
-                                    !block.header().is_genesis()
-                                        && st.world.accounts.get(&p.authority).is_none()
+                                    missing_authority_requires_rejection(
+                                        &st,
+                                        tx,
+                                        &p.authority,
+                                        tx.instructions().instruction_count() as usize,
+                                        block.header().is_genesis(),
+                                    )
                                 };
                                 if missing_authority {
                                     record_amx_abort(state_block, p.idx, "commit");
@@ -8823,9 +8928,13 @@ pub(crate) mod valid {
                             state_tx.world.current_dataspace_id =
                                 Some(routing_decisions[idx].dataspace_id);
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                            let missing_authority = overlay.instruction_count() > 0
-                                && !block.header().is_genesis()
-                                && state_tx.world.accounts.get(&authority).is_none();
+                            let missing_authority = missing_authority_requires_rejection(
+                                &state_tx,
+                                tx,
+                                &authority,
+                                overlay.instruction_count(),
+                                block.header().is_genesis(),
+                            );
                             if missing_authority {
                                 Err(
                                     iroha_data_model::transaction::error::TransactionRejectionReason::AccountDoesNotExist(
@@ -8973,9 +9082,13 @@ pub(crate) mod valid {
                         state_tx.world.current_dataspace_id =
                             Some(routing_decisions[idx].dataspace_id);
                         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                        let missing_authority = overlay.instruction_count() > 0
-                            && !block.header().is_genesis()
-                            && state_tx.world.accounts.get(&authority).is_none();
+                        let missing_authority = missing_authority_requires_rejection(
+                            &state_tx,
+                            tx,
+                            &authority,
+                            overlay.instruction_count(),
+                            block.header().is_genesis(),
+                        );
                         if missing_authority {
                             Err(
                                 iroha_data_model::transaction::error::TransactionRejectionReason::AccountDoesNotExist(
@@ -12721,8 +12834,9 @@ mod commit {
         };
 
         const ACCOUNT_FROM_LITERAL: &str =
-            "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-        const ACCOUNT_TO_LITERAL: &str = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU";
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+        const ACCOUNT_TO_LITERAL: &str =
+            "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76";
 
         fn binding_for_descriptor(descriptor: &AxtDescriptor) -> AxtBinding {
             descriptor.binding().expect("descriptor binding")
@@ -15710,6 +15824,59 @@ mod tests {
         assert!(
             lookup(&accept_hash, "accept tx").is_ok(),
             "Second tx must succeed"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_and_record_transactions_allows_missing_authority_self_register() {
+        let chain_id = ChainId::from("missing-authority-self-register-block");
+
+        let (authority, keypair) = gen_account_in("wonderland");
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+
+        let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([
+                InstructionBox::from(Register::account(Account::new_domainless(
+                    authority.clone(),
+                ))),
+                InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
+            ])
+            .sign(keypair.private_key());
+        let crypto_cfg = state.crypto();
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            crypto_cfg.as_ref(),
+        )
+        .expect("admission should accept transaction shape");
+
+        let unverified_block = BlockBuilder::new(vec![tx])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert!(
+            valid_block.as_ref().errors().next().is_none(),
+            "self-register block path should not produce transaction errors"
+        );
+        assert!(
+            state_block.world.accounts.get(&authority).is_some(),
+            "authority account should be materialized during block execution"
         );
     }
 

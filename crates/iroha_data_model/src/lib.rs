@@ -14,6 +14,8 @@
 #![allow(semicolon_in_expressions_from_macros)]
 
 #[allow(unused_extern_crates)]
+extern crate bech32;
+#[allow(unused_extern_crates)]
 extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary
@@ -135,6 +137,8 @@ pub mod repo;
 pub mod role;
 /// Runtime upgrade payloads and manifests.
 pub mod runtime;
+/// Real-world asset lot structures and controls.
+pub mod rwa;
 /// Smart contract descriptors and execution metadata.
 pub mod smart_contract;
 /// Sora Name Service registrar data structures.
@@ -365,6 +369,8 @@ pub mod prelude {
         ram_lfe::prelude::*,
         repo::prelude::*,
         role::prelude::*,
+        rwa::prelude::*,
+        smart_contract::prelude::*,
         sns::prelude::*,
         social::prelude::*,
         sorafs_uri::SorafsUri,

@@ -20,12 +20,12 @@ function ed25519PublicKeyBytes() {
   return new Uint8Array(der.subarray(der.length - 32));
 }
 
-function demoAccountId(domain) {
-  const address = AccountAddress.fromAccount({ domain, publicKey: ed25519PublicKeyBytes() });
+function demoAccountId() {
+  const address = AccountAddress.fromAccount({ publicKey: ed25519PublicKeyBytes() });
   return address.toI105();
 }
 
-const ACCOUNT_ID = demoAccountId("directory");
+const ACCOUNT_ID = demoAccountId();
 const POLICY_ID = "phone#retail";
 const OPAQUE_ID = `opaque:${"11".repeat(32)}`;
 const RECEIPT_HASH = "22".repeat(32);
@@ -314,6 +314,43 @@ test("issueIdentifierClaimReceipt posts account-scoped requests", async () => {
     encryptedInput: "ABCD",
   });
   assert.equal(result.opaque_id, OPAQUE_ID);
+  assert.equal(result.account_id, ACCOUNT_ID);
+});
+
+test("issueIdentifierClaimReceipt accepts account aliases on account-id paths", async () => {
+  const alias = "operator@hbl.universal";
+  const signedReceipt = signedReceiptFixture({
+    signaturePayloadHex: "0A0B0C0D",
+  });
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async (input, init) => {
+      assert.equal(
+        new URL(input).pathname,
+        `/v1/accounts/${encodeURIComponent(alias)}/identifiers/claim-receipt`,
+      );
+      return jsonResponse(200, {
+        policy_id: POLICY_ID,
+        opaque_id: OPAQUE_ID,
+        receipt_hash: RECEIPT_HASH,
+        uaid: UAID,
+        account_id: ACCOUNT_ID,
+        resolved_at_ms: 7,
+        backend: "bfv-affine-sha3-256-v1",
+        signature: signedReceipt.signature,
+        signature_payload_hex: signedReceipt.signature_payload_hex,
+        signature_payload: {
+          ...signedReceipt.signature_payload,
+          resolved_at_ms: 7,
+          expires_at_ms: null,
+        },
+      });
+    },
+  });
+
+  const result = await client.issueIdentifierClaimReceipt(alias, {
+    policyId: POLICY_ID,
+    encryptedInput: "ABCD",
+  });
   assert.equal(result.account_id, ACCOUNT_ID);
 });
 

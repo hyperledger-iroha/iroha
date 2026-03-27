@@ -524,6 +524,7 @@ fn command_success(program: &str, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(target_os = "macos")]
 fn run_command_capture(program: &str, args: &[&str]) -> Option<String> {
     let output = Command::new(program)
         .args(args)
@@ -723,11 +724,6 @@ fn macos_opencl_devices_present() -> bool {
     macos_ioreg_reports_accelerator()
 }
 
-#[cfg(not(target_os = "macos"))]
-fn macos_opencl_devices_present() -> bool {
-    false
-}
-
 #[cfg(target_os = "macos")]
 fn macos_system_profiler_opencl_devices() -> Option<bool> {
     let output = run_command_capture(
@@ -744,11 +740,6 @@ fn macos_system_profiler_opencl_devices() -> Option<bool> {
     None
 }
 
-#[cfg(not(target_os = "macos"))]
-fn macos_system_profiler_opencl_devices() -> Option<bool> {
-    None
-}
-
 #[cfg(target_os = "macos")]
 fn macos_ioreg_reports_accelerator() -> bool {
     if let Some(output) = run_command_capture("ioreg", &["-l", "-w0", "-c", "IOAccelerator"]) {
@@ -757,11 +748,6 @@ fn macos_ioreg_reports_accelerator() -> bool {
             return true;
         }
     }
-    false
-}
-
-#[cfg(not(target_os = "macos"))]
-fn macos_ioreg_reports_accelerator() -> bool {
     false
 }
 
@@ -802,11 +788,6 @@ fn metal_device_visible_via_api() -> bool {
         }
     }
     !devices.is_empty()
-}
-
-#[cfg(not(all(feature = "fastpq-gpu", target_os = "macos")))]
-fn metal_device_visible_via_api() -> bool {
-    false
 }
 
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]

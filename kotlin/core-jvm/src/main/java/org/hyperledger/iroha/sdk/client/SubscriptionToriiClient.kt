@@ -27,9 +27,7 @@ class SubscriptionToriiClient private constructor(builder: Builder) {
     }
 
     fun createSubscriptionPlan(request: SubscriptionPlanCreateRequest): CompletableFuture<SubscriptionPlanCreateResponse> {
-        val transport = buildPostRequest(PLANS_PATH, request.toJsonBytes())
-        notifyRequest(transport)
-        return executeHttpRequest(transport, SubscriptionJsonParser::parsePlanCreateResponse)
+        return unsupportedServerSideSigning("/v1/subscriptions/plans")
     }
 
     fun listSubscriptions(params: SubscriptionListParams?): CompletableFuture<SubscriptionListResponse> {
@@ -39,9 +37,7 @@ class SubscriptionToriiClient private constructor(builder: Builder) {
     }
 
     fun createSubscription(request: SubscriptionCreateRequest): CompletableFuture<SubscriptionCreateResponse> {
-        val transport = buildPostRequest(SUBSCRIPTIONS_PATH, request.toJsonBytes())
-        notifyRequest(transport)
-        return executeHttpRequest(transport, SubscriptionJsonParser::parseSubscriptionCreateResponse)
+        return unsupportedServerSideSigning("/v1/subscriptions")
     }
 
     fun getSubscription(subscriptionId: String): CompletableFuture<SubscriptionListResponse.SubscriptionRecord?> {
@@ -52,18 +48,14 @@ class SubscriptionToriiClient private constructor(builder: Builder) {
         return executeHttpRequestAllowingNotFound(request, SubscriptionJsonParser::parseSubscriptionRecord)
     }
 
-    fun pauseSubscription(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = executeSubscriptionAction(subscriptionId, "pause", request)
-    fun resumeSubscription(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = executeSubscriptionAction(subscriptionId, "resume", request)
-    fun cancelSubscription(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = executeSubscriptionAction(subscriptionId, "cancel", request)
-    fun keepSubscription(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = executeSubscriptionAction(subscriptionId, "keep", request)
-    fun chargeSubscriptionNow(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = executeSubscriptionAction(subscriptionId, "charge-now", request)
+    fun pauseSubscription(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/pause")
+    fun resumeSubscription(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/resume")
+    fun cancelSubscription(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/cancel")
+    fun keepSubscription(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/keep")
+    fun chargeSubscriptionNow(subscriptionId: String, request: SubscriptionActionRequest): CompletableFuture<SubscriptionActionResponse> = unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/charge-now")
 
     fun recordSubscriptionUsage(subscriptionId: String, request: SubscriptionUsageRequest): CompletableFuture<SubscriptionActionResponse> {
-        val normalizedId = requireNonBlank(subscriptionId, "subscription_id")
-        val path = "$SUBSCRIPTIONS_PATH/${urlEncode(normalizedId)}/usage"
-        val transport = buildPostRequest(path, request.toJsonBytes())
-        notifyRequest(transport)
-        return executeHttpRequest(transport, SubscriptionJsonParser::parseActionResponse)
+        return unsupportedServerSideSigning("/v1/subscriptions/{subscription_id}/usage")
     }
 
     fun executor(): HttpTransportExecutor = executor
@@ -129,6 +121,11 @@ class SubscriptionToriiClient private constructor(builder: Builder) {
     private fun notifyRequest(request: TransportRequest) { for (observer in observers) observer.onRequest(request) }
     private fun notifyResponse(request: TransportRequest, response: ClientResponse) { for (observer in observers) observer.onResponse(request, response) }
     private fun notifyFailure(request: TransportRequest, error: Throwable) { for (observer in observers) observer.onFailure(request, error) }
+
+    private fun <T> unsupportedServerSideSigning(endpoint: String): CompletableFuture<T> =
+        throw UnsupportedOperationException(
+            "$endpoint no longer accepts server-side signing inputs; submit a locally signed transaction instead.",
+        )
 
     private fun <T> executeHttpRequest(request: TransportRequest, parser: (ByteArray) -> T): CompletableFuture<T> {
         val future = CompletableFuture<T>()

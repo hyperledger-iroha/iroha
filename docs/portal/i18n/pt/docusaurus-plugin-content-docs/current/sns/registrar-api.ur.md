@@ -117,7 +117,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTER | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (armazenável em cache)۔ |
 | `/v1/sns/names/{namespace}/{literal}` | OBTER | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
 
-**Codificação do seletor:** `{selector}` segmento de caminho I105, compactado (`sora`) یا hexadecimal canônico ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalizar کرتا ہے۔**Modelo de erro:** Defina os endpoints Norito JSON `code`, `message`, `details` واپس کرتے ہیں۔ Códigos میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
+**Codificação do seletor:** `{selector}` segmento de caminho i105, compactado (`sora`) یا hexadecimal canônico ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalizar کرتا ہے۔**Modelo de erro:** Defina os endpoints Norito JSON `code`, `message`, `details` واپس کرتے ہیں۔ Códigos میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
 
 ### 3.1 Auxiliares CLI (N0 دستی registrador ضرورت)
 
@@ -161,7 +161,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -221,7 +221,7 @@ Verificações falhadas `sns_err_governance_missing` واپس کرتے ہیں۔
 
 ### 6.1 Registro Padrão1. Cliente `/v1/sns/policies/{suffix_id}` کو consulta کرتا ہے تاکہ preços, graça e دستیاب níveis حاصل کرے۔
 2. Cliente `RegisterNameRequestV1` بناتا ہے:
-   - `selector` ترجیحی I105 یا segundo melhor rótulo compactado (`sora`) سے derivado ہے۔
+   - `selector` ترجیحی i105 یا segundo melhor rótulo compactado (`sora`) سے derivado ہے۔
    - `term_years` پالیسی حدود میں۔
    - `payment` transferência de divisão de tesouraria/administrador کو consulte کرتا ہے۔
 3. Torii validar o valor:

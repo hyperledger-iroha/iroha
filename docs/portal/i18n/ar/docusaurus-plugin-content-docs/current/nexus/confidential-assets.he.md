@@ -252,7 +252,7 @@ SPDX-License-Identifier: Apache-2.0
 - تسلسل اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (nullifier key)، `ivk` (incoming viewing key)، `ovk` (outgoing viewing key)، `fvk`.
 - تستخدم payloads notes المشفرة AEAD مع مفاتيح مشتركة مشتقة من ECDH؛ يمكن ارفاق auditor view keys اختيارية الى outputs حسب سياسة الاصل.
-- اضافات CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos، والمساعد `iroha app zk envelope` لانتاج/فحص envelopes Norito دون اتصال. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset` ويعيد اشكالا hex وbase64 لكي تستطيع المحافظ جلب هياكل المفاتيح برمجيا.
+- اضافات CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos، والمساعد `iroha app zk envelope` لانتاج/فحص envelopes Norito دون اتصال. يعرض
 
 ## الغاز، الحدود، وضوابط DoS
 - جدول gas حتمي:

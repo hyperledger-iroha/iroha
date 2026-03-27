@@ -406,6 +406,9 @@ mod ledger {
         /// Read and write NFTs
         #[command(subcommand)]
         Nft(crate::nft::Command),
+        /// Read and write RWA lots
+        #[command(subcommand)]
+        Rwa(crate::rwa::Command),
         /// Read and write peers
         #[command(subcommand)]
         Peer(crate::peer::Command),
@@ -441,6 +444,7 @@ mod ledger {
                 Account(variant) => Run::run(variant, context),
                 Asset(variant) => Run::run(variant, context),
                 Nft(variant) => Run::run(variant, context),
+                Rwa(variant) => Run::run(variant, context),
                 Peer(variant) => Run::run(variant, context),
                 Role(variant) => Run::run(variant, context),
                 Parameter(variant) => Run::run(variant, context),
@@ -1237,6 +1241,21 @@ mod filter {
             FilterArgs::new(self.predicate, self.options)
         }
     }
+
+    #[derive(clap::Args, Debug)]
+    pub struct RwaFilter {
+        /// Filtering condition specified as a JSON string
+        #[arg(value_parser = parse_json::<CompoundPredicate<Rwa>>)]
+        predicate: CompoundPredicate<Rwa>,
+        #[command(flatten)]
+        options: CommonArgs,
+    }
+
+    impl RwaFilter {
+        pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Rwa>> {
+            FilterArgs::new(self.predicate, self.options)
+        }
+    }
 }
 
 async fn drive_try_stream_until_timeout<S, F>(
@@ -1675,9 +1694,20 @@ mod account {
                     context.print_data(&entry)
                 }
                 Register(args) => {
-                    let account_id = parse_register_account_id(&args.id, &args.domain)?;
-                    let instruction =
-                        iroha::data_model::isi::Register::account(Account::new(account_id));
+                    let instruction = if args.domainless {
+                        let account_id = parse_domainless_account_id(&args.id)?;
+                        iroha::data_model::isi::Register::account(Account::new_domainless(
+                            account_id,
+                        ))
+                    } else {
+                        let domain = args.domain.as_ref().ok_or_else(|| {
+                            eyre!(
+                                "`ledger account register` requires either `--domain <domain>` or `--domainless`"
+                            )
+                        })?;
+                        let account_id = parse_register_account_id(&args.id, domain)?;
+                        iroha::data_model::isi::Register::account(Account::new(account_id))
+                    };
                     context
                         .finish([instruction])
                         .wrap_err("Failed to register account")
@@ -1820,8 +1850,11 @@ mod account {
         #[arg(short, long)]
         id: String,
         /// Domain in which to materialize the account link
-        #[arg(short = 'd', long)]
-        domain: DomainId,
+        #[arg(short = 'd', long, conflicts_with = "domainless")]
+        domain: Option<DomainId>,
+        /// Register the canonical domainless account directly
+        #[arg(long, default_value_t = false, conflicts_with = "domain")]
+        domainless: bool,
     }
 
     #[derive(clap::Args, Debug)]
@@ -2951,6 +2984,264 @@ mod nft {
         }
         if let Some(sel) = common.select.as_deref() {
             let tuple = crate::list_support::parse_selector_tuple::<Nft>(sel)?;
+            builder = builder.with_selector_tuple(tuple);
+        }
+        Ok(builder)
+    }
+}
+
+mod rwa {
+    use iroha::data_model::isi::rwa::{
+        ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
+        SetRwaControls, TransferRwa, UnfreezeRwa,
+    };
+
+    use super::*;
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Command {
+        /// Retrieve details of a specific RWA lot
+        Get(Id),
+        /// List RWA lots
+        #[clap(subcommand)]
+        List(List),
+        /// Register an RWA lot using `NewRwa` JSON from stdin
+        Register,
+        /// Transfer quantity from an existing lot
+        Transfer(Transfer),
+        /// Merge parent lots using `MergeRwas` JSON from stdin
+        Merge,
+        /// Redeem quantity from an existing lot
+        Redeem(Quantity),
+        /// Freeze an existing lot
+        Freeze(Id),
+        /// Unfreeze an existing lot
+        Unfreeze(Id),
+        /// Hold quantity on an existing lot
+        Hold(Quantity),
+        /// Release held quantity from an existing lot
+        Release(Quantity),
+        /// Force-transfer quantity from an existing lot
+        ForceTransfer(ForceTransfer),
+        /// Replace the lot control policy using `RwaControlPolicy` JSON from stdin
+        SetControls(Id),
+        /// Read and write metadata
+        #[command(subcommand)]
+        Meta(metadata::rwa::Command),
+    }
+
+    #[derive(crate::json_macros::JsonDeserialize)]
+    struct MergeInput {
+        parents: Vec<RwaParentRef>,
+        primary_reference: String,
+        status: Option<Name>,
+        metadata: Metadata,
+    }
+
+    impl Run for Command {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            use self::Command::*;
+            match self {
+                Get(args) => {
+                    let client = context.client_from_config();
+                    let entries = client
+                        .query(FindRwas)
+                        .execute_all()
+                        .wrap_err("Failed to get RWA")?;
+                    let entry = entries
+                        .into_iter()
+                        .find(|e| e.id() == &args.id)
+                        .ok_or_else(|| eyre!("RWA not found"))?;
+                    context.print_data(&entry)
+                }
+                List(cmd) => cmd.run(context),
+                Register => {
+                    let rwa: NewRwa = parse_json_stdin(context)?;
+                    context
+                        .finish([RegisterRwa { rwa }])
+                        .wrap_err("Failed to register RWA")
+                }
+                Transfer(args) => {
+                    let from = resolve_account_id(context, &args.from)
+                        .wrap_err("failed to resolve --from account")?;
+                    let to = resolve_account_id(context, &args.to)
+                        .wrap_err("failed to resolve --to account")?;
+                    context
+                        .finish([TransferRwa {
+                            source: from,
+                            rwa: args.id,
+                            quantity: args.quantity,
+                            destination: to,
+                        }])
+                        .wrap_err("Failed to transfer RWA")
+                }
+                Merge => {
+                    let merge: MergeInput = parse_json_stdin(context)?;
+                    context
+                        .finish([MergeRwas {
+                            parents: merge.parents,
+                            primary_reference: merge.primary_reference,
+                            status: merge.status,
+                            metadata: merge.metadata,
+                        }])
+                        .wrap_err("Failed to merge RWAs")
+                }
+                Redeem(args) => context
+                    .finish([RedeemRwa {
+                        rwa: args.id,
+                        quantity: args.quantity,
+                    }])
+                    .wrap_err("Failed to redeem RWA"),
+                Freeze(args) => context
+                    .finish([FreezeRwa { rwa: args.id }])
+                    .wrap_err("Failed to freeze RWA"),
+                Unfreeze(args) => context
+                    .finish([UnfreezeRwa { rwa: args.id }])
+                    .wrap_err("Failed to unfreeze RWA"),
+                Hold(args) => context
+                    .finish([HoldRwa {
+                        rwa: args.id,
+                        quantity: args.quantity,
+                    }])
+                    .wrap_err("Failed to hold RWA quantity"),
+                Release(args) => context
+                    .finish([ReleaseRwa {
+                        rwa: args.id,
+                        quantity: args.quantity,
+                    }])
+                    .wrap_err("Failed to release RWA hold"),
+                ForceTransfer(args) => {
+                    let to = resolve_account_id(context, &args.to)
+                        .wrap_err("failed to resolve --to account")?;
+                    context
+                        .finish([ForceTransferRwa {
+                            rwa: args.id,
+                            quantity: args.quantity,
+                            destination: to,
+                        }])
+                        .wrap_err("Failed to force-transfer RWA")
+                }
+                SetControls(args) => {
+                    let controls: RwaControlPolicy = parse_json_stdin(context)?;
+                    context
+                        .finish([SetRwaControls {
+                            rwa: args.id,
+                            controls,
+                        }])
+                        .wrap_err("Failed to update RWA controls")
+                }
+                Meta(cmd) => cmd.run(context),
+            }
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Id {
+        /// RWA identifier in the format `hash$domain`
+        #[arg(short, long)]
+        pub id: RwaId,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Quantity {
+        /// RWA identifier in the format `hash$domain`
+        #[arg(short, long)]
+        pub id: RwaId,
+        /// Quantity for the operation
+        #[arg(short, long)]
+        pub quantity: Numeric,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Transfer {
+        /// RWA identifier in the format `hash$domain`
+        #[arg(short, long)]
+        pub id: RwaId,
+        /// Source account identifier (canonical I105 literal)
+        #[arg(short, long)]
+        pub from: String,
+        /// Quantity to transfer
+        #[arg(short, long)]
+        pub quantity: Numeric,
+        /// Destination account identifier (canonical I105 literal)
+        #[arg(short, long)]
+        pub to: String,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct ForceTransfer {
+        /// RWA identifier in the format `hash$domain`
+        #[arg(short, long)]
+        pub id: RwaId,
+        /// Quantity to transfer
+        #[arg(short, long)]
+        pub quantity: Numeric,
+        /// Destination account identifier (canonical I105 literal)
+        #[arg(short, long)]
+        pub to: String,
+    }
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum List {
+        /// List all IDs, or full entries when `--verbose` is specified
+        All(crate::list_support::AllArgs),
+        /// Filter by a given predicate
+        Filter(filter::RwaFilter),
+    }
+
+    impl Run for List {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let client = context.client_from_config();
+            match self {
+                List::All(args) => list_all(context, client.query(FindRwas), &args),
+                List::Filter(filter) => {
+                    let (predicate, common) = filter.into_list_args().decompose();
+                    let builder = client.query(FindRwas).filter(predicate);
+                    let builder = apply_common_args(builder, &common)?;
+                    let entries = builder.execute_all()?;
+                    context.print_data(&entries)
+                }
+            }
+        }
+    }
+
+    fn list_all<C: RunContext>(
+        context: &mut C,
+        builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindRwas, Rwa>,
+        args: &crate::list_support::AllArgs,
+    ) -> Result<()> {
+        let builder = apply_common_args(builder, &args.common)?;
+        let entries = builder.execute_all()?;
+        if args.verbose {
+            context.print_data(&entries)
+        } else {
+            let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
+            context.print_data(&ids)
+        }
+    }
+
+    fn apply_common_args<'a>(
+        builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindRwas, Rwa>,
+        common: &'a crate::list_support::CommonArgs,
+    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindRwas, Rwa>> {
+        use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
+        use std::num::NonZeroU64;
+
+        let mut builder = builder;
+        if let Some(key) = common.sort_by_metadata_key.clone() {
+            let sorting = Sorting::new(Some(key), common.order.map(Into::into));
+            builder = builder.with_sorting(sorting);
+        }
+        if common.limit.is_some() || common.offset > 0 {
+            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
+            builder = builder.with_pagination(pagination);
+        }
+        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
+            let fs = FetchSize::new(Some(n));
+            builder = builder.with_fetch_size(fs);
+        }
+        if let Some(sel) = common.select.as_deref() {
+            let tuple = crate::list_support::parse_selector_tuple::<Rwa>(sel)?;
             builder = builder.with_selector_tuple(tuple);
         }
         Ok(builder)
@@ -5538,6 +5829,64 @@ mod metadata {
         }
     }
 
+    pub mod rwa {
+        use super::*;
+
+        #[derive(clap::Subcommand, Debug)]
+        pub enum Command {
+            /// Retrieve a value from the key-value store
+            Get(IdKey),
+            /// Create or update an entry in the key-value store using JSON input from stdin
+            Set(IdKey),
+            /// Delete an entry from the key-value store
+            Remove(IdKey),
+        }
+
+        #[derive(clap::Args, Debug)]
+        pub struct IdKey {
+            #[arg(short, long)]
+            pub id: RwaId,
+            #[arg(short, long)]
+            pub key: Name,
+        }
+
+        impl Run for Command {
+            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+                use self::Command::*;
+                match self {
+                    Get(args) => {
+                        let client = context.client_from_config();
+                        let entries: Vec<Rwa> = client
+                            .query(FindRwas)
+                            .execute_all()
+                            .wrap_err("Failed to get value")?;
+                        let entry = entries
+                            .into_iter()
+                            .find(|e| e.id() == &args.id)
+                            .ok_or_else(|| eyre!("RWA not found"))?;
+                        let value = entry
+                            .metadata()
+                            .get(&args.key)
+                            .cloned()
+                            .ok_or_else(|| eyre!("Key not found"))?;
+                        context.print_data(&value)
+                    }
+                    Set(args) => {
+                        let value: Json = parse_json_stdin(context)?;
+                        let instruction =
+                            iroha::data_model::isi::SetKeyValue::rwa(args.id, args.key, value);
+                        context.finish([instruction])
+                    }
+                    Remove(args) => {
+                        let instruction =
+                            iroha::data_model::isi::RemoveKeyValue::rwa(args.id, args.key);
+                        context.finish([instruction])
+                    }
+                }
+            }
+        }
+    }
+
     pub mod trigger {
         use super::*;
 
@@ -6925,6 +7274,13 @@ fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
 }
 
 fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedAccountId> {
+    Ok(ScopedAccountId::from_account_id(
+        parse_domainless_account_id(literal)?,
+        domain.clone(),
+    ))
+}
+
+fn parse_domainless_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
         eyre::bail!("`ledger account register --id` must be a canonical I105 account id");
@@ -6945,10 +7301,7 @@ fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedA
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
         eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
     })?;
-    Ok(ScopedAccountId::from_account_id(
-        parsed.into_account_id(),
-        domain.clone(),
-    ))
+    Ok(parsed.into_account_id())
 }
 
 fn string_from_stdin() -> Result<String> {
@@ -7078,6 +7431,21 @@ mod tests {
     };
     use tokio::runtime::Runtime;
     use url::Url;
+
+    #[test]
+    fn parse_domainless_account_id_accepts_canonical_i105_literal() {
+        let literal = "44ZQsD4b6qLunCkTq4zwtixNaRBPXshxMZa23TA2JNde33UWs67E7WCpjemcwS2YdKa78EhgEgfvR";
+        let parsed = parse_domainless_account_id(literal).expect("domainless account id");
+        assert_eq!(parsed.to_string(), literal);
+    }
+
+    #[test]
+    fn parse_register_account_id_materializes_requested_domain() {
+        let literal = "44ZQsD4b6qLunCkTq4zwtixNaRBPXshxMZa23TA2JNde33UWs67E7WCpjemcwS2YdKa78EhgEgfvR";
+        let domain: DomainId = "universal".parse().expect("domain");
+        let scoped = parse_register_account_id(literal, &domain).expect("scoped account");
+        assert_eq!(scoped.to_string(), format!("{literal}@{domain}"));
+    }
 
     #[derive(Clone, Copy, JsonSerialize)]
     struct DummyEvent;
@@ -7228,7 +7596,7 @@ mod tests {
 
     #[test]
     fn resolve_account_id_with_rejects_non_canonical_i105_literal() {
-        let literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
         let err =
             resolve_account_id_with(&literal).expect_err("non-canonical I105 literal should fail");
@@ -7245,7 +7613,7 @@ mod tests {
         let key_pair = KeyPair::from_seed(vec![11_u8; 32], Algorithm::Ed25519);
         let literal = AccountId::new(key_pair.public_key().clone())
             .canonical_i105()
-            .expect("canonical i105");
+            .expect("canonical I105");
         let resolved = parse_register_account_id(&literal, &domain).expect("register account id");
         assert_eq!(
             resolved,
@@ -7268,7 +7636,7 @@ mod tests {
     #[test]
     fn parse_register_account_id_rejects_non_canonical_i105_literal() {
         let domain: DomainId = "wonderland".parse().expect("domain");
-        let literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
         let err = parse_register_account_id(&literal, &domain)
             .expect_err("non-canonical I105 literal should fail");
         assert!(
@@ -7370,7 +7738,7 @@ mod tests {
     fn resolve_account_id_with_resolves_encoded_literal() {
         let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
-        let canonical = account.canonical_i105().expect("canonical i105");
+        let canonical = account.canonical_i105().expect("canonical I105");
         let resolved = resolve_account_id_with(&canonical).expect("local resolve");
 
         assert_eq!(resolved.to_string(), account.to_string());

@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`፡ ለማንኛውም የሚደገፍ መታወቂያ (`DomainId`፣ `AccountId`፣ `AssetDefinitionId`፣ `AssetId`፣ `NftId`፣ Norito `TriggerId`፣ `RoleId`፣ `Permission`፣ `CustomParameterId`)። ለአጠቃላይ ፍሰቶች እና Norito ኢንኮዲንግ እንደ ነጠላ አይነት ይጠቅማል።
 - `ChainId`: ግልጽ ያልሆነ ሰንሰለት መለያ በግብይቶች ውስጥ መልሶ ለማጫወት ጥበቃ ጥቅም ላይ ይውላል።የመታወቂያዎች ሕብረቁምፊ ቅርጾች (ዙር-trippable ከ `Display`/`FromStr`)፡
 - `DomainId`: `name` (ለምሳሌ `wonderland`)።
-- `AccountId`፡ ቀኖናዊ ዶሜናዊ መለያ መለያ በ`AccountAddress` እንደ I105 ብቻ የተመዘገበ። የፓርሰር ግብዓቶች ቀኖናዊ I105 መሆን አለባቸው; የጎራ ቅጥያ (`@domain`)፣ ቀኖናዊ I105 ቃላቶች፣ ተለዋጭ ስሞች፣ ቀኖናዊ ሄክስ ተንታኝ ግብዓት፣ የቆየ `norito:` ክፍያ ጭነቶች፣ እና `uaid:`/`uaid:`/`opaque:` የመለያ ቅጾች ውድቅ ናቸው።
+- `AccountId`፡ ቀኖናዊ ዶሜናዊ መለያ መለያ በ`AccountAddress` እንደ i105 ብቻ የተመዘገበ። የፓርሰር ግብዓቶች ቀኖናዊ i105 መሆን አለባቸው; የጎራ ቅጥያ (`@domain`)፣ ቀኖናዊ i105 ቃላቶች፣ ተለዋጭ ስሞች፣ ቀኖናዊ ሄክስ ተንታኝ ግብዓት፣ የቆየ `norito:` ክፍያ ጭነቶች፣ እና `uaid:`/`uaid:`/`opaque:` የመለያ ቅጾች ውድቅ ናቸው።
 - `AssetDefinitionId`፡ ቀኖናዊ `unprefixed Base58 address with versioning and checksum` (UUID-v4 ባይት)።
-- `AssetId`: ቀኖናዊ ኮድ በጥሬው `<asset-definition-id>#<account-id>` (የቆዩ የጽሑፍ ቅጾች በመጀመሪያው መለቀቅ አይደገፉም)።
+- `AssetId`: ቀኖናዊ ኮድ በጥሬው `<canonical-base58-asset-definition-id>` (የቆዩ የጽሑፍ ቅጾች በመጀመሪያው መለቀቅ አይደገፉም)።
 - `NftId`፡ `nft$domain` (ለምሳሌ `rose$garden`)።
 - `PeerId`: `public_key` (የአቻ እኩልነት በወል ቁልፍ ነው)።
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` - ልዩ ስም።
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - ግንበኛ: `NewDomain` በ `with_logo`, `with_metadata`, ከዚያም `Registrable::build(authority)` ስብስቦች `owned_by`.## መለያ
-- `AccountId` በተቆጣጣሪው ቁልፍ የተከፈተ እና እንደ ቀኖናዊ I105 የተቀመጠ ቀኖናዊ ጎራ-አልባ መለያ መለያ ነው።
+- `AccountId` በተቆጣጣሪው ቁልፍ የተከፈተ እና እንደ ቀኖናዊ i105 የተቀመጠ ቀኖናዊ ጎራ-አልባ መለያ መለያ ነው።
 - `ScopedAccountId { account: AccountId, domain: DomainId }` ሰፋ ያለ እይታ በሚያስፈልግበት ጊዜ ብቻ ግልጽ የጎራ አውድ ይይዛል።
 - `Account { id, metadata, label?, uaid? }` — `label` አማራጭ የተረጋጋ ተለዋጭ ስም በሬኪ መዝገቦች ጥቅም ላይ ይውላል፣ `uaid` አማራጭ Nexus-ሰፊ [ዩኒቨርሳል መለያ መታወቂያ](Kotodama) ይይዛል።
 - ገንቢ: `NewAccount` በ `Account::new(id)`; ምዝገባ ግልጽ የሆነ የ`ScopedAccountId` ጎራ ይፈልጋል እና ከነባሪዎች አንዱን አይገምትም።
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```የስደት ማስታወሻ፡-
 - የድሮ `name#domain` የንብረት ትርጉም መታወቂያዎች v1 ውስጥ ተቀባይነት የላቸውም።
-- ለአዝሙድና / ለማቃጠል / ለማስተላለፍ የንብረት መታወቂያዎች ቀኖናዊ `<asset-definition-id>#<account-id>` ይቀራሉ; እነሱን በ:
+- ለአዝሙድና / ለማቃጠል / ለማስተላለፍ የንብረት መታወቂያዎች ቀኖናዊ `<canonical-base58-asset-definition-id>` ይቀራሉ; እነሱን በ:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - ወይም `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

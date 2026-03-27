@@ -16,7 +16,7 @@ Cette page concerne `docs/source/sns/local_to_global_toolkit.md` en mono-repo. L
 
 - `scripts/address_local_toolkit.sh` utilise la CLI `iroha`, à savoir :
   - `audit.json` -- structuré pour `iroha tools address audit --format json`.
-  - `normalized.txt` -- преобразованные I105 (предпочтительно) / compressé (`sora`) (второй выбор) для каждого Sélecteur de domaine local.
+  - `normalized.txt` -- преобразованные i105 (предпочтительно) / compressé (`sora`) (второй выбор) для каждого Sélecteur de domaine local.
 - Utiliser le script dans les adresses d'acquisition du tableau de bord (`dashboards/grafana/address_ingest.json`)
   et j'utilise Alertmanager (`dashboards/alerts/address_ingest_rules.yml`), qui permet de télécharger le basculement Local-8 /
   Locale-12. Placez-vous dans les panneaux de collision Local-8 et Local-12 et alertes
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 Commentaires :
 
-- `--format I105` pour votre `sora...` pour I105.
+- `--format i105` pour votre `sora...` pour i105.
 - `domainless output (default)` pour les littéraux nus.
 - `--audit-only` pour permettre la conversion.
 - `--allow-errors` permet d'effectuer une analyse à l'aide de la CLI.Le script vous permet d'obtenir des œuvres d'art dans votre entreprise. Приложите оба файла к

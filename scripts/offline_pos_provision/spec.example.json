@@ -43,7 +43,7 @@
         "jurisdiction": "pilot",
         "program": "oa12"
       },
-      "operator_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "operator_account": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "operator_key": "ed25519:7e7d7c7b7a797877767574737271706f6e6d6c6b6a69686766656463626160",
       "published_at_ms": 1730314876000,
       "roots": [
@@ -66,7 +66,7 @@
     }
   ],
   "operator": {
-    "account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "account": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
     "private_key": "ed25519:8f8c7d6c5b4a392817161514131211100f0e0d0c0b0a09080706050403020100"
   },
   "revocation_bundles": [

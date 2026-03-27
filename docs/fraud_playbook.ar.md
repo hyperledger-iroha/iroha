@@ -103,7 +103,7 @@ Norito المطبقة في `crates/iroha_data_model::fraud`:
 - **استلام طلبات المخاطر (Risk intake)** – تستقبل
   `POST /v1/fraud/query` بنية `RiskQuery`:
   - `query_id` (`[u8; 32]`، مُمثَّلة بصيغة hex)
-  - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
+  - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (non-canonical I105 literals rejected)`)
   - `operation` (enum مُعنون يتطابق مع `RiskOperation`؛ الحقل `type` في
     JSON يعكس نوع الـ enum)
   - `related_asset` (`AssetId` اختياري)

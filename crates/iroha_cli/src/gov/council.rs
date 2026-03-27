@@ -884,7 +884,7 @@ mod tests {
         let key_pair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
         AccountId::new(key_pair.public_key().clone())
             .canonical_i105()
-            .expect("canonical i105")
+            .expect("canonical I105")
     }
 
     #[test]

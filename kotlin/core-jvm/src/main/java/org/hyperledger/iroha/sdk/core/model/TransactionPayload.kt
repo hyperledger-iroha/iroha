@@ -12,7 +12,7 @@ private val DEFAULT_AUTHORITY = AccountAddress
  *
  * The structure mirrors the Rust data model sufficiently for encoding and signing. Instruction
  * handling currently focuses on the IVM bytecode variant; support for general instruction lists will
- * be added alongside dedicated builders. `authority` must use the canonical public I105 account
+ * be added alongside dedicated builders. `authority` must use the canonical I105 account
  * literal.
  */
 class TransactionPayload(

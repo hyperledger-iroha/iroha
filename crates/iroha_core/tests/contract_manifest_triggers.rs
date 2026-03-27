@@ -143,6 +143,8 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let entrypoint = EntrypointDescriptor {
         name: "run".to_string(),
         kind: EntryPointKind::Public,
+        params: Vec::new(),
+        return_type: None,
         permission: None,
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -284,6 +286,8 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     let entrypoint = EntrypointDescriptor {
         name: "run".to_string(),
         kind: EntryPointKind::Public,
+        params: Vec::new(),
+        return_type: None,
         permission: None,
         read_keys: Vec::new(),
         write_keys: Vec::new(),

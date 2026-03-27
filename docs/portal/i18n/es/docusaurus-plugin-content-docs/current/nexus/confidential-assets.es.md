@@ -207,7 +207,7 @@ La documentación anula las configuraciones regionales en el runbook de operacio
 - Jerarquía de derivación por cuenta:
   - `sk_spend` -> `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Payloads de notas encriptadas usan AEAD con claves compartidas derivadas por ECDH; se pueden adjuntar ver claves de auditores opcionales a salidas según la política del activo.
-- Adiciones al CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descifrar memos, y el ayudante `iroha app zk envelope` para producir/inspeccionar sobres Norito fuera de línea. Torii exponen el mismo flujo de derivación vía `POST /v1/confidential/derive-keyset`, retornando formas hexadecimal y base64 para que wallets obtengan jerarquias de claves programáticamente.## Gas, límites y controles DoS
+- Adiciones al CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descifrar memos, y el ayudante `iroha app zk envelope` para producir/inspeccionar sobres Norito fuera de línea.
 - Horario determinista de gas:
   - Halo2 (Plonkish): gas base `250_000` + gas `2_000` por entrada del público.
   - `5` gas por byte de prueba, mas cargas por anulador (`300`) y por compromiso (`500`).

@@ -146,7 +146,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -154,7 +154,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` يعكس JSON `/v1/explorer/accounts/{id}/qr`: يشمل معرف الحساب القياسي، الحرفية القياسية I105، بيانات بادئة/تصحيح خطأ، أبعاد QR، وSVG داخلية يمكن تضمينها مباشرة.
+`ExplorerAccountQrSnapshot` يعكس JSON `/v1/explorer/accounts/{id}/qr`: يشمل معرف الحساب القياسي، الحرفية القياسية i105، بيانات بادئة/تصحيح خطأ، أبعاد QR، وSVG داخلية يمكن تضمينها مباشرة.
 
 ## 7. اشترك في الأحداث
 

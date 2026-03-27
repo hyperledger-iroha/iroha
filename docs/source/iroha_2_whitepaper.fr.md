@@ -113,9 +113,10 @@ La caisse `iroha_crypto` permet la gestion des clés, le hachage et la vérifica
 
 La caisse `iroha_data_model` définit tous les objets, instructions, requêtes et événements du grand livre. Points forts :
 
-- **Les domaines, comptes et actifs** utilisent les identifiants de compte canoniques I105 (de préférence) ; `name@domain` reste un routage
-  alias lorsqu'il est explicitement fourni. Les métadonnées sont déterministes (carte `Metadata`). Les actifs numériques prennent en charge la virgule fixe
-  opérations ; Les NFT contiennent des métadonnées structurées arbitraires.
+- **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  operations; NFTs carry arbitrary structured metadata.
+
 - **Les rôles et autorisations** utilisent des jetons énumérés Norito qui correspondent directement aux contrôles de l'exécuteur.
 - Les **déclencheurs** (basés sur le temps, basés sur des blocs ou basés sur des prédicats) émettent des transactions déterministes via la chaîne.
   exécuteur testamentaire.

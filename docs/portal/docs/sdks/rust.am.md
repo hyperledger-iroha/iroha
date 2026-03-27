@@ -149,7 +149,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -159,7 +159,7 @@ fn download_qr() -> eyre::Result<()> {
 
 `ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON ያንጸባርቃል
 ላዩን፡ እሱ የቀኖናዊ መለያ መታወቂያን፣ ቀጥተኛውን ከ. ጋር ያካትታል
-መደበኛ I105 literal፣ የአውታረ መረብ ቅድመ ቅጥያ/ስህተት ማስተካከያ ዲበ ውሂብ፣ የQR ልኬቶች፣ እና
+መደበኛ i105 literal፣ የአውታረ መረብ ቅድመ ቅጥያ/ስህተት ማስተካከያ ዲበ ውሂብ፣ የQR ልኬቶች፣ እና
 የኪስ ቦርሳ/አሳሾች በቀጥታ ሊከተቱት የሚችሉት የውስጠ-መስመር SVG ጭነት።
 
 ## 7. ለክስተቶች ይመዝገቡ

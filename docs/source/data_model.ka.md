@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`: ჯამის ტიპის კონვერტი ნებისმიერი მხარდაჭერილი ID-სთვის (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, Kotodama `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). სასარგებლოა ზოგადი ნაკადებისთვის და Norito კოდირებისთვის, როგორც ერთი ტიპის.
 - `ChainId`: გაუმჭვირვალე ჯაჭვის იდენტიფიკატორი, რომელიც გამოიყენება ტრანზაქციებში განმეორებით დაცვისთვის.ID-ების სიმებიანი ფორმები (ორმხრივი `Display`/`FromStr`-ით):
 - `DomainId`: `name` (მაგ., `wonderland`).
-- `AccountId`: ანგარიშის კანონიკური დომენის იდენტიფიკატორი, კოდირებული მხოლოდ `AccountAddress`-ით, როგორც I105. პარსერის შეყვანები უნდა იყოს კანონიკური I105; დომენის სუფიქსები (`@domain`), კანონიკური I105 ლიტერალები, მეტსახელის ლიტერალები, კანონიკური თექვსმეტობითი პარსერის შეყვანა, ძველი `norito:` დატვირთვა და `uaid:`/`opaque:` არის ანგარიშის რეჟიმები.
+- `AccountId`: ანგარიშის კანონიკური დომენის იდენტიფიკატორი, კოდირებული მხოლოდ `AccountAddress`-ით, როგორც i105. პარსერის შეყვანები უნდა იყოს კანონიკური i105; დომენის სუფიქსები (`@domain`), კანონიკური i105 ლიტერალები, მეტსახელის ლიტერალები, კანონიკური თექვსმეტობითი პარსერის შეყვანა, ძველი `norito:` დატვირთვა და `uaid:`/`opaque:` არის ანგარიშის რეჟიმები.
 - `AssetDefinitionId`: კანონიკური `unprefixed Base58 address with versioning and checksum` (UUID-v4 ბაიტი).
-- `AssetId`: კანონიკური კოდირებული ლიტერალი `<asset-definition-id>#<account-id>` (მემკვიდრეობითი ტექსტური ფორმები არ არის მხარდაჭერილი პირველ გამოშვებაში).
+- `AssetId`: კანონიკური კოდირებული ლიტერალი `<canonical-base58-asset-definition-id>` (მემკვიდრეობითი ტექსტური ფორმები არ არის მხარდაჭერილი პირველ გამოშვებაში).
 - `NftId`: `nft$domain` (მაგ., `rose$garden`).
 - `PeerId`: `public_key` (თანასწორობა არის საჯარო გასაღებით).
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` – უნიკალური სახელი.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - მშენებელი: `NewDomain` `with_logo`, `with_metadata`, შემდეგ `Registrable::build(authority)` კომპლექტი `owned_by`.### ანგარიში
-- `AccountId` არის კანონიკური ანგარიშის დომენის გარეშე, ჩასმული კონტროლერის მიერ და დაშიფრულია როგორც კანონიკური I105.
+- `AccountId` არის კანონიკური ანგარიშის დომენის გარეშე, ჩასმული კონტროლერის მიერ და დაშიფრულია როგორც კანონიკური i105.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` ახორციელებს დომენის გამოკვეთილ კონტექსტს მხოლოდ იქ, სადაც საჭიროა სკოპური ხედი.
 - `Account { id, metadata, label?, uaid? }` — `label` არის არასავალდებულო სტაბილური მეტსახელი, რომელსაც იყენებენ ხელახალი ჩანაწერები, `uaid` ატარებს არასავალდებულო Nexus ფართო [უნივერსალური ანგარიშის ID](Kotodama).
 - Builder: `NewAccount` via `Account::new(id)`; რეგისტრაცია მოითხოვს აშკარა `ScopedAccountId` დომენს და არ გამოიტანს დასკვნას ნაგულისხმევიდან.
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```მიგრაციის შენიშვნა:
 - ძველი `name#domain` აქტივების განსაზღვრის ID არ არის მიღებული v1-ში.
-- ზარაფხანის/დაწვის/გადაცემის აქტივების ID-ები რჩება კანონიკური `<asset-definition-id>#<account-id>`; ააშენეთ ისინი:
+- ზარაფხანის/დაწვის/გადაცემის აქტივების ID-ები რჩება კანონიკური `<canonical-base58-asset-definition-id>`; ააშენეთ ისინი:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - ან `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

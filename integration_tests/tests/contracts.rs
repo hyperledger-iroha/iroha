@@ -30,6 +30,8 @@ fn minimal_contract_artifact() -> Vec<u8> {
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -38,6 +40,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
+        states: Vec::new(),
     };
     let mut out = meta.encode();
     out.extend_from_slice(&interface.encode_section());

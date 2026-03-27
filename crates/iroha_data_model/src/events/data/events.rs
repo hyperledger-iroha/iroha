@@ -557,6 +557,155 @@ mod nft {
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(NftOwnerChanged);
 
+mod rwa {
+    //! This module contains `RwaEvent` and its impls.
+
+    use iroha_data_model_derive::model;
+
+    pub use self::model::*;
+    use super::*;
+
+    /// Metadata change captured for a specific RWA lot.
+    type RwaMetadataChanged = MetadataChanged<RwaId>;
+
+    data_event! {
+        #[has_origin(origin = Rwa)]
+        /// Event describing lifecycle changes for a single RWA lot.
+        pub enum RwaEvent {
+            #[has_origin(rwa => rwa.id())]
+            /// Lot was created.
+            Created(Rwa),
+            #[has_origin(metadata_changed => &metadata_changed.target)]
+            /// Metadata entry was inserted or updated.
+            MetadataInserted(RwaMetadataChanged),
+            #[has_origin(metadata_changed => &metadata_changed.target)]
+            /// Metadata entry was removed.
+            MetadataRemoved(RwaMetadataChanged),
+            #[has_origin(owner_changed => &owner_changed.rwa)]
+            /// Full-lot ownership changed in place.
+            OwnerChanged(RwaOwnerChanged),
+            #[has_origin(split => &split.source)]
+            /// A partial transfer split quantity out of the source lot.
+            Split(RwaSplit),
+            #[has_origin(merged => &merged.child)]
+            /// A new derived lot was created from parent lots.
+            Merged(RwaMerged),
+            #[has_origin(quantity_changed => &quantity_changed.rwa)]
+            /// Quantity was redeemed from the lot.
+            Redeemed(RwaQuantityChanged),
+            #[has_origin(id => id)]
+            /// Lot was frozen.
+            Frozen(RwaId),
+            #[has_origin(id => id)]
+            /// Lot was unfrozen.
+            Unfrozen(RwaId),
+            #[has_origin(hold_changed => &hold_changed.rwa)]
+            /// Quantity was placed on hold.
+            Held(RwaHoldChanged),
+            #[has_origin(hold_changed => &hold_changed.rwa)]
+            /// Held quantity was released.
+            Released(RwaHoldChanged),
+            #[has_origin(force_transfer => &force_transfer.source)]
+            /// Controller-driven transfer split quantity out of the source lot.
+            ForceTransferred(RwaSplit),
+            #[has_origin(controls_changed => &controls_changed.rwa)]
+            /// Control policy changed.
+            ControlsChanged(RwaControlsChanged),
+        }
+    }
+
+    #[model]
+    mod model {
+        use super::*;
+
+        /// Event emitted when full-lot ownership changes in place.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaOwnerChanged {
+            /// Lot whose owner changed.
+            pub rwa: RwaId,
+            /// New owner of the lot.
+            pub new_owner: AccountId,
+        }
+
+        /// Event emitted when quantity is split out of a source lot into a child lot.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaSplit {
+            /// Source lot reduced in place.
+            pub source: RwaId,
+            /// New child lot receiving the transferred quantity.
+            pub child: RwaId,
+            /// Quantity moved into the child lot.
+            pub quantity: Numeric,
+            /// Owner of the child lot.
+            pub new_owner: AccountId,
+        }
+
+        /// Event emitted when a derived lot is created from parent contributions.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaMerged {
+            /// Child lot created by the merge.
+            pub child: RwaId,
+            /// Quantitative parent contributions.
+            pub parents: Vec<RwaParentRef>,
+        }
+
+        /// Event emitted when lot quantity changes due to redemption.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaQuantityChanged {
+            /// Lot whose quantity changed.
+            pub rwa: RwaId,
+            /// Quantity affected by the operation.
+            pub quantity: Numeric,
+        }
+
+        /// Event emitted when held quantity changes.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaHoldChanged {
+            /// Lot whose held quantity changed.
+            pub rwa: RwaId,
+            /// Quantity affected by the hold or release.
+            pub quantity: Numeric,
+        }
+
+        /// Event emitted when a lot's control policy changes.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaControlsChanged {
+            /// Lot whose controls changed.
+            pub rwa: RwaId,
+            /// Full replacement control policy.
+            pub controls: RwaControlPolicy,
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl_json_via_norito_bytes!(
+    RwaOwnerChanged,
+    RwaSplit,
+    RwaMerged,
+    RwaQuantityChanged,
+    RwaHoldChanged,
+    RwaControlsChanged
+);
+
 mod peer {
     //! This module contains `PeerEvent` and its impls
 
@@ -957,6 +1106,9 @@ mod domain {
             #[has_origin(nft_event => &nft_event.origin().domain)]
             /// NFT event occurred in the domain scope.
             Nft(NftEvent),
+            #[has_origin(rwa_event => &rwa_event.origin().domain)]
+            /// RWA event occurred in the domain scope.
+            Rwa(RwaEvent),
             #[has_origin(account_event => account_event.origin_domain())]
             /// Account event occurred in the domain scope.
             Account(AccountEvent),
@@ -2109,6 +2261,12 @@ impl From<NftEvent> for DataEvent {
     }
 }
 
+impl From<RwaEvent> for DataEvent {
+    fn from(value: RwaEvent) -> Self {
+        DomainEvent::Rwa(value).into()
+    }
+}
+
 impl DataEvent {
     /// Return the domain id of [`DataEvent`]
     pub fn domain(&self) -> Option<&DomainId> {
@@ -2176,6 +2334,10 @@ pub mod prelude {
             RepoAccountRole, RepoAccountSettled,
         },
         role::{RoleEvent, RoleEventSet, RolePermissionChanged},
+        rwa::{
+            RwaControlsChanged, RwaEvent, RwaEventSet, RwaHoldChanged, RwaMerged, RwaOwnerChanged,
+            RwaQuantityChanged, RwaSplit,
+        },
         trigger::{TriggerEvent, TriggerEventSet, TriggerNumberOfExecutionsChanged},
     };
     pub use crate::{DataSpaceId, LaneId};

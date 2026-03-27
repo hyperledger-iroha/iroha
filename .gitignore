@@ -166,6 +166,7 @@ test_*
 !crates/iroha_core/tests/test_world.rs
 !scripts/tests/test_check_slot_duration.py
 !scripts/tests/test_iroha_monitor_screenshots.py
+!scripts/fastpq/tests/test_*.py
 !scripts/fastpq/tests/test_metal_capture_summary.py
 !scripts/fastpq/tests/test_profile_queue.py
 !scripts/telemetry/tests/test_generate_and7_quiz_summary.py

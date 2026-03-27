@@ -1,111 +1,99 @@
----
-lang: kk
-direction: ltr
-source: docs/account_structure.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 01561366c9698c10d29ff3f49ad4c14b22b1796b5c7701cf98d200a140af1caf
-source_last_modified: "2026-01-28T17:11:30.635172+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
----
+# Account Structure RFC
 
-# Есептік жазба құрылымы RFC
+**Status:** Accepted (ADDR-1)  
+**Audience:** Data model, Torii, Nexus, Wallet, Governance teams  
+**Related issues:** TBD
 
-**Күйі:** Қабылданды (ADDR-1)  
-**Аудитория:** Деректер үлгісі, Torii, Nexus, Wallet, Басқару топтары  
-**Байланысты мәселелер:** TBD
+## Summary
 
-## Түйіндеме
+This document describes the shipping account-addressing stack implemented in
+`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) and the
+companion tooling. It provides:
 
-Бұл құжат ішінде жүзеге асырылған жөнелту тіркелгісінің адрестеу стекін сипаттайды
-`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) және
-серіктес құрал. Ол қамтамасыз етеді:
+- A checksummed, human-facing **Katakana I105 account address** produced by
+  `AccountAddress::to_i105` that binds a chain discriminant to the account
+  controller and offers deterministic interop-friendly textual forms.
+- A domainless canonical account payload keyed only by the controller.
+  Explicit domain context now lives outside the payload via
+  `ScopedAccountId { account, domain }` and domain-link state.
 
-- Бақылау сомасы, адамға бағытталған **Iroha Base58 мекенжайы (I105)**
-  Тізбек дискриминантын тіркелгіге байланыстыратын `AccountAddress::to_i105`
-  контроллер және детерминирленген өзара әрекеттесуге ыңғайлы мәтіндік пішіндерді ұсынады.
-- жасырын әдепкі домендерге және жергілікті дайджесттерге арналған домен селекторлары
-  Болашақ Nexus қолдауы бар маршруттау үшін сақталған жаһандық тізілім селектор тегі (
-  тізілімді іздеу **әлі жөнелтілмеген**).
+## Motivation
 
-## Мотивация
+Wallets and off-chain tooling rely on raw `name@dataspace` or `name@domain.dataspace` on-chain account aliases today. This
+has two major drawbacks:
 
-Әмияндар мен тізбектен тыс құралдар бүгінгі таңда өңделмеген `alias@domain` (rejected legacy form) бағыттау бүркеншік аттарына сүйенеді. Бұл
-екі негізгі кемшілігі бар:
+1. **No network binding.** The string has no checksum or chain prefix, so users
+   can paste an address from the wrong network without immediate feedback. The
+   transaction will eventually be rejected (chain mismatch) or, worse, succeed
+   against an unintended account if the destination exists locally.
+2. **Domain collision.** Domains are namespace-only and can be reused on each
+   chain. Federation of services (custodians, bridges, cross-chain workflows)
+   becomes brittle because `finance` on chain A is unrelated to `finance` on
+   chain B.
 
-1. **Желіге байланыстыру жоқ.** Жолда бақылау сомасы немесе тізбек префиксі жоқ, сондықтан пайдаланушылар
-   дереу кері байланыссыз қате желіден мекенжайды қоя алады. The
-   транзакция ақыр соңында қабылданбайды (тізбек сәйкес келмеуі) немесе одан да жаманы сәтті болады
-   тағайындалмаған тіркелгіге қарсы, егер тағайындалған жер жергілікті жерде болса.
-2. **Домен соқтығысуы.** Домендер тек аттар кеңістігі болып табылады және оларды әрқайсысында қайта пайдалануға болады
-   тізбек. Қызметтер федерациясы (кастодиандар, көпірлер, кросс-тізбекті жұмыс процестері)
-   сынғыш болады, себебі А тізбегіндегі `finance` `finance` байланысы жоқ.
-   тізбек В.
+We need a human-friendly address format that guards against copy/paste errors
+and a deterministic mapping from an on-chain alias to the authoritative chain/account binding.
 
-Бізге көшіру/қою қателерінен қорғайтын адамға қолайлы мекенжай пішімі қажет
-және домендік атаудан беделді тізбекке детерминирленген салыстыру.
+## Goals
 
-## Мақсаттар
+- Describe the I105 envelope implemented in the data model and the
+  canonical parsing/alias rules that `AccountId` and `AccountAddress` follow.
+- Encode the configured chain discriminant directly into each address and
+  define its governance/registry process.
+- Describe how to introduce a global domain registry without breaking current
+  deployments and specify normalization/anti-spoofing rules.
 
-- Деректер үлгісінде енгізілген I105 Base58 конвертін сипаттаңыз және
-  `AccountId` және `AccountAddress` орындайтын канондық талдау/бүркеншік ат ережелері.
-- Конфигурацияланған тізбек дискриминантын тікелей әрбір мекенжайға кодтау және
-  оның басқару/тіркеу процесін анықтау.
-- Ағымды үзбестен ғаламдық домен тізілімін енгізу жолын сипаттаңыз
-  орналастыру және қалыпқа келтіру/спуфингке қарсы ережелерді көрсетіңіз.
+## Non-goals
 
-## Мақсатсыз
+- Implementing cross-chain asset transfers. The routing layer only returns the
+  target chain.
+- Finalising governance for global domain issuance. This RFC focuses on the data
+  model and transport primitives.
 
-- Активтердің тізбекаралық трансферттерін жүзеге асыру. Маршруттау қабаты тек қайтарады
-  мақсатты тізбек.
-- Жаһандық домен шығару үшін басқаруды аяқтау. Бұл RFC деректерге назар аударады
-  модель және тасымалдау примитивтері.
+## Background
 
-## Фон
-
-### Ағымдағы маршруттау бүркеншік аты
+### Current on-chain account alias
 
 ```
 AccountId {
-    domain: DomainId,   // wrapper over Name (ASCII-ish string)
     controller: AccountController // single PublicKey or multisig policy
 }
+ScopedAccountId {
+    account: AccountId,
+    domain: DomainId,
+}
 
-Display: canonical I105 literal (no `@domain` suffix)
+Display / JSON text: canonical I105 literal only
 Parse accepts:
-- Encoded account identifiers only: I105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
+- Canonical I105 account literals only.
+- Runtime parsers reject non-canonical/dotted i105 literals, legacy `norito:<hex>`,
+  canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as
+  `name@dataspace` or `name@domain.dataspace`.
 
-Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
-and `0x` prefixes are not accepted.
-
-This text form is now treated as an **account alias**: a routing convenience
-that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
-It remains useful for human readability and domain-scoped governance, but it is
-no longer considered the authoritative account identifier on-chain.
+Domain context is explicit and out-of-band. There is no public
+`AccountSubjectId`; subject identity is `AccountId`.
 ```
 
-`ChainId` `AccountId` сыртында тұрады. Түйіндер транзакцияның `ChainId` тексереді
-қабылдау кезінде конфигурацияға қарсы (`AcceptTransactionFail::ChainIdMismatch`)
-және шетелдік транзакцияларды қабылдамайды, бірақ шот жолының өзі жоқ
-желілік анықтама.
+`ChainId` lives outside of `AccountId`. Nodes check the transaction’s `ChainId`
+against configuration during admission (`AcceptTransactionFail::ChainIdMismatch`)
+and reject foreign transactions, but the account string itself carries no
+network hint.
 
-### Домен идентификаторлары
+### Domain identifiers
 
-`DomainId` `Name` (қалыпты жол) орап, жергілікті тізбекке қамтылған.
-Әрбір тізбек `wonderland`, `finance` және т.б. дербес тіркей алады.
+`DomainId` wraps a `Name` (normalized string) and is scoped to the local chain.
+Every chain can register `wonderland`, `finance`, etc. independently.
 
-### Nexus контекст
+### Nexus context
 
-Nexus құрамдас аралық үйлестіруге жауапты (жолақтар/деректер кеңістігі). Ол
-қазіргі уақытта кросс-тізбекті доменді бағыттау тұжырымдамасы жоқ.
+Nexus is responsible for cross-component coordination (lanes/data-spaces). It
+currently has no concept of cross-chain domain routing.
 
-## Ұсынылған дизайн
+## Proposed Design
 
-### 1. Детерминирленген тізбек дискриминанты
+### 1. Deterministic chain discriminant
 
-`iroha_config::parameters::actual::Common` енді мынаны көрсетеді:
+`iroha_config::parameters::actual::Common` now exposes:
 
 ```rust
 pub struct Common {
@@ -115,54 +103,46 @@ pub struct Common {
 }
 ```
 
-- **Шектеулер:**
-  - Белсенді желі үшін бірегей; қол қойылған мемлекеттік тізілім арқылы басқарылады
-    анық сақталған ауқымдар (мысалы, `0x0000–0x0FFF` сынақ/дев, `0x1000–0x7FFF`
-    қауымдастықты бөлу, `0x8000–0xFFEF` басқару мақұлдаған, `0xFFF0–0xFFFF`
-    сақталған).
-  - Жүру тізбегі үшін өзгермейтін. Оны өзгерту үшін қатты шанышқы және а
-    тізілімді жаңарту.
-- **Басқару және тізілім (жоспарлы):** Көп қолтаңбалы басқару жинағы
-  қол қойылған JSON тізілімін адамның бүркеншік аттарымен салыстыру дискриминанттарын сақтау және
-  CAIP-2 идентификаторлары. Бұл тізілім әлі жеткізілген орындалу уақытының бөлігі емес.
-- **Қолданылуы:** Мемлекеттік рұқсат, Torii, SDK және әмиян API интерфейстері арқылы беріледі.
-  әрбір құрамдас оны ендіре алады немесе тексере алады. CAIP-2 экспозициясы болашақ болып қала береді
-  өзара әрекеттесу тапсырмасы.
+- **Constraints:**
+  - Unique per active network; managed through a signed public registry with
+    explicit reserved ranges (e.g., `0x0000–0x0FFF` test/dev, `0x1000–0x7FFF`
+    community allocations, `0x8000–0xFFEF` governance-approved, `0xFFF0–0xFFFF`
+    reserved).
+  - Immutable for a running chain. Changing it requires a hard fork and a
+    registry update.
+- **Governance & registry (planned):** A multi-signature governance set will
+  maintain a signed JSON registry mapping discriminants to human aliases and
+  CAIP-2 identifiers. This registry is not yet part of the shipped runtime.
+- **Usage:** Threaded through state admission, Torii, SDKs, and wallet APIs so
+  every component can embed or validate it. CAIP-2 exposure remains a future
+  interop task.
 
-### 2. Канондық мекенжай кодектері
+### 2. Canonical address codecs
 
-Rust деректер үлгісі бір канондық пайдалы жүктеме көрінісін көрсетеді
-(`AccountAddress`) бірнеше адамға арналған форматтар ретінде шығарылуы мүмкін. I105 болып табылады
-ортақ пайдалану және канондық шығару үшін қолайлы тіркелгі пішімі; қысылған
-`sora` пішіні UX үшін екінші ең жақсы, тек Sora нұсқасы, мұнда кана алфавиті бар
-құндылық қосады. Канондық он алтылық отладтау құралы болып қала береді.
+The Rust data model now distinguishes the public `AccountId` surface from the
+lower-level `AccountAddress` helper.
 
-- **I105 (Iroha Base58)** – тізбекті ендіретін Base58 конверті
-  дискриминант. Декодерлер пайдалы жүктемені жылжытпас бұрын префиксті тексереді
-  канондық формасы.
-- **Сорамен қысылған көрініс** – құрастырған **105 таңбадан** тұратын тек Sora әліпбиі
-  58 таңбаға жарты ені イロハ өлеңін (ヰ және ヱ қоса алғанда) қосу
-  I105 жинағы. Жолдар `sora` күзетшісінен басталады, Bech32m туындысын ендіреді
-  бақылау сомасын енгізіп, желі префиксін өткізіп жіберіңіз (Sora Nexus дегенді күзетші меңзейді).
+- `AccountId` text/JSON parsing is hard-cut to canonical I105 only.
+- `AccountAddress` remains the canonical binary envelope and can still be
+  rendered as I105. Canonical hex remains an internal envelope/debug view and
+  is not a public account identifier.
 
-  ```
-  I105  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
-  Iroha : ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ
-  ```
-- **Канондық алтылық** – канондық байтты түзетуге ыңғайлы `0x…` кодтауы
-  конверт.
+- **I105** – the canonical account-address envelope that embeds the chain
+  discriminant. Decoders validate the prefix before promoting the payload to
+  the canonical form.
+- **Canonical hex** – an internal `0x…` view of the canonical byte envelope for
+  debugging, fixtures, and low-level tooling only.
 
-`AccountAddress::parse_encoded` I105 (қалаулы), қысылған (`sora`, екінші ең жақсы) немесе канондық он алтылықты автоматты түрде анықтайды
-(тек `0x...`; жалаң он алтылық қабылданбайды) декодталған пайдалы жүктемені де, анықталған мәнді де енгізеді және қайтарады.
-`AccountAddress`. Torii енді ISO 20022 қосымшасы үшін `parse_encoded` деп атайды
-метадеректер детерминирленген болып қалатындай канондық он алтылық пішінді мекендейді және сақтайды
-бастапқы ұсынуына қарамастан.
+`AccountAddress::parse_encoded` accepts i105 forms for
+the raw address envelope. `AccountId::parse_encoded`, `FromStr`, and JSON
+deserialization accept only canonical I105 and reject non-canonical/legacy
+i105 forms, canonical hex, `norito:`, alias, and `@domain` forms.
 
-#### 2.1 Тақырып байт орналасуы (ADDR-1a)
+#### 2.1 Header byte layout (ADDR-1a)
 
-Әрбір канондық пайдалы жүктеме `header · controller` ретінде көрсетілген. The
-`header` - бұл байттарға қандай талдаушы ережелері қолданылатынын көрсететін жалғыз байт.
-орындаңыз:
+Every canonical payload is laid out as `header · controller`. The
+`header` is a single byte that communicates which parser rules apply to the bytes that
+follow:
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -171,18 +151,18 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-Сондықтан бірінші байт төменде декодерлерге арналған схема метадеректерін жинайды:
+The first byte therefore packs the schema metadata for downstream decoders:
 
-| Биттар | Өріс | Рұқсат етілген мәндер | Бұзушылықтағы қате |
+| Bits | Field | Allowed values | Error on violation |
 |------|-------|----------------|--------------------|
-| 7-5 | `addr_version` | `0` (v1). `1-7` мәндері болашақ түзетулер үшін сақталған. | `0-7` триггерінен тыс мәндер `AccountAddressError::InvalidHeaderVersion`; іске асырулар нөлден басқа нұсқаларды бүгінде қолдау көрсетілмейтін ретінде қарастыруы керек. |
-| 4-3 | `addr_class` | `0` = жалғыз кілт, `1` = мультисиг. | Басқа мәндер `AccountAddressError::UnknownAddressClass` жоғарылайды. |
-| 2-1 | `norm_version` | `1` (Норма v1). `0`, `2`, `3` мәндері сақталған. | `0-3` тыс мәндер `AccountAddressError::InvalidNormVersion` жоғарылайды. |
-| 0 | `ext_flag` | `0` болуы керек. | Орнату биті `AccountAddressError::UnexpectedExtensionFlag` жоғарылайды. |
+| 7-5  | `addr_version` | `0` (v1). Values `1-7` are reserved for future revisions. | Values outside `0-7` trigger `AccountAddressError::InvalidHeaderVersion`; implementations MUST treat non-zero versions as unsupported today. |
+| 4-3  | `addr_class` | `0` = single key, `1` = multisig. | Other values raise `AccountAddressError::UnknownAddressClass`. |
+| 2-1  | `norm_version` | `1` (Norm v1). Values `0`, `2`, `3` are reserved. | Values outside `0-3` raise `AccountAddressError::InvalidNormVersion`. |
+| 0    | `ext_flag` | MUST be `0`. | Set bit raises `AccountAddressError::UnexpectedExtensionFlag`. |
 
-Rust кодері бір кілтті контроллерлер үшін `0x02` жазады (0 нұсқа, 0 сынып,
-v1 нормасы, кеңейтім жалаушасы тазартылды) және мультисиг контроллері үшін `0x0A` (0 нұсқасы,
-1-сынып, v1 нормасы, кеңейту жалауы тазартылған).
+The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
+norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
+class 1, norm v1, extension flag cleared).
 
 #### 2.2 Domainless payload semantics
 
@@ -191,242 +171,202 @@ with no selector segment, no implicit default-domain reconstruction, and no
 public decode fallback for legacy scoped-account literals.
 
 Explicit domain context is modeled separately as `ScopedAccountId { account,
-domain }` or separate API fields; it is not encoded into `AccountId` payload
-bytes.
+domain }` and via account-domain link state. Converting an `AccountAddress`
+into a scoped account therefore requires the caller to supply the domain
+explicitly. The public subject-identity surface is just `AccountId`;
+`AccountSubjectId` is not part of the public API.
 
-| Tag | Meaning | Payload | Notes |
-|-----|---------|---------|-------|
-| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
-| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
+#### 2.3 Controller payload encodings (ADDR-1a)
 
-Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
+The controller payload is a tagged union appended immediately after the header in
+canonical payloads:
 
-```
-legacy selector segment
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind, see table)│
-└──────────┴──────────────────────────────────────────────┘
-```
-
-When present, the selector is immediately adjacent to the controller payload, so
-a decoder can walk the wire format in order: read the tag byte, read the
-tag-specific payload, then move on to the controller bytes.
-
-**Legacy selector examples**
-
-- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
-  domain using the deterministic test key:
-  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
-  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
-  that follow the payload are identical to the implicit-default case; the selector simply
-  replaces the normalised domain string with a registry pointer. Example using
-  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
-
-#### 2.3 Контроллердің пайдалы жүктеме кодтаулары (ADDR-1a)
-
-Контроллердің пайдалы жүктемесі домен селекторынан кейін қосылған басқа тегтелген бірлестік болып табылады:| Тег | Контроллер | Макет | Ескертпелер |
+| Tag | Controller | Layout | Notes |
 |-----|------------|--------|-------|
-| `0x00` | Бір кілт | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` бүгін Ed25519 картасына сәйкес келеді. `key_len` `u8` шектелген; үлкен мәндер `AccountAddressError::KeyPayloadTooLong` жоғарылайды (сондықтан >255 байт болатын бір кілтті ML-DSA ашық кілттерін кодтауға болмайды және мультисигті пайдалану керек). |
-| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u8` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_len:u16`)\* | 255 мүшеге дейін қолдайды (`CONTROLLER_MULTISIG_MEMBER_MAX`). Белгісіз қисықтар `AccountAddressError::UnknownCurve` көтереді; дұрыс емес саясаттар `AccountAddressError::InvalidMultisigPolicy` ретінде көпіршіктенеді. |
+| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
+| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u16` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | The encoded member count is 16-bit; the old 255-member hard cap is gone. Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
 
-Multisig саясаты сонымен қатар CTAP2 стиліндегі CBOR картасын және канондық дайджестті көрсетеді
-хосттар мен SDK контроллерді анықтаушы түрде тексере алады. Қараңыз
-Схема үшін `docs/source/references/multisig_policy_schema.md` (ADDR-1c),
-валидация ережелері, хэштеу процедурасы және алтын арматура.
+Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
+hosts and SDKs can verify the controller deterministically. See
+`docs/source/references/multisig_policy_schema.md` (ADDR-1c) for the schema,
+validation rules, hashing procedure, and golden fixtures.
 
-Барлық кілт байттары дәл `PublicKey::to_bytes` қайтарғандай кодталған; декодерлер `PublicKey` даналарын қайта құрастырады және байттар жарияланған қисыққа сәйкес келмесе, `AccountAddressError::InvalidPublicKey` жоғарылайды.
+All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders reconstruct `PublicKey` instances and raise `AccountAddressError::InvalidPublicKey` if the bytes do not match the declared curve.
 
-> **Ed25519 канондық орындау (ADDR-3a):** `0x01` қисығы пернелері қол қоюшы шығаратын нақты байт жолын декодтауы керек және шағын ретті ішкі топта жатпауы керек. Түйіндер енді канондық емес кодтауларды (мысалы, `2^255-19` модулінің азайтылған мәндері) және сәйкестендіру элементі сияқты әлсіз нүктелерден бас тартады, сондықтан SDK мекенжайларды жібермес бұрын сәйкестік тексеру қателерін көрсетуі керек.
+> **Ed25519 canonical enforcement (ADDR-3a):** curve `0x01` keys must decode to the exact byte string emitted by the signer and must not lie in the small-order subgroup. Nodes now reject non-canonical encodings (e.g., values reduced modulo `2^255-19`) and weak points such as the identity element, so SDKs should surface matching validation errors before submitting addresses.
 
-##### 2.3.1 Қисық идентификатор тізілімі (ADDR-1d)
+##### 2.3.1 Curve identifier registry (ADDR-1d)
 
-| ID (`curve_id`) | Алгоритм | Мүмкіндік қақпасы | Ескертпелер |
-|----------------|-----------|--------------|-------|
-| `0x00` | Резервтелген | — | ШЫҒЫРЫЛМАУ КЕРЕК; декодерлердің беті `ERR_UNKNOWN_CURVE`. |
-| `0x01` | Ed25519 | — | Канондық v1 алгоритмі (`Algorithm::Ed25519`); әдепкі конфигурацияда қосылған. |
-| `0x02` | ML‑DSA (Dilithium3) | — | Dilithium3 ашық кілт байттарын (1952 байт) пайдаланады. Бір кілтті мекенжайлар ML‑DSA кодтай алмайды, себебі `key_len` `u8`; multisig `u16` ұзындықтарын пайдаланады. |
-| `0x03` | BLS12‑381 (қалыпты) | `bls` | G1-дегі ашық кілттер (48 байт), G2-дегі қолтаңбалар (96 байт). |
-| `0x04` | secp256k1 | — | SHA‑256 бойынша детерминистік ECDSA; ашық кілттер 33 байт SEC1 қысылған пішінін пайдаланады, ал қолтаңбалар канондық 64 байт `r∥s` орналасуын пайдаланады. |
-| `0x05` | BLS12‑381 (кіші) | `bls` | G2-дегі ашық кілттер (96 байт), G1-дегі қолтаңбалар (48 байт). |
-| `0x0A` | ГОСТ Р 34.10‑2012 (256, А жинағы) | `gost` | `gost` мүмкіндігі қосылғанда ғана қолжетімді. |
-| `0x0B` | ГОСТ Р 34.10‑2012 (256, В жинағы) | `gost` | `gost` мүмкіндігі қосылғанда ғана қолжетімді. |
-| `0x0C` | ГОСТ Р 34.10‑2012 (256, С жинағы) | `gost` | `gost` мүмкіндігі қосылғанда ғана қолжетімді. |
-| `0x0D` | ГОСТ Р 34.10‑2012 (512, А жинағы) | `gost` | `gost` мүмкіндігі қосылғанда ғана қолжетімді. |
-| `0x0E` | ГОСТ Р 34.10‑2012 (512, В жинағы) | `gost` | `gost` мүмкіндігі қосылғанда ғана қолжетімді. |
-| `0x0F` | SM2 | `sm` | DistID ұзындығы (u16 BE) + DistID байттары + 65-байт SEC1 қысылмаған SM2 пернесі; `sm` қосылғанда ғана қолжетімді. |
+| ID (`curve_id`) | Algorithm | Feature gate | Notes |
+|-----------------|-----------|--------------|-------|
+| `0x00` | Reserved | — | MUST NOT be emitted; decoders surface `ERR_UNKNOWN_CURVE`. |
+| `0x01` | Ed25519 | — | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled in the default config. |
+| `0x02` | ML‑DSA (Dilithium3) | — | Uses the Dilithium3 public key bytes (1952 bytes). Single‑key addresses cannot encode ML‑DSA because `key_len` is `u8`; multisig uses `u16` lengths. |
+| `0x03` | BLS12‑381 (normal) | `bls` | Public keys in G1 (48 bytes), signatures in G2 (96 bytes). |
+| `0x04` | secp256k1 | — | Deterministic ECDSA over SHA‑256; public keys use the 33‑byte SEC1 compressed form and signatures use the canonical 64‑byte `r∥s` layout. |
+| `0x05` | BLS12‑381 (small) | `bls` | Public keys in G2 (96 bytes), signatures in G1 (48 bytes). |
+| `0x0A` | GOST R 34.10‑2012 (256, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0B` | GOST R 34.10‑2012 (256, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0C` | GOST R 34.10‑2012 (256, set C) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0D` | GOST R 34.10‑2012 (512, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0E` | GOST R 34.10‑2012 (512, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0F` | SM2 | `sm` | DistID length (u16 BE) + DistID bytes + 65‑byte SEC1 uncompressed SM2 key; available only when `sm` is enabled. |
 
-`0x06–0x09` ұяшықтары қосымша қисықтар үшін тағайындалмаған күйінде қалады; жаңасымен таныстыру
-алгоритм жол картасын жаңартуды және сәйкес SDK/хост қамтуды қажет етеді. Кодерлер
-`ERR_UNSUPPORTED_ALGORITHM` көмегімен кез келген қолдау көрсетілмейтін алгоритмді қабылдамау керек және
-декодерлер сақтау үшін `ERR_UNKNOWN_CURVE` белгісіз идентификаторларда тез істен шығуы КЕРЕК
-сәтсіз жабық мінез-құлық.
+Slots `0x06–0x09` remain unassigned for additional curves; introducing a new
+algorithm requires a roadmap update and matching SDK/host coverage. Encoders
+MUST reject any unsupported algorithm with `ERR_UNSUPPORTED_ALGORITHM`, and
+decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
+fail-closed behaviour.
 
-Канондық тізілім (соның ішінде машинада оқылатын JSON экспорты) астында тұрады
+The canonical registry (including a machine-readable JSON export) lives under
 [`docs/source/references/address_curve_registry.md`](source/references/address_curve_registry.md).
-Құралдар қисық идентификаторлар қалуы үшін бұл деректер жиынын тікелей тұтынуы КЕРЕК
-SDK және оператордың жұмыс үрдістері бойынша үйлесімді.
+Tooling SHOULD consume that dataset directly so curve identifiers remain
+consistent across SDKs and operator workflows.
 
-- **SDK шлюзі:** SDK әдепкі бойынша Ed25519-ға ғана тексеру/кодтау. Свифт көрсетеді
-  компиляция уақыты жалаулары (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
-  `IROHASWIFT_ENABLE_SM`); Java/Android SDK қажет
-  `AccountAddress.configureCurveSupport(...)`; JavaScript SDK пайдаланады
+- **SDK gating:** SDKs default to Ed25519-only validation/encoding. Swift exposes
+  compile-time flags (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
+  `IROHASWIFT_ENABLE_SM`); the Java/Android SDK requires
+  `AccountAddress.configureCurveSupport(...)`; the JavaScript SDK uses
   `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`.
-  secp256k1 қолдауы қолжетімді, бірақ JS/Android жүйесінде әдепкі бойынша қосылмаған
-  SDKs; Ed25519 емес контроллерлерді шығару кезінде қоңырау шалушылар анық түрде қосылуы керек.
-- **Хост қақпасы:** `Register<Account>` қол қоюшылары алгоритмдерді пайдаланатын контроллерлерді қабылдамайды
-  түйіннің `crypto.allowed_signing` тізімінде жоқ **немесе** қисық идентификаторлары жоқ
-  `crypto.curves.allowed_curve_ids`, сондықтан кластерлер қолдауды жарнамалауы керек (конфигурация +
-  genesis) ML‑DSA/GOST/SM контроллерлерін тіркеуге дейін. BLS контроллері
-  құрастыру кезінде алгоритмдерге әрқашан рұқсат етіледі (консенсус кілттері оларға сүйенеді),
-  және әдепкі конфигурация Ed25519 + secp256k1 қосады.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
+  secp256k1 support is available but not enabled by default in the JS/Android
+  SDKs; callers must opt in explicitly when emitting non‑Ed25519 controllers.
+- **Host gating:** `Register<Account>` rejects controllers whose signatories use algorithms
+  missing from the node’s `crypto.allowed_signing` list **or** curve identifiers absent from
+  `crypto.curves.allowed_curve_ids`, so clusters must advertise support (configuration +
+  genesis) before ML‑DSA/GOST/SM controllers can be registered. BLS controller
+  algorithms are always allowed when compiled (consensus keys rely on them),
+  and the default configuration enables Ed25519 + secp256k1.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
 
-##### 2.3.2 Multisig контроллері бойынша нұсқаулық
+##### 2.3.2 Multisig controller guidance
 
-`AccountController::Multisig` арқылы саясаттарды сериялайды
-`crates/iroha_data_model/src/account/controller.rs` және схеманы жүзеге асырады
-[`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md) ішінде құжатталған.
-Негізгі іске асыру мәліметтері:
+`AccountController::Multisig` serialises policies via
+`crates/iroha_data_model/src/account/controller.rs` and enforces the schema
+documented in [`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
+Key implementation details:
 
-- Саясаттар бұрын `MultisigPolicy::validate()` арқылы қалыпқа келтірілген және расталған
-  ендірілген. Шекті мәндер ≥1 және ≤Σ салмақ болуы керек; қайталанатын мүшелер
-  `(algorithm || 0x00 || key_bytes)` бойынша сұрыптаудан кейін анықтаушы түрде жойылды.
-- Екілік контроллердің пайдалы жүктемесі (`ControllerPayload::Multisig`) кодтайды
-  `version:u8`, `threshold:u16`, `member_count:u8`, содан кейін әрбір мүшенің
-  `(curve_id, weight:u16, key_len:u16, key_bytes)`. Бұл дәл солай
-  `AccountAddress::canonical_bytes()` I105 (таңдаулы)/sora (екінші ең жақсы) пайдалы жүктемелерге жазады.
-- Хэшинг (`MultisigPolicy::digest_blake2b256()`) Blake2b-256 пайдаланады.
-  `iroha-ms-policy` жекелендіру жолы, сондықтан басқару манифесттері
-  I105 ішіне енгізілген контроллер байттарына сәйкес келетін детерминирленген саясат идентификаторы.
-- Арматураны қамту мерзімі `fixtures/account/address_vectors.json` (жағдайлар
-  `addr-multisig-*`). Әмияндар мен SDK канондық I105 жолдарын бекітуі керек
-  олардың кодтауыштарының Rust енгізуіне сәйкестігін растау үшін төменде.
+- Policies are normalised and validated by `MultisigPolicy::validate()` before
+  being embedded. Thresholds must be ≥ 1 and ≤ Σ weight; duplicate members are
+  removed deterministically after sorting by `(algorithm || 0x00 || key_bytes)`.
+- The binary controller payload (`ControllerPayload::Multisig`) encodes
+  `version:u8`, `threshold:u16`, `member_count:u16`, then each member’s
+  `(curve_id, weight:u16, key_len:u16, key_bytes)`. This is exactly what
+  `AccountAddress::canonical_bytes()` writes to I105 payloads.
+- Multisig address encoding is no longer limited by an 8-bit member counter.
+  The binary field is `u16`, so the old 255-member hard cap no longer applies.
+- Hashing (`MultisigPolicy::digest_blake2b256()`) uses Blake2b-256 with the
+  `iroha-ms-policy` personalization string so governance manifests can bind to a
+  deterministic policy ID that matches the controller bytes embedded in I105.
+- Fixture coverage lives in `fixtures/account/address_vectors.json` (cases
+  `addr-multisig-*`). Wallets and SDKs should assert the generated fixture
+  bundle directly rather than copying inline literals into code or docs. The
+  canonical renderer now emits mixed Base58 + Iroha-poem I105 payload symbols after the
+  chain sentinel.
 
-| Іс идентификаторы | Табалдырық / мүшелер | I105 литералы (`0x02F1` префиксі) | Сора қысылған (`sora`) әріптік | Ескертпелер |
-|---------|--------------------|--------------------------------|-------------------------|-------|
-| `addr-multisig-council-threshold3` | `≥3` салмағы, мүшелері `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | Кеңес-домендік басқару кворумы. |
-| `addr-multisig-wonderland-threshold2` | `≥2`, мүшелері `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | Қос қолтаңба ғажайыптар әлемінің мысалы (салмақ 1 + 2). |
-| `addr-multisig-default-quorum3` | `≥3`, мүшелері `(1,1,1,1)` | `nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5` | `soraﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM` | Негізгі басқару үшін қолданылатын жасырын-әдепкі домен кворумы.
+#### 2.4 Failure rules (ADDR-1a)
 
-#### 2.4 Сәтсіздік ережелері (ADDR-1a)
+- Payloads shorter than the required canonical header+controller size emit
+  `AccountAddressError::InvalidLength` or
+  `AccountAddressError::UnexpectedTrailingBytes`.
+- Headers that set the reserved `ext_flag` or advertise unsupported versions/classes MUST be rejected using `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, or `UnknownAddressClass`.
+- Unknown controller tags raise `UnknownControllerTag`.
+- Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
+- Multisig controllers that exceed the encodable `u16` member count raise
+  `MultisigMemberOverflow`; there is no 255-member limit.
+- Canonical rendering uses mixed Base58 + Iroha-poem I105 payload symbols after the chain
+  sentinel. Decoders may still read historical mixed payloads for compatibility,
+  but public renderers, JSON, and docs must emit the katakana canonical form.
+- `AccountId` text/JSON parsing does not attempt alias or domain fallback:
+  non-canonical/legacy i105 literals, `norito:<hex>`, canonical hex, `@domain`, and alias
+  forms are rejected up front in favor of canonical I105 only.
 
-- Қажетті тақырып + селектордан қысқарақ немесе қалған байттары бар пайдалы жүктемелер `AccountAddressError::InvalidLength` немесе `AccountAddressError::UnexpectedTrailingBytes` шығарады.
-- Сақталған `ext_flag` параметрін орнататын немесе қолдау көрсетілмейтін нұсқаларды/сыныптарды жарнамалайтын тақырыптар `UnexpectedExtensionFlag`, `InvalidHeaderVersion` немесе `UnknownAddressClass` арқылы қабылданбауы КЕРЕК.
-- Белгісіз селектор/контроллер тегтері `UnknownDomainTag` немесе `UnknownControllerTag` көтереді.
-- Өлшемі үлкен немесе дұрыс емес негізгі материал `KeyPayloadTooLong` немесе `InvalidPublicKey` көтереді.
-- 255 мүшеден асатын мультисиг контроллері `MultisigMemberOverflow` жоғарылайды.
-- IME/NFKC түрлендірулері: жарты ені Sora kana кодты декодтауды бұзбай олардың толық ендік пішіндеріне қалыпқа келтіруге болады, бірақ ASCII `sora` sentinel және I105 сандары/әріптері ASCII болып қалуы КЕРЕК. Толық ені немесе корпусы бүктелген күзетшілер беті `ERR_MISSING_COMPRESSED_SENTINEL`, толық ені ASCII пайдалы жүктемелері `ERR_INVALID_COMPRESSED_CHAR` жоғарылайды және бақылау сомасының сәйкессіздігі `ERR_CHECKSUM_MISMATCH` ретінде көпіршіктенеді. `crates/iroha_data_model/src/account/address.rs` жүйесіндегі сипат сынақтары осы жолдарды қамтиды, осылайша SDK және әмияндар детерминирленген сәтсіздіктерге сене алады.
-- Torii және `address@domain` (rejected legacy form) бүркеншік аттарының SDK талдауы енді I105 (таңдаулы)/sora (екінші ең жақсы) кірістер бүркеншік аттың қалпына келуіне дейін сәтсіздікке ұшыраған кезде (мысалы, домен құрылымының қателігі, сондықтан тексеру сомасының қатесі қайталануы мүмкін), енді `ERR_*` кодтарын шығарады. прозалық жолдардан болжау.
-- 12 байттан қысқа жергілікті селектордың пайдалы жүктемелері `ERR_LOCAL8_DEPRECATED` бетін береді, бұл бұрынғы Local‑8 дайджесттерінен қатты үзіндіні сақтайды.
-- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+#### 2.5 Normative binary vectors
 
-#### 2.5 Нормативтік екілік векторлар
+- **Selector-free canonical single-key payload (`seed byte 0x00`)**  
+  Canonical hex: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  Breakdown: `0x02` header, `0x00` controller tag, `0x01` curve id (Ed25519),
+  `0x20` key length, followed by the 32-byte key payload.
+- **Canonical multisig payload layout**  
+  `0x0A | 0x01 | version:u8 | threshold:u16 | member_count:u16 | ...members`
+  where each member is encoded as `(curve_id:u8, weight:u16, key_len:u16,
+  key_bytes)`.
 
-- **Жасырын әдепкі домен (`default`, бастапқы байты `0x00`)**  
-  Канондық алтылық: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
-  Бөлім: `0x02` тақырыбы, `0x00` селекторы (жасырын әдепкі), `0x00` контроллер тегі, `0x01` қисық идентификаторы (Ed25519), I18NI000 кілт ұзындығы, содан кейін 3-жүктеу кілті.
-- **Жергілікті домен дайджесті (`treasury`, тұқымдық байты `0x01`)**  
-  Канондық алтылық: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
-  Бөлім: `0x02` тақырыбы, селектор тегі `0x01` плюс дайджест `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, одан кейін бір кілтті пайдалы жүктеме (`0x00` тегі, `0x01` қисық идентификаторы идентификаторы000000285, ұзындығы I002NI82 Ed25519 кілті).Бірлік сынақтары (`account::address::tests::parse_encoded_accepts_all_formats`) төмендегі V1 векторларын `AccountAddress::parse_encoded` арқылы бекітеді, бұл құралдың он алтылық, I105 (қалаулы) және қысылған (`sora`, екінші ең жақсы) пішіндердегі канондық пайдалы жүктемеге сенетініне кепілдік береді. `cargo run -p iroha_data_model --example address_vectors` көмегімен ұзартылған арматура жинағын қайта жасаңыз.
+The fixture bundle in `fixtures/account/address_vectors.json` still publishes
+i105 outputs plus non-canonical legacy-vector fixtures for the same canonical payloads.
+Public `AccountId` parser tests separately assert that only canonical I105 is
+accepted.
 
-| домен | Тұқым байты | Канондық алтылық | Сығылған (`sora`) |
-|-------------|-----------|-----------------------------------------------------------------------------------------|------------|
-| әдепкі | `0x00` | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
-| қазынашылық | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| ғажайыптар әлемі | `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
-| ироха | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
-| альфа | `0x04` | `0x020146be2154ae86826a3fef0ec0000120ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c` | `sora5ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1` |
-| омега | `0x05` | `0x0201390d946885bc8416b3d30c9d0001206e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1` | `sora5ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F` |
-| басқару | `0x06` | `0x0201989eb45a80940d187e2c908f0001208a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17` | `sora5ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP` |
-| валидаторлар | `0x07` | `0x0201e4ffa58704c69afaeb7cc2d7000120ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c` | `sora5ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N` |
-| зерттеуші | `0x08` | `0x02013b35422c65c2a83c99c523ad0001201398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca` | `sora5ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB` |
-| соранет | `0x09` | `0x0201047d9ea7f5d5dbec3f7bfc58000120fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618` | `sora5ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvﾌﾏfｾNnﾛRJsｿDhﾙuHaﾚｺｦﾌﾍﾈeﾆﾎｺN1UUDｶ6ﾎﾄﾛoRH8JUL` |
-| Kitsune | `0x0A` | `0x0201e91933de397fd7723dc9a76c00012043a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c` | `sora5ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS` |
-| да | `0x0B` | `0x02016838cf5bb0ce0f3d4f380e1c00012066be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a` | `sora5ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93` |
+Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
 
-Қарап шыққан: деректер үлгісі WG, криптография WG — ADDR-1a үшін бекітілген аумақ.
+##### Sora Nexus reference aliases
 
-##### Sora Nexus сілтеме бүркеншік аттары
-
-Sora Nexus желілерінің әдепкі мәні `chain_discriminant = 0x02F1`
+Sora Nexus networks default to `chain_discriminant = 0x02F1`
 (`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). The
-Сондықтан `AccountAddress::to_i105` және `to_i105` көмекшілері сәуле шығарады
-әрбір канондық пайдалы жүктеме үшін дәйекті мәтіндік пішіндер. Таңдалған арматура
-`fixtures/account/address_vectors.json` (арқылы жасалған
-`cargo xtask address-vectors`) жылдам анықтама үшін төменде көрсетілген:
+`AccountAddress::to_i105` helpers therefore emit
+consistent textual forms for every canonical payload. The authoritative sample
+literals now live only in `fixtures/account/address_vectors.json` so the CLI,
+Torii responses, and SDK helpers all consume one canonical I105 source
+of truth instead of duplicating stale inline strings.
 
-| Тіркелгі / селектор | I105 литералы (`0x02F1` префиксі) | Сора қысылған (`sora`) әріптік |
-|--------------------------------|--------------------------------|-------------------------|
-| `default` домені (жасырын селектор, `0x00` тұқымы) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (айқын бағыттау туралы кеңестер берген кезде қосымша `@default` жұрнағы) |
-| `treasury` (жергілікті дайджест селекторы, тұқым `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| Ғаламдық тізілім көрсеткіші (`registry_id = 0x0000_002A`, `treasury` баламасы) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
+#### 2.6 Public textual forms
 
-Бұл жолдар CLI (`iroha tools address convert`), Torii шығаратын жолдарға сәйкес келеді
-жауаптар (`canonical I105 literal rendering`) және SDK көмекшілері, сондықтан UX көшіру/қою
-ағындар оларға сөзбе-сөз сене алады. `<address>@<domain>` (rejected legacy form)-ті нақты бағыттау туралы кеңес қажет болғанда ғана қосыңыз; жұрнақ канондық шығыстың бөлігі емес.
+- **Canonical account id:** a I105 literal only.
+- **On-chain account aliases:** `name@dataspace` or `name@domain.dataspace`.
+  These aliases resolve on-chain to canonical I105 account ids and are not a
+  second account-id codec.
+- **Out-of-band wrappers:** transport wrappers such as CAIP-style URIs or other
+  integration envelopes may exist in downstream systems, but they are not
+  canonical account ids. Any such wrapper must resolve to a canonical I105 account id or an
+  on-chain alias before it reaches strict parser paths.
+- **Machine helpers:** Rust, TypeScript/JavaScript, Python, Swift, Kotlin, and
+  Java SDKs expose canonical I105 codecs
+  (`AccountAddress::to_i105`, `AccountAddress::parse_encoded`, and equivalents).
 
-#### 2.6 Өзара жұмыс істеуге арналған мәтіндік бүркеншік аттар (жоспарланған)
+#### 2.7 Deterministic i105 encoding
 
-- **Тізбекті бүркеншік ат стилі:** журналдар мен адамға арналған `ih:<chain-alias>:<alias@domain>`
-  кіру. Әмияндар префиксті талдауы, енгізілген тізбекті тексеруі және блоктауы керек
-  сәйкессіздіктер.
-- **CAIP-10 нысаны:** тізбекті-агностикалық үшін `iroha:<caip-2-id>:<i105-addr>`
-  интеграциялар. Бұл карта жөнелтілгенде **әлі орындалмаған**
-  құралдар тізбегі.
-- **Машиналық көмекшілер:** Rust, TypeScript/JavaScript, Python үшін кодектерді жариялау,
-  және I105 және қысылған пішімдерді қамтитын Котлин (`AccountAddress::to_i105`,
-  `AccountAddress::parse_encoded` және олардың SDK баламалары). CAIP-10 көмекшілері болып табылады
-  болашақ жұмыс.
-
-#### 2.7 Детерминистік I105 бүркеншік аты
-
-- **Префиксті салыстыру:** `chain_discriminant` I105 желі префиксі ретінде қайта пайдаланыңыз.
-  `encode_i105_prefix()` (`crates/iroha_data_model/src/account/address.rs` қараңыз)
-  `<64` мәндері үшін 6 биттік префиксті (бір байт) және 14 биттік, екі байтты шығарады
-  үлкен желілерге арналған пішін. Беделді тапсырмалар өмір сүреді
+- **Prefix mapping:** Reuse the `chain_discriminant` inside the same canonical
+  i105 codec. Well-known discriminants use sentinels such as `sora`, `test`,
+  or `dev` as part of the canonical i105 literal; there is no separate ASCII
+  account-id codec. The authoritative assignments live in
   [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
-  SDK соқтығысуларды болдырмау үшін сәйкес JSON тізбесін синхрондауы КЕРЕК.
-- **Есептік жазба материалы:** I105 құрастырған канондық пайдалы жүктемені кодтайды
-  `AccountAddress::canonical_bytes()` — тақырып байты, домен селекторы және
-  контроллердің пайдалы жүктемесі. Қосымша хэштеу қадамы жоқ; I105 ендіреді
-  Rust шығарған екілік контроллердің пайдалы жүктемесі (бір кілт немесе мультисиг).
-  мультисиг саясат дайджесттері үшін пайдаланылатын CTAP2 картасы емес, кодтаушы.
-- **Кодтау:** `encode_i105()` префикс байттарын канондық байтпен біріктіреді
-  пайдалы жүктеме және тіркелген параметрмен Blake2b-512 алынған 16 биттік бақылау сомасын қосады
-  префиксі `I105PRE` (`b"I105PRE" || prefix || payload`). Нәтиже `bs58` арқылы Base58-кодталған.
-  CLI/SDK көмекшілері бірдей процедураны көрсетеді және `AccountAddress::parse_encoded`
-  оны `decode_i105` арқылы кері қайтарады.
+  SDKs MUST keep the matching JSON registry in sync to avoid collisions.
+- **Account material:** I105 encodes the canonical payload built by
+  `AccountAddress::canonical_bytes()`—header byte and controller payload.
+  Domain-selector bytes are not emitted in canonical payloads. There is no additional hashing step; I105 embeds the
+  binary controller payload (single key or multisig) as produced by the Rust
+  encoder, not the CTAP2 map used for multisig policy digests.
+- **Encoding:** `encode_i105()` renders the canonical payload with the
+  105-symbol katakana alphabet and appends a six-symbol Bech32m-style checksum
+  over the canonical bytes. CLI/SDK helpers expose the same procedure, and
+  `AccountAddress::parse_encoded` reverses it via `decode_i105`.
 
-#### 2.8 Нормативтік мәтіндік тест векторлары
+#### 2.8 Normative textual test vectors
 
-`fixtures/account/address_vectors.json` құрамында толық I105 (қалаулы) және қысылған (`sora`, екінші ең жақсы)
-әрбір канондық пайдалы жүктеме үшін литералдар. Ерекшеліктер:
+`fixtures/account/address_vectors.json` contains canonical i105 literals plus
+negative fixtures that exercise non-canonical and malformed inputs.
+Highlights:
 
-- **`addr-single-default-ed25519` (Sora Nexus, `0x02F1` префиксі).**  
-  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, қысылған (`sora`)
-  `sora2QG…U4N5E5`. Torii осы дәл жолдарды `AccountId` арқылы шығарады
-  `Display` іске асыру (канондық I105) және `AccountAddress::to_i105`.
-- **`addr-global-registry-002a` (тізілім селекторы → қазынашылық).**  
-  I105 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, қысылған (`sora`)
-  `sorakX…CM6AEP`. Тіркеу селекторлары әлі де кодты шешетінін көрсетеді
-  сәйкес жергілікті дайджест сияқты бірдей канондық пайдалы жүктеме.
-- **Сәтсіздік жағдайы (`i105-prefix-mismatch`).**  
-  Түйінде `NETWORK_PREFIX + 1` префиксімен кодталған I105 литералы талдау
-  әдепкі префикс кірістерін күту
+- **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
+  Torii emits the generated I105 literal from `AccountId`’s `Display`
+  implementation (canonical I105).
+- **Multisig controller payloads.**  
+  Canonical controller bytes now encode `member_count:u16`, so address encoding
+  no longer has the old 255-member hard cap.
+- **Failure case (`i105-prefix-mismatch`).**  
+  Parsing an i105 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
+  expecting the default prefix yields
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
-  доменді бағыттау әрекетінен бұрын. `i105-checksum-mismatch` арматурасы
-  Blake2b бақылау сомасы бойынша бұрмалауды анықтау жаттығулары.
+  before domain routing is attempted. Negative-path `AccountId` tests also cover
+  rejected `norito:...`, `0x...`, alias, and `@domain` inputs. The
+  `i105-checksum-mismatch` fixture exercises tampering detection over the
+  I105 checksum.
 
-#### 2.9 Сәйкестік құрылғылары
+#### 2.9 Compliance fixtures
 
-ADDR‑2 оң және теріс мәндерді қамтитын қайта ойнатылатын арматура жинағын жеткізеді
-канондық он алтылық, I105 (қалаулы), қысылған (`sora`, жарты/толық ен), жасырын сценарийлер
-әдепкі селекторлар, жаһандық тізілім бүркеншік аттары және көп қолтаңба контроллерлері. The
-канондық JSON `fixtures/account/address_vectors.json` ішінде тұрады және болуы мүмкін
-қалпына келтірілді:
+ADDR‑2 ships a replayable fixture bundle covering positive and negative
+scenarios across canonical I105, non-canonical legacy-vector output, canonical
+`AccountAddress` hex renderings, selector-free payloads, multisignature
+controllers, and rejected legacy `AccountId` literal forms. The canonical JSON
+lives in `fixtures/account/address_vectors.json` and can be regenerated with:
 
 ```
 cargo xtask address-vectors --out fixtures/account/address_vectors.json
@@ -434,26 +374,26 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-Арнайы эксперименттер үшін (әртүрлі жолдар/пішімдер) екілік мысал әлі де болады
-қолжетімді:
+For ad-hoc experiments (different paths/formats) the example binary is still
+available:
 
 ```
 cargo run -p iroha_data_model --example account_address_vectors > fixtures/account/address_vectors.json
 ```
 
-`crates/iroha_data_model/tests/account_address_vectors.rs` жүйесінде тот блоктарының сынақтары
-және `crates/iroha_torii/tests/account_address_vectors.rs`, JS бірге,
-Swift және Android құрылғылары (`javascript/iroha_js/test/address.test.js`,
+Rust unit tests in `crates/iroha_data_model/tests/account_address_vectors.rs`
+and `crates/iroha_torii/tests/account_address_vectors.rs`, together with the JS,
+Swift, and Android harnesses (`javascript/iroha_js/test/address.test.js`,
 `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
 `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`),
-SDK және Torii кіруі арасындағы кодектер паритетіне кепілдік беру үшін бірдей құрылғыны қолданыңыз.
+consume the same fixture to guarantee codec parity across SDKs and Torii admission.
 
-### 3. Ғаламдық бірегей домендер және қалыпқа келтіру
+### 3. Globally unique domains & normalization
 
-Сондай-ақ қараңыз: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
-Torii, деректер үлгісі және SDKs арқылы қолданылатын канондық норма v1 құбыры үшін.
+See also: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
+for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
 
-`DomainId` тегтелген кортеж ретінде қайта анықтаңыз:
+Redefine `DomainId` as a tagged tuple:
 
 ```
 DomainId {
@@ -467,328 +407,321 @@ enum GlobalDomainAuthority {
 }
 ```
 
-`LocalChain` ағымдағы тізбек басқаратын домендер үшін бар атауды орап алады.
-Домен жаһандық тізілім арқылы тіркелгенде, біз иелік етуді сақтаймыз
-тізбектің дискриминанты. Дисплей/талдау әзірше өзгеріссіз қалады, бірақ
-кеңейтілген құрылым маршруттау шешімдерін қабылдауға мүмкіндік береді.
+`LocalChain` wraps the existing Name for domains managed by the current chain.
+When a domain is registered through the global registry, we persist the owning
+chain’s discriminant. Display / parsing stays unchanged for now, but the
+expanded structure allows routing decisions.
 
-#### 3.1 Нормализация және спуфингке қарсы қорғаныс
+#### 3.1 Normalization & spoofing defenses
 
-Norm v1 әрбір компонент домен алдында пайдалануы тиіс канондық құбырды анықтайды
-аты сақталады немесе `AccountAddress` ішіне ендірілген. Толық шолу
-[`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md) ішінде тұрады;
-Төмендегі қорытынды әмияндар, Torii, SDK және басқару қадамдарын қамтиды.
-құралдарын жүзеге асыру керек.
+Norm v1 defines the canonical pipeline every component must use before a domain
+name is persisted or embedded into an `AccountAddress`. The full walkthrough
+lives in [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md);
+the summary below captures the steps that wallets, Torii, SDKs, and governance
+tools must implement.
 
-1. **Енгізуді тексеру.** Бос жолдарды, бос орындарды және резервте қалғандарды қабылдамау
-   бөлгіштер `@`, `#`, `$`. Бұл орындаған инварианттарға сәйкес келеді
+1. **Input validation.** Reject empty strings, whitespace, and the reserved
+   delimiters `@`, `#`, `$`. This matches the invariants enforced by
    `Name::validate_str`.
-2. **Unicode NFC композициясы.** ICU қолдайтын NFC қалыпқа келтіруді канондық түрде қолданыңыз
-   эквивалентті тізбектер детерминирленген түрде құлайды (мысалы, `e\u{0301}` → `é`).
-3. **UTS-46 қалыпқа келтіру.** NFC шығысын UTS‑46 арқылы іске қосыңыз.
-   `use_std3_ascii_rules = true`, `transitional_processing = false`, және
-   DNS ұзындығының күшіне енуі қосылды. Нәтиже – кіші әріпті A-белгі тізбегі;
-   STD3 ережелерін бұзатын кірістер бұл жерде сәтсіздікке ұшырайды.
-4. **Ұзындық шектеулері.** DNS стилінің шекараларын күшейтіңіз: әрбір белгі 1–63 болуы керек.
-   3-қадамнан кейін байт және толық домен 255 байттан аспауы керек.
-5. **Қосымша шатастырылатын саясат.** UTS‑39 сценарийін тексерулер үшін бақыланады
-   Норма v2; операторлар оларды ерте қоса алады, бірақ тексеруден өтпеген жағдайда тоқтату керек
-   өңдеу.
+2. **Unicode NFC composition.** Apply ICU-backed NFC normalisation so canonically
+   equivalent sequences collapse deterministically (e.g., `e\u{0301}` → `é`).
+3. **UTS-46 normalisation.** Run the NFC output through UTS‑46 with
+   `use_std3_ascii_rules = true`, `transitional_processing = false`, and
+   DNS-length enforcement enabled. The result is a lower-case A-label sequence;
+   inputs that violate STD3 rules fail here.
+4. **Length limits.** Enforce the DNS-style bounds: each label MUST be 1–63
+   bytes and the full domain MUST NOT exceed 255 bytes after step 3.
+5. **Optional confusable policy.** UTS‑39 script checks are tracked for
+   Norm v2; operators can enable them early, but failing the check must abort
+   processing.
 
-Әрбір кезең сәтті болса, кіші әріпті A-жапсырма жолы кэштеледі және үшін пайдаланылады
-мекенжайды кодтау, конфигурациялау, манифесттер және тізілімді іздеу. Жергілікті дайджест
-селекторлар 12 байт мәнін `blake2s_mac(кілт = "SORA-LOCAL-K:v1",
-канондық_белгі)[0..12]`  3-қадам шығысы арқылы. Барлық басқа әрекеттер (аралас
-регистр, бас әріп, шикі Юникод енгізуі) құрылымдықпен қабылданбайды
-`ParseError`s атау берілген шекарада.
+If every stage succeeds, the lower-case A-label string is cached and used for
+address encoding, configuration, manifests, and registry lookups. Local digest
+selectors derive their 12-byte value as `blake2s_mac(key = "SORA-LOCAL-K:v1",
+canonical_label)[0..12]` using the step 3 output. All other attempts (mixed
+case, upper-case, raw Unicode input) are rejected with structured
+`ParseError`s at the boundary where the name was supplied.
 
-Осы ережелерді көрсететін канондық қондырғылар, соның ішінде пуникодтық сапарлар
-және жарамсыз STD3 реттілігі — тізімде берілген
-`docs/source/references/address_norm_v1.md` және SDK CI ішінде бейнеленген
-ADDR‑2 астында бақыланатын векторлық жиынтықтар.
+Canonical fixtures demonstrating these rules — including punycode round-trips
+and invalid STD3 sequences — are listed in
+`docs/source/references/address_norm_v1.md` and are mirrored in the SDK CI
+vector suites tracked under ADDR‑2.
 
-### 4. Nexus домен тізілімі және маршруттау- **Тіркеу схемасы:** Nexus қол қойылған `DomainName -> ChainRecord` картасын сақтайды
-  мұндағы `ChainRecord` тізбекті дискриминантты, қосымша метадеректерді (RPC) қамтиды
-  соңғы нүктелер) және өкілеттіктің дәлелі (мысалы, басқарудың көп қолтаңбасы).
-- **Синхрондау механизмі:**
-  - Тізбектер қол қойылған домен шағымдарын Nexus (генезис кезінде немесе арқылы) жібереді
-    басқару жөніндегі нұсқаулық).
-  - Nexus мерзімді манифесттерді жариялайды (қол қойылған JSON және қосымша Merkle түбірі)
-    HTTPS және мазмұн мекенжайы бар жад (мысалы, IPFS) арқылы. Клиенттер белгішесін бекітеді
-    соңғы манифест және қолтаңбаларды тексеру.
-- **Іздеу ағыны:**
-  - Torii `DomainId` сілтемесі бар транзакцияны алады.
-  - Домен жергілікті түрде белгісіз болса, Torii кэштелген Nexus манифестіне сұрау салады.
-  - Манифест шетелдік тізбекті көрсетсе, транзакция қабылданбайды
-    детерминирленген `ForeignDomain` қатесі және қашықтағы тізбек ақпараты.
-  - Nexus доменінде жоқ болса, Torii `UnknownDomain` қайтарады.
-- **Сенім анкерлері және айналу:** Басқару кілттерінің манифесттері; айналу немесе
-  күшін жою жаңа манифест жазбасы ретінде жарияланады. Клиенттер манифестті жүзеге асырады
-  TTLs (мысалы, 24 сағ) және сол терезеден кейінгі ескірген деректермен кеңесуден бас тартыңыз.
-- **Сәтсіздік режимдері:** Манифестті шығарып алу сәтсіз болса, Torii кэштелген күйге оралады.
-  TTL ішіндегі деректер; өткен TTL ол `RegistryUnavailable` шығарады және бас тартады
-  сәйкес келмейтін күйді болдырмау үшін доменаралық бағыттау.
+### 4. Nexus domain registry & routing
 
-### 4.1 Тізілімнің өзгермейтіндігі, бүркеншік аттары және құлпытастары (ADDR-7c)
+- **Registry schema:** Nexus maintains a signed map `DomainName -> ChainRecord`
+  where `ChainRecord` includes the chain discriminant, optional metadata (RPC
+  endpoints), and a proof of authority (e.g., governance multi-signature).
+- **Sync mechanism:**
+  - Chains submit signed domain claims to Nexus (either during genesis or via
+    governance instruction).
+  - Nexus publishes periodic manifests (signed JSON plus optional Merkle root)
+    over HTTPS and content-addressed storage (e.g., IPFS). Clients pin the
+    latest manifest and verify signatures.
+- **Lookup flow:**
+  - Torii receives a transaction referencing `DomainId`.
+  - If the domain is unknown locally, Torii queries the cached Nexus manifest.
+  - If the manifest indicates a foreign chain, the transaction is rejected with
+    a deterministic `ForeignDomain` error and the remote chain info.
+  - If the domain is missing from Nexus, Torii returns `UnknownDomain`.
+- **Trust anchors & rotation:** Governance keys sign manifests; rotation or
+  revocation is published as a new manifest entry. Clients enforce manifest
+  TTLs (e.g., 24h) and refuse to consult stale data beyond that window.
+- **Failure modes:** If manifest retrieval fails, Torii falls back to cached
+  data within TTL; past TTL it emits `RegistryUnavailable` and refuses
+  cross-domain routing to avoid inconsistent state.
 
-Nexus **тек қосу үшін манифест** жариялайды, осылайша әрбір домен немесе бүркеншік ат тағайындалады
-тексеруге және қайталауға болады. Операторлар бөлімде сипатталған топтаманы өңдеуі керек
-[адрес манифест runbook](source/runbooks/address_manifest_ops.md) ретінде
-ақиқаттың жалғыз көзі: егер манифест жоқ болса немесе валидациядан өтпесе, Torii
-зардап шеккен доменді шешуден бас тарту.
+### 4.1 Registry immutability, aliases, and tombstones (ADDR-7c)
 
-Автоматтандыруды қолдау: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
-бөлімінде жазылған бақылау сомасын, схеманы және алдыңғы дайджест тексерулерін қайталайды
-runbook. `sequence` көрсету үшін өзгерту билеттеріне пәрмен шығысын қосыңыз
-және `previous_digest` байланысы жинақты жарияламас бұрын тексерілді.
+Nexus publishes an **append-only manifest** so every domain or alias assignment
+can be audited and replayed. Operators must treat the bundle described in the
+[address manifest runbook](source/runbooks/address_manifest_ops.md) as the
+sole source of truth: if a manifest is missing or fails validation, Torii must
+refuse to resolve the affected domain.
 
-#### Манифест тақырыбы және қол қою келісімшарты
+Automation support: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
+replays the checksum, schema, and previous-digest checks spelled out in the
+runbook. Include the command output in change tickets to show the `sequence`
+and `previous_digest` linkage was validated before publishing the bundle.
 
-| Өріс | Талап |
+#### Manifest header & signature contract
+
+| Field | Requirement |
 |-------|-------------|
-| `version` | Қазіргі уақытта `1`. Сәйкес спецификация жаңартуымен ғана соққы беріңіз. |
-| `sequence` | Әр жарияланымға **дәл** бір көбейту. Torii кэштері бос орындар немесе регрессиялар бар түзетулерден бас тартады. |
-| `generated_ms` + `ttl_hours` | Кэштің жаңалығын орнату (әдепкі 24 сағат). Егер TTL келесі жарияланымға дейін аяқталса, Torii `RegistryUnavailable` түріне ауысады. |
-| `previous_digest` | Алдыңғы манифест дененің BLAKE3 дайджесті (он алтылығы). Тексерушілер өзгермейтіндігін дәлелдеу үшін оны `b3sum` көмегімен қайта есептейді. |
-| `signatures` | Манифесттерге Sigstore (`cosign sign-blob`) арқылы қол қойылады. Операциялар `cosign verify-blob --bundle manifest.sigstore manifest.json` іске қосуы және шығару алдында басқару идентификациясын/эмитент шектеулерін орындауы керек. |
+| `version` | Currently `1`. Bump only with a matching spec update. |
+| `sequence` | Increment by **exactly** one per publication. Torii caches refuse revisions with gaps or regressions. |
+| `generated_ms` + `ttl_hours` | Establish cache freshness (default 24 h). If the TTL expires before the next publication, Torii flips to `RegistryUnavailable`. |
+| `previous_digest` | BLAKE3 digest (hex) of the prior manifest body. Verifiers recompute it with `b3sum` to prove immutability. |
+| `signatures` | Manifests are signed via Sigstore (`cosign sign-blob`). Ops must run `cosign verify-blob --bundle manifest.sigstore manifest.json` and enforce the governance identity/issuer constraints before rollout. |
 
-Шығарылымды автоматтандыру `manifest.sigstore` және `checksums.sha256` шығарады
-JSON денесінің жанында. SoraFS немесе көшіру кезінде файлдарды бірге сақтаңыз
-Аудиторлар тексеру қадамдарын сөзбе-сөз қайталай алатындай HTTP соңғы нүктелері.
+The release automation emits `manifest.sigstore` and `checksums.sha256`
+alongside the JSON body. Keep the files together when mirroring to SoraFS or
+HTTP endpoints so auditors can replay the verification steps verbatim.
 
-#### Жазба түрлері
+#### Entry types
 
-| |түрі Мақсаты | Міндетті өрістер |
+| Type | Purpose | Required fields |
 |------|---------|-----------------|
-| `global_domain` | Домен жаһандық деңгейде тіркелгенін және тізбек дискриминантына және I105 префиксіне сәйкес келуі керек екенін мәлімдейді. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
-| `tombstone` | Бүркеншік атты/таңдаушыны біржола өшіреді. Local‑8 дайджесттерін өшіру немесе доменді жою кезінде қажет. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
+| `global_domain` | Declares that a domain is registered globally and should map to a chain discriminant and I105 prefix. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
+| `tombstone` | Retires an alias/selector permanently. Required when erasing Local‑8 digests or removing a domain. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
-`global_domain` жазбалары міндетті түрде `manifest_url` немесе `sorafs_cid` қамтуы мүмкін
-әмияндарды қол қойылған тізбек метадеректеріне бағыттаңыз, бірақ канондық кортеж сақталады
-`{domain, chain, discriminant/i105_prefix}`. `tombstone` жазбалары **міндетті** сілтеме жасау керек
-зейнеткерлікке шыққан селектор және рұқсат берген билет/басқару артефакті
-Аудит жолын желіден тыс қайта құруға болатындай өзгерту.
+`global_domain` entries may optionally include a `manifest_url` or `sorafs_cid`
+to point wallets at signed chain metadata, but the canonical tuple remains
+`{domain, chain, discriminant/i105_prefix}`. `tombstone` records **must** cite
+the selector being retired and the ticket/governance artefact that authorised
+the change so the audit trail is reconstructable offline.
 
-#### Бүркеншік ат/құлпытас жұмыс процесі және телеметрия
+#### Alias/tombstone workflow & telemetry
 
-1. **Дрейфті анықтаңыз.** `torii_address_local8_total{endpoint}` пайдаланыңыз,
+1. **Detect drift.** Use `torii_address_local8_total{endpoint}`,
    `torii_address_local8_domain_total{endpoint,domain}`,
    `torii_address_collision_total{endpoint,kind="local12_digest"}`,
    `torii_address_collision_domain_total{endpoint,domain}`,
-   `torii_address_domain_total{endpoint,domain_kind}`, және
-   `torii_address_invalid_total{endpoint,reason}` (көрсетілген
-   `dashboards/grafana/address_ingest.json`) жергілікті жіберулерді растау және
-   Жергілікті-12 соқтығысуы құлпытас ұсынбас бұрын нөлде қалады. The
-   әр домен есептегіштері иелеріне тек әзірлеуші/сынақ домендері Local‑8 шығаратынын дәлелдеуге мүмкіндік береді
-   трафик (және сол Local‑12 соқтығысу белгілі кезеңдік домендерге салыстыру) кезінде
-   **Домен түрінің қоспасы (5м)** панелін қамтиды, осылайша SRE қанша болатынын сыза алады
-   `domain_kind="local12"` трафик қалады, ал `AddressLocal12Traffic`
-   Өндіріс жергілікті-12 селекторларын көрсе де, ескерту іске қосылады
-   зейнеткерлік қақпа.
-2. **Канондық дайджесттерді шығарыңыз.** Жүгіру
+   `torii_address_domain_total{endpoint,domain_kind}`, and
+   `torii_address_invalid_total{endpoint,reason}` (rendered in
+   `dashboards/grafana/address_ingest.json`) to confirm Local submissions and
+   Local-12 collisions stay at zero before proposing a tombstone. The
+   per-domain counters let owners prove that only dev/test domains emit Local‑8
+   traffic (and that Local‑12 collisions map to known staging domains) while
+   includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
+   `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
+   alert fires whenever production still sees Local-12 selectors despite the
+   retirement gate.
+2. **Derive canonical digests.** Run
    `iroha tools address convert <address> --format json --expect-prefix 753`
-   (немесе `fixtures/account/address_vectors.json` арқылы тұтыныңыз
-   `scripts/account_fixture_helper.py`) дәл `digest_hex` түсіру үшін.
-   CLI I105, `i105` және канондық `0x…` литералдарын қабылдайды; қосу
-   `@<domain>` тек манифесттер үшін белгіні сақтау қажет болғанда.
-   JSON жиыны сол доменді `input_domain` өрісі арқылы көрсетеді және
-   `legacy  suffix` түрлендірілген кодтауды `<address>@<domain>` (rejected legacy form) ретінде қайталайды.
-   манифест айырмашылықтары (бұл жұрнақ канондық тіркелгі идентификаторы емес, метадеректер болып табылады).
-   Жаңа жолға бағытталған экспорттар үшін пайдаланыңыз
-   `iroha tools address normalize --input <file> legacy-selector input mode` Жергілікті жаппай түрлендіру үшін
-   селекторларды өткізіп жіберу кезінде канондық I105 (қалаулы), қысылған (`sora`, екінші ең жақсы), он алтылық немесе JSON пішіндеріне
-   жергілікті емес жолдар. Аудиторларға электрондық кестеге сәйкес келетін дәлелдер қажет болғанда, іске қосыңыз
-   CSV қорытындысын шығару үшін `iroha tools address audit --input <file> --format csv`
-   (`input,status,format,domain_kind,…`) жергілікті селекторларды бөлектейді,
-   канондық кодтаулар және бір файлдағы сәтсіздіктерді талдау.
-3. **Манифест жазбаларын қосыңыз.** `tombstone` жазбасының жобасын (және кейінгі
-   жаһандық тізілімге көшу кезінде `global_domain` жазбасы) және растаңыз
-   қол қоюды сұрамас бұрын манифест `cargo xtask address-vectors`.
-4. **Тексеру және жариялау.** Runbook тексеру тізімін орындаңыз (хэштер, Sigstore,
-   бірізділік монотондылығы) топтаманы SoraFS түріне көшірмес бұрын. Torii қазір
-   I105 (таңдаулы)/sora (екінші ең жақсы) литералдарды топтамадан кейін бірден канонизациялайды.
-5. **Бақылау және кері қайтару.** Local‑8 және Local‑12 соқтығысу панелдерін мына жерде ұстаңыз.
-   30 күн бойы нөл; регрессиялар пайда болса, алдыңғы манифестті қайта жариялаңыз
-   телеметрия тұрақтанғанға дейін тек зардап шеккен өндірістік емес ортада.
+   (or consume `fixtures/account/address_vectors.json` via
+   `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
+  The CLI address tool accepts canonical I105 and the internal
+  canonical `0x…` envelope view; runtime `AccountId` parsers continue to accept
+  canonical I105 only.
+  The JSON summary reports the parsed format/domain kind plus canonical
+  encodings (I105 and canonical hex) for each input.
+  For newline-oriented exports use
+  `iroha tools address normalize --input <file>` to rewrite newline-separated
+  address lists into canonical I105, canonical hex, or JSON forms.
+  When auditors need spreadsheet-friendly evidence, run
+  `iroha tools address audit --input <file> --format csv` to emit a CSV summary
+  (`input,status,format,domain_kind,…`) that highlights domain kind,
+  canonical encodings, and parse failures in the same file.
+3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
+   `global_domain` record when migrating to the global registry) and validate
+   the manifest with `cargo xtask address-vectors` before requesting signatures.
+4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
+   sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
+   canonicalizes account filters and path literals from canonical I105 input only.
+5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
+   zero for 30 days; if regressions appear, republish the previous manifest
+   only in the affected non-production environment until telemetry stabilises.
 
-Жоғарыдағы қадамдардың барлығы ADDR‑7c үшін міндетті дәлел: онсыз көрсетіледі
-`cosign` қолтаңба жинағы немесе сәйкес `previous_digest` мәндері жоқ
-автоматты түрде қабылданбайды және операторлар тексеру журналдарын тіркеуі керек
-олардың билеттерін ауыстыру.
+All of the steps above are mandatory evidence for ADDR‑7c: manifests without
+the `cosign` signature bundle or without matching `previous_digest` values must
+be rejected automatically, and operators must attach the verification logs to
+their change tickets.
 
-### 5. Әмиян және API эргономикасы
+### 5. Wallet & API ergonomics
 
-- **Дисплейдің әдепкі параметрлері:** Әмияндар I105 мекенжайын көрсетеді (қысқа, бақылау сомасы)
-  плюс шешілген домен тізілімнен алынған белгі ретінде. Домендер
-  өзгеруі мүмкін сипаттаушы метадеректер ретінде анық белгіленген, ал I105 - бұл
-  тұрақты мекенжай.
-- **Кірісті канонизациялау:** Torii және SDKs I105 (қалаулы)/sora (екінші ең жақсы)/0x қабылдайды
-  мекенжайлар плюс `alias@domain` (rejected legacy form), `uaid:…` және
-  `opaque:…` пішімдері, одан кейін шығару үшін I105 стандартына сәйкестендіріледі. жоқ
-  қатаң режимді ауыстыру; өңделмеген телефон/электрондық пошта идентификаторлары кітаптан тыс сақталуы керек
-  UAID/мөлдір емес салыстырулар арқылы.
-- **Қатенің алдын алу:** Әмияндар I105 префикстерін талдайды және тізбекті дискриминанттарды қолданады
-  күту. Тізбек сәйкессіздіктері әрекет ететін диагностикамен ауыр ақауларды тудырады.
-- **Кодек кітапханалары:** Ресми Rust, TypeScript/JavaScript, Python және Kotlin
-  кітапханалар I105 кодтау/декодтау плюс қысылған (`sora`) қолдауын қамтамасыз етеді.
-  бөлшектелген іске асырудан аулақ болыңыз. CAIP-10 түрлендірулері әлі жеткізілмеген.
+- **Display defaults:** Wallets show the I105 address (short, checksummed)
+  plus the resolved domain as a label fetched from the registry. Domains are
+  clearly marked as descriptive metadata that may change, while I105 is the
+  stable address.
+- **Input canonicalization:** Torii and SDKs accept canonical I105 account IDs only and reject `@domain` suffixes, alias forms, non-canonical/legacy i105 literals, and canonical-hex account literals in runtime parser paths. There is no
+  strict-mode toggle; raw phone/email identifiers must be kept off-ledger
+  via UAID/opaque mappings.
+- **Error prevention:** Wallets parse I105 prefixes and enforce chain-discriminant
+  expectations. Chain mismatches trigger hard failures with actionable diagnostics.
+- **Codec libraries:** Official Rust, TypeScript/JavaScript, Python, and Kotlin
+  libraries provide I105 encoding/decoding plus I105 support to
+  avoid fragmented implementations. CAIP-10 conversions are not shipped yet.
 
-#### Қол жетімділік және қауіпсіз бөлісу бойынша нұсқаулық- Өнім беттерін енгізу бойынша нұсқаулық тікелей қадағаланады
-  `docs/portal/docs/reference/address-safety.md`; сол бақылау тізіміне сілтеме жасағанда
-  бұл талаптарды әмиянға немесе Explorer UX-ге бейімдеу.
-- **Қауіпсіз ортақ пайдалану ағындары:** Мекенжайларды I105 пішініне әдепкі етіп көшіретін немесе көрсететін беттер және пайдаланушылар бақылау сомасын визуалды немесе сканерлеу арқылы тексере алатындай толық жолды да, бірдей пайдалы жүктемеден алынған QR кодын да ұсынатын көршілес «бөлісу» әрекетін көрсетеді. Қиып кетудің алдын алу мүмкін болмаған кезде (мысалы, кішкентай экрандар), жолдың басы мен соңын сақтаңыз, анық эллипстерді қосыңыз және кездейсоқ қиып алудың алдын алу үшін толық мекенжайды алмасу буферіне көшіру арқылы қол жетімді етіп қойыңыз.
-- **IME қауіпсіздік шаралары:** Мекенжай кірістері IME/IME стиліндегі пернетақталардағы композиция артефактілерінен бас тартуы КЕРЕК. Тек ASCII енгізуін орындау, толық ені немесе Kana таңбалары анықталған кезде кірістірілген ескертуді ұсыныңыз және жапондық және қытайлық пайдаланушылар өздерінің IME деректерін прогресті жоғалтпай өшіре алатындай етіп тексеру алдында белгілерді біріктіретін қарапайым мәтінді қою аймағын ұсыныңыз.
-- **Экранды оқуға қолдау көрсету:** Басты Base58 префикс сандарын сипаттайтын және I105 пайдалы жүктемесін 4 немесе 8 таңбалы топтарға бөлетін көрнекі жасырын белгілерді (`aria-label`/I18NI0000475X) қамтамасыз етіңіз, осылайша топтық таңбалар жолының орнына іске қосылған көмекші технологиялар оқиды. Сыпайы тірі аймақтар арқылы көшіру/бөлісу сәттілігін жариялаңыз және QR алдын ала қарауында сипаттаушы балама мәтінді («0x02F1 тізбегіндегі <бүркеншік ат үшін I105 мекенжайы») қамтитынына көз жеткізіңіз.
-- **Тек Sora үшін қысылған пайдалану:** Әрқашан `i105` қысылған көріністі «Тек Sora» деп белгілеңіз және көшірмес бұрын оны нақты растаудың артына қойыңыз. Тізбек дискриминанты Sora Nexus мәні болмаса, SDK және әмияндар қысылған нәтижені көрсетуден бас тартуы керек және қаражатты бұрмалауды болдырмау үшін пайдаланушыларды желіаралық аударымдар үшін I105 бағытына қайта бағыттауы керек.
+#### Accessibility & Safe Sharing Guidance
 
-## Іске асыруды бақылау тізімі
+- Implementation guidance for product surfaces is tracked live in
+  `docs/portal/docs/reference/address-safety.md`; reference that checklist when
+  adapting these requirements to wallet or explorer UX.
+- **Safe sharing flows:** Surfaces that copy or display addresses default to the i105 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
+- **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
+- **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading i105 digits and chunk the i105 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“i105 address for <alias> on chain 0x02F1”).
+- **Single-format usage:** Keep address sharing on canonical I105 only and avoid secondary account-literal formats in wallet/explorer copy flows.
 
-- **I105 конверт:** Префикс `chain_discriminant` ықшам файлын пайдаланып кодтайды.
-  `encode_i105_prefix()` бастап 6-/14-биттік схема, денесі канондық байттар болып табылады
-  (`AccountAddress::canonical_bytes()`) және бақылау сомасы алғашқы екі байт
-  Blake2b-512(`b"I105PRE"` || префиксі || негізгі). Толық пайдалы жүктеме Base58-
-  `bs58` арқылы кодталған.
-- **Тіркеу келісімшарты:** Қол қойылған JSON (және қосымша Merkle түбірі) жариялау
-  `{discriminant, i105_prefix, chain_alias, endpoints}` 24 сағ TTL және
-  айналдыру пернелері.
-- **Домен саясаты:** ASCII `Name` бүгін; i18n қосылса, үшін UTS-46 қолданыңыз
-  қалыпқа келтіру және шатастыратын тексерулер үшін UTS-39. Максималды белгіні (63) және
-  жалпы (255) ұзындық.
-- **Мәтіндік көмекшілер:** Rust ішіндегі I105 ↔ қысылған (`i105`) кодектерін жіберіңіз,
-  Ортақ сынақ векторлары бар TypeScript/JavaScript, Python және Kotlin (CAIP-10
-  салыстыру болашақ жұмыс болып қалады).
-- **CLI құралдары:** `iroha tools address convert` арқылы детерминирленген оператор жұмыс процесін қамтамасыз етіңіз
-  (`crates/iroha_cli/src/address.rs` қараңыз), ол I105/`0x…` литералдарын және
-  қосымша `<address>@<domain>` (rejected legacy form) жапсырмалары, әдепкі бойынша Sora Nexus префиксі (`753`) арқылы I105 шығысы,
-  және операторлар оны нақты сұраған кезде ғана Sora-тек қысылған алфавитті шығарады
-  `--format i105` немесе JSON жиынтық режимі. Пәрмен префикс күтулерін іске қосады
-  талдау, берілген доменді (JSON ішіндегі `input_domain`) және `legacy  suffix` жалауын жазады
-  түрлендірілген кодтауды `<address>@<domain>` (rejected legacy form) ретінде қайталайды, сондықтан манифест айырмашылықтары эргономикалық болып қалады.
-- **Wallet/explorer UX:** [мекенжайды көрсету нұсқауларын] (source/sns/address_display_guidelines.md) орындаңыз
-  ADDR-6 арқылы жеткізіледі — қос көшірме түймелерін ұсыныңыз, I105 QR пайдалы жүктемесі ретінде сақтаңыз және ескертіңіз
-  пайдаланушылар қысылған `i105` пішіні тек Sora және IME қайта жазуларына сезімтал.
-- **Torii интеграциясы:** Nexus кэші TTL-ге қатысты көрінеді, шығарылады
-  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` анықтаушы және
-  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
+## Implementation Checklist
 
-### Torii жауап пішімдері
+- **I105 envelope:** Prefix encodes the `chain_discriminant` using the compact
+  6-/14-bit scheme from `encode_i105_prefix()`, the body is the canonical bytes
+  (`AccountAddress::canonical_bytes()`), and the checksum is the first two bytes
+  of Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded
+  with the I105 alphabet via `bs58`.
+- **Registry contract:** Signed JSON (and optional Merkle root) publishing
+  `{discriminant, i105_prefix, chain_alias, endpoints}` with 24h TTL and
+  rotation keys.
+- **Domain policy:** ASCII `Name` today; if enabling i18n, apply UTS-46 for
+  normalization and UTS-39 for confusable checks. Enforce max label (63) and
+  total (255) lengths.
+- **Textual helpers:** Ship I105 ↔ canonical I105 codecs in Rust,
+  TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
+  mappings remain future work).
+- **CLI tooling:** Provide a deterministic operator workflow via `iroha tools address convert`
+  (see `crates/iroha_cli/src/address.rs`), which accepts canonical I105 literals,
+  defaults to i105 output using the Sora Nexus prefix (`753`), enforces prefix
+  expectations on parse, and rejects `@domain` suffixes so operator pipelines
+  stay on canonical address literals only.
+- **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
+  shipped with ADDR-6—keep canonical I105 as the single copy/QR payload and
+  apply IME-safe input/output handling.
+- **Torii integration:** Cache Nexus manifests respecting TTL, emit
+  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical
+  forms and any `@domain` suffix) with canonical I105 output.
 
-- `GET /v1/accounts` қосымша `canonical I105 rendering` сұрау параметрін қабылдайды және
-  `POST /v1/accounts/query` JSON конвертінің ішіндегі бірдей өрісті қабылдайды.
-  Қолдау көрсетілетін мәндер:
-  - `i105` (әдепкі) — жауаптар канондық I105 Base58 пайдалы жүктемелерін шығарады (мысалы,
-    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
-  - `i105_default` — жауаптар тек Sora-ға арналған `i105` қысылған көріністі шығарады.
-    сүзгілерді/жол параметрлерін канондық сақтау.
-- Жарамсыз мәндер қайтарады `400` (`QueryExecutionFail::Conversion`). Бұл мүмкіндік береді
-  әмияндар мен зерттеушілер тек Sora-ға арналған UX үшін қысылған жолдарды сұрау үшін
-  I105 әрекеттесу әдепкі ретінде сақталады.
-- Актив ұстаушылардың тізімдері (`GET /v1/assets/{definition_id}/holders`) және олардың JSON
-  конверт әріптесі (`POST …/holders/query`) сонымен қатар `canonical I105 rendering` құрметіне ие.
-  `items[*].account_id` өрісі кез келген уақытта қысылған литералдарды шығарады
-  параметр/конверт өрісі тіркелгілерді көрсететін `i105_default` күйіне орнатылды
-  зерттеушілер каталогтар бойынша дәйекті нәтиже көрсете алатындай соңғы нүктелер.
-- **Тестілеу:** Кодер/декодер айналмалы сапарлары, қате тізбек үшін бірлік сынақтарын қосыңыз
-  сәтсіздіктер және манифестті іздеулер; Torii және SDKs интеграциялық қамтуды қосыңыз
-  I105 ағындары үшін басынан аяғына дейін.
+### Torii response formats
 
-## Қате коды тізілімі
+- `GET /v1/accounts` and `POST /v1/accounts/query` emit canonical I105 account
+  literals in responses.
+- Asset holder listings (`GET /v1/assets/{definition_id}/holders`) and their JSON
+  envelope counterpart (`POST …/holders/query`) also emit canonical I105 account
+  identifiers in `items[*].account_id`.
+- **Testing:** Add unit tests for encoder/decoder round-trips, wrong-chain
+  failures, and manifest lookups; add integration coverage in Torii and SDKs
+  for I105 flows end to end.
 
-Адрестік кодтаушылар мен декодерлер ақауларды көрсетеді
-`AccountAddressError::code_str()`. Келесі кестелер тұрақты кодтарды береді
-SDK, әмияндар және Torii беттері адам оқи алатын беттермен қатар тұруы керек
-хабарлар, сонымен қатар ұсынылған түзету нұсқаулары.
+## Error Code Registry
 
-### Канондық құрылыс
+Address encoders and decoders expose failures through
+`AccountAddressError::code_str()`. The following tables provide the stable codes
+that SDKs, wallets, and Torii surfaces should surface alongside human-readable
+messages, plus recommended remediation guidance.
 
-| Код | Сәтсіздік | Ұсынылатын түзету |
+### Canonical Construction
+
+| Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
-| `ERR_UNSUPPORTED_ALGORITHM` | Кодер тізбе немесе құрастыру мүмкіндіктері қолдамайтын қол қою алгоритмін алды. | Тіркеу мен конфигурацияда қосылған қисық сызықтармен тіркелгі құрылысын шектеңіз. |
-| `ERR_KEY_PAYLOAD_TOO_LONG` | Қол қою кілтінің пайдалы жүктеме ұзындығы қолдау көрсетілетін шектен асып кетті. | Бір кілтті контроллерлер `u8` ұзындықтарымен шектелген; үлкен ашық кілттер үшін multisig пайдаланыңыз (мысалы, ML‑DSA). |
-| `ERR_INVALID_HEADER_VERSION` | Мекенжай тақырыбының нұсқасы қолдау көрсетілетін ауқымнан тыс. | V1 мекенжайлары үшін `0` тақырып нұсқасын шығару; жаңа нұсқаларды қабылдамас бұрын кодерлерді жаңартыңыз. |
-| `ERR_INVALID_NORM_VERSION` | Нормализация нұсқасының жалауы танылмайды. | `1` қалыпқа келтіру нұсқасын пайдаланыңыз және сақталған биттерді ауыстырып-қоспаңыз. |
-| `ERR_INVALID_I105_PREFIX` | Сұралған I105 желі префиксін кодтау мүмкін емес. | Тізбек тізілімінде жарияланған `0..=16383` инклюзивті ауқымынан префиксті таңдаңыз. |
-| `ERR_CANONICAL_HASH_FAILURE` | Канондық пайдалы жүкті хэштеу сәтсіз аяқталды. | Операцияны қайталап көріңіз; егер қате сақталса, оны хэштеу стекіндегі ішкі қате ретінде қарастырыңыз. |
+| `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the registry or build features. | Restrict account construction to curves enabled in the registry and configuration. |
+| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers are limited to `u8` lengths; use multisig for large public keys (e.g., ML‑DSA). |
+| `ERR_INVALID_HEADER_VERSION` | Address header version is outside the supported range. | Emit header version `0` for V1 addresses; upgrade encoders before adopting new versions. |
+| `ERR_INVALID_NORM_VERSION` | Normalisation version flag is not recognised. | Use normalisation version `1` and avoid toggling reserved bits. |
+| `ERR_INVALID_I105_PREFIX` | Requested I105 network prefix cannot be encoded. | Pick a prefix within the inclusive `0..=16383` range published in the chain registry. |
+| `ERR_CANONICAL_HASH_FAILURE` | Canonical payload hashing failed. | Retry the operation; if the error persists, treat it as an internal bug in the hashing stack. |
 
-### Пішімді декодтау және автоматты анықтау
+### Format Decoding and Auto Detection
 
-| Код | Сәтсіздік | Ұсынылатын түзету |
+| Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
-| `ERR_INVALID_I105_ENCODING` | I105 жолында алфавиттен тыс таңбалар бар. | Мекенжайдың жарияланған I105 алфавитін пайдаланатынына және көшіру/қою кезінде кесілмегеніне көз жеткізіңіз. |
-| `ERR_INVALID_LENGTH` | Пайдалы жүк ұзындығы селектор/контроллер үшін күтілетін канондық өлшемге сәйкес келмейді. | Таңдалған домен селекторы мен контроллердің орналасуы үшін толық канондық пайдалы жүктемені қамтамасыз етіңіз. |
-| `ERR_CHECKSUM_MISMATCH` | I105 (таңдаулы) немесе қысылған (`sora`, екінші ең жақсы) бақылау сомасын тексеру сәтсіз аяқталды. | Сенімді көзден мекенжайды қайта жасаңыз; бұл әдетте көшіру/қою қатесін көрсетеді. |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 префикс байттары дұрыс емес. | Мекенжайды үйлесімді кодтауышпен қайта кодтаңыз; жетекші Base58 байтты қолмен өзгертпеңіз. |
-| `ERR_INVALID_HEX_ADDRESS` | Канондық он алтылық пішінді декодтау мүмкін болмады. | Ресми кодтаушы шығарған `0x` префиксті, жұп ұзындықтағы алты қырлы жолды қамтамасыз етіңіз. |
-| `ERR_MISSING_COMPRESSED_SENTINEL` | Қысылған пішін `sora` деп басталмайды. | Сығылған Sora мекенжайларын декодерлерге бермес бұрын қажетті күзетшімен префикс қойыңыз. |
-| `ERR_COMPRESSED_TOO_SHORT` | Сығылған жолда пайдалы жүктеме және бақылау сомасы үшін жеткілікті сандар жоқ. | Кесілген үзінділердің орнына кодер шығаратын толық қысылған жолды пайдаланыңыз. |
-| `ERR_INVALID_COMPRESSED_CHAR` | Сығылған алфавиттен тыс таңба кездесті. | Таңбаны жарияланған жарты ені/толық ен кестелеріндегі жарамды Base‑105 глифімен ауыстырыңыз. |
-| `ERR_INVALID_COMPRESSED_BASE` | Кодер қолдау көрсетілмейтін радиксті пайдалануға әрекет жасады. | Кодерге қарсы қате жіберіңіз; қысылған алфавит V1-де 105-радикске бекітілген. |
-| `ERR_INVALID_COMPRESSED_DIGIT` | Сандық мән қысылған алфавит өлшемінен асып кетті. | Әр санның `0..105)` шегінде екеніне көз жеткізіңіз, қажет болса мекенжайды қайта жасаңыз. |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Автоматты анықтау енгізу пішімін тани алмады. | Талдауыштарды шақырған кезде I105 (қалаулы), қысылған (`sora`) немесе канондық `0x` он алтылық жолдарын қамтамасыз етіңіз. |
+| `ERR_INVALID_I105_ENCODING` | I105 string contains characters outside the alphabet. | Ensure the address uses the published I105 alphabet and has not been truncated during copy/paste. |
+| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for header/controller (or legacy decode-compat selector variants). | Supply the full canonical payload emitted by the official encoder, or a complete legacy payload when decoding historical data. |
+| `ERR_CHECKSUM_MISMATCH` | Canonical I105 checksum validation failed. | Regenerate the canonical I105 address from a trusted source; this typically indicates a copy/paste error. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading I105 bytes manually. |
+| `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
+| `ERR_MISSING_COMPRESSED_SENTINEL` | Legacy/non-canonical I105 form does not start with the expected sentinel. | Use canonical I105 output and avoid manual sentinel rewriting. |
+| `ERR_COMPRESSED_TOO_SHORT` | Legacy/non-canonical I105 string is truncated before payload+checksum complete. | Use the full canonical I105 string emitted by the encoder. |
+| `ERR_INVALID_COMPRESSED_CHAR` | Legacy/non-canonical I105 payload includes an invalid glyph. | Replace with canonical I105 output generated by official codecs. |
+| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported legacy radix. | File a bug against the encoder; production flows must stay canonical I105. |
+| `ERR_INVALID_COMPRESSED_DIGIT` | Legacy/non-canonical digit value exceeds the supported legacy alphabet size. | Regenerate canonical I105 and avoid manual digit manipulation. |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide canonical I105 on strict account-id parser paths; use canonical `0x` hex only in low-level/debug tooling that explicitly accepts it. |
 
-### Домен мен желіні тексеру| Код | Сәтсіздік | Ұсынылатын түзету |
+### Domain and Network Validation
+
+| Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
-| `ERR_DOMAIN_MISMATCH` | Домен селекторы күтілетін доменге сәйкес келмейді. | Белгіленген домен үшін берілген мекенжайды пайдаланыңыз немесе күтуді жаңартыңыз. |
-| `ERR_INVALID_DOMAIN_LABEL` | Домен белгісін қалыпқа келтіруді тексеру сәтсіз аяқталды. | Кодтау алдында UTS-46 өтпелі емес өңдеу арқылы доменді канонизациялау. |
-| `ERR_UNEXPECTED_NETWORK_PREFIX` | Декодталған I105 желі префиксі конфигурацияланған мәннен ерекшеленеді. | Мақсатты тізбектен мекенжайға ауысыңыз немесе күтілетін дискриминант/префиксті реттеңіз. |
-| `ERR_UNKNOWN_ADDRESS_CLASS` | Мекенжай класының биттері танылмайды. | Декодерді жаңа сыныпты түсінетін шығарылымға жаңартыңыз немесе тақырып биттерін өзгертуге жол бермеңіз. |
-| `ERR_UNKNOWN_DOMAIN_TAG` | Домен таңдау тегі белгісіз. | Жаңа селектор түрін қолдайтын шығарылымға жаңартыңыз немесе V1 түйіндерінде эксперименттік пайдалы жүктемелерді пайдаланбаңыз. |
-| `ERR_UNEXPECTED_EXTENSION_FLAG` | Сақталған кеңейтім биті орнатылды. | Сақталған биттерді тазалау; олар болашақ ABI оларды таныстырмайынша жабық қалады. |
-| `ERR_UNKNOWN_CONTROLLER_TAG` | Контроллердің пайдалы жүктеме тегі танылмады. | Жаңа контроллер түрлерін талдаудан бұрын тану үшін декодерді жаңартыңыз. |
-| `ERR_UNEXPECTED_TRAILING_BYTES` | Канондық пайдалы жүктемеде декодтаудан кейін кейінгі байттар бар. | Канондық пайдалы жүктемені қалпына келтіріңіз; тек құжатталған ұзындық болуы керек. |
+| `ERR_DOMAIN_MISMATCH` | Domain selector does not match the expected domain. | Use an address issued for the intended domain or update the expectation. |
+| `ERR_INVALID_DOMAIN_LABEL` | Domain label failed normalisation checks. | Canonicalise the domain using UTS-46 non-transitional processing before encoding. |
+| `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded I105 network prefix differs from the configured value. | Switch to an address from the target chain or adjust the expected discriminant/prefix. |
+| `ERR_UNKNOWN_ADDRESS_CLASS` | Address class bits are not recognised. | Upgrade the decoder to a release that understands the new class, or avoid tampering with the header bits. |
+| `ERR_UNKNOWN_DOMAIN_TAG` | Domain selector tag is unknown. | Update to a release that supports the new selector type, or avoid using experimental payloads on V1 nodes. |
+| `ERR_UNEXPECTED_EXTENSION_FLAG` | Reserved extension bit was set. | Clear reserved bits; they remain gated until a future ABI introduces them. |
+| `ERR_UNKNOWN_CONTROLLER_TAG` | Controller payload tag not recognised. | Upgrade the decoder to recognise new controller types before parsing them. |
+| `ERR_UNEXPECTED_TRAILING_BYTES` | Canonical payload contained trailing bytes after decoding. | Regenerate the canonical payload; only the documented length should be present. |
 
-### Контроллердің пайдалы жүктемесін тексеру
+### Controller Payload Validation
 
-| Код | Сәтсіздік | Ұсынылатын түзету |
+| Code | Failure | Recommended Remediation |
 |------|---------|-------------------------|
-| `ERR_INVALID_PUBLIC_KEY` | Кілт байттары жарияланған қисыққа сәйкес келмейді. | Кілт байттары таңдалған қисық үшін талап етілетіндей кодталғанына көз жеткізіңіз (мысалы, 32 байт Ed25519). |
-| `ERR_UNKNOWN_CURVE` | Қисық идентификатор тіркелмеген. | Қосымша қисықтар мақұлданып, тізілімде жарияланғанша `1` (Ed25519) қисық идентификаторын пайдаланыңыз. |
-| `ERR_MULTISIG_MEMBER_OVERFLOW` | Multisig контроллері қолдау көрсетілетіннен көбірек мүшелерді жариялайды. | Кодтау алдында мультисиг мүшелігін құжатталған шекке дейін азайтыңыз. |
-| `ERR_INVALID_MULTISIG_POLICY` | Multisig саясатының пайдалы жүктемесін тексеру сәтсіз аяқталды (шекті мән/салмақ/схема). | Саясатты CTAP2 схемасын, салмақ шектерін және шекті шектеулерді қанағаттандыратындай етіп қайта жасаңыз. |
+| `ERR_INVALID_PUBLIC_KEY` | Key bytes do not match the declared curve. | Ensure the key bytes are encoded exactly as required for the selected curve (e.g., 32-byte Ed25519). |
+| `ERR_UNKNOWN_CURVE` | Curve identifier is not registered. | Use curve ID `1` (Ed25519) until additional curves are approved and published in the registry. |
+| `ERR_MULTISIG_MEMBER_OVERFLOW` | Multisig controller declares more members than supported. | Reduce the multisig membership to the documented limit before encoding. |
+| `ERR_INVALID_MULTISIG_POLICY` | Multisig policy payload failed validation (threshold/weights/schema). | Rebuild the policy so that it satisfies the CTAP2 schema, weight bounds, and threshold constraints. |
 
-## Баламалар қарастырылды
+## Alternatives Considered
 
-- **Pure Base58Check (Bitcoin-стиль).** Қарапайым бақылау сомасы, бірақ қатені анықтау әлсіз.
-  Blake2b-дан алынған I105 бақылау сомасына қарағанда (`encode_i105` 512 биттік хэшті қысқартады)
-  және 16-биттік дискриминанттар үшін айқын префикс семантикасы жоқ.
-- **Домен жолына тізбек атауын енгізу (мысалы, `finance@chain`).** Үзілістер
-- **Мекенжайды өзгертпестен тек Nexus маршрутизациясына сеніңіз.** Пайдаланушылар әлі де
-  анық емес жолдарды көшіру/қою; мекенжайдың өзі контекстті тасымалдауды қалаймыз.
-- **Bech32m конверт.** QR-қолайлы және адам оқи алатын префиксті ұсынады, бірақ
-  I105 жеткізілімінен (`AccountAddress::to_i105`) алшақтайды
-  және барлық құрылғыларды/SDK қайта жасауды талап етеді. Ағымдағы жол картасы I105 + сақтайды
-  болашақта зерттеуді жалғастыра отырып, қысылған (`sora`) қолдау
-  Bech32m/QR қабаттары (CAIP-10 салыстыру кейінге қалдырылған).
+- **Pure checksum envelope (Bitcoin-style).** Simpler checksum but weaker error detection
+  than the Blake2b-derived I105 checksum (`encode_i105` truncates a 512-bit hash)
+  and lacks explicit prefix semantics for 16-bit discriminants.
+- **Embedding chain name in the domain string (e.g., `finance@chain`).** Breaks
+- **Rely solely on Nexus routing without changing addresses.** Users would still
+  copy/paste ambiguous strings; we want the address itself to carry context.
+- **Bech32m envelope.** QR-friendly and offers a human-readable prefix, but
+  would diverge from the shipping I105 implementation (`AccountAddress::to_i105`)
+  and require recreating all fixtures/SDKs. The current roadmap keeps I105 +
+  I105 support while continuing research into future
+  Bech32m/QR layers (CAIP-10 mapping is deferred).
 
-## Ашық сұрақтар
+## Open Questions
 
-- `u16` дискриминанттары плюс резервтелген ауқымдар ұзақ мерзімді сұранысты жабатынын растаңыз;
-  әйтпесе `u32` нұсқасын варинт кодтауымен бағалаңыз.
-- Тізілім жаңартулары үшін көп қолтаңбаны басқару процесін аяқтаңыз және қалай
-  қайтарып алу/мерзімі өткен бөлулер өңделеді.
-- Нақты манифест қолтаңбасының схемасын анықтаңыз (мысалы, Ed25519 мульти-сиг) және
-  Nexus тарату үшін көлік қауіпсіздігі (HTTPS бекіту, IPFS хэш пішімі).
-- Тасымалдау үшін домен бүркеншік аттарын/қайта бағыттауларды қолдау керек пе және қалай екенін анықтаңыз
-  детерминизмді бұзбай олардың бетін ашу.
-- Kotodama/IVM келісім-шарттарының I105 көмекшілеріне қалай кіруін көрсетіңіз (`to_address()`,
-  `parse_address()`) және тізбекті сақтау CAIP-10-ны көрсетуі керек пе
-  салыстырулар (бүгін I105 канондық болып табылады).
-- Iroha тізбектерін сыртқы тізілімдерде тіркеуді зерттеңіз (мысалы, I105 тізілімі,
-  CAIP аттар кеңістігі каталогы) кеңірек экожүйені туралау үшін.
+- Confirm that `u16` discriminants plus reserved ranges cover long-term demand;
+  otherwise evaluate `u32` with varint encoding.
+- Finalize the multi-signature governance process for registry updates and how
+  revocations/expired allocations are handled.
+- Define the exact manifest signature scheme (e.g., Ed25519 multi-sig) and
+  transport security (HTTPS pinning, IPFS hash format) for Nexus distribution.
+- Determine whether to support domain aliases/redirects for migrations and how
+  to surface them without breaking determinism.
+- Specify how Kotodama/IVM contracts access I105 helpers (`to_address()`,
+  `parse_address()`) and whether on-chain storage should ever expose CAIP-10
+  mappings (today I105 is canonical).
+- Explore registering Iroha chains in external registries (e.g., I105 registry,
+  CAIP namespace directory) for broader ecosystem alignment.
 
-## Келесі қадамдар
+## Next Steps
 
-1. I105 кодтауы `iroha_data_model` (`AccountAddress::to_i105`,
-   `parse_encoded`); құрылғыларды/сынақтарды әр SDK-ға тасымалдауды жалғастырыңыз және кез келгенін тазалаңыз
-   Bech32m толтырғыштары.
-2. `chain_discriminant` көмегімен конфигурация схемасын кеңейтіп, мәнді шығарыңыз
-  бұрыннан бар сынақ/әзірлеу параметрлері үшін әдепкі мәндер. **(Орындалды: `common.chain_discriminant`
-  қазір `iroha_config` нұсқасында жеткізіледі, әдепкі бойынша әр желімен `0x02F1`
-  қайта анықтайды.)**
-3. Nexus тізілім схемасының және тұжырымдаманың дәлелі манифест жариялаушысының жобасын жасаңыз.
-4. Әмиян провайдерлері мен кастодиандардан адам факторы аспектілері бойынша кері байланыс жинаңыз
-   (HRP атауы, дисплей пішімі).
-5. Құжаттаманы (`docs/source/data_model.md`, Torii API құжаттары) жаңартыңыз.
-   іске асыру жолы бекітілді.
-6. Нормативтік сынағы бар ресми кодектер кітапханаларын (Rust/TS/Python/Kotlin) жіберіңіз.
-   сәттілік пен сәтсіздік жағдайларын қамтитын векторлар.
+1. I105 encoding landed in `iroha_data_model` (`AccountAddress::to_i105`,
+   `parse_encoded`); continue porting fixtures/tests to every SDK and purge any
+   Bech32m placeholders.
+2. Extend configuration schema with `chain_discriminant` and derive sensible
+  defaults for existing test/dev setups. **(Done: `common.chain_discriminant`
+  now ships in `iroha_config`, defaulting to `0x02F1` with per-network
+  overrides.)**
+3. Draft the Nexus registry schema and proof-of-concept manifest publisher.
+4. Collect feedback from wallet providers and custodians on human-factor aspects
+   (HRP naming, display formatting).
+5. Update documentation (`docs/source/data_model.md`, Torii API docs) once the
+   implementation path is committed.
+6. Ship official codec libraries (Rust/TS/Python/Kotlin) with normative test
+   vectors covering success and failure cases.

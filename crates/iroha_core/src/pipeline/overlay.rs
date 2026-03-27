@@ -609,6 +609,11 @@ impl TxOverlay {
         &self.instructions
     }
 
+    /// Borrow the durable smart-contract state overlay accumulated during IVM execution.
+    pub fn durable_state_overlay(&self) -> &BTreeMap<Name, Option<Vec<u8>>> {
+        &self.durable_state_overlay
+    }
+
     /// Return IVM gas used during overlay prepass, when the source executable was `Executable::Ivm`.
     pub fn ivm_gas_used(&self) -> Option<u64> {
         self.ivm_gas_used
@@ -1779,7 +1784,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -1934,7 +1938,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -3049,7 +3052,8 @@ mod tests {
             op: axt::SpendOp {
                 kind: "transfer".into(),
                 from: authority_str,
-                to: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".into(),
+                to: "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+                    .into(),
                 amount: "5".into(),
             },
         };

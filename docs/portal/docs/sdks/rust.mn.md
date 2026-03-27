@@ -150,7 +150,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -160,7 +160,7 @@ fn download_qr() -> eyre::Result<()> {
 
 `ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON-г тусгадаг
 гадаргуу: энэ нь каноник дансны id, кодоор илэрхийлэгдсэн үг хэллэгийг агуулдаг
-канон I105 literal, сүлжээний угтвар/алдаа засах мета өгөгдөл, QR хэмжээсүүд болон
+канон i105 literal, сүлжээний угтвар/алдаа засах мета өгөгдөл, QR хэмжээсүүд болон
 түрийвч/судлаачдын шууд оруулах боломжтой SVG ачаалал.
 
 ## 7. Үйл явдалд бүртгүүлэх

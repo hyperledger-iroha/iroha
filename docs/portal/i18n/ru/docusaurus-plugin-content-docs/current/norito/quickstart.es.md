@@ -90,7 +90,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 С адресом исправления, отправьте байт-код, скомпилированный в Torii, используя CLI. Идентификатор desarrollo por deriva de la clave publica en `defaults/client.toml`, por lo que el ID de cuenta es
 ```
-i105...
+<i105-account-id>
 ```
 
 Используйте архив конфигурации для просмотра URL-адреса Torii, идентификатора цепочки и ключа фирмы:
@@ -108,7 +108,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

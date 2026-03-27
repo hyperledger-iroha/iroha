@@ -90,9 +90,11 @@ fn try_gpu_crc64(data: &[u8]) -> Option<u64> {
         *guard = load_gpu_backend();
     }
     match &*guard {
-        GpuBackend::Metal(lib) | GpuBackend::Cuda(lib) | GpuBackend::Custom(lib) => unsafe {
-            lib.compute(data)
-        },
+        #[cfg(all(feature = "metal-crc64", target_os = "macos"))]
+        GpuBackend::Metal(lib) => unsafe { lib.compute(data) },
+        #[cfg(feature = "cuda-crc64")]
+        GpuBackend::Cuda(lib) => unsafe { lib.compute(data) },
+        GpuBackend::Custom(lib) => unsafe { lib.compute(data) },
         GpuBackend::Unavailable => None,
     }
 }
@@ -211,7 +213,9 @@ fn validate_gpu_lib(lib: GpuLib) -> Option<GpuLib> {
 #[derive(Clone, Copy)]
 enum GpuBackend {
     Unavailable,
+    #[cfg(all(feature = "metal-crc64", target_os = "macos"))]
     Metal(GpuLib),
+    #[cfg(feature = "cuda-crc64")]
     Cuda(GpuLib),
     Custom(GpuLib),
 }

@@ -3,7 +3,7 @@ package org.hyperledger.iroha.android.offline;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
-import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 
 public final class OfflineJsonParserTest {
 
@@ -28,7 +28,7 @@ public final class OfflineJsonParserTest {
   }
 
   private static void parsesAllowancePayload() {
-    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
+    final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
     final String json =
         """
         {
@@ -36,8 +36,8 @@ public final class OfflineJsonParserTest {
           "items": [
             {
               "certificate_id_hex": "deadbeef",
-              "controller_id": "alice@wonderland",
-              "controller_display": "alice@wonderland",
+              "controller_id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "controller_display": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "asset_definition_id": "%s",
               "asset_definition_name": "USD",
@@ -61,7 +61,7 @@ public final class OfflineJsonParserTest {
     assert list.items().size() == 1 : "items size mismatch";
     final OfflineAllowanceList.OfflineAllowanceItem item = list.items().get(0);
     assert "deadbeef".equals(item.certificateIdHex()) : "certificate id mismatch";
-    assert "alice@wonderland".equals(item.controllerId()) : "controller mismatch";
+    assert "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".equals(item.controllerId()) : "controller mismatch";
     assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".equals(item.assetId()) : "asset mismatch";
     assert assetDefinitionId.equals(item.assetDefinitionId()) : "asset definition id mismatch";
     assert "USD".equals(item.assetDefinitionName()) : "asset definition name mismatch";
@@ -84,10 +84,10 @@ public final class OfflineJsonParserTest {
           "items": [
             {
               "bundle_id_hex": "cafebabe",
-              "receiver_id": "merchant@wonderland",
-              "receiver_display": "merchant@wonderland",
-              "deposit_account_id": "merchant@wonderland",
-              "deposit_account_display": "merchant@wonderland",
+              "receiver_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "receiver_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "deposit_account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "deposit_account_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
               "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "receipt_count": 2,
               "total_amount": "15",
@@ -113,7 +113,7 @@ public final class OfflineJsonParserTest {
     assert items.size() == 1 : "transfer size mismatch";
     final OfflineTransferList.OfflineTransferItem item = items.get(0);
     assert "cafebabe".equals(item.bundleIdHex()) : "bundle id mismatch";
-    assert "merchant@wonderland".equals(item.receiverId()) : "receiver mismatch";
+    assert "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".equals(item.receiverId()) : "receiver mismatch";
     assert item.receiptCount() == 2 : "receipt count mismatch";
     assert "15".equals(item.totalAmount()) : "total amount mismatch";
     assert "15".equals(item.claimedDelta()) : "claimed delta mismatch";
@@ -133,10 +133,10 @@ public final class OfflineJsonParserTest {
         """
         {
           "bundle_id_hex": "deadbeef",
-          "receiver_id": "merchant@wonderland",
-          "receiver_display": "merchant@wonderland",
-          "deposit_account_id": "merchant@wonderland",
-          "deposit_account_display": "merchant@wonderland",
+          "receiver_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+          "receiver_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+          "deposit_account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+          "deposit_account_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
           "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "receipt_count": 1,
           "total_amount": "5",
@@ -162,10 +162,10 @@ public final class OfflineJsonParserTest {
           "items": [
             {
               "bundle_id_hex": "feedface",
-              "receiver_id": "bob@wonderland",
-              "receiver_display": "bob@wonderland",
-              "deposit_account_id": "bob@wonderland",
-              "deposit_account_display": "bob@wonderland",
+              "receiver_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "receiver_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "deposit_account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "deposit_account_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
               "receipt_count": 1,
               "total_amount": "5",
               "claimed_delta": "5",
@@ -186,10 +186,10 @@ public final class OfflineJsonParserTest {
     final OfflineTransferList.OfflineTransferItem item =
         new OfflineTransferList.OfflineTransferItem(
             "cafebabe",
-            "merchant@wonderland",
-            "merchant@wonderland",
-            "merchant@wonderland",
-            "merchant@wonderland",
+            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
             null,
             2,
             "15",
@@ -199,7 +199,7 @@ public final class OfflineJsonParserTest {
             "{\"bundle\":\"payload\"}");
     final Map<String, Object> json = item.toJsonMap();
     assert "cafebabe".equals(json.get("bundle_id_hex")) : "bundle id mismatch";
-    assert "merchant@wonderland".equals(json.get("receiver_id")) : "receiver mismatch";
+    assert "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".equals(json.get("receiver_id")) : "receiver mismatch";
     assert !json.containsKey("asset_id") : "asset_id should be omitted when null";
     assert !json.containsKey("platform_policy") : "platform_policy should be omitted when null";
     final Object snapshotNode = json.get("platform_token_snapshot");
@@ -222,10 +222,10 @@ public final class OfflineJsonParserTest {
           "items": [
             {
               "bundle_id_hex": "c0ffee",
-              "receiver_id": "merchant@wonderland",
-              "receiver_display": "merchant@wonderland",
-              "deposit_account_id": "merchant@wonderland",
-              "deposit_account_display": "merchant@wonderland",
+              "receiver_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "receiver_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "deposit_account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "deposit_account_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
               "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "receipt_count": 1,
               "total_amount": "7.5",
@@ -234,9 +234,9 @@ public final class OfflineJsonParserTest {
                 "receipts": [
                   {
                     "tx_id": "offline-tx-1",
-                    "from": "alice@wonderland",
-                    "to": "merchant@wonderland",
-                    "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#merchant@wonderland",
+                    "from": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+                    "to": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                    "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
                     "amount": "7.5"
                   }
                 ],
@@ -253,9 +253,9 @@ public final class OfflineJsonParserTest {
     final OfflineTransferList.OfflineTransferItem item = list.items().get(0);
     final var summary = item.firstReceiptSummary();
     assert summary.isPresent() : "receipt summary missing";
-    assert "alice@wonderland".equals(summary.get().senderId()) : "sender mismatch";
-    assert "merchant@wonderland".equals(summary.get().receiverId()) : "receiver mismatch";
-    assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#merchant@wonderland".equals(summary.get().assetId())
+    assert "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".equals(summary.get().senderId()) : "sender mismatch";
+    assert "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".equals(summary.get().receiverId()) : "receiver mismatch";
+    assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".equals(summary.get().assetId())
         : "asset mismatch";
     assert "7.5".equals(summary.get().amount()) : "amount mismatch";
   }
@@ -268,8 +268,8 @@ public final class OfflineJsonParserTest {
           "items": [
             {
               "verdict_id_hex": "ABCD",
-              "issuer_id": "ops@wonderland",
-              "issuer_display": "ops@wonderland",
+              "issuer_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+              "issuer_display": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
               "revoked_at_ms": 1730314876000,
               "reason": "compromised_key",
               "note": "hardware breach",
@@ -284,7 +284,7 @@ public final class OfflineJsonParserTest {
     assert list.total() == 1 : "revocation total mismatch";
     final OfflineRevocationList.OfflineRevocationItem item = list.items().get(0);
     assert "ABCD".equals(item.verdictIdHex()) : "verdict id mismatch";
-    assert "ops@wonderland".equals(item.issuerId()) : "issuer mismatch";
+    assert "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".equals(item.issuerId()) : "issuer mismatch";
     assert item.revokedAtMs() == 1_730_314_876_000L : "revoked timestamp mismatch";
     assert "compromised_key".equals(item.reason()) : "reason mismatch";
     assert "hardware breach".equals(item.note()) : "note mismatch";
@@ -298,8 +298,8 @@ public final class OfflineJsonParserTest {
         {
           "certificate_id_hex": "deadbeef",
           "certificate": {
-            "controller": "alice@wonderland",
-            "operator": "ops@wonderland",
+            "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            "operator": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
             "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2, 3] },
             "spend_public_key": "ed0120deadbeef",
             "attestation_report": [4, 5, 6],
@@ -318,8 +318,8 @@ public final class OfflineJsonParserTest {
         OfflineJsonParser.parseCertificateIssueResponse(json.getBytes(StandardCharsets.UTF_8));
     assert "deadbeef".equals(response.certificateIdHex()) : "certificate id mismatch";
     final OfflineWalletCertificate certificate = response.certificate();
-    assert "ops@wonderland".equals(certificate.operator()) : "operator mismatch";
-    assert "ops@wonderland".equals(certificate.toJsonMap().get("operator"))
+    assert "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".equals(certificate.operator()) : "operator mismatch";
+    assert "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".equals(certificate.toJsonMap().get("operator"))
         : "operator missing from JSON map";
   }
 
@@ -364,7 +364,7 @@ public final class OfflineJsonParserTest {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 1700500000000L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
-            "alice@wonderland",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             allowance,
             "ed0120deadbeef",
             new byte[] {4, 5, 6},
@@ -385,7 +385,7 @@ public final class OfflineJsonParserTest {
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 1700500000000L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
-            "alice@wonderland",
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             allowance,
             "ed0120deadbeef",
             new byte[] {4, 5, 6},
@@ -428,7 +428,7 @@ public final class OfflineJsonParserTest {
   }
 
   private static void rejectsFractionalOptionalTimestamp() {
-    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
+    final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
     final String json =
         """
         {
@@ -436,8 +436,8 @@ public final class OfflineJsonParserTest {
           "items": [
             {
               "certificate_id_hex": "deadbeef",
-              "controller_id": "alice@wonderland",
-              "controller_display": "alice@wonderland",
+              "controller_id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "controller_display": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "asset_definition_id": "%s",
               "asset_definition_name": "USD",

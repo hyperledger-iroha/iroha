@@ -14,6 +14,18 @@ import {
   buildTransferDomainInstruction,
   buildTransferAssetDefinitionInstruction,
   buildTransferNftInstruction,
+  buildRegisterRwaInstruction,
+  buildTransferRwaInstruction,
+  buildMergeRwasInstruction,
+  buildRedeemRwaInstruction,
+  buildFreezeRwaInstruction,
+  buildUnfreezeRwaInstruction,
+  buildHoldRwaInstruction,
+  buildReleaseRwaInstruction,
+  buildForceTransferRwaInstruction,
+  buildSetRwaControlsInstruction,
+  buildSetRwaKeyValueInstruction,
+  buildRemoveRwaKeyValueInstruction,
   buildCreateKaigiInstruction,
   buildJoinKaigiInstruction,
   buildLeaveKaigiInstruction,
@@ -53,6 +65,7 @@ const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
+const SORA_I105_DISCRIMINANT = 0x2f1;
 
 function loadInstructionFixture(name) {
   const fixturePath = path.join(repoRoot, "fixtures", "norito_instructions", name);
@@ -67,12 +80,11 @@ function decodeFixtureInstruction(name) {
 import {
   normalizeAccountId as exportedNormalizeAccountId,
   normalizeAssetId as exportedNormalizeAssetId,
+  normalizeAssetHoldingId as exportedNormalizeAssetHoldingId,
 } from "../src/index.js";
 import { ValidationErrorCode } from "../src/validationError.js";
 import {
   AccountAddress,
-  AccountAddressError,
-  AccountAddressErrorCode,
 } from "../src/address.js";
 
 function hexToBytes(hex) {
@@ -103,7 +115,7 @@ function canonicalizeValue(value) {
   if (typeof value === "string") {
     if (!value.startsWith("hash:") && value.includes("#")) {
       try {
-        return exportedNormalizeAssetId(value);
+        return exportedNormalizeAssetHoldingId(value);
       } catch {
         return value;
       }
@@ -150,11 +162,9 @@ const DOMAIN_ID = "wonderland";
 const ACCOUNT_SIGNATORY =
   "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const ACCOUNT_PUBLIC_KEY = hexToBytes(ACCOUNT_SIGNATORY.slice(6));
-const ACCOUNT_ADDRESS = AccountAddress.fromAccount({
-  domain: DOMAIN_ID,
-  publicKey: ACCOUNT_PUBLIC_KEY,
+const ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: ACCOUNT_PUBLIC_KEY,
 });
-const ACCOUNT_ID = ACCOUNT_ADDRESS.toI105();
+const ACCOUNT_ID = ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const ACCOUNT_ID_INPUT = ACCOUNT_ID;
 const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAccountIdUsingNorito(ACCOUNT_ID)
@@ -166,15 +176,17 @@ const ASSET_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAssetIdUsingNorito(ASSET_ID)
   : ASSET_ID;
 const NFT_ID = "dragon$wonderland";
+const RWA_ID =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
+const RWA_ID_INPUT =
+  "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities";
 const SAMPLE_PUBLIC_KEY = hexToBytes(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
 );
-const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({
-  domain: DOMAIN_ID,
-  publicKey: SAMPLE_PUBLIC_KEY,
+const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: SAMPLE_PUBLIC_KEY,
 });
-const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105();
-const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105Default();
+const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
+const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const SAMPLE_ACCOUNT_CANONICAL = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
 const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS);
 
@@ -261,7 +273,7 @@ test("normalizeAccountId exported accepts encoded account IDs", () => {
   assert.equal(canonical, ACCOUNT_ID_CANONICAL);
 });
 
-test("normalizeAccountId canonicalizes I105 and i105Default (`sora`) encodings", () => {
+test("normalizeAccountId canonicalizes I105 and i105 (`sora`) encodings", () => {
   const canonicalI105 = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
   assert.equal(canonicalI105, SAMPLE_ACCOUNT_CANONICAL);
   const canonicalCompressed = exportedNormalizeAccountId(SAMPLE_ACCOUNT_COMPRESSED_LITERAL);
@@ -272,23 +284,28 @@ test("normalizeAccountId rejects Local-8 selectors", () => {
   assert.throws(
     () => exportedNormalizeAccountId(SAMPLE_ACCOUNT_LOCAL8_LITERAL),
     (error) => {
-      assert(error instanceof AccountAddressError);
-      assert.equal(error.code, AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT);
+      assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
+      assert.match(String(error?.message), /canonical I105 account id/i);
       return true;
     },
   );
 });
 
-test("normalizeAssetId exported canonicalizes public asset identifiers", () => {
-  const canonical = exportedNormalizeAssetId(ASSET_ID_INPUT);
-  assert.equal(canonical, ASSET_ID_CANONICAL);
+test("normalizeAssetId exported canonicalizes bare Base58 asset ids", () => {
+  const canonical = exportedNormalizeAssetId(ASSET_DEFINITION_ID);
+  assert.equal(canonical, ASSET_DEFINITION_ID);
 });
 
 test("normalizeAssetId rejects malformed asset literals", () => {
   assert.throws(
-    () => exportedNormalizeAssetId("not:an-asset"),
-    /must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix/,
+    () => exportedNormalizeAssetId(ASSET_ID_INPUT),
+    /canonical Base58 asset id/,
   );
+});
+
+test("normalizeAssetHoldingId exported canonicalizes asset-holding identifiers", () => {
+  const canonical = exportedNormalizeAssetHoldingId(ASSET_ID_INPUT);
+  assert.equal(canonical, ASSET_ID_CANONICAL);
 });
 
 test("buildMintAssetInstruction produces Norito-compatible payload", () => {
@@ -491,6 +508,157 @@ test("buildTransferNftInstruction covers nft transfer", () => {
         object: NFT_ID,
         destination: ACCOUNT_ID_CANONICAL,
       },
+    },
+  });
+});
+
+test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
+  const instruction = buildRegisterRwaInstruction({
+    rwa: {
+      domain: "commodities",
+      quantity: "10.5",
+      spec: { scale: 1 },
+      primaryReference: "vault-cert-001",
+      metadata: { origin: "AE", lot: BigInt(3) },
+      parents: [{ rwa: RWA_ID, quantity: "1.25" }],
+      controls: {
+        controllerAccounts: [ACCOUNT_ID],
+        controllerRoles: ["auditor"],
+        freezeEnabled: true,
+        holdEnabled: true,
+      },
+    },
+  });
+  const decoded = encodeAndDecode(instruction);
+  assert.deepEqual(decoded, {
+    RegisterRwa: {
+      rwa: {
+        domain: "commodities",
+        quantity: "10.5",
+        spec: { scale: 1 },
+        primary_reference: "vault-cert-001",
+        status: null,
+        metadata: { origin: "AE", lot: "3" },
+        parents: [{ rwa: RWA_ID, quantity: "1.25" }],
+        controls: {
+          controller_accounts: [ACCOUNT_ID_CANONICAL],
+          controller_roles: ["auditor"],
+          freeze_enabled: true,
+          hold_enabled: true,
+          force_transfer_enabled: false,
+          redeem_enabled: false,
+        },
+      },
+    },
+  });
+});
+
+test("buildTransferRwaInstruction covers rwa transfer", () => {
+  const instruction = buildTransferRwaInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    rwaId: RWA_ID_INPUT,
+    quantity: "3.25",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const decoded = encodeAndDecode(instruction);
+  assert.deepEqual(decoded, {
+    TransferRwa: {
+      source: ACCOUNT_ID_CANONICAL,
+      rwa: RWA_ID,
+      quantity: "3.25",
+      destination: ACCOUNT_ID_CANONICAL,
+    },
+  });
+});
+
+test("rwa scalar instruction builders cover lifecycle operations", () => {
+  const merge = buildMergeRwasInstruction({
+    merge: {
+      parents: [{ rwa: RWA_ID, quantity: "1.5" }],
+      primaryReference: "blend-cert-007",
+      status: "blended",
+      metadata: { grade: "A" },
+    },
+  });
+  const redeem = buildRedeemRwaInstruction({ rwaId: RWA_ID, quantity: "2" });
+  const freeze = buildFreezeRwaInstruction({ rwaId: RWA_ID });
+  const unfreeze = buildUnfreezeRwaInstruction({ rwaId: RWA_ID });
+  const hold = buildHoldRwaInstruction({ rwaId: RWA_ID, quantity: "3" });
+  const release = buildReleaseRwaInstruction({ rwaId: RWA_ID, quantity: "1" });
+  const forceTransfer = buildForceTransferRwaInstruction({
+    rwaId: RWA_ID,
+    quantity: "4",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const controls = buildSetRwaControlsInstruction({
+    rwaId: RWA_ID,
+    controls: { redeemEnabled: true },
+  });
+
+  assert.deepEqual(encodeAndDecode(merge), {
+    MergeRwas: {
+      parents: [{ rwa: RWA_ID, quantity: "1.5" }],
+      primary_reference: "blend-cert-007",
+      status: "blended",
+      metadata: { grade: "A" },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(redeem), {
+    RedeemRwa: { rwa: RWA_ID, quantity: "2" },
+  });
+  assert.deepEqual(encodeAndDecode(freeze), {
+    FreezeRwa: { rwa: RWA_ID },
+  });
+  assert.deepEqual(encodeAndDecode(unfreeze), {
+    UnfreezeRwa: { rwa: RWA_ID },
+  });
+  assert.deepEqual(encodeAndDecode(hold), {
+    HoldRwa: { rwa: RWA_ID, quantity: "3" },
+  });
+  assert.deepEqual(encodeAndDecode(release), {
+    ReleaseRwa: { rwa: RWA_ID, quantity: "1" },
+  });
+  assert.deepEqual(encodeAndDecode(forceTransfer), {
+    ForceTransferRwa: {
+      rwa: RWA_ID,
+      quantity: "4",
+      destination: ACCOUNT_ID_CANONICAL,
+    },
+  });
+  assert.deepEqual(encodeAndDecode(controls), {
+    SetRwaControls: {
+      rwa: RWA_ID,
+      controls: {
+        controller_accounts: [],
+        controller_roles: [],
+        freeze_enabled: false,
+        hold_enabled: false,
+        force_transfer_enabled: false,
+        redeem_enabled: true,
+      },
+    },
+  });
+
+  const setMetadata = buildSetRwaKeyValueInstruction({
+    rwaId: RWA_ID,
+    key: "grade",
+    value: { country: "AE", sequence: BigInt(7) },
+  });
+  const removeMetadata = buildRemoveRwaKeyValueInstruction({
+    rwaId: RWA_ID,
+    key: "grade",
+  });
+  assert.deepEqual(encodeAndDecode(setMetadata), {
+    SetRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+      value: { country: "AE", sequence: "7" },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(removeMetadata), {
+    RemoveRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
     },
   });
 });
@@ -817,7 +985,14 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
   };
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
-  assert.deepEqual(decoded, expected);
+  assert.deepEqual(decoded, {
+    RegisterSmartContractCode: {
+      manifest: {
+        ...expected.RegisterSmartContractCode.manifest,
+        kotoba: null,
+      },
+    },
+  });
 });
 
 test("buildRegisterSmartContractBytesInstruction encodes bytes deterministically", () => {
@@ -1049,20 +1224,21 @@ test("buildCastZkBallotInstruction requires complete lock hints", () => {
 });
 
 test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
+  const nonCanonicalOwner = ACCOUNT_ADDRESS.toI105(0x02f2);
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
         electionId: "ref-5",
         proof: Buffer.from([0x06]),
         publicInputs: {
-          owner: ACCOUNT_ID_INPUT,
+          owner: nonCanonicalOwner,
           amount: "250",
           duration_blocks: 12,
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
+      assert.match(String(error?.message), /canonical .*i105 account id/i);
       return true;
     },
   );
@@ -1413,6 +1589,7 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
 });
 
 test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
+  const invalidNullifier = Array.from({ length: 32 }, (_, index) => (index === 0 ? 256 : 0));
   assert.throws(
     () =>
       buildSubmitBallotInstruction({
@@ -1423,7 +1600,7 @@ test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
           proof: Buffer.from("proof"),
           verifyingKeyRef: "halo2/ipa:vk_ballot",
         },
-        nullifier: [256],
+        nullifier: invalidNullifier,
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);

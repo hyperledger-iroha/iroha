@@ -67,6 +67,7 @@ use iroha_data_model::{
         compute_receipts_root,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    rwa::RwaId,
     smart_contract::manifest::ContractManifest,
     transaction::{
         Executable, SignedTransaction, TransactionSubmissionReceipt, signed::TransactionBuilder,
@@ -572,6 +573,7 @@ fn parse_account_list(bytes: &[u8]) -> BridgeResult<Vec<AccountId>> {
 enum MetadataTarget {
     Domain(DomainId),
     Account(AccountId),
+    Rwa(RwaId),
     AssetDefinition(AssetDefinitionId),
     Asset(AssetId),
 }
@@ -583,6 +585,10 @@ fn parse_metadata_target(kind: u8, object: String) -> BridgeResult<MetadataTarge
             .map(MetadataTarget::Domain)
             .map_err(|_| BridgeError::MetadataTarget),
         1 => parse_account_id(object).map(MetadataTarget::Account),
+        4 => object
+            .parse::<RwaId>()
+            .map(MetadataTarget::Rwa)
+            .map_err(|_| BridgeError::MetadataTarget),
         2 => parse_asset_definition(object).map(MetadataTarget::AssetDefinition),
         3 => AssetId::parse_literal(&object)
             .map(MetadataTarget::Asset)
@@ -599,6 +605,7 @@ fn build_set_metadata_instruction(
     match target {
         MetadataTarget::Domain(id) => InstructionBox::from(SetKeyValue::domain(id, key, value)),
         MetadataTarget::Account(id) => InstructionBox::from(SetKeyValue::account(id, key, value)),
+        MetadataTarget::Rwa(id) => InstructionBox::from(SetKeyValue::rwa(id, key, value)),
         MetadataTarget::AssetDefinition(id) => {
             InstructionBox::from(SetKeyValue::asset_definition(id, key, value))
         }
@@ -610,6 +617,7 @@ fn build_remove_metadata_instruction(target: MetadataTarget, key: Name) -> Instr
     match target {
         MetadataTarget::Domain(id) => InstructionBox::from(RemoveKeyValue::domain(id, key)),
         MetadataTarget::Account(id) => InstructionBox::from(RemoveKeyValue::account(id, key)),
+        MetadataTarget::Rwa(id) => InstructionBox::from(RemoveKeyValue::rwa(id, key)),
         MetadataTarget::AssetDefinition(id) => {
             InstructionBox::from(RemoveKeyValue::asset_definition(id, key))
         }
@@ -1662,8 +1670,6 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
     out_hex_len: *mut c_ulong,
     out_i105_ptr: *mut *mut c_uchar,
     out_i105_len: *mut c_ulong,
-    out_i105_default_ptr: *mut *mut c_uchar,
-    out_i105_default_len: *mut c_ulong,
     out_error_json_ptr: *mut *mut c_uchar,
     out_error_json_len: *mut c_ulong,
 ) -> c_int {
@@ -1672,8 +1678,6 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
         || out_hex_len.is_null()
         || out_i105_ptr.is_null()
         || out_i105_len.is_null()
-        || out_i105_default_ptr.is_null()
-        || out_i105_default_len.is_null()
     {
         return ERR_NULL_PTR;
     }
@@ -1699,25 +1703,12 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
         }
     };
-    let i105_default = match address.to_i105() {
-        Ok(value) => value,
-        Err(err) => {
-            return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
-        }
-    };
 
     unsafe {
         if let Err(code) = write_bytes(out_hex_ptr, out_hex_len, canonical_hex.as_bytes()) {
             return code;
         }
         if let Err(code) = write_bytes(out_i105_ptr, out_i105_len, i105.as_bytes()) {
-            return code;
-        }
-        if let Err(code) = write_bytes(
-            out_i105_default_ptr,
-            out_i105_default_len,
-            i105_default.as_bytes(),
-        ) {
             return code;
         }
     }
@@ -8255,7 +8246,18 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("default", 0);
-        let scoped_account = cstring(&format!("{}@default", authority.to_str().unwrap()));
+        let authority_id = AccountId::parse_encoded(authority.to_str().unwrap())
+            .expect("authority account id")
+            .into_account_id();
+        let scoped_account = cstring(
+            &ScopedAccountId::from_account_id(
+                authority_id,
+                "governance.dataspace"
+                    .parse()
+                    .expect("governance.dataspace domain"),
+            )
+            .canonical_encoded(),
+        );
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
         let member_a = AccountId::parse_encoded(member_a_str.to_str().unwrap())
@@ -9397,12 +9399,13 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
     }
 }
 
-/// Decode a canonical public `AssetId` literal into canonical readable JSON fields.
+/// Decode a canonical internal `AssetId` balance-bucket literal into readable JSON fields.
 ///
 /// Response JSON object fields:
-/// - `asset_id`: canonical public asset id (`<asset-definition-id>#<account-id>`)
+/// - `asset_id`: canonical internal asset balance-bucket literal
+///   (`<base58-asset-definition-id>#<i105-account-id>`)
 /// - `asset_definition_id`: canonical asset definition id (unprefixed Base58 address)
-/// - `account_id`: canonical account id (I105 literal)
+/// - `account_id`: canonical I105 account id (i105 literal)
 ///
 /// # Safety
 /// All pointer arguments must be valid and non-null.
@@ -9884,6 +9887,31 @@ fn convert_field_elem<L: Into<String>>(
         *dst = *src as u64;
     }
     Some(limbs)
+}
+
+fn convert_field_elems<L: Into<String>>(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JLongArray<'_>,
+    context: L,
+) -> Option<Vec<[u64; 4]>> {
+    let context = context.into();
+    let buf = read_long_array(env, array, &context)?;
+    if buf.len() % 4 != 0 {
+        throw_java_illegal_argument(
+            env,
+            format!("{context} expects a flattened array with a length multiple of 4"),
+        );
+        return None;
+    }
+    let mut elems = Vec::with_capacity(buf.len() / 4);
+    for chunk in buf.chunks_exact(4) {
+        let mut limbs = [0u64; 4];
+        for (dst, src) in limbs.iter_mut().zip(chunk.iter()) {
+            *dst = *src as u64;
+        }
+        elems.push(limbs);
+    }
+    Some(elems)
 }
 
 #[cfg(any(
@@ -10409,6 +10437,204 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     if let Some(field) = result {
         let values: Vec<i64> = field.into_iter().map(|limb| limb as i64).collect();
         if write_long_array(&mut env, &out, &values, "bn254Mul") {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    } else {
+        JNI_FALSE
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254AddBatch(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    lhs: jni::objects::JLongArray<'_>,
+    rhs: jni::objects::JLongArray<'_>,
+    out: jni::objects::JLongArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    let lhs = match convert_field_elems(&mut env, &lhs, "bn254AddBatch lhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    let rhs = match convert_field_elems(&mut env, &rhs, "bn254AddBatch rhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if lhs.len() != rhs.len() {
+        throw_java_illegal_argument(
+            &mut env,
+            "bn254AddBatch expects matching batch lengths".into(),
+        );
+        return JNI_FALSE;
+    }
+    let out_len = match i32::try_from(lhs.len().saturating_mul(4)) {
+        Ok(value) => value,
+        Err(_) => {
+            throw_java_illegal_argument(
+                &mut env,
+                "bn254AddBatch output exceeds Java array limits".into(),
+            );
+            return JNI_FALSE;
+        }
+    };
+    if !ensure_min_array_length(&mut env, &out, out_len, "bn254AddBatch") {
+        return JNI_FALSE;
+    }
+    let result = match catch_unwind_to_java(&mut env, "bn254_add_batch_cuda", || {
+        ivm::bn254_add_batch_cuda(&lhs, &rhs)
+    }) {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if let Some(fields) = result {
+        let values: Vec<i64> = fields
+            .into_iter()
+            .flat_map(|field| field.into_iter().map(|limb| limb as i64))
+            .collect();
+        if write_long_array(&mut env, &out, &values, "bn254AddBatch") {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    } else {
+        JNI_FALSE
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254SubBatch(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    lhs: jni::objects::JLongArray<'_>,
+    rhs: jni::objects::JLongArray<'_>,
+    out: jni::objects::JLongArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    let lhs = match convert_field_elems(&mut env, &lhs, "bn254SubBatch lhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    let rhs = match convert_field_elems(&mut env, &rhs, "bn254SubBatch rhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if lhs.len() != rhs.len() {
+        throw_java_illegal_argument(
+            &mut env,
+            "bn254SubBatch expects matching batch lengths".into(),
+        );
+        return JNI_FALSE;
+    }
+    let out_len = match i32::try_from(lhs.len().saturating_mul(4)) {
+        Ok(value) => value,
+        Err(_) => {
+            throw_java_illegal_argument(
+                &mut env,
+                "bn254SubBatch output exceeds Java array limits".into(),
+            );
+            return JNI_FALSE;
+        }
+    };
+    if !ensure_min_array_length(&mut env, &out, out_len, "bn254SubBatch") {
+        return JNI_FALSE;
+    }
+    let result = match catch_unwind_to_java(&mut env, "bn254_sub_batch_cuda", || {
+        ivm::bn254_sub_batch_cuda(&lhs, &rhs)
+    }) {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if let Some(fields) = result {
+        let values: Vec<i64> = fields
+            .into_iter()
+            .flat_map(|field| field.into_iter().map(|limb| limb as i64))
+            .collect();
+        if write_long_array(&mut env, &out, &values, "bn254SubBatch") {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    } else {
+        JNI_FALSE
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254MulBatch(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    lhs: jni::objects::JLongArray<'_>,
+    rhs: jni::objects::JLongArray<'_>,
+    out: jni::objects::JLongArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    let lhs = match convert_field_elems(&mut env, &lhs, "bn254MulBatch lhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    let rhs = match convert_field_elems(&mut env, &rhs, "bn254MulBatch rhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if lhs.len() != rhs.len() {
+        throw_java_illegal_argument(
+            &mut env,
+            "bn254MulBatch expects matching batch lengths".into(),
+        );
+        return JNI_FALSE;
+    }
+    let out_len = match i32::try_from(lhs.len().saturating_mul(4)) {
+        Ok(value) => value,
+        Err(_) => {
+            throw_java_illegal_argument(
+                &mut env,
+                "bn254MulBatch output exceeds Java array limits".into(),
+            );
+            return JNI_FALSE;
+        }
+    };
+    if !ensure_min_array_length(&mut env, &out, out_len, "bn254MulBatch") {
+        return JNI_FALSE;
+    }
+    let result = match catch_unwind_to_java(&mut env, "bn254_mul_batch_cuda", || {
+        ivm::bn254_mul_batch_cuda(&lhs, &rhs)
+    }) {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if let Some(fields) = result {
+        let values: Vec<i64> = fields
+            .into_iter()
+            .flat_map(|field| field.into_iter().map(|limb| limb as i64))
+            .collect();
+        if write_long_array(&mut env, &out, &values, "bn254MulBatch") {
             JNI_TRUE
         } else {
             JNI_FALSE
@@ -11784,6 +12010,7 @@ mod tests {
     use std::{ffi::CString, mem::MaybeUninit};
 
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::isi::rwa::RwaInstructionBox;
 
     use super::*;
 
@@ -11882,6 +12109,10 @@ mod tests {
 
     fn sample_identifier_signature_hex() -> String {
         "ab".repeat(64)
+    }
+
+    fn sample_rwa_id_literal() -> String {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities".to_owned()
     }
 
     const LIVE_EMAIL_CLAIM_SIGNATURE_HEX: &str = "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900";
@@ -12051,6 +12282,56 @@ mod tests {
     }
 
     #[test]
+    fn rwa_metadata_target_parses_kind_four() {
+        let literal = sample_rwa_id_literal();
+        let target = parse_metadata_target(4, literal.clone()).expect("parse rwa target");
+        match target {
+            MetadataTarget::Rwa(id) => assert_eq!(id.to_string(), literal),
+            _ => panic!("expected rwa metadata target"),
+        }
+    }
+
+    #[test]
+    fn rwa_metadata_target_builds_set_key_value_in_rwa_instruction_box() {
+        let literal = sample_rwa_id_literal();
+        let target = parse_metadata_target(4, literal.clone()).expect("parse rwa target");
+        let key: Name = "serial".parse().expect("valid name");
+        let instruction =
+            build_set_metadata_instruction(target, key.clone(), Json::from("vault-01"));
+        let rwa = instruction
+            .as_any()
+            .downcast_ref::<RwaInstructionBox>()
+            .expect("rwa instruction box");
+        match rwa {
+            RwaInstructionBox::SetKeyValue(inner) => {
+                assert_eq!(inner.object.to_string(), literal);
+                assert_eq!(inner.key, key);
+                assert_eq!(inner.value, Json::from("vault-01"));
+            }
+            other => panic!("expected SetKeyValue variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rwa_metadata_target_builds_remove_key_value_in_rwa_instruction_box() {
+        let literal = sample_rwa_id_literal();
+        let target = parse_metadata_target(4, literal.clone()).expect("parse rwa target");
+        let key: Name = "serial".parse().expect("valid name");
+        let instruction = build_remove_metadata_instruction(target, key.clone());
+        let rwa = instruction
+            .as_any()
+            .downcast_ref::<RwaInstructionBox>()
+            .expect("rwa instruction box");
+        match rwa {
+            RwaInstructionBox::RemoveKeyValue(inner) => {
+                assert_eq!(inner.object.to_string(), literal);
+                assert_eq!(inner.key, key);
+            }
+            other => panic!("expected RemoveKeyValue variant, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn zk_ballot_public_inputs_canonicalizes_hex() {
         let mut map = JsonMap::new();
         let root_raw = format!("0x{}", "Aa".repeat(32));
@@ -12094,7 +12375,9 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            JsonValue::from(
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            ),
         );
         let mut value = JsonValue::Object(map);
         assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
@@ -12119,7 +12402,9 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            JsonValue::from(
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            ),
         );
         map.insert("amount".to_owned(), JsonValue::from("100"));
         map.insert("duration_blocks".to_owned(), JsonValue::from(64u64));
@@ -12363,8 +12648,6 @@ mod tests {
         let mut hex_len: c_ulong = 0;
         let mut i105_ptr: *mut c_uchar = ptr::null_mut();
         let mut i105_len: c_ulong = 0;
-        let mut i105_default_ptr: *mut c_uchar = ptr::null_mut();
-        let mut i105_default_len: c_ulong = 0;
         let mut render_err_ptr: *mut c_uchar = ptr::null_mut();
         let mut render_err_len: c_ulong = 0;
 
@@ -12377,8 +12660,6 @@ mod tests {
                 &mut hex_len,
                 &mut i105_ptr,
                 &mut i105_len,
-                &mut i105_default_ptr,
-                &mut i105_default_len,
                 &mut render_err_ptr,
                 &mut render_err_len,
             )
@@ -12390,7 +12671,6 @@ mod tests {
 
         connect_norito_free(hex_ptr);
         connect_norito_free(i105_ptr);
-        connect_norito_free(i105_default_ptr);
 
         let canonical_literal =
             CString::new(address.canonical_hex().expect("canonical hex")).expect("cstring");
@@ -12576,7 +12856,7 @@ mod signed_transaction_fixture_tests {
 
     use super::decode_signed_transaction;
 
-    // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (I105 discriminant) used by fixtures.
+    // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (i105 discriminant) used by fixtures.
     const FIXTURE_CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
     struct ChainDiscriminantReset {

@@ -105,7 +105,7 @@ Tugun ishlayotgan holda, kompilyatsiya qilingan baytekodni CLI yordamida Torii g
 Standart ishlab chiqish identifikatori ochiq kalitdan olingan
 `defaults/client.toml`, shuning uchun hisob identifikatori
 ```
-i105...
+<i105-account-id>
 ```
 
 Torii URL manzili, zanjir identifikatori va imzo kalitini taʼminlash uchun konfiguratsiya faylidan foydalaning:
@@ -127,7 +127,7 @@ Shartnomada yozilgan hisob ma'lumotlarini olish uchun bir xil CLI profilidan foy
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

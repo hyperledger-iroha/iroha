@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
     time::{Duration, Instant},
@@ -9663,6 +9663,29 @@ impl InboundBlockMessage {
     }
 }
 
+#[derive(Debug, Default)]
+struct FrontierBlockSyncHint {
+    contiguous_frontier_pressure_active: AtomicBool,
+    frontier_lane_active: AtomicBool,
+}
+
+impl FrontierBlockSyncHint {
+    fn set_contiguous_frontier_pressure_active(&self, active: bool) {
+        self.contiguous_frontier_pressure_active
+            .store(active, Ordering::Relaxed);
+    }
+
+    fn set_frontier_lane_active(&self, active: bool) {
+        self.frontier_lane_active.store(active, Ordering::Relaxed);
+    }
+
+    fn should_pause_latest_gossip(&self) -> bool {
+        self.contiguous_frontier_pressure_active
+            .load(Ordering::Relaxed)
+            || self.frontier_lane_active.load(Ordering::Relaxed)
+    }
+}
+
 /// Minimal handle for the Sumeragi actor.
 #[derive(Clone)]
 pub struct SumeragiHandle {
@@ -9676,6 +9699,7 @@ pub struct SumeragiHandle {
     wake: Option<mpsc::SyncSender<()>>,
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
+    frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
 }
 
 impl SumeragiHandle {
@@ -9699,6 +9723,7 @@ impl SumeragiHandle {
         vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
         block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
     ) -> Self {
+        let frontier_block_sync_hint = Arc::new(FrontierBlockSyncHint::default());
         Self {
             block_payload: block_payload_tx,
             block: block_tx,
@@ -9710,6 +9735,7 @@ impl SumeragiHandle {
             wake: None,
             vote_dedup,
             block_payload_dedup,
+            frontier_block_sync_hint,
         }
     }
 
@@ -9722,6 +9748,26 @@ impl SumeragiHandle {
         if let Some(wake) = self.wake.as_ref() {
             let _ = wake.try_send(());
         }
+    }
+
+    fn frontier_block_sync_hint(&self) -> Arc<FrontierBlockSyncHint> {
+        Arc::clone(&self.frontier_block_sync_hint)
+    }
+
+    pub(crate) fn should_pause_block_sync_latest_gossip(&self) -> bool {
+        self.frontier_block_sync_hint.should_pause_latest_gossip()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_contiguous_frontier_pressure_active_for_tests(&self, active: bool) {
+        self.frontier_block_sync_hint
+            .set_contiguous_frontier_pressure_active(active);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_frontier_lane_active_for_tests(&self, active: bool) {
+        self.frontier_block_sync_hint
+            .set_frontier_lane_active(active);
     }
 
     fn dedup_vote(&self, key: VoteDedupKey) -> bool {
@@ -10892,6 +10938,7 @@ impl SumeragiStartArgs {
             Arc::clone(&block_payload_dedup),
         )
         .with_wake(wake_tx.clone());
+        let frontier_block_sync_hint = handle.frontier_block_sync_hint();
 
         let rbc_status_handle = rbc_status::register_handle();
         rbc_status::set_active(&rbc_status_handle);
@@ -10919,6 +10966,7 @@ impl SumeragiStartArgs {
             da_spool_dir,
             vote_dedup,
             block_payload_dedup,
+            frontier_block_sync_hint,
             vote_rx,
             block_payload_rx,
             block_rx,
@@ -10966,6 +11014,7 @@ struct SumeragiWorker {
     da_spool_dir: PathBuf,
     vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>>,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
+    frontier_block_sync_hint: Arc<FrontierBlockSyncHint>,
     vote_rx: mpsc::Receiver<InboundBlockMessage>,
     block_payload_rx: mpsc::Receiver<InboundBlockMessage>,
     block_rx: mpsc::Receiver<InboundBlockMessage>,
@@ -11214,6 +11263,7 @@ trait WorkerActor {
     fn on_consensus_control(&mut self, msg: ControlFlow) -> Result<()>;
     fn on_lane_relay(&mut self, message: LaneRelayMessage) -> Result<()>;
     fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()>;
+    fn sync_external_hints(&mut self) {}
     fn refresh_worker_loop_config(&mut self, _cfg: &mut WorkerLoopConfig) {}
     fn poll_commit_results(&mut self) -> bool {
         false
@@ -11257,6 +11307,10 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 
     fn on_background_request(&mut self, request: BackgroundRequest) -> Result<()> {
         crate::sumeragi::main_loop::Actor::on_background_request(self, request)
+    }
+
+    fn sync_external_hints(&mut self) {
+        crate::sumeragi::main_loop::Actor::sync_external_hints(self);
     }
 
     fn poll_commit_results(&mut self) -> bool {
@@ -11451,6 +11505,7 @@ fn poll_worker_results<A: WorkerActor>(actor: &mut A) -> bool {
     progress |= actor.poll_qc_verify_results();
     progress |= actor.poll_vote_verify_results();
     progress |= actor.poll_rbc_persist_results();
+    actor.sync_external_hints();
     progress
 }
 
@@ -12184,6 +12239,7 @@ fn run_worker_iteration<A: WorkerActor>(
         let tick_start = Instant::now();
         stats.progress |= actor.tick();
         stats.tick_elapsed_ms = u64::try_from(tick_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        actor.sync_external_hints();
         *last_tick = tick_now;
     }
 
@@ -12210,6 +12266,7 @@ fn run_worker_iteration<A: WorkerActor>(
     refresh_budget_exhaustion_flags(&mut mailbox, &budgets, &mut stats);
 
     stats.queue_depths = post_tick_depths;
+    actor.sync_external_hints();
     if stats.votes_handled > 0 || stats.block_payloads_handled > 0 || stats.blocks_handled > 0 {
         iroha_logger::debug!(
             votes_handled = stats.votes_handled,
@@ -12614,6 +12671,7 @@ fn spawn_tick_worker<A: WorkerActor + Send + 'static>(
                         if guard.actor_mut().tick() {
                             last_tick = now;
                         }
+                        guard.actor_mut().sync_external_hints();
                     }
                     status::record_worker_iteration(
                         u64::try_from(iter_start.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -12942,6 +13000,7 @@ impl SumeragiWorker {
             da_spool_dir,
             vote_dedup: _vote_dedup,
             block_payload_dedup,
+            frontier_block_sync_hint,
         } = self;
         let fallback_params = iroha_data_model::parameter::system::SumeragiParameters::default();
         let msg_channel_cap_block_payload = config.queues.block_payload;
@@ -12980,7 +13039,7 @@ impl SumeragiWorker {
             worker_iteration_budget_cap,
         );
         let parallel_ingress = config.worker.parallel_ingress;
-        let mut actor = match crate::sumeragi::main_loop::Actor::new(
+        let mut actor = match crate::sumeragi::main_loop::Actor::new_with_block_sync_hint(
             config,
             common_config,
             consensus_frame_cap,
@@ -13002,6 +13061,7 @@ impl SumeragiWorker {
             background_post_tx,
             Some(wake_tx.clone()),
             block_payload_dedup,
+            frontier_block_sync_hint,
             rbc_status_handle,
         ) {
             Ok(actor) => Box::new(actor),

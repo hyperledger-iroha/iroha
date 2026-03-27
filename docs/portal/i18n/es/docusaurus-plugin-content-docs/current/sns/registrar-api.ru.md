@@ -113,7 +113,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTENER | -- | Pulse el botón `SuffixPolicyV1` (кэшируемо). |
 | `/v1/sns/names/{namespace}/{literal}` | OBTENER | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, y т. д.). |
 
-**Selector de código:** segmento `{selector}` del formato I105, comprimido (`sora`) o código hexadecimal para ADDR-5; Torii normalmente se encuentra en `NameSelectorV1`.**Modelь ошибок:** estos componentes combinan Norito JSON con `code`, `message`, `details`. Коды включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Selector de código:** segmento `{selector}` del formato i105, comprimido (`sora`) o código hexadecimal para ADDR-5; Torii normalmente se encuentra en `NameSelectorV1`.**Modelь ошибок:** estos componentes combinan Norito JSON con `code`, `message`, `details`. Коды включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 CLI помощники (требование ручного регистратора N0)
 
@@ -157,7 +157,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows

@@ -223,7 +223,7 @@ SPDX-License-Identifier: Apache-2.0
 - 派生クラス:
   - `sk_spend` → `nk` (無効化キー)、`ivk` (受信表示キー)、`ovk` (送信表示キー)、`fvk`。
 - ペイロードに関するメモ、AEAD および ECDH 由来の共有キー。監査ビューのキーと出力を確認できます。
-- CLI: `confidential create-keys`、`confidential send`、`confidential export-view-key`、аудит-инструменты для расзифровки メモおよびヘルパー `iroha app zk envelope` 日создания/инспекции Norito メモ封筒 офлайн。 Torii フローの導出、`POST /v1/confidential/derive-keyset`、16 進数、base64 の数値、чтобы кольки моглиあなたのことを考えてください。## Газ、лимиты、DoS-контроли
+- CLI: `confidential create-keys`、`confidential send`、`confidential export-view-key`、аудит-инструменты для расзифровки メモおよびヘルパー `iroha app zk envelope` 日создания/инспекции Norito メモ封筒 офлайн。
 - ロシアのガススケジュール:
   - Halo2 (Plonkish): `250_000` ガス + `2_000` ガス - каждый パブリック入力。
   - `5` ガスの安全性、無効化子ごと (`300`) およびコミットメントごと (`500`) の機能。

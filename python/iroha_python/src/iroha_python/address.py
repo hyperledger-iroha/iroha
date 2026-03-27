@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
 DEFAULT_DOMAIN_NAME = "default"
 
-LOCAL_DOMAIN_KEY = b"SORA-LOCAL-K:v1"
 HEADER_VERSION_V1 = 0
 HEADER_NORM_VERSION_V1 = 1
 I105_SENTINEL_SORA = "sora"
@@ -23,72 +21,64 @@ CHAIN_DISCRIMINANT_SORA = DEFAULT_CHAIN_DISCRIMINANT
 CHAIN_DISCRIMINANT_TEST = 0x0171
 CHAIN_DISCRIMINANT_DEV = 0x0000
 I105_WARNING = (
-    "I105 addresses are the canonical account literal encoding. "
-    "Use the chain-discriminant sentinel (for example, `sora` on discriminant 753)."
+    "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 "
+    "katakana from the Iroha poem. Render and validate them with the intended "
+    "chain discriminant."
 )
 
-I105_ASCII_ALPHABET: Tuple[str, ...] = (
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "A",
-    "B",
-    "C",
-    "D",
-    "E",
-    "F",
-    "G",
-    "H",
-    "J",
-    "K",
-    "L",
-    "M",
-    "N",
-    "P",
-    "Q",
-    "R",
-    "S",
-    "T",
-    "U",
-    "V",
-    "W",
-    "X",
-    "Y",
-    "Z",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e",
-    "f",
-    "g",
-    "h",
-    "i",
-    "j",
-    "k",
-    "m",
-    "n",
-    "o",
-    "p",
-    "q",
-    "r",
-    "s",
-    "t",
-    "u",
-    "v",
-    "w",
-    "x",
-    "y",
-    "z",
+BASE58_ALPHABET: Tuple[str, ...] = tuple(
+    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 )
-
-SORA_KANA: Tuple[str, ...] = (
+IROHA_POEM_KANA_FULLWIDTH: Tuple[str, ...] = (
+    "イ",
+    "ロ",
+    "ハ",
+    "ニ",
+    "ホ",
+    "ヘ",
+    "ト",
+    "チ",
+    "リ",
+    "ヌ",
+    "ル",
+    "ヲ",
+    "ワ",
+    "カ",
+    "ヨ",
+    "タ",
+    "レ",
+    "ソ",
+    "ツ",
+    "ネ",
+    "ナ",
+    "ラ",
+    "ム",
+    "ウ",
+    "ヰ",
+    "ノ",
+    "オ",
+    "ク",
+    "ヤ",
+    "マ",
+    "ケ",
+    "フ",
+    "コ",
+    "エ",
+    "テ",
+    "ア",
+    "サ",
+    "キ",
+    "ユ",
+    "メ",
+    "ミ",
+    "シ",
+    "ヱ",
+    "ヒ",
+    "モ",
+    "セ",
+    "ス",
+)
+IROHA_POEM_KANA_HALFWIDTH: Tuple[str, ...] = (
     "ｲ",
     "ﾛ",
     "ﾊ",
@@ -137,10 +127,15 @@ SORA_KANA: Tuple[str, ...] = (
     "ｾ",
     "ｽ",
 )
-
-I105_ALPHABET: Tuple[str, ...] = I105_ASCII_ALPHABET + SORA_KANA
+I105_ALPHABET: Tuple[str, ...] = BASE58_ALPHABET + IROHA_POEM_KANA_FULLWIDTH
 I105_BASE = len(I105_ALPHABET)
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
+I105_INDEX.update(
+    {
+        symbol: len(BASE58_ALPHABET) + idx
+        for idx, symbol in enumerate(IROHA_POEM_KANA_HALFWIDTH)
+    }
+)
 
 
 class AccountAddressError(ValueError):
@@ -212,10 +207,8 @@ class DomainSelector:
 
     @classmethod
     def from_domain(cls, domain: str) -> "DomainSelector":
-        if domain.lower() == DEFAULT_DOMAIN_NAME:
-            return cls.default()
-        digest = compute_local_digest(domain)
-        return cls.local12(digest)
+        _ = domain
+        return cls.default()
 
     def encode_into(self, out: bytearray) -> None:
         out.append(self.tag)
@@ -341,12 +334,12 @@ class AccountAddress:
     def from_account(
         cls, *, domain: str, public_key: bytes, algorithm: str = "ed25519"
     ) -> "AccountAddress":
+        _ = domain
         header = AddressHeader.new(
             version=HEADER_VERSION_V1, class_=AddressClass.SINGLE_KEY, norm_version=HEADER_NORM_VERSION_V1
         )
-        selector = DomainSelector.from_domain(domain)
         controller = ControllerPayload.single_key(public_key, algorithm)
-        return cls(header=header, domain=selector, controller=controller)
+        return cls(header=header, domain=DomainSelector.default(), controller=controller)
 
     @classmethod
     def from_canonical_bytes(cls, payload: bytes) -> "AccountAddress":
@@ -354,18 +347,22 @@ class AccountAddress:
             raise AccountAddressError("invalid length for address payload")
         header = AddressHeader.decode(payload[0])
         cursor = 1
-        domain, cursor = DomainSelector.decode(payload, cursor)
         controller, cursor = ControllerPayload.decode(payload, cursor)
         if cursor != len(payload):
             raise AccountAddressError("unexpected trailing bytes in canonical payload")
-        return cls(header=header, domain=domain, controller=controller)
+        return cls(header=header, domain=DomainSelector.default(), controller=controller)
 
     @classmethod
     def from_i105(
         cls, encoded: str, expected_discriminant: Optional[int] = None
     ) -> "AccountAddress":
-        payload = decode_i105_string(encoded, expected_discriminant=expected_discriminant)
-        return cls.from_canonical_bytes(payload)
+        literal = encoded.strip()
+        payload = decode_i105_string(literal, expected_discriminant=expected_discriminant)
+        address = cls.from_canonical_bytes(payload)
+        discriminant = i105_discriminant_from_sentinel(literal)
+        if discriminant is not None and address.to_i105(discriminant) != literal:
+            raise AccountAddressError("account address literals must use canonical I105 form")
+        return address
 
     @classmethod
     def parse_encoded(
@@ -375,17 +372,18 @@ class AccountAddress:
         if not token:
             raise AccountAddressError("invalid length for address payload")
         if "@" in token:
-            raise AccountAddressError("account id must not include '@domain'")
+            raise AccountAddressError(
+                "account address literals must not include @domain; use canonical I105 form"
+            )
         if token.startswith(("0x", "0X")):
             raise AccountAddressError(
-                "canonical hex account literals are not accepted; use canonical I105 forms"
+                "canonical hex account addresses are not accepted; use canonical I105 form"
             )
         return cls.from_i105(token, expected_discriminant=expected_discriminant)
 
     def canonical_bytes(self) -> bytes:
         out = bytearray()
         out.append(self.header.encode())
-        self.domain.encode_into(out)
         self.controller.encode_into(out)
         return bytes(out)
 
@@ -404,12 +402,7 @@ class AccountAddress:
         }
 
     def __str__(self) -> str:
-        return self.canonical_hex()
-
-
-def compute_local_digest(label: str) -> bytes:
-    mac = hashlib.blake2s(label.encode("utf-8"), key=LOCAL_DOMAIN_KEY, digest_size=32)
-    return mac.digest()[:12]
+        return self.to_i105()
 
 
 def i105_sentinel_for_discriminant(discriminant: int) -> str:
@@ -456,10 +449,10 @@ def strip_i105_sentinel(encoded: str, expected_discriminant: Optional[int] = Non
     found = i105_discriminant_from_sentinel(encoded)
     if found is not None:
         raise AccountAddressError(
-            f"unexpected I105 chain discriminant: expected {expected}, found {found}"
+            f"unexpected i105 chain discriminant: expected {expected}, found {found}"
         )
     raise AccountAddressError(
-        "I105 address is missing the expected chain-discriminant sentinel"
+        "i105 address is missing the expected chain-discriminant sentinel"
     )
 
 
@@ -474,23 +467,32 @@ def encode_i105_string(canonical: bytes, *, discriminant: int = DEFAULT_CHAIN_DI
 
 def decode_i105_string(encoded: str, *, expected_discriminant: Optional[int] = None) -> bytes:
     payload = strip_i105_sentinel(encoded, expected_discriminant=expected_discriminant)
-    if len(payload) <= I105_CHECKSUM_LEN:
-        raise AccountAddressError("I105 address too short")
-    digits = [i105_digit(symbol) for symbol in payload]
+    digits = decode_i105_digits(payload)
+    if len(digits) <= I105_CHECKSUM_LEN:
+        raise AccountAddressError("i105 address too short")
     data_digits = digits[:-I105_CHECKSUM_LEN]
     checksum_digits = digits[-I105_CHECKSUM_LEN:]
     canonical = decode_base_n(data_digits, I105_BASE)
     expected = i105_checksum_digits(canonical)
     if list(expected) != checksum_digits:
-        raise AccountAddressError("I105 checksum mismatch")
+        raise AccountAddressError("i105 checksum mismatch")
     return canonical
+
+
+def decode_i105_digits(payload: str) -> List[int]:
+    try:
+        return [I105_INDEX[symbol] for symbol in payload]
+    except KeyError as exc:
+        raise AccountAddressError(
+            f"invalid i105 alphabet symbol: {exc.args[0]}"
+        ) from exc
 
 
 def i105_digit(symbol: str) -> int:
     try:
         return I105_INDEX[symbol]
     except KeyError as exc:
-        raise AccountAddressError(f"invalid I105 alphabet symbol: {symbol}") from exc
+        raise AccountAddressError(f"invalid i105 alphabet symbol: {symbol}") from exc
 
 
 def encode_base_n(data: bytes, base: int) -> List[int]:

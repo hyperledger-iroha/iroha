@@ -100,7 +100,8 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
-            account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            account: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+                .into(),
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
@@ -128,8 +129,8 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "100".into(),
         },
     };

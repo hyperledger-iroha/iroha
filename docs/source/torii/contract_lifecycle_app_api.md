@@ -89,7 +89,7 @@ activation instruction.【crates/iroha_torii/src/routing.rs:3806】
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `authority` | `AccountId` | Canonical I105 account id (domainless encoded literal). Torii strict parser paths accept only canonical I105 and reject non-I105 literals and any `@<domain>` suffix. |
+| `authority` | `AccountId` | Canonical I105 account id (domainless encoded literal). Torii strict parser paths accept only canonical I105 and reject non-i105 literals and any `@<domain>` suffix. |
 | `private_key` | `ExposedPrivateKey` | Bare multihash hex string.【crates/iroha_crypto/src/lib.rs:1994】 |
 | `namespace` | `String` | Governance namespace hosting the instance (e.g., `apps.market`). |
 | `contract_id` | `String` | Logical identifier under the namespace (e.g., `calc.v1`). |

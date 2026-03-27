@@ -187,6 +187,28 @@ fn cuda_available() -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(all(unix, not(all(target_os = "macos", target_arch = "aarch64"))))]
+fn unix_gpu_helper_library_names() -> &'static [&'static str] {
+    #[cfg(target_os = "macos")]
+    {
+        &[
+            "libgpuzstd_cuda.dylib",
+            "libgpuzstd_cuda.so",
+            "libgpuzstd_metal.dylib",
+            "libgpuzstd_metal.so",
+        ]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        &["libgpuzstd_cuda.so", "libgpuzstd_metal.so"]
+    }
+}
+
+#[cfg(windows)]
+fn windows_gpu_helper_library_names() -> &'static [&'static str] {
+    &["gpuzstd_cuda.dll", "gpuzstd_metal.dll"]
+}
+
 fn gpu_self_test(compress: CompressFn, decompress: DecompressFn) -> Result<(), SelfTestFailure> {
     const SAMPLE: &[u8] = b"norito gpu roundtrip parity check v1";
     // GPU encode the sample payload.
@@ -324,7 +346,7 @@ unsafe fn init_backend() -> Option<Backend> {
     }
     let _has_device = !device.is_null();
     let (lib, compress_fn, decompress_fn) =
-        match unsafe { load_gpu_symbols("libgpuzstd_metal.dylib") } {
+        match unsafe { load_gpu_symbols(&["libgpuzstd_metal.dylib"]) } {
             Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
             None => return None,
         };
@@ -350,7 +372,7 @@ unsafe fn init_backend() -> Option<Backend> {
     #[cfg(unix)]
     {
         let (lib, compress_fn, decompress_fn) =
-            match unsafe { load_gpu_symbols("libgpuzstd_cuda.so") } {
+            match unsafe { load_gpu_symbols(unix_gpu_helper_library_names()) } {
                 Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
                 None => return None,
             };
@@ -373,31 +395,33 @@ unsafe fn init_backend() -> Option<Backend> {
             report_gpu_load_failure(err);
             return None;
         }
-        let dll_name: Vec<u16> = OsStr::new("gpuzstd_cuda.dll")
-            .encode_wide()
-            .chain(Some(0))
-            .collect();
-        let search_flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
-        let lib = LoadLibraryExW(dll_name.as_ptr(), ptr::null_mut(), search_flags);
-        if lib.is_null() {
-            report_gpu_load_failure(format!(
-                "LoadLibraryExW failed for gpuzstd_cuda.dll: {}",
-                io::Error::last_os_error()
+        let mut loaded = None;
+        for helper_name in windows_gpu_helper_library_names() {
+            let dll_name: Vec<u16> = OsStr::new(helper_name)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            let search_flags = LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_SYSTEM32;
+            let lib = LoadLibraryExW(dll_name.as_ptr(), ptr::null_mut(), search_flags);
+            if lib.is_null() {
+                continue;
+            }
+            let compress = GetProcAddress(lib, b"gpu_zstd_compress\0".as_ptr());
+            let decompress = GetProcAddress(lib, b"gpu_zstd_decompress\0".as_ptr());
+            if compress.is_null() || decompress.is_null() {
+                let _ = FreeLibrary(lib);
+                continue;
+            }
+            loaded = Some((
+                lib,
+                std::mem::transmute::<*mut c_void, CompressFn>(compress),
+                std::mem::transmute::<*mut c_void, DecompressFn>(decompress),
             ));
-            return None;
+            break;
         }
-        let compress = GetProcAddress(lib, b"gpu_zstd_compress\0".as_ptr());
-        let decompress = GetProcAddress(lib, b"gpu_zstd_decompress\0".as_ptr());
-        if compress.is_null() || decompress.is_null() {
-            let _ = FreeLibrary(lib);
-            report_gpu_load_failure(format!(
-                "GetProcAddress failed for CUDA gpu_zstd symbols: {}",
-                io::Error::last_os_error()
-            ));
+        let Some((lib, compress_fn, decompress_fn)) = loaded else {
             return None;
-        }
-        let compress_fn: CompressFn = std::mem::transmute(compress);
-        let decompress_fn: DecompressFn = std::mem::transmute(decompress);
+        };
         if let Err(err) = gpu_self_test(compress_fn, decompress_fn) {
             let _ = FreeLibrary(lib);
             report_gpu_load_failure(format!("CUDA backend failed self-test ({})", err));
@@ -413,15 +437,16 @@ unsafe fn init_backend() -> Option<Backend> {
 }
 
 #[cfg(unix)]
-unsafe fn load_gpu_symbols(lib_name: &str) -> Option<(*mut c_void, CompressFn, DecompressFn)> {
+unsafe fn load_gpu_symbols(lib_names: &[&str]) -> Option<(*mut c_void, CompressFn, DecompressFn)> {
     use std::{env, ffi::CString, os::unix::ffi::OsStrExt, path::PathBuf};
 
-    let mut library = std::ptr::null_mut();
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        candidates.extend(helper_candidates_from_exe_dir(dir, lib_name));
+        for lib_name in lib_names {
+            candidates.extend(helper_candidates_from_exe_dir(dir, lib_name));
+        }
     }
 
     for path in candidates {
@@ -432,22 +457,29 @@ unsafe fn load_gpu_symbols(lib_name: &str) -> Option<(*mut c_void, CompressFn, D
         if let Ok(path) = CString::new(bytes) {
             let handle = unsafe { dlopen(path.as_ptr(), RTLD_LAZY) };
             if !handle.is_null() {
-                library = handle;
-                break;
+                return unsafe { resolve_gpu_symbols(handle) };
             }
         }
     }
 
-    if library.is_null()
-        && let Ok(path) = CString::new(lib_name)
-    {
-        library = unsafe { dlopen(path.as_ptr(), RTLD_LAZY) };
+    for lib_name in lib_names {
+        if let Ok(path) = CString::new(*lib_name) {
+            let library = unsafe { dlopen(path.as_ptr(), RTLD_LAZY) };
+            if !library.is_null()
+                && let Some(loaded) = unsafe { resolve_gpu_symbols(library) }
+            {
+                return Some(loaded);
+            }
+        }
     }
 
-    if library.is_null() {
-        return None;
-    }
+    None
+}
 
+#[cfg(unix)]
+unsafe fn resolve_gpu_symbols(
+    library: *mut c_void,
+) -> Option<(*mut c_void, CompressFn, DecompressFn)> {
     let compress = unsafe { dlsym(library, c"gpu_zstd_compress".as_ptr()) };
     let decompress = unsafe { dlsym(library, c"gpu_zstd_decompress".as_ptr()) };
     if compress.is_null() || decompress.is_null() {
@@ -489,6 +521,9 @@ fn try_gpu_encode(compress: CompressFn, payload: &[u8], level: i32) -> Option<Ve
                 &mut out_len,
             )
         };
+        if rc == RC_GPU_UNAVAILABLE {
+            return None;
+        }
         if rc == 0 {
             if out_len == 0 || out_len > out.len() {
                 return None;
@@ -775,6 +810,16 @@ mod self_test {
         0
     }
 
+    unsafe extern "C" fn compress_unavailable_immediate(
+        _src: *const u8,
+        _src_len: usize,
+        _level: i32,
+        _dst: *mut u8,
+        _dst_len: *mut usize,
+    ) -> i32 {
+        RC_GPU_UNAVAILABLE
+    }
+
     unsafe extern "C" fn decompress_invalid_len_success(
         _src: *const u8,
         _src_len: usize,
@@ -803,6 +848,12 @@ mod self_test {
     }
 
     #[test]
+    fn try_gpu_encode_stops_on_gpu_unavailable() {
+        let payload = b"gpu unavailable";
+        assert!(try_gpu_encode(compress_unavailable_immediate, payload, 1).is_none());
+    }
+
+    #[test]
     fn try_gpu_decode_rejects_invalid_success_length() {
         let payload = b"decode helper length check";
         let encoded = zstd::encode_all(io::Cursor::new(payload), 1).expect("cpu encode");
@@ -825,6 +876,25 @@ mod self_test {
                 )
             }),
             "candidate list should include parent sibling dylib used by cargo-run examples"
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn unix_gpu_helper_names_include_workspace_fallback() {
+        let names = unix_gpu_helper_library_names();
+        assert_eq!(
+            names.first().copied(),
+            Some("libgpuzstd_cuda.so"),
+            "linux helper search should prefer the dedicated CUDA-named helper when both artifacts exist"
+        );
+        assert!(
+            names.contains(&"libgpuzstd_cuda.so"),
+            "linux helper search must keep the CUDA helper name first-class"
+        );
+        assert!(
+            names.contains(&"libgpuzstd_metal.so"),
+            "linux helper search should also accept the workspace-built gpuzstd_metal artifact"
         );
     }
 

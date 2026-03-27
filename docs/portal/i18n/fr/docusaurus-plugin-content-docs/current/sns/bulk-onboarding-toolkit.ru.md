@@ -72,9 +72,9 @@ Dans le cas du script, il y a un manifeste agrégé :
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -83,7 +83,7 @@ Dans le cas du script, il y a un manifeste agrégé :
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -231,7 +231,7 @@ Le filtre `release` permet aux auditeurs d'accéder au programme CSV.
 - **Analyse des métadonnées/gouvernance :** analyse JSON en ligne ; ссылки на файлы
   разрешаются относительно CSV. Les métadonnées ne sont pas autorisées à être validées.
 - **Contrôleurs :** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  явные списки contrôleurs (par exemple `i105...;i105...`) при делегировании не-propriétaire.
+  явные списки contrôleurs (par exemple `<i105-account-id>;<i105-account-id>`) при делегировании не-propriétaire.
 
 Les appareils sont liés au contexte des nombres de coups (par exemple
 `error: row 12 term_years must be between 1 and 255`). Le script correspond au code `1`

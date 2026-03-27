@@ -3,51 +3,14 @@
 
 package org.hyperledger.iroha.android.address;
 
-import java.util.Objects;
-
-/**
- * Composes canonical public asset identifiers.
- *
- * <p>Public asset literals use:
- *
- * <ul>
- *   <li>{@code <asset-definition-id>#<account-id>}
- *   <li>{@code <asset-definition-id>#<account-id>#dataspace:<id>}
- * </ul>
- */
+/** Public asset identifiers are canonical unprefixed Base58 asset-definition ids only. */
 public final class AssetIdEncoder {
 
   private AssetIdEncoder() {}
 
-  /**
-   * Computes a canonical public asset identifier from asset name, domain, and account id.
-   */
-  public static String encodeAssetId(String assetName, String domainName, String accountId) {
-    Objects.requireNonNull(assetName, "assetName");
-    Objects.requireNonNull(domainName, "domainName");
-    return encodeAssetIdFromDefinition(AssetDefinitionIdEncoder.encode(assetName, domainName), accountId);
-  }
-
-  /**
-   * Composes a canonical public asset identifier from a definition address and account id.
-   */
-  public static String encodeAssetIdFromDefinition(String definitionAddress, String accountId) {
-    Objects.requireNonNull(definitionAddress, "definitionAddress");
-    Objects.requireNonNull(accountId, "accountId");
-    final String canonicalDefinition = canonicalDefinitionAddress(definitionAddress);
-    final String canonicalAccount = AccountIdLiteral.requireCanonicalI105Address(accountId, "accountId");
-    return canonicalDefinition + "#" + canonicalAccount;
-  }
-
-  /**
-   * Composes a dataspace-scoped canonical public asset identifier.
-   */
-  public static String encodeScopedAssetIdFromDefinition(
-      String definitionAddress, String accountId, long dataspaceId) {
-    if (dataspaceId < 0L) {
-      throw new IllegalArgumentException("dataspaceId must be non-negative");
-    }
-    return encodeAssetIdFromDefinition(definitionAddress, accountId) + "#dataspace:" + dataspaceId;
+  /** Returns the canonical public asset identifier from a definition address. */
+  public static String encodeAssetIdFromDefinition(String definitionAddress) {
+    return canonicalDefinitionAddress(definitionAddress);
   }
 
   private static String canonicalDefinitionAddress(String definitionAddress) {

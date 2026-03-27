@@ -1210,7 +1210,7 @@ mod schema_tests {
     use iroha_test_samples::ALICE_ID;
 
     fn sample_account_literal() -> String {
-        ALICE_ID.canonical_i105().expect("canonical i105")
+        ALICE_ID.canonical_i105().expect("canonical I105")
     }
 
     fn sample_case() -> Value {
@@ -1300,7 +1300,7 @@ mod tests {
     }
 
     fn sample_account_literal() -> String {
-        ALICE_ID.canonical_i105().expect("canonical i105")
+        ALICE_ID.canonical_i105().expect("canonical I105")
     }
 
     fn resolve_account_literal(literal: &str) -> Result<AccountId> {

@@ -1,6 +1,2247 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
+
+Latest sync (2026-03-27 FASTPQ BN254 CUDA bench/report wiring):
+`crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs`
+now carries the low-level BN254 CUDA helper work into the raw bench evidence
+path.
+
+- `fastpq_cuda_bench` now times deterministic BN254 FFT and LDE CPU baselines
+  and emits the results as `bn254_metrics` under both `benchmarks` and
+  `report`, reusing the existing `acceleration.bn254_{fft,lde}_ms` metric names
+  that wrapped bundles already preserve;
+- the CUDA bench now handles partially available GPU configurations more
+  defensively by dropping to CPU-only BN254 metrics when the helper itself is
+  unavailable or errors at runtime, and it records that downgrade explicitly as
+  `bn254_warnings` instead of aborting the whole capture after general GPU
+  auto-detection succeeds;
+- `scripts/fastpq/wrap_benchmark.py` now preserves those BN254 warnings in the
+  wrapped bundle and skips Metal-only Poseidon telemetry enforcement for CUDA
+  captures, so the raw and wrapped evidence flows both succeed on the current
+  downgraded BN254 host state; and
+- the wrapper path has been spot-checked end to end so wrapped CUDA bundles now
+  keep the BN254 metric map without additional tooling changes.
+
+Validation:
+- `cargo test -p fastpq_prover --bin fastpq_cuda_bench -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu --bin fastpq_cuda_bench -- --nocapture`
+- `cargo run -p fastpq_prover --bin fastpq_cuda_bench -- --rows 8 --iterations 1 --warmups 0 --column-count 2 --output /tmp/fastpq_cuda_bn254_probe.json`
+- `cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_cuda_bench -- --rows 8 --iterations 1 --warmups 0 --column-count 2 --output /tmp/fastpq_cuda_bn254_gpu_probe.json`
+- `python3 -m py_compile scripts/fastpq/wrap_benchmark.py scripts/fastpq/tests/test_wrap_benchmark.py`
+- `python3 -c "..."` direct invocations for `test_wrap_benchmark.py`
+- `python3 scripts/fastpq/wrap_benchmark.py --skip-acceleration-state --label device_class=test --label gpu_kind=discrete /tmp/fastpq_cuda_bn254_fft16_probe.json /tmp/fastpq_cuda_bn254_fft16_probe_wrapped.json`
+- `python3 scripts/fastpq/wrap_benchmark.py --skip-acceleration-state --label device_class=test --label gpu_kind=discrete /tmp/fastpq_cuda_bn254_gpu_probe.json /tmp/fastpq_cuda_bn254_gpu_probe_wrapped.json`
+
+Open work for this FASTPQ BN254 CUDA slice now remains:
+- capture real SM80 lab reruns so wrapped CUDA evidence carries live BN254 GPU
+  timings instead of only the validated CPU-only fallback-plus-warning shape
+  from local probes;
+- investigate the current live `fastpq_cuda_bench --features fastpq-gpu`
+  BN254 warning path on this host (`cudaError_t(1)`) so the new bench/report
+  flow can emit GPU BN254 timings instead of just surfaced downgrade warnings;
+- decide whether BN254 needs a focused `--operation` selector or a dedicated
+  microbench/export path once repeated lab captures start diffing it alongside
+  Goldilocks FFT/LDE and Poseidon; and
+- thread the BN254 CUDA path into any higher-level planner/adaptive scheduling
+  lanes that still stop at the low-level helper and bench surfaces.
+
+Latest sync (2026-03-27 FASTPQ BN254 CUDA low-level wrappers + kernels):
+`crates/fastpq_prover/{src/bn254.rs,src/fastpq_cuda.rs,src/lib.rs,cuda/fastpq_cuda.cu}`
+now close the first real FASTPQ BN254 CUDA implementation gap.
+
+- FASTPQ now has native CUDA BN254 FFT/LDE entry points plus public Rust
+  wrappers that accept flat canonical-limb buffers and stage the required
+  twiddle/coset data automatically;
+- the CUDA kernels convert canonical limbs into Montgomery form on-device and
+  run deterministic one-block-per-column BN254 FFT/LDE loops that match the CPU
+  reference on the current CUDA host; and
+- focused BN254 regressions now cover both local validation failures and live
+  CPU-vs-CUDA parity under `fastpq-gpu`.
+
+Validation:
+- `cargo test -p fastpq_prover bn254_ -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu bn254_ -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu --no-run`
+
+Open work for this FASTPQ BN254 CUDA slice now remains:
+- thread the new BN254 CUDA path into higher-level FASTPQ planner/bench/report
+  tooling so lab evidence no longer stops at the low-level helper surface;
+- decide whether BN254 needs the same async/pooling treatment as the existing
+  Goldilocks CUDA transforms once higher-level callers start overlapping it; and
+- rerun the FASTPQ CUDA bench/report flow on a lab host after BN254 capture
+  support lands so transfer metrics and release evidence include the new path.
+
+Latest sync (2026-03-27 release manifest evidence links for archived FASTPQ rollouts):
+`scripts/run_release_pipeline.py`
+and
+`scripts/fastpq/tests/test_release_pipeline_rollout_summary.py`
+and
+`docs/source/{benchmarks.md,fastpq_plan.md,fastpq_rollout_playbook.md,release_dual_track_runbook.md}`
+now carry the CUDA rollout-summary follow-up into `release_manifest.json`
+itself.
+
+- the release pipeline now appends an `evidence` block to
+  `release_manifest.json` after rollout archival;
+- `release_manifest.json.evidence.fastpq` records the archived rollout bundle
+  roots, copied `fastpq_rollout_summary.{json,md}` paths, and any FASTPQ
+  Grafana export path so downstream automation can follow the same evidence
+  links that were previously only in `SUMMARY.txt`; and
+- `release_manifest.json.evidence.cbdc` now records the validated CBDC rollout
+  bundle path when that release gate runs.
+
+Validation:
+- `python3 -m py_compile scripts/fastpq/rollout_manifest_summary.py scripts/run_release_pipeline.py scripts/fastpq/tests/test_rollout_manifest_summary.py scripts/fastpq/tests/test_release_pipeline_rollout_summary.py`
+- direct `python3 -c "..."` invocations for
+  `test_release_pipeline_rollout_summary.py`
+
+Latest sync (2026-03-27 FASTPQ archived rollout summaries from signed manifests):
+`scripts/fastpq/{rollout_manifest_summary.py,tests/test_rollout_manifest_summary.py,tests/test_release_pipeline_rollout_summary.py}`
+and
+`scripts/run_release_pipeline.py`
+and
+`docs/source/{benchmarks.md,fastpq_plan.md,fastpq_rollout_playbook.md}`
+now carry the CUDA `operation_filter` follow-up into the release archive itself
+instead of stopping at the signed manifest boundary.
+
+- archived FASTPQ rollout bundles now gain
+  `fastpq_rollout_summary.{json,md}` beside each copied
+  `fastpq_bench_manifest.json`, derived from the signed manifest plus the
+  archived wrapped bench files;
+- those summaries surface per-bench `operation_filter`,
+  `matrix_operation_filters`, resolved wrapped bench filenames, device labels,
+  and compact operation listings so reviewers can confirm whether a lane was
+  full-bundle or focused without reopening the raw JSON;
+- the summarizer resolves copied bench files even when the signed manifest
+  still points at the original `artifacts/fastpq_benchmarks/...` path, which
+  is the common shape after release archival; and
+- `scripts/run_release_pipeline.py` now records the generated Markdown summary
+  paths in the top-level release `SUMMARY.txt`, making the archived rollout
+  evidence easier to navigate during release review.
+
+Validation:
+- `python3 -m py_compile scripts/fastpq/rollout_manifest_summary.py scripts/run_release_pipeline.py scripts/fastpq/tests/test_rollout_manifest_summary.py scripts/fastpq/tests/test_release_pipeline_rollout_summary.py`
+- direct `python3 -c "..."` invocations for
+  `test_rollout_manifest_summary.py` and
+  `test_release_pipeline_rollout_summary.py`
+
+Latest sync (2026-03-27 FASTPQ dashboard + matrix + Poseidon export filter visibility):
+`scripts/fastpq/{update_dashboard_panel.py,capture_matrix.py,export_poseidon_microbench.py,aggregate_poseidon_microbench.py,tests/test_update_dashboard_panel.py,tests/test_capture_matrix.py,tests/test_poseidon_microbench_tools.py}`
+and
+`docs/source/{benchmarks.md,fastpq_plan.md}`
+now carry the CUDA `operation_filter` follow-up through the last two
+operator-facing tools that were still flattening focused captures into generic
+full-bundle summaries.
+
+- the Grafana “Latest Benchmark” markdown helper now prints the selected
+  operation filter, reports `column_count` when present, and emits
+  backend-specific rerun guidance so CUDA captures point back to
+  `fastpq_cuda_bench` rather than the old Metal-only hint;
+- the same helper falls back to `all` for older multi-operation bundles and to
+  the lone operation name for older single-op bundles, so archived captures
+  stay readable without manual relabeling;
+- the matrix manifest now records `operation_filters` per device label, so
+  release tooling and audits can tell whether a device summary came from full
+  bundle captures, focused stage reruns, or a mix of both;
+- standalone Poseidon microbench exports and their aggregated manifest now
+  preserve `operation_filter`, `column_count`, and the source bench command, so
+  focused Poseidon reruns stay attributable after they leave the wrapped
+  bundle;
+- the generated benchmark history now carries the same Poseidon `Filter` and
+  `Columns` fields with legacy fallbacks, so operators do not have to open the
+  raw manifest to tell whether a Poseidon snapshot came from a focused rerun;
+- signed bench manifests now carry matrix-derived `matrix_operation_filters` per
+  bench when the matrix manifest provides them, so release gating retains the
+  distinction between full-bundle and focused-only device baselines without
+  reopening the matrix JSON; and
+- `.gitignore` now explicitly allows `scripts/fastpq/tests/test_*.py`, so the
+  FASTPQ reporting regressions added during this CUDA evidence pass are no
+  longer hidden by the repository-wide `test_*` ignore rule.
+
+Validation:
+- `cargo test -p xtask manifest_ -- --nocapture`
+- direct `python3 -c "..."` invocations for
+  `test_update_dashboard_panel.py`, `test_capture_matrix.py`, and
+  `test_poseidon_microbench_tools.py`
+
+Latest sync (2026-03-27 FASTPQ CUDA evidence propagation through manifests/history/stage summaries):
+`crates/fastpq_prover/{cuda/fastpq_cuda.cu,src/bin/fastpq_cuda_bench.rs}`
+and
+`crates/fastpq_prover/src/trace.rs`
+and
+`scripts/fastpq/{wrap_benchmark.py,aggregate_stage_timings.py,update_benchmark_history.py,tests/test_wrap_benchmark.py,tests/test_aggregate_stage_timings.py,tests/test_update_benchmark_history.py}`
+and
+`xtask/src/{fastpq.rs,main.rs}`
+now close the next immediate CUDA follow-up without widening the backend
+surface.
+
+- the shipped async FFT/IFFT/LDE path keeps the pooled pinned-staging model as
+  the validated ownership design; an experimental direct caller-buffer
+  registration shortcut was intentionally not kept because it broke the latency
+  LDE parity case and the concurrent CUDA LDE regression while the pooled path
+  remained green;
+- `fastpq_cuda_bench` now captures `ifft` alongside `fft`, `lde`, and
+  `poseidon_hash_columns`, so fresh SM80 bundles cover the full Goldilocks
+  transform round-trip plus the existing CUDA Poseidon batch path instead of
+  only the forward transform plus LDE;
+- the raw CUDA bench also now accepts
+  `--operation <fft|ifft|lde|poseidon_hash_columns|all>` so focused lab reruns
+  can isolate a single stage while the default release-style capture still
+  emits the full bundle;
+- `cargo xtask fastpq-cuda-suite` now forwards that same operation selector and
+  only enforces wrap thresholds for operations present in the filtered bundle,
+  so focused FFT/IFFT reruns can still produce wrapped artefacts instead of
+  failing on intentionally omitted LDE/Poseidon entries;
+- the raw CUDA bench now stamps `operation_filter` into both its `benchmarks`
+  and `report` blocks, and the Python wrapper now normalizes the nested
+  `fastpq_cuda_bench` payload shape before summarizing it, so focused CUDA
+  captures remain self-describing after re-wrapping instead of relying only on
+  the filename or a one-entry operations array, while also backfilling
+  per-operation fields like `columns` and preserving the original benchmark
+  command from nested CUDA metadata;
+- downstream FASTPQ evidence tooling now preserves that same filter too:
+  `cargo xtask fastpq-bench-manifest` records `operation_filter` per bench
+  entry, `update_benchmark_history.py` exposes it in the generated Stage 7
+  history table, and `aggregate_stage_timings.py` now accepts wrapped bundle
+  shapes directly instead of assuming flat raw reports;
+- when the suite uses its default output paths, focused runs now suffix the
+  wrapped/raw artifact names with the selected operation so partial captures
+  stay visibly distinct from the full-bundle evidence files; and
+- the new scalar Poseidon bench baseline uses
+  `trace::hash_columns_cpu_batch_inputs(...)`, which hashes the same
+  deterministic domain + coefficient inputs that the CUDA path flattens into
+  `PoseidonColumnBatch`; and
+- each CUDA bench operation now records explicit `input_len`, `output_len`,
+  `input_bytes`, `output_bytes`, and `estimated_gpu_transfer_bytes`, making it
+  easier to tell from raw and wrapped artefacts whether remaining regressions
+  are dominated by host/device transfer volume or by the kernels themselves.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p fastpq_prover --features fastpq-gpu concurrent_cuda_ -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu gpu_lde_matches_cpu_output -- --nocapture`
+- `cargo test -p fastpq_prover --bin fastpq_cuda_bench -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu --bin fastpq_cuda_bench -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu poseidon_cpu_batch_inputs_match_scalar_reference -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu --no-run`
+- `cargo test -p xtask cuda_ -- --nocapture`
+- `cargo test -p xtask manifest_ -- --nocapture`
+- `cargo run -p fastpq_prover --bin fastpq_cuda_bench -- --rows 8 --iterations 1 --warmups 0 --column-count 2 --operation lde --output /tmp/fastpq_cuda_probe.json`
+- `python3 scripts/fastpq/wrap_benchmark.py --skip-acceleration-state --label device_class=test --label gpu_kind=discrete /tmp/fastpq_cuda_probe.json /tmp/fastpq_cuda_probe_wrapped.json`
+- `python3 scripts/fastpq/update_benchmark_history.py`
+- `python3 -c "..."` tempdir-backed direct invocations for `test_wrap_benchmark.py`, `test_update_benchmark_history.py`, and `test_aggregate_stage_timings.py`
+
+Open work for this FASTPQ CUDA evidence slice now remains:
+- rerun `fastpq_cuda_bench` on a lab GPU and use the new transfer-size fields to
+  decide whether copy volume or kernel geometry is still dominating the
+  break-even point;
+- if staged copies still dominate, revisit direct caller-buffer pinning only
+  behind the now-expanded CUDA parity/concurrency coverage instead of shipping
+  it optimistically; and
+- keep moving down the larger CUDA backlog: BN254 kernels for FASTPQ, real CUDA
+  JSON Stage-1 parsing, and dedicated CUDA compression kernels for
+  `gpuzstd_cuda`.
+
+Latest sync (2026-03-27 FASTPQ CUDA FFT/IFFT/LDE correctness + pooled async staging):
+`crates/fastpq_prover/{cuda/fastpq_cuda.cu,src/fastpq_cuda.rs,src/gpu.rs,src/gpu_stub.rs,src/fft.rs}`
+now close the next concrete FASTPQ CUDA correctness gap.
+
+- the native CUDA FFT/IFFT wrappers now copy dense column buffers into
+  persistent per-device workspaces before launching kernels and copy the
+  results back afterwards, instead of passing host pointers directly to CUDA;
+- the planner-facing Rust GPU path now threads the actual trace/LDE roots from
+  the active parameter set into the CUDA wrapper surface, so the same backend
+  can serve both canonical FASTPQ parameter sets without assuming one fixed
+  Goldilocks root;
+- the CUDA LDE path now applies coset powers before the FFT and performs the
+  transform in-place on device-resident evaluation buffers, replacing the
+  oversized shared-memory design that failed on the real 32K-row parity case;
+  and
+- the native pending FFT/IFFT/LDE path now borrows reusable CUDA streams plus
+  device/pinned staging buffers from a per-device async pool, so concurrent
+  callers no longer depend on a Rust-side serialization lane while also
+  avoiding one fresh allocation cycle per submit; and
+- focused CUDA regressions now pin the second canonical FFT and LDE roots too,
+  so the parameter-set-specific root plumbing is covered directly instead of
+  only by the first catalogue entry.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p fastpq_prover --features fastpq-gpu concurrent_cuda_ffts_match_cpu_output_across_parameter_sets -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu concurrent_cuda_ldes_match_cpu_output_across_parameter_sets -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu gpu_fft_matches_cpu_output -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu gpu_ifft_matches_cpu_output -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu gpu_lde_matches_cpu_output -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu gpu_fft_matches_cpu_output_for_latency_parameters -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu gpu_lde_matches_cpu_output_for_latency_parameters -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu --no-run`
+- `cargo test -p fastpq_prover --features fastpq-gpu poseidon_gpu_repeated_dispatches_match_cpu_when_backend_available -- --nocapture`
+
+Open work for this FASTPQ CUDA slice now remains:
+- rerun the FASTPQ CUDA bench binaries on a lab GPU and capture whether the
+  remaining break-even cost is dominated by host/device copies or by the
+  current one-thread-per-column kernels;
+- decide whether the new pooled stream/buffer design is sufficient or whether
+  FFT/IFFT/LDE need a deeper kernel-side redesign if the lab benches still show
+  host/device transfer cost dominating the break-even point; and
+- keep moving down the remaining heavier CUDA backlog: BN254 kernels for
+  FASTPQ, real CUDA JSON Stage-1 parsing, and dedicated CUDA compression
+  kernels for `gpuzstd_cuda`.
+
+Latest sync (2026-03-27 FASTPQ CUDA Poseidon workspace reuse):
+`crates/fastpq_prover/cuda/fastpq_cuda.cu`
+and
+`crates/fastpq_prover/src/trace.rs`
+now close another obvious host-overhead gap in the FASTPQ CUDA path.
+
+- the native CUDA Poseidon wrappers now reuse persistent per-device payload,
+  slice, state, and hash buffers instead of reallocating them for every
+  permutation / column-hash / fused-hash dispatch;
+- the current Rust-side GPU lane mutex still serializes accelerator work, so
+  the new native workspace cache removes allocation churn without changing the
+  external execution model; and
+- a repeated-dispatch regression now proves the reused workspace path produces
+  the same result across back-to-back GPU hashes and still matches the CPU
+  reference.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p fastpq_prover --features fastpq-gpu --no-run`
+- `cargo test -p fastpq_prover --features fastpq-gpu poseidon_gpu_repeated_dispatches_match_cpu_when_backend_available -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu poseidon_fused_gpu_matches_cpu_first_level -- --nocapture`
+
+Open work for this FASTPQ workspace-reuse slice now remains:
+- rerun the FASTPQ CUDA bench binaries on a lab GPU and capture whether the
+  persistent workspace actually moves the `poseidon_hash_columns` and fused
+  first-level timings enough to change the current acceleration budgets;
+- measure whether the newly added FFT/LDE workspace staging is sufficient by
+  itself or whether those kernels still need deeper launch-geometry and copy
+  tuning beyond the current correctness pass; and
+- keep moving down the remaining large CUDA backlog: BN254 for FASTPQ, true CUDA
+  JSON Stage-1 parsing, and dedicated CUDA compression kernels for
+  `gpuzstd_cuda`.
+
+Latest sync (2026-03-27 shared Linux CUDA build hardening for `jsonstage1_cuda` and `ivm`):
+`crates/norito/accelerators/jsonstage1_cuda/{build.rs,src/cuda_crc64.cu,src/lib.rs}`
+and
+`crates/ivm/build.rs`
+now close the next cross-workspace CUDA buildability gap.
+
+- `jsonstage1_cuda` now follows the same Linux CUDA build policy as FASTPQ:
+  release-style CUDA object builds, explicit `g++-12` preference when
+  available, and no broken `-ccbin=c++` / debug-device flag combination on GCC
+  13 hosts;
+- the CUDA CRC64 helper also no longer performs a redundant device-wide sync
+  before its blocking host copy, so the compile-fix slice removes a small piece
+  of wrapper overhead at the same time; and
+- `ivm`'s manual PTX build now reruns on CUDA/compiler env changes and uses the
+  same Linux host-compiler selection policy, keeping the workspace's CUDA build
+  behavior aligned instead of depending on crate-by-crate defaults.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p jsonstage1_cuda --features cuda-kernel --no-run`
+- `cargo test -p jsonstage1_cuda --features cuda-kernel -- --nocapture`
+- `cargo test -p ivm --features cuda --no-run`
+
+Open work for this shared buildability slice now remains:
+- decide whether the repeated Linux NVCC host-compiler selection logic should be
+  factored into a shared build helper if more CUDA crates pick up native builds;
+- keep pushing the actual runtime/kernel backlog beyond buildability, especially
+  true CUDA JSON Stage-1 parsing, deeper FASTPQ workspace reuse, and dedicated
+  CUDA compression kernels for `gpuzstd_cuda`; and
+- rerun the newly buildable helper crates on additional Linux CUDA hosts so the
+  repo captures whether the `g++-12` preference is sufficient across the lab
+  matrix or whether a broader NVCC host-compiler policy is still needed.
+
+Latest sync (2026-03-27 FASTPQ CUDA Poseidon buildability + parity fixes):
+`crates/fastpq_prover/{build.rs,src/lib.rs,src/fastpq_cuda.rs,src/trace.rs,cuda/fastpq_cuda.cu,metal/kernels/poseidon2.metal}`
+now close the next practical FASTPQ CUDA blockers.
+
+- the actual `fastpq-gpu` feature path now compiles on this Linux CUDA host by
+  avoiding `cc-rs`' unsupported default `-ccbin=c++` choice, preferring
+  `g++-12` when it exists, and disabling the conflicting debug-device flags for
+  the CUDA object build;
+- the regular and fused CUDA Poseidon column-hash paths now match the CPU
+  reference again after restoring the prefixed trace-column domains in the GPU
+  batch call sites and hashing fused depth-1 parents under
+  `fastpq:v1:trace:node` with the same sponge schedule as the CPU Merkle layer;
+  and
+- the CUDA wrapper overhead is slightly lower because the native Poseidon host
+  wrappers no longer perform redundant `cudaDeviceSynchronize()` calls right
+  before blocking host copies.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p fastpq_prover --lib gpu::tests -- --nocapture`
+- `cargo test -p fastpq_prover --no-run`
+- `cargo test -p fastpq_prover --features fastpq-gpu --no-run`
+- `cargo test -p fastpq_prover --features fastpq-gpu gpu_poseidon_matches_cpu_for_batched_states -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu poseidon_gpu_hashes_match_cpu_when_backend_available -- --nocapture`
+- `cargo test -p fastpq_prover --features fastpq-gpu poseidon_fused_gpu_matches_cpu_first_level -- --nocapture`
+
+Open work for this FASTPQ slice now remains:
+- rerun the same regular/fused Poseidon checks plus the FASTPQ CUDA benches on a
+  cleaner lab profile so the repo captures timing deltas for the reduced-wrapper
+  path, not just parity/buildability evidence;
+- decide whether the same Linux CUDA host-compiler selection logic should be
+  mirrored into any other NVCC build scripts in the workspace; and
+- keep moving down the heavier CUDA backlog: deeper FFT/LDE workspace reuse,
+  BN254 CUDA parity, and dedicated CUDA compression kernels for `gpuzstd_cuda`.
+
+Latest sync (2026-03-27 Ed25519 single helper now reuses the batch CUDA path):
+`crates/ivm/src/cuda.rs`
+now closes another small duplicated-helper gap inside the `ivm` CUDA surface.
+
+- `ed25519_verify_cuda(...)` now computes the challenge scalar once and routes
+  the one-signature case through `ed25519_verify_batch_cuda(...)` instead of
+  maintaining a second direct kernel-launch path;
+- the singleton and batch Ed25519 helpers therefore now share the same CUDA
+  module lookup, cached stream use, kernel launch, and output materialization
+  logic while preserving the existing public fallback semantics; and
+- focused regressions now assert that the singleton helper matches the
+  singleton batch result directly, in addition to the existing CPU parity and
+  self-test coverage.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda --lib public_ed25519_verify_helpers_match_cpu_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_ed25519_single_helper_matches_singleton_batch_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib ed25519_selftest_covers_signature_kernel -- --nocapture --test-threads=1`
+
+Open work for this Ed25519 cleanup slice now remains:
+- rerun the singleton and batch Ed25519 helpers on a live CUDA host so the
+  shared-path refactor has real device evidence instead of compile/skip
+  coverage only; and
+- continue into the remaining heavier CUDA items outside `ivm`, especially the
+  FASTPQ-native wrapper overhead and the still-missing dedicated CUDA
+  compression kernels.
+
+Latest sync (2026-03-27 reusable CUDA streams + cached Poseidon constant buffers):
+`crates/ivm/src/{gpu_manager.rs,cuda.rs}`
+now close another practical per-call overhead gap across the `ivm` CUDA helper
+surface.
+
+- `GpuContext` now owns a reusable CUDA `Stream`, so helper dispatch no longer
+  allocates a fresh stream for every AES, SHA-256, Poseidon, BN254, Ed25519,
+  or vector helper call;
+- immutable `u64` device-buffer caching is now available per `GpuContext`, and
+  the Poseidon2/Poseidon6 CUDA wrappers use it to keep the round constants and
+  MDS matrices resident on-device after the first upload; and
+- focused regressions now pin both the stream reuse and constant-buffer reuse
+  behavior, while the existing Poseidon parity/error-path tests still pass on
+  supported and unsupported hosts.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda --lib with_stream_reuses_cached_stream_for_same_gpu -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib cached_u64_buffer_reuses_device_allocation_for_same_key -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_poseidon_helpers_match_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib poseidon_kernel_reports_stride_errors_without_disabling_backend -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_aes_batch_matches_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_ed25519_verify_helpers_match_cpu_when_cuda_available -- --nocapture --test-threads=1`
+
+Open work for this stream/constant-cache slice now remains:
+- rerun the Poseidon and helper benches on live CUDA hardware so the cached
+  stream and cached constant-buffer path has real timing evidence instead of
+  compile/skip coverage only;
+- decide whether additional immutable CUDA inputs, if any, should use the same
+  cached-device-buffer mechanism now that it exists in `GpuContext`; and
+- keep moving down the remaining heavy CUDA backlog: deeper FASTPQ tuning,
+  FASTPQ BN254 parity, and dedicated CUDA compression kernels for `gpuzstd_cuda`.
+
+Latest sync (2026-03-27 BN254 batch bindings mirrored into Python and Java):
+`python/iroha_python/iroha_python_rs/src/lib.rs`,
+`python/iroha_python/src/iroha_python/{gpu.py,__init__.py}`,
+`crates/connect_norito_bridge/src/lib.rs`,
+and
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/gpu/{CudaAccelerators.java,CudaAcceleratorsKotlin.java}`
+now expose the BN254 CUDA batch surface outside Rust.
+
+- Python now exports `bn254_{add,sub,mul}_cuda_many(...)` with tuple-of-limbs
+  validation layered over the new `ivm::bn254_*_batch_cuda(...)` helpers;
+- the Java/Android JNI bridge now includes `nativeBn254{Add,Sub,Mul}Batch`,
+  and the `CudaAccelerators` facades expose matching `*Batch` helpers with the
+  same deterministic “empty optional / null on unavailable backend” contract as
+  the existing Poseidon batch APIs; and
+- focused PyO3 tests and compile-only JNI validation keep the binding surface
+  in sync with the Rust CUDA helpers even on hosts without a live GPU.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_python_rs bn254_ -- --nocapture`
+- `cargo test -p connect_norito_bridge --no-run`
+- `GRADLE_USER_HOME=/tmp/iroha-gradle ./gradlew test --console=plain --tests org.hyperledger.iroha.android.gpu.CudaAcceleratorsTests --tests org.hyperledger.iroha.android.gpu.CudaAcceleratorsKotlinFacadeTests`
+  (blocked here because the host only has Java 8 while the Android Gradle plugin requires Java 11+)
+
+Open work for this binding slice now remains:
+- rerun the focused Java facade tests on a host with Java 11+ or newer so the
+  new `CudaAccelerators` batch wrappers have a real passing Android-side test
+  result instead of compile/probe coverage only;
+- decide whether the Python and Java surfaces should grow richer typed BN254
+  batch outputs later instead of the current tuple/flattened-array conventions;
+  and
+- keep wiring the remaining CUDA additions outward where appropriate, especially
+  if FASTPQ BN254 or dedicated CUDA compression kernels add new public helper
+  surfaces later.
+
+Latest sync (2026-03-27 CUDA module cache + BN254 batch helpers):
+`crates/ivm/src/{cuda.rs,gpu_manager.rs}`
+and
+`crates/ivm/benches/bench_bn254_cuda.rs`
+now close the next practical BN254 host-overhead gap.
+
+- `GpuContext` now caches PTX `Module` handles per device, so repeated CUDA
+  helper calls stop reloading the same PTX for AES, SHA-256, Keccak, Poseidon,
+  BN254, Ed25519, and vector kernels;
+- `ivm::cuda` now exposes `bn254_{add,sub,mul}_batch_cuda(...)`, which feed the
+  existing count-aware BN254 kernels with many field-element pairs in one
+  launch while preserving the single-element helpers and deterministic CPU
+  fallback behavior; and
+- the BN254 Criterion bench now includes 1024-element batch add/mul groups so
+  live CUDA hosts can capture whether the new batching path clears the current
+  copy/launch overhead break-even point.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda --lib cached_module_reuses_loaded_handle_for_same_key -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_bn254_helpers_match_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_bn254_batch_helpers_match_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_poseidon_helpers_match_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo bench -p ivm --bench bench_bn254_cuda --features cuda --no-run`
+
+Open work for this BN254/module-cache slice now remains:
+- rerun the new batch helpers and Criterion groups on live CUDA hardware so the
+  repo has actual batch-vs-scalar throughput evidence rather than compile/skip
+  coverage only;
+- decide whether higher-level BN254 consumers such as Poseidon should grow
+  internal batch plumbing to take advantage of the new wrappers without
+  changing public APIs; and
+- keep pushing the remaining CUDA-heavy items that still need real kernels or
+  lab access: deeper FASTPQ tuning, FASTPQ BN254 parity, and dedicated CUDA
+  compression kernels for `gpuzstd_cuda`.
+
+Latest sync (2026-03-27 CUDA Merkle leaf/output cleanup):
+`crates/ivm/src/{cuda.rs,byte_merkle_tree.rs}`
+and
+`crates/ivm/cuda/sha256_leaves.cu`
+now close the next practical SHA-256/Merkle host-overhead gap.
+
+- the CUDA `sha256_leaves` kernel now writes 32-byte big-endian digests
+  directly, so the host wrapper no longer has to translate device-returned
+  SHA-256 words into digest bytes;
+- `sha256_leaves_cuda(...)` now returns those digest bytes directly while
+  preserving the public helper surface and parity tests; and
+- `ByteMerkleTree::root_from_bytes_accel(...)` now calls an internal CUDA
+  helper that keeps leaf digests on device through Merkle pair reduction and
+  copies back only the final root.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda --lib public_sha256_leaves_matches_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_sha256_pairs_reduce_matches_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib root_from_bytes_accel_matches_canonical -- --nocapture --test-threads=1`
+
+Open work for this SHA-256/Merkle slice now remains:
+- rerun the updated byte-tree CUDA path on live hardware to capture real
+  throughput gains from the direct-digest leaf kernel and on-device Merkle root
+  reduction;
+- decide whether the full-tree rebuild paths that still need the host leaf
+  vector should grow a matching CUDA-native digest buffer API later; and
+- continue the remaining CUDA batching/tuning work in `ivm`, especially BN254
+  and any helper paths that still allocate per call.
+
+Latest sync (2026-03-27 CUDA self-test routing + device-resident SHA-256 Merkle reduction):
+`crates/ivm/src/cuda.rs`
+now closes the next local CUDA cleanup slice without requiring new toolchains or
+live-device benches.
+
+- the remaining raw CUDA startup/self-test probes for Ed25519, SHA-256,
+  Keccak, AES batch, and fused AES rounds now run inside deterministic
+  task scopes, so they stop implicitly favoring GPU 0 on multi-GPU hosts;
+- the CUDA SHA-256 pair-reduction helper now keeps Merkle levels resident on
+  device by ping-ponging between two fixed device buffers and only copying the
+  final root back to host memory; and
+- the corresponding SHA-256/Ed25519 self-test regressions still fail closed on
+  unsupported hosts while compiling the new routing and device-buffer path.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda --lib public_sha256_pairs_reduce_matches_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib sha256_merkle_selftest_covers_cuda_kernels -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib ed25519_selftest_covers_signature_kernel -- --nocapture --test-threads=1`
+
+Open work for this CUDA cleanup slice now remains:
+- rerun the updated self-test and Merkle helper paths on a live multi-GPU host
+  so the device-resident reducer and task-scoped startup routing have real
+  throughput evidence instead of compile/skip coverage only;
+- continue the larger `ivm` CUDA batching work beyond SHA-256 pair reduction,
+  especially around BN254 and any remaining single-call helper hot paths; and
+- keep pushing the heavier CUDA items that are still blocked on toolchain /
+  hardware access: FASTPQ BN254 parity, deeper LDE/Poseidon tuning, and real
+  CUDA compression kernels for `gpuzstd_cuda`.
+
+Latest sync (2026-03-27 FASTPQ CUDA async guard groundwork):
+`crates/fastpq_prover/src/gpu.rs`
+now closes the next practical FASTPQ CUDA planner mismatch.
+
+- the CUDA `fft_columns_async(...)`, `ifft_columns_async(...)`, and
+  `lde_columns_async(...)` entry points now return guards that own real pending
+  background work instead of doing all CUDA wrapper work synchronously and then
+  returning `Ready`;
+- `ColumnDispatch::wait()` and `LdeDispatch::wait()` now own the final restore /
+  materialization step for the CUDA path, bringing the contract closer to the
+  shipped Metal async surface; and
+- focused unit tests now pin the new CUDA pending-guard semantics, including
+  panic-to-`GpuError` mapping.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p fastpq_prover --lib gpu::tests -- --nocapture`
+- `cargo test -p fastpq_prover --no-run`
+- `cargo test -p fastpq_prover --features fastpq-gpu --offline --no-run`
+  (fails because `metal v0.32.0` is not cached locally, so the feature build
+  remains unvalidated in this environment)
+
+Open work for this FASTPQ async slice now remains:
+- keep measuring whether the pooled CUDA async ownership model is fast enough
+  or whether FFT/IFFT/LDE now need more aggressive copy reduction or kernel
+  changes beyond host-side staging reuse;
+- validate the `fastpq-gpu` feature build and parity path on the target GPU
+  hosts as the native async wrapper evolves; and
+- continue the larger CUDA work after that: BN254 kernels, deeper LDE tuning,
+  and lower-copy Poseidon residency.
+
+Latest sync (2026-03-27 CUDA task-scoped routing + Norito/FASTPQ follow-up):
+`crates/ivm/src/{cuda.rs,gpu_manager.rs}`,
+`crates/fastpq_prover/cuda/fastpq_cuda.cu`,
+`crates/norito/accelerators/jsonstage1_cuda/src/lib.rs`,
+`crates/gpuzstd_cuda/src/lib.rs`,
+and
+`crates/norito/src/core/gpu_zstd.rs`
+now close the next concrete CUDA follow-up slice.
+
+- `ivm` CUDA helper launches now derive stable workload-based task IDs and run
+  under an ambient task scope, so the existing public helper surface no longer
+  hard-pins work to GPU 0 on multi-GPU hosts;
+- the CUDA bitonic-sort helper now relies on in-order stream execution instead
+  of synchronizing after every stage, and single-block AES round helpers now
+  reuse the batch kernels for `count = 1`;
+- FASTPQ CUDA FFT/IFFT launch geometry now uses bounded 128-thread blocks while
+  preserving the current one-thread-per-column execution model; and
+- Norito’s CUDA helper surface is more explicit: JSON Stage-1 no longer builds a
+  temporary offsets vector on every call, while `gpuzstd_cuda` now reports
+  `gpu_unavailable` for compression until real CUDA kernels exist and the core
+  runtime treats that return code as a clean CPU-fallback signal.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda --lib -- --nocapture --test-threads=1`
+  (still red in pre-existing `host`, `memory`, and `mock_wsv` tests outside
+  this slice)
+- `cargo test -p ivm --features cuda --lib task_scope_overrides_default_task_zero_only -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_aes_batch_matches_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_bitonic_sort_pairs_match_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo test -p jsonstage1_cuda -- --nocapture`
+- `cargo test -p gpuzstd_cuda -- --nocapture`
+- `cargo test -p norito --features gpu-compression self_test -- --nocapture`
+- `cargo test -p fastpq_prover --no-run`
+
+Open work for this CUDA follow-up slice now remains:
+- rerun the updated `ivm` CUDA helper paths on a live multi-GPU host so the new
+  task-scoped routing and reduced synchronization are backed by real throughput
+  measurements instead of compile/skip coverage only;
+- continue the larger FASTPQ CUDA work: real async dispatch, LDE tuning,
+  Poseidon host-device residency improvements, and BN254 CUDA parity with the
+  Metal path; and
+- replace the current `gpuzstd_cuda` “explicit unavailable compression” stub
+  with actual CUDA match-finding / entropy kernels so the helper can stop
+  falling back to CPU encode.
+
+Latest sync (2026-03-27 Izanami workload-side stale asset tracking is fixed, pending full-soak confirmation):
+`crates/izanami/src/instructions.rs`
+now stops publishing asset IDs into workload state before the corresponding
+transaction has actually succeeded:
+
+- asset-producing workload plans now carry success-only
+  `PlanUpdate::TrackAssetInstance` updates instead of mutating
+  `state.asset_instances` eagerly during planning;
+- failed or unconfirmed mint/transfer-style plans therefore cannot leave dead
+  asset IDs behind for later asset-metadata recipes to target; and
+- focused regressions proving both success-only tracking and failed-mint
+  metadata fallback are green.
+
+Validation:
+- `rustfmt --edition 2024 crates/izanami/src/instructions.rs`
+- `cargo test -p izanami failed_asset_plan_does_not_poison_asset_metadata_target -- --nocapture`
+- `cargo test -p izanami workload_record_result_tracks_assets_only_on_success -- --nocapture`
+- `cargo test -p izanami instructions::tests::staking_recipes_track_validator_registry -- --nocapture`
+- `cargo test -p izanami instructions::tests::bond_public_stake_tracks_share_and_uses_stake_asset -- --nocapture`
+- `cargo test -p izanami instructions::tests::asset_metadata_set_and_remove_trackers -- --nocapture`
+- `cargo test -p izanami instructions::tests::workload_record_result_applies_updates_on_success -- --nocapture`
+
+Open work from this workload fix:
+- rerun the full permissioned and NPoS preserved-peer stable soaks on this exact
+  cut to confirm the previous NPoS `Failed to find asset` rejection storm is
+  gone from the harness metrics;
+- if any workload rejections remain, classify whether they now come from a
+  different stale tracker or from a real on-chain semantic failure path; and
+- once the workload noise is clean, reevaluate the remaining stable p95 latency
+  gate without the prior `plan submission failed err=1382` distortion.
+
+Latest sync (2026-03-27 full preserved-peer stable soaks on the timeout-owner / exact-body retry cut are liveness-clean, but both modes still miss the p95 latency gate):
+the rebuilt 4-peer preserved-peer stable envelopes on
+`/tmp/izanami_permissioned_ownerhandoff_20260327T113630Z.log`
+and
+`/tmp/izanami_npos_ownerhandoff_20260327T121650Z.log`
+no longer reproduce the March 26 consensus no-progress failure:
+
+- permissioned reaches `strict/quorum=2004` with
+  `interval_p50_ms=1016` and `interval_p95_ms=1668`, then fails only the
+  stable latency gate;
+- NPoS reaches `strict/quorum=2001` with
+  `interval_p50_ms=1112` and `interval_p95_ms=2001`, then fails only the same
+  latency gate;
+- both runs have `no strict block height progress=0`,
+  `requested block-sync range pull from committed anchor=0`, and no aligned
+  liveness collapse; and
+- the preserved-peer logs also show no exact-body traffic on these soaks
+  (`FetchBlockBody=0`, `BlockBodyResponse=0`), which means the repaired
+  frontier-owner path was not actually exercised by the stable envelopes.
+
+Open work from this soak result:
+- treat current-frontier liveness as fixed on this cut and shift acceptance to
+  performance: reduce stable p95 block interval in permissioned from `1668ms`
+  and in NPoS from `2001ms` down to the `1000ms` gate;
+- isolate the NPoS workload noise before using its throughput numbers as a
+  consensus signal, because `mint_trigger_repetitions` still contributes
+  `1382` submission failures through the existing missing-asset path;
+- investigate the residual permissioned backpressure
+  (`plan submission failed err=7`,
+  `transaction queued for too long=3`,
+  `haven't got tx confirmation within 20s=4`) to see whether it is consensus
+  latency, ingress pressure, or workload harness behavior; and
+- add or rerun an explicit lagging-peer frontier repro on this exact cut,
+  because the stable soaks now prove cluster-wide liveness but do not yet show
+  nonzero `FetchBlockBody` / `BlockBodyResponse` traffic.
+
+Latest sync (2026-03-27 current-frontier timeout-owner and exact-body retry repair is implemented and targeted regressions are green):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/qc.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/votes.rs`, and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the remaining current-frontier control-flow gap identified in the
+March 26 preserved-peer soaks:
+
+- quorum-timeout for `committed + 1` now seeds and honors the `FrontierSlot`
+  from same-height prepare/commit votes or cached QCs even when the local
+  pending block is a stale competing hash;
+- vote/QC-driven current-frontier missing-payload paths bootstrap the slot
+  before exact-body routing, so `FetchBlockBody` is no longer blocked on a
+  pre-existing slot record;
+- exact-body retry and deep-catchup gating are now driven by `body_missing`
+  plus `exact_fetch_armed`, so same-height QC/vote evidence cannot strand the
+  slot in `AwaitCommitQc` with zero exact-body fetch traffic; and
+- focused regressions covering timeout handoff, vote placeholders, QC defer,
+  leader-first fetch, voter fallback, and lag-window/deep-catchup behavior all
+  pass on this cut.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/reschedule.rs crates/iroha_core/src/sumeragi/main_loop/votes.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo test -p iroha_core --lib zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_other_hash -- --nocapture`
+- `cargo test -p iroha_core --lib seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_vote_evidence -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_vote_placeholder_skips_generic_missing_block_request -- --nocapture`
+- `cargo test -p iroha_core --lib qc_missing_block_defer_contiguous_frontier_stays_on_exact_body_owner -- --nocapture`
+- `cargo test -p iroha_core --lib defer_qc_if_block_missing_with_commit_quorum_hint_seeds_contiguous_frontier_owner_create_only -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_body_repair_fetches_leader_before_voter_fallback -- --nocapture`
+- `cargo test -p iroha_core --lib request_missing_block_for_pending_rbc_holds_initial_frontier_fetch_within_ingress_grace -- --nocapture`
+- `cargo test -p iroha_core --lib retry_missing_block_requests_keeps_far_ahead_future_entries_passive_while_exact_frontier_owner_active -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_quorum_timeout_rotates_same_height_candidate_without_deep_catchup -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull -- --nocapture`
+
+Open work from this cut:
+- done in the new March 27 soak entry above; keep the code/testing notes here
+  as the implementation record for the liveness repair.
+
+Latest sync (2026-03-26 full preserved-peer stable soaks after the same-height `DeepCatchup` fix still fail in aligned `missing_qc` rotation):
+the current preserved-peer stable envelopes on
+`/tmp/izanami_permissioned_rootcausefix_20260326T193813Z.log`
+and
+`/tmp/izanami_npos_rootcausefix_20260326T193813Z.log`
+show that the old `frontier_stall_reset` dead end is gone, but both modes
+still fail liveness earlier in the handoff path:
+
+- permissioned stalls aligned at `strict/quorum=88` after reaching
+  `strict_reference_height=93`;
+- NPoS stalls aligned at `strict/quorum=8` after reaching
+  `strict_reference_height=13`;
+- both preserved-peer runs have
+  `requested block-sync range pull from committed anchor=0`,
+  so the previous committed-chain catch-up regression is no longer the active
+  failure;
+- both preserved-peer runs still have
+  `FetchBlockBody=0` and `BlockBodyResponse=0` while also logging
+  `routed contiguous missing-parent recovery through exact frontier body owner`;
+  and
+- the critical same-height timeout records show
+  `handoff_frontier_quorum_timeout_owner=false` and
+  `frontier_recovery_advance=None`, followed immediately by local
+  `view change triggered ... cause="missing_qc"` and pacemaker reproposal.
+
+Open work from this soak result:
+- make quorum-timeout for `committed + 1` actually hand ownership to the
+  frontier slot when the node has same-height commit-vote/QC evidence but is
+  still missing the payload locally;
+- stop the legacy `missing_qc` reschedule/view-change path from rotating the
+  current frontier while `handoff_frontier_quorum_timeout_owner` is false and
+  the slot should own missing-payload recovery;
+- make the slot arm real `FetchBlockBody` on that current-frontier missing-
+  payload path, since exact-body traffic is still zero in both preserved-peer
+  runs; and
+- rerun the full permissioned and NPoS preserved-peer stable soaks after that
+  handoff fix, because the acceptance gate is still cluster-wide liveness.
+
+Latest sync (2026-03-26 current-frontier liveness root cause follow-up: same-height quorum-loss now stays in slot-owned rotation instead of falling into `DeepCatchup`):
+`crates/iroha_core/src/sumeragi/main_loop.rs`
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the remaining bad state transition behind the aligned-cluster
+`frontier_stall_reset` dead end:
+
+- `FrontierSlotEvent::OnQuorumTimeout` no longer escalates `AwaitCommitQc`
+  into `DeepCatchup`; same-height quorum-loss stays in normal slot-owned
+  rebroadcast/view rotation;
+- `FrontierSlotEvent::OnLagWindowExpired` and
+  `frontier_slot_lag_window_expired(...)` are now body-specific, so only
+  stalled exact-body repair may enter `DeepCatchup`;
+- the existing exact-body deep-catchup regression still passes, so the
+  absorbing catch-up mode remains available for real frontier body misses; and
+- live current-frontier quorum-timeout recovery now explicitly stays off
+  committed-chain range pulls until the slot itself owns a real deep-catchup
+  transition.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo test -p iroha_core --lib frontier_slot_quorum_timeout_rotates_same_height_candidate_without_deep_catchup -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull -- --nocapture`
+
+Open work from this follow-up:
+- rebuild `iroha3d` / `izanami` on this exact cut and rerun the full
+  permissioned preserved-peer stable soak to confirm the aligned
+  `frontier_stall_reset` loop no longer reproduces at the current frontier;
+- rerun the full NPoS preserved-peer stable soak on the same cut once
+  permissioned liveness is confirmed, because the previous rerun was also
+  falling into the same aligned current-frontier range-pull dead end; and
+- if either soak still stalls, capture whether exact-body traffic remains zero
+  or whether a different same-height ownership path is now responsible.
+
+Latest sync (2026-03-26 current-frontier liveness root cause: stale lag expiry now ages from `last_progress_at`, not `observed_at`):
+`crates/iroha_core/src/sumeragi/main_loop.rs`
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the timer bug behind the bad same-height `DeepCatchup` transition:
+
+- `FrontierSlot::lag_started_at()` now falls back to `last_progress_at`, so
+  body/vote/QC progress refreshes the slot-owned lag window instead of letting
+  `AwaitVotes` / `AwaitCommitQc` age from the original first observation;
+- a new focused regression,
+  `frontier_slot_quorum_timeout_uses_last_progress_for_lag_window_expiry`,
+  proves a same-height slot that just observed vote progress no longer enters
+  `DeepCatchup` on the next quorum-timeout tick unless the refreshed lag window
+  really expires; and
+- the existing deep-catchup regression remains in place to ensure the slot
+  still enters `DeepCatchup` once the refreshed lag window has genuinely timed
+  out.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo test -p iroha_core --lib frontier_slot_quorum_timeout_uses_last_progress_for_lag_window_expiry -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+
+Open work from this fix:
+- rerun the full permissioned and NPoS preserved-peer stable soaks on this
+  exact cut and confirm the aligned-cluster `frontier_stall_reset` deadlock no
+  longer reproduces;
+- if either soak still stalls, capture whether `FetchBlockBody` remains zero or
+  whether the cluster is now getting stuck after same-height progress is
+  refreshed correctly; and
+- if the liveness gate is clean, reevaluate the separate NPoS p95/workload
+  noise on a fresh unchanged binary.
+
+Latest sync (2026-03-26 current-frontier ownership follow-up: same-height timeout wrappers now create the slot owner instead of short-circuiting on `committed + 1`):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/{proposal_handlers.rs,propose.rs,qc.rs,votes.rs}`,
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the specific lagging-peer handoff bug found while implementing the
+single-owner frontier FSM:
+
+- `seed_frontier_recovery_for_quorum_timeout(...)` and
+  `seed_frontier_recovery_for_missing_payload(...)` no longer treat
+  `height == committed + 1` as proof that a `FrontierSlot` already exists; if
+  the slot is absent they now fall through to same-height slot seeding instead
+  of returning early and reopening legacy behavior;
+- same-height commit/prepare vote and QC evidence for `committed + 1` can now
+  instantiate the frontier slot even when the original proposal was missed;
+- pacemaker proposal assembly now seeds the slot from same-height evidence
+  before deciding the height is free for a new local proposal; and
+- proposal-seen suppression now treats active `AwaitBody` / `DeepCatchup`
+  frontier-slot ownership as authoritative same-height evidence.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo test -p iroha_core --lib seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_vote_evidence -- --nocapture`
+- `cargo test -p iroha_core --lib slot_has_proposal_evidence_counts_await_body_and_deep_catchup_slot_ownership -- --nocapture`
+- `cargo test -p iroha_core --lib pacemaker_defers_reproposal_when_frontier_slot_owns_current_height -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+
+Open work from this follow-up:
+- rerun the full permissioned preserved-peer stable soak on this exact cut and
+  confirm the lagging peer at `91/view=0` stays under slot-owned repair instead
+  of locally reproposing `91/view=1`;
+- if permissioned still stalls, capture whether the slot enters `DeepCatchup`
+  deterministically or whether exact-body traffic still remains zero; and
+- once the current-frontier liveness regression is clean in permissioned,
+  rerun the NPoS preserved-peer soak to verify the fix did not reopen the old
+  aligned `708/709` deadlock while the separate p95/workload issue remains
+  tracked independently.
+
+Latest sync (2026-03-26 single-owner frontier-FSM soak verdict: permissioned still fails liveness, NPoS reaches target but misses the p95 gate):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/{qc.rs,votes.rs,block_sync.rs,proposal_handlers.rs}`,
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now route `committed + 1` through one explicit `FrontierSlot` owner:
+
+- `FrontierSlot` is now a height-owned FSM with explicit mode/phase/candidate,
+  timer/quorum/repair state, and slot events/actions; same-height
+  `BlockCreated`, vote/QC, body-availability, future-gap, timeout, and
+  lag-window signals now feed that FSM instead of mutating the frontier owner
+  through competing hot paths;
+- exact `FetchBlockBody`, current-slot view rotation, and the transition into
+  absorbing `DeepCatchup` are now slot-owned for `committed + 1`; the exact
+  frontier no longer intentionally reopens generic `FetchPendingBlock` recovery
+  from `request_missing_block(...)` while the slot remains in normal mode; and
+- same-height proposal evidence now survives view changes when the slot still
+  owns an authoritative candidate, and focused tests were updated for slot-led
+  quorum-timeout suppression, deep-catch-up entry, and same-height candidate
+  preservation.
+
+Latest soak evidence on this cut:
+- permissioned still fails on aligned frontier liveness, not on throughput:
+  `no strict block height progress for 600s (strict min height 90, quorum min height 90, target 2000, tolerated_failures 0)`;
+  preserved-peer counts were
+  `FetchBlockBody=0`,
+  `BlockBodyResponse=0`,
+  `requested missing BlockCreated while awaiting RBC INIT=0`,
+  `sharing from fallback anchor=0`,
+  `commit quorum missing past timeout=5`,
+  `view change triggered=5`,
+  `routed contiguous missing-parent recovery through exact frontier body owner=4`
+- NPoS no longer reproduces the earlier aligned `708/709` deadlock and stayed
+  live to `strict/quorum=2004`, but the run still failed the stable gate on
+  `quorum p95 block interval 2133ms exceeded threshold 1000ms`
+  after reaching target; all `1494` recorded failures were repeated
+  `Failed to find asset` rejections from the stable workload plan
+  `mint_trigger_repetitions`
+- both modes removed the old frontier rescue signatures, but neither soak
+  showed live exact-body traffic
+  (`FetchBlockBody=0`, `BlockBodyResponse=0`)
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/votes.rs crates/iroha_core/src/sumeragi/main_loop/block_sync.rs crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo check -p iroha_core --lib` is currently blocked by existing unrelated
+  parser errors in `crates/ivm/src/ivm.rs`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- full permissioned stable preserved-peer soak
+- full NPoS stable preserved-peer soak
+
+Open work from this slice:
+- fix or isolate the unrelated `crates/ivm/src/ivm.rs` parse break, then rerun
+  `cargo check -p iroha_core --lib` and the focused `iroha_core` frontier test
+  set on this slot-FSM cut;
+- fix the remaining aligned permissioned liveness hole around heights
+  `88/91`: the current slot must either fetch/validate the missing exact body
+  or deterministically enter `DeepCatchup`, not align at one tip and stop with
+  zero exact-body traffic;
+- make the slot-owned exact-body lane visibly live when the frontier is really
+  missing: preserved-peer logs should show nonzero `FetchBlockBody` /
+  `BlockBodyResponse` on the failure path instead of only
+  `routed contiguous missing-parent recovery through exact frontier body owner`;
+- keep `no proposal observed for view before changing view` suppressed for a
+  same-height authoritative slot candidate and continue reducing the remaining
+  `missing_qc` / `commit quorum missing past timeout` churn that still appears
+  in both modes; and
+- debug the NPoS stable workload bug
+  (`mint_trigger_repetitions` repeatedly targets a missing asset) separately
+  from consensus so the next NPoS preserved-peer soak is a clean performance
+  comparator against the `1000ms` p95 gate.
+
+Latest sync (2026-03-26 deterministic lagging-reopen cut still fails preserved-peer stable soaks with new liveness bugs):
+the current frontier-owner tree no longer fails the stable preserved-peer
+envelope on the old fallback-anchor signature, but it still does not satisfy
+end-to-end liveness:
+
+- permissioned now fails quickly on a single marooned near-tip peer instead of
+  the one-hour p95 gate:
+  `height divergence exceeded safety window (divergence 114, threshold 16, window 60s, quorum min 78, strict reference 192, strict min 78, lagging peers 1, target 2000, tolerated_failures 0)`;
+  the lagging peer `mighty_cheetah` committed through `78`, observed /
+  proposed `79`, then looped on contiguous missing-parent recovery for `80`
+  without converging;
+- NPoS no longer split by a single lagging peer on this cut, but the whole
+  cluster still deadlocks: all four peers aligned at `strict/quorum=708`,
+  then spun on `missing_qc` / `quorum_timeout` / occasional
+  `stake_quorum_timeout` at height `709` until Izanami failed
+  `no strict block height progress for 600s`;
+- preserved peer counts confirm the old frontier signals are mostly gone but
+  the new lane still does not produce live exact-body traffic:
+  - permissioned:
+    `FetchBlockBody=0`, `BlockBodyResponse=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `sharing from fallback anchor=0`
+  - NPoS:
+    `FetchBlockBody=0`, `BlockBodyResponse=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=2`,
+    `sharing from fallback anchor=0`
+  - dominant new signatures are `no proposal observed for view before changing view`,
+    `commit quorum missing past timeout`, and large `view change triggered`
+    counts, not fallback-anchor rescue;
+- NPoS stable workload remains benchmark-contaminated by repeated
+  asset-lookup failures and later queue/confirmation timeouts, but the final
+  `708` aligned stall is still a real consensus-liveness failure independent
+  of the workload noise.
+
+Validation:
+- `cargo fmt --all`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo check -p iroha_core --lib --message-format short`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core frontier_catchup_stall_mode_throttles_reanchor_to_one_per_window_across_reasons --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core frontier_shared_window_gate_all_reasons_single_emit --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core range_pull_anchor_uses_prev_latest_pair_for_frontier_conflict_and_no_roster_reasons --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core frontier_catchup_stall_mode_window_gate_applies_to_frontier_stall_reset_reason --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core missing_qc_height_stall_mode_throttles_idle_reacquire_range_pull_to_one_per_window --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core missing_qc_height_stall_mode_throttles_qc_missing_payload_range_pull_to_one_per_window --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- full permissioned stable preserved-peer soak
+- full NPoS stable preserved-peer soak
+
+Open work from this soak round:
+- remove the remaining split between contiguous missing-parent handling and the
+  frontier slot owner so a marooned `committed + 1` peer cannot sit on
+  repeated `routed contiguous missing-parent recovery through exact frontier body owner`
+  without ever issuing or completing a real exact-body transfer;
+- make the deterministic deep catch-up reopen actually terminal for a lagging
+  near-tip peer: once the shared lagging window fires, the peer must either
+  commit the frontier or decisively transition into deep catch-up instead of
+  spinning on local `79`/`80` pressure;
+- fix the aligned-cluster liveness hole at `height = committed + 1` so peers do
+  not all reach the same tip and then rotate forever on `missing_qc`,
+  `quorum_timeout`, and `stake_quorum_timeout` with no lagging peer present;
+- finish deleting the residual RBC-era frontier paths until
+  `requested missing BlockCreated while awaiting RBC INIT` reaches zero even in
+  NPoS preserved-peer runs; and
+- debug the NPoS stable workload asset-lookup failures separately so its
+  throughput numbers become a clean consensus signal again.
+
+Latest sync (2026-03-25 frontier-owner full stable soaks still fail on legacy frontier recovery):
+the current `BlockCreated` frontier-owner cut still fails both full 4-peer
+stable preserved-peer soaks at the duration deadline:
+
+- permissioned finished at height `1403` and NPoS finished at height `1387`,
+  with both runs failing `quorum p95 block interval 5001ms exceeded threshold
+  1000ms`;
+- neither mode showed any live exact-body frontier traffic
+  (`FetchBlockBody=0`, `BlockBodyResponse=0`);
+- both modes still relied on legacy frontier rescue
+  (`requested missing BlockCreated while awaiting RBC INIT` and
+  `sharing from fallback anchor`);
+- permissioned remains the cleaner consensus signal, while the NPoS stable
+  workload is additionally broken by repeated asset-lookup submission failures
+  and should not be used as a clean performance comparator until that harness
+  issue is fixed.
+
+Validation:
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- full permissioned stable preserved-peer soak
+- full NPoS stable preserved-peer soak
+
+Open work from this soak round:
+- delete the remaining frontier ownership split so `committed + 1` repair can
+  no longer fall back to missing-`BlockCreated` rescue or fallback-anchor
+  sharing, and the preserved-peer logs show nonzero exact-body fetches instead;
+- keep `BlockSyncUpdate`, anchor sharing, and generic missing-block recovery out
+  of the frontier lane entirely; and
+- debug the NPoS stable workload asset-lookup failures before treating its
+  full-hour soak numbers as meaningful consensus-only performance data.
+Latest sync (2026-03-27 domain-links SNS lease fixture repair):
+`integration_tests/tests/domain_links.rs`
+now closes the failing domain-links integration slice under the current
+SNS-backed domain-registration rules.
+
+- the test helper now provisions an active SNS domain-name lease for the
+  current authority before submitting `Register::domain(...)`, so the live
+  integration flow matches the runtime invariant instead of assuming direct
+  domain registration still works without a lease;
+- the affected test domain literals now use hyphenated labels accepted by the
+  default SNS domain pricing policy, removing the stale underscore-based
+  fixture mismatch; and
+- a small helper regression now pins the generated SNS registration payload for
+  this file, covering the owner/controller/payment defaults used by the lease
+  setup path.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test domain_links -- --nocapture`
+
+Open work for this domain-links slice now remains:
+- no confirmed open work remains for the focused `domain_links` failures fixed
+  here; broader integration suites that still create non-genesis domains
+  directly should adopt the same SNS-backed setup if they begin failing under
+  the same invariant.
+
+Latest sync (2026-03-27 Torii contract deploy route repair):
+`crates/iroha_torii/src/lib.rs`
+now closes the concrete contract-route drift behind the failing
+`deploy_and_get_contract_manifest_via_torii` integration test.
+
+- the contract/VK route group now mounts the three app-facing contract
+  mutation endpoints that already had handlers and OpenAPI/MCP references:
+  `POST /v1/contracts/deploy`,
+  `POST /v1/contracts/instance`, and
+  `POST /v1/contracts/instance/activate`;
+- a focused router regression now drives `/v1/contracts/deploy` through
+  `api_router_for_tests()` with `ConnectInfo` injected, so this failure mode
+  is pinned at the router assembly layer rather than only at the handler unit
+  layer; and
+- the original 4-peer integration test now passes end-to-end, confirming the
+  route repair in the live Torii + consensus harness.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_torii --lib contracts_deploy_route_is_mounted_in_api_router -- --nocapture`
+- `cargo test -p integration_tests --test contracts deploy_and_get_contract_manifest_via_torii -- --nocapture`
+
+Open work for this contract-route slice now remains:
+- no confirmed open work remains for the `/v1/contracts/*` Torii route
+  mounting covered by this regression; broader app-API route drift checks can
+  continue independently.
+
+Latest sync (2026-03-27 genesis bootstrap alignment for offline-allowance validation):
+`crates/iroha_test_network/src/config.rs`
+now closes the direct-test bootstrap mismatch that was still failing after the
+offline-allowance route/helper repair.
+
+- the focused `genesis_executes_offline_allowance_instruction` unit now starts
+  from a real genesis baseline with the `genesis` domain/account materialized
+  instead of an impossible empty-domain world;
+- it also seeds SNS genesis alias bootstrap state before direct block
+  validation, matching the production `populate_genesis_results(...)` path; and
+- the offline allowance fixture controller account is now built through the
+  standard account builder path so escrow/bootstrap lookups see the same shape
+  of account state as the runtime.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_test_network genesis_executes_offline_allowance_instruction -- --nocapture`
+
+Latest sync (2026-03-27 offline allowance Torii route + genesis-helper repair):
+`integration_tests/tests/address_canonicalisation.rs`
+and
+`crates/iroha_torii/src/{lib.rs,routing.rs}`
+now close the next concrete offline-allowance regression in the app-facing I105
+coverage.
+
+- the offline-allowance genesis helper now seeds a valid named asset
+  definition and no longer duplicates built-in testnet domains like `aid`,
+  which clears the genesis `ContainsErrors` failure that was blocking the
+  allowance endpoint tests;
+- a focused helper regression now inspects the built genesis block directly so
+  this helper cannot silently drift back to duplicate-domain or nameless-asset
+  registrations; and
+- Torii now mounts `GET /v1/offline/allowances` plus
+  `POST /v1/offline/allowances/query` again, and the shared endpoint constants
+  match those public paths instead of placeholder deleted-endpoint markers.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition --test address_canonicalisation -- --nocapture`
+- `cargo test -p integration_tests offline_allowances_ --test address_canonicalisation -- --nocapture`
+
+Open work for this offline-allowance slice now remains:
+- decide whether the rest of the placeholder `"<deleted-offline-...>"` Torii
+  endpoint constants and unmounted allowance/certificate surfaces should be
+  restored or pruned so OpenAPI, handlers, and route registration stay in one
+  coherent state.
+
+Latest sync (2026-03-27 Metal Merkle helper fallback alignment):
+`crates/ivm/src/vector.rs`
+now closes the next concrete Metal/no-feature API mismatch in the ongoing
+accelerator audit.
+
+- non-`metal` macOS builds now expose fail-closed stubs for
+  `metal_sha256_leaves(...)` and `metal_sha256_pairs_reduce(...)`, matching the
+  fallback pattern already used by `metal_available()` and
+  `metal_sha256_compress(...)`;
+- `crates/ivm/src/byte_merkle_tree.rs` therefore compiles again on macOS
+  without the `metal` feature instead of failing to resolve those helper
+  symbols from the Metal acceleration branches; and
+- a focused unit test now pins the no-feature stub behavior directly.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --no-run`
+- `cargo test -p ivm metal_sha256_merkle_helpers_return_none_without_metal_feature -- --nocapture`
+
+Open work for this accelerator review slice now remains:
+- continue the broader `ivm` accelerator audit across the remaining
+  CUDA/Metal/determinism boundaries beyond the no-feature helper-surface drift
+  fixed in this pass; and
+- rerun broader `ivm` suites when runtime budget allows, since this repair
+  only exercised compile coverage plus the focused non-Metal fallback test.
+
+Latest sync (2026-03-26 IVM architecture spec CUDA-state refresh):
+`crates/ivm/docs/architecture_spec.md`
+now matches the helper surface already shipped in-tree.
+
+- the top-level note now describes Metal/CUDA acceleration as a shipped
+  best-effort surface with deterministic fallback coverage instead of treating
+  “full CUDA kernel coverage” as the next missing implementation step;
+- the cryptographic opcode summary now lists `ED25519VERIFY` and
+  `ED25519BATCHVERIFY` as implemented, instead of describing
+  `ED25519VERIFY` as a stub; and
+- the hardware-acceleration roadmap now separates delivered CUDA helper
+  coverage from the still-open live-device validation and Metal-parity follow-up.
+
+Validation:
+- `cargo test -p ivm --features cuda --lib public_ -- --test-threads=1`
+- `cargo test -p ivm --features cuda --test cuda --test cuda_extra --test cuda_sha256 --test poseidon_cuda_parity --test cuda_parity_keccak_aes --test ed25519_batch -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --test gpu_manager --test gpu_determinism --test hardware_determinism --test cuda_env -- --nocapture --test-threads=1`
+
+Open work for this CUDA-docs slice now remains:
+- keep rerunning the focused CUDA parity and benchmark suites on hosts with a
+  live CUDA backend so the operator/performance guidance reflects measured
+  hardware behavior; and
+- continue the incremental Metal-parity expansion where the shipped CUDA helper
+  surface still has no matching Metal kernel.
+
+Latest sync (2026-03-26 CUDA bitonic-sort helper public-surface + `iroha_core` compile repair):
+`crates/ivm/src/{lib.rs,cuda.rs}`,
+`crates/ivm/tests/{cuda_fallback.rs,cuda_disable_on_mismatch.rs}`,
+and
+`crates/iroha_core/src/pipeline/gpu.rs`
+now close the remaining public-helper mismatch in the scheduler GPU path.
+
+- `bitonic_sort_pairs(...)` is now re-exported from the `ivm` crate root
+  alongside the rest of the explicit CUDA helper surface, so downstream crates
+  no longer need the private `ivm::cuda` module path;
+- `iroha_core::pipeline::gpu::sort_triplets_gpu(...)` now checks
+  `ivm::cuda_available()` and calls `ivm::bitonic_sort_pairs(...)`, which
+  fixes the `E0603` private-module compile break under
+  `cargo check -p iroha_core --features cuda` and reports no-device /
+  config-disabled hosts as `Unsupported` before launch;
+- focused CUDA regressions now cover the helper directly on all surfaces: live
+  parity in `cuda.rs`, the no-CUDA stubs in `cuda_fallback.rs`, and the
+  disabled/self-test-failed path in `cuda_disable_on_mismatch.rs`; and
+- failed or unavailable bitonic-sort calls are now pinned to leave the caller
+  buffers unchanged, matching the rest of the explicit CUDA helper contract.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --test cuda_fallback -- --nocapture`
+- `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_bitonic_sort_pairs_match_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo check -p iroha_core --features cuda --message-format short`
+
+Open work for this CUDA helper slice now remains:
+- no additional confirmed code gaps remain in this focused bitonic/helper
+  slice; broader accelerator soak and benchmark reruns still depend on access
+  to a live CUDA host.
+
+Latest sync (2026-03-26 FASTPQ trace-commitment fixture refresh):
+`crates/fastpq_prover/tests/fixtures/transfer.norito`,
+`crates/fastpq_prover/tests/fixtures/ordering_hash.json`,
+and
+`crates/fastpq_prover/tests/trace_commitment.rs`
+now match the current canonical transfer-row key encoding again:
+
+- the transfer golden fixture was regenerated after account literal
+  canonicalization changed the sender/receiver row keys expected by transcript
+  verification; and
+- the checked-in transfer ordering hash plus transfer commitment expectation
+  were refreshed to the regenerated canonical batch, so the focused
+  `trace_commitment` suite is green again.
+
+Validation:
+- `cargo test -p fastpq_prover --test trace_commitment -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the broader `cargo test -p fastpq_prover` sweep when runtime budget
+  allows, since this repair only exercised the focused trace-commitment suite;
+- keep an eye on other checked-in FASTPQ fixtures when identifier display or
+  key encoding rules change again, because those fixture bytes intentionally
+  encode the canonical row keys verbatim; and
+- rerun the optional GPU/parity coverage once the required GPU toolchain is
+  available in the environment.
+
+Latest sync (2026-03-26 CUDA root-export alignment + bench compile repair):
+`crates/ivm/src/{lib.rs,cuda.rs,signature.rs,byte_merkle_tree.rs}`
+and
+`crates/ivm/tests/{cuda_disable_on_mismatch.rs,cuda_fallback.rs}`
+now close the next concrete CUDA API drift found during the review.
+
+- the crate root now re-exports the CUDA batch/vector/Merkle helper family
+  (`aesenc_batch_cuda`, `aesdec_batch_cuda`,
+  `aesenc_rounds_batch_cuda`, `aesdec_rounds_batch_cuda`,
+  `sha256_leaves_cuda`, `sha256_pairs_reduce_cuda`,
+  `vadd32_cuda`, `vadd64_cuda`, `vand_cuda`, `vxor_cuda`, `vor_cuda`),
+  matching the helper set already implemented in `cuda.rs`;
+- the matching no-CUDA stubs now exist for those helpers too, so the crate root
+  stays coherent in non-CUDA builds instead of exposing only a partial subset of
+  the explicit helper surface;
+- the focused disable-path acceptance and no-CUDA fallback tests now call the
+  newly public helper entry points directly, pinning both the CPU-fallback
+  behavior and the fail-closed `None` stubs; and
+- `cargo test -p ivm --features cuda --benches --no-run` is green again, so
+  `bench_aes_cuda.rs` no longer references missing crate-root exports.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --test cuda_fallback -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --benches --no-run`
+
+Open work for this CUDA review slice now remains:
+- continue the broader `ivm` accelerator audit across the remaining
+  CUDA/Metal/determinism boundaries beyond the public helper, disable-path,
+  Ed25519 batch-wrapper, and root-export regressions closed in this pass.
+
+Latest sync (2026-03-26 Ed25519 CUDA batch-wrapper wiring):
+`crates/ivm/src/signature.rs`
+and
+`crates/ivm/tests/ed25519_batch.rs`
+now close another remaining CUDA surface gap in the public signature helpers.
+
+- `verify_ed25519_batch_items(...)` now builds one CUDA batch of
+  `(signature, public_key, hram)` tuples and uses `ed25519_verify_batch_cuda`
+  first when CUDA is live, instead of launching the single-signature CUDA path
+  once per item;
+- malformed entries still fail closed to `false`, and the wrapper still falls
+  back to the existing CPU/per-item verification path if the CUDA batch helper
+  declines;
+- the generic mixed-validity batch regression stays green; and
+- a new CUDA-host regression now compares the public wrapper directly against
+  the dedicated CUDA batch helper on the same input set, so the batch wiring
+  cannot silently fall back to the slower per-signature path again.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda --test ed25519_batch -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --test cuda_extra test_cuda_ed25519_verify_batch -- --nocapture --test-threads=1`
+
+Open work for this CUDA review slice now remains:
+- continue the broader `ivm` accelerator audit across the remaining
+  CUDA/Metal/determinism boundaries beyond the public helper, disable-path,
+  and Ed25519 batch-wrapper regressions closed in this pass.
+
+Latest sync (2026-03-26 CUDA disable-path fallback hardening):
+`crates/ivm/src/cuda.rs`
+and
+`crates/ivm/tests/cuda_disable_on_mismatch.rs`
+now close the next concrete CUDA correctness gap found during the focused
+accelerator review.
+
+- the fused `aesenc_rounds_batch_cuda` / `aesdec_rounds_batch_cuda` helpers now
+  preserve the deterministic CPU AES output when CUDA is disabled or when the
+  CUDA startup self-test fails, instead of incorrectly returning the input
+  blocks unchanged;
+- the public disable-path acceptance coverage now locks/restores the global
+  CUDA env/config state so it can safely mutate backend policy under ordinary
+  `cargo test` execution instead of depending only on manual single-thread
+  reruns;
+- that same regression now asserts the explicit CUDA SHA-256, Poseidon,
+  multi-round AES, vector, Keccak, BN254, and Ed25519 helpers all fail closed
+  or fall back to the documented CPU behavior after forced self-test failure or
+  config disable; and
+- the exported `aesenc_n_rounds_many` / `aesdec_n_rounds_many` wrappers are now
+  pinned specifically in the disabled-CUDA path, so the fused batch fallback
+  cannot silently drift again.
+- the non-macOS `--features cuda` sweep also no longer emits the local
+  `merkle_metal_min_leaves` dead-code warning, because the Metal-only threshold
+  getter now stays cfg-gated to macOS or tests.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_ -- --test-threads=1`
+
+Open work for this CUDA review slice now remains:
+- continue the broader `ivm` accelerator audit across the remaining
+  CUDA/Metal/determinism boundaries beyond the public helper and disable-path
+  regressions closed in this pass.
+
+Latest sync (2026-03-26 `iroha_core` test-helper lifetime repair):
+`crates/iroha_core/src/state.rs`
+now carries the targeted compile fix:
+
+- the `WorldTransaction` test/API helper impl now declares the explicit
+  `<'block, 'world>` lifetimes required by its `StorageTransaction` return
+  values, which clears the `error[E0261]` failures in
+  `smart_contract_state_mut_for_testing`,
+  `account_aliases_mut_for_testing`, and
+  `account_rekey_records_mut_for_testing`; and
+- no behavioral change is intended beyond restoring the gated helper API to a
+  compilable state for `iroha-core-tests` consumers.
+
+Validation:
+- `cargo check -p iroha_core --message-format short`
+- `cargo check -p iroha_core --features iroha-core-tests --message-format short`
+- `cargo fmt --all`
+
+Open work for this slice now remains:
+- rerun a broader workspace validation sweep when runtime budget allows, since
+  this fix only exercised `iroha_core`; and
+- no additional regressions are known in this lifetime-helper slice after the
+  targeted feature-enabled compile check.
+
+Latest sync (2026-03-26 FASTPQ Stage 2 fixture refresh):
+`crates/fastpq_prover/tests/fixtures/stage2_balanced_1k.bin`
+and
+`crates/fastpq_prover/tests/fixtures/stage2_balanced_5k.bin`
+now match the current canonical CPU prover output again:
+
+- the Stage 2 backend regression fixtures were regenerated from the current
+  prover output, which clears the focused fixture parity failures in
+  `backend_regression` and `proof_fixture`; and
+- the focused `realistic_flows` suite still verifies regenerated proofs, so no
+  new proof-verification regression is known in this slice.
+
+Validation:
+- `cargo test -p fastpq_prover --test realistic_flows -- --nocapture`
+- `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture`
+- `cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture`
+- `cargo test -p fastpq_prover --test proof_fixture golden_stage2_proof_matches_fixture -- --nocapture`
+
+Open work for this slice now remains:
+- rerun a broader `cargo test -p fastpq_prover` sweep when runtime budget
+  allows; and
+- rerun the optional `fastpq-gpu` parity coverage once the required GPU/Metal
+  toolchain is available in the environment.
+
+Latest sync (2026-03-26 targeted warning cleanup):
+`crates/iroha_core/src/state.rs`
+and
+`crates/izanami/src/main.rs`
+now carry the warning pass:
+
+- the test-only `WorldTransaction` helpers in `iroha_core` no longer trigger
+  `single_use_lifetimes`; and
+- the `izanami` bin target now reuses the library `faults` module, removing
+  the duplicate dead-code warnings from bin/test builds.
+
+Validation:
+- `cargo check -p iroha_core -p izanami --message-format short`
+- `cargo test -p izanami --message-format short`
+
+Latest sync (2026-03-26 Mochi core + Izanami fixture drift repair):
+`mochi/mochi-core/src/compose.rs`,
+`mochi/fixtures/composer/{draft_multisig_propose,multisig_instructions}.json`,
+`mochi/mochi-core/tests/fixtures/composer_drafts/{implicit_receive_transfer,multisig_propose}.json`,
+`mochi/mochi-core/tests/fixtures/{canonical_block_wire,canonical_pipeline_event_message}.bin`,
+and
+`crates/izanami/src/smart_contracts.rs`
+now carry the remaining green-up work:
+
+- composer draft fixtures and roundtrip tests now use canonical asset/account
+  literals that match the current parser contracts;
+- Torii canonical fixture binaries were regenerated from the built-in ignored
+  helpers, so the block/event stream regression tests match the live wire
+  encoding again; and
+- Izanami now points at the checked-in `v1_1` IVM artifacts, which clears the
+  previously red binary-side smart-contract tests.
+
+Validation:
+- `cargo test -p mochi-core regenerate_ -- --ignored --nocapture`
+- `cargo test -p mochi-core --message-format short`
+- `cargo test -p izanami --message-format short`
+
+Latest sync (2026-03-26 MOCHI dashboard + wizard + bootstrap + chaos refresh):
+`mochi/mochi-core/src/{bootstrap,dashboard,chaos,lib,supervisor}.rs`,
+`mochi/mochi-ui-egui/src/{main,dashboard_view,composer_scenarios,wizard,chaos_view}.rs`,
+`crates/izanami/src/{lib,faults}.rs`,
+and
+`mochi/README.md`
+now carry the larger Mochi local-dev UX pass:
+
+- Mochi opens on a new account-first `Dashboard` with explorer balances,
+  recent blocks, one-click local actions, and direct bootstrap-file/env output
+  instead of dropping straight into the node/ops view;
+- first-run setup is now a wizard that selects topology, workspace, and Nexus
+  defaults before launching the sandbox;
+- the composer now has scenario cards for the most common local-dev flows while
+  preserving the advanced/raw transaction path; and
+- a new `Chaos Lab` tab reuses extracted Izanami fault helpers to exercise peer
+  bounce, latency, partition, pressure, and wipe/rejoin drills against the
+  current supervised sandbox.
+
+Validation:
+- `cargo fmt --all`
+- `cargo check -p mochi-core -p mochi-ui-egui -p izanami --message-format short`
+- `cargo test -p mochi-ui-egui --message-format short`
+- `cargo test -p mochi-core bootstrap::tests:: -- --nocapture`
+- `cargo test -p mochi-core dashboard::tests::fetch_dashboard_snapshot_aggregates_signers_assets_and_blocks -- --nocapture`
+
+Open work for this slice now remains:
+- continue splitting the remaining `mochi-ui-egui/src/main.rs` monolith so the
+  old network/activity/state panels and shared theme helpers live in dedicated
+  modules instead of the shell file;
+- decide whether the dashboard should grow a richer recent-activity rail
+  (transactions/rejections) instead of the current account+block snapshot only;
+- decide whether the refreshed fixture assets should also be surfaced from
+  developer docs or fixture-generation automation instead of relying on the
+  ignored regeneration tests alone.
+
+Latest sync (2026-03-26 Kagami task-first CLI + docs/help refresh):
+`crates/iroha_kagami/src/{main,localnet,localnet_tui,swarm,wizard,codec}.rs`,
+`crates/iroha_kagami/{README.md,CommandLineHelp.md}`,
+`crates/iroha_kagami/docs/{codec,kura,swarm}.md`,
+`crates/iroha_kagami/samples/codec/{README.md,account.{json,bin},domain.{json,bin}}`,
+`defaults/docker-compose*.yml`,
+and
+`docs/source/{norito_streaming*,sumeragi*}.md`
+now carry the Kagami usability overhaul:
+
+- the CLI is task-first at the top level (`wizard`, `localnet-wizard`,
+  `localnet`, `docker`, `keys`, `genesis`, `verify`, `advanced`) instead of
+  exposing the narrower operator subcommands as peers;
+- `wizard --non-interactive` now exposes the formerly prompt-only host/port and
+  relay fields, while `wizard`, `localnet`, and `docker` all emit labeled
+  summaries and generated next-step guidance instead of terse completion lines;
+- generic localnet flows now default to permissioned consensus unless the
+  selected profile/perf mode requires NPoS, the localnet TUI matches that
+  default, and the checked-in markdown help is now generated from the live CLI
+  and asserted in tests; and
+- Kagami README/docs/examples plus the codec fixture samples were refreshed to
+  the new command names and current codec schema so the crate-level suite is
+  green again.
+
+Validation:
+- `cargo fmt --all`
+- `cargo run -p iroha_kagami -- advanced markdown-help > crates/iroha_kagami/CommandLineHelp.md`
+- `CARGO_TARGET_DIR=/tmp/codex-target-iroha-kagami cargo test -p iroha_kagami --test codec regenerate_codec_samples -- --ignored --nocapture`
+- `CARGO_TARGET_DIR=/tmp/codex-target-iroha-kagami cargo test -p iroha_kagami`
+
+Open work for this slice now remains:
+- consider whether a future Kagami follow-up should add the deferred
+  `doctor`/spec-file workflows instead of only improving the current
+  flag-driven and generated-guide UX;
+- rerun broader workspace validation when budget allows, since this slice only
+  exercised `iroha_kagami`; and
+- no additional Kagami CLI/doc/help regressions are known after the task-first
+  surface change, regenerated markdown help, and green crate test suite.
+
+Latest sync (2026-03-26 MOCHI desktop UI + devex refresh):
+`mochi/mochi-ui-egui/src/main.rs`
+and
+`mochi/README.md`
+now carry a friendlier local-dev workflow for the desktop shell:
+
+- the desktop palette and hierarchy now push MOCHI toward a warmer,
+  Ganache-style "local chain cockpit" feel instead of a colder operator
+  console;
+- the overview/header, quickstart, and connect panels now expose copyable
+  launch recipes, app bootstrap env snippets, and `/status` curl probes so the
+  same setup is easy to reuse from a shell; and
+- the first-run path is clearer: preset choice, launch recipe, copyable local
+  identities, and live activity/debugging are now framed as one flow.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo check -p mochi-core -p mochi-ui-egui -p mochi-integration --message-format short`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui compose_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui shell_quote -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui ensure_http_base -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui render_overview_bar_smoke -- --nocapture`
+
+Open work for this slice now remains:
+- fix the existing `mochi-ui-egui` full-suite failures in the state-filter and
+  composer-template tests so the broader `cargo test -p mochi-ui-egui` run is
+  green again without the shared env-lock poison cascade;
+- decide whether the new desktop recipe/app-env snippets should also be exposed
+  from the bundle/docs pages outside `mochi/README.md`; and
+- no additional UI/devex blockers are known for this refresh after the targeted
+  helper/smoke reruns.
+
+Latest sync (2026-03-26 strict workspace clippy closure):
+`crates/iroha_data_model/src/rwa.rs`,
+`crates/iroha_executor_data_model/src/permission.rs`,
+`crates/iroha_genesis/src/bin/manifest_normalize.rs`,
+`crates/iroha_p2p/src/transport.rs`,
+`crates/iroha_core/src/pipeline/overlay.rs`,
+`crates/iroha_core/src/smartcontracts/isi/world.rs`,
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/commit.rs`,
+`crates/iroha_core/src/sumeragi/status.rs`,
+`crates/iroha_core/tests/kotodama_pointer_abi_apply.rs`,
+`crates/iroha_kagami/src/localnet.rs`,
+`crates/iroha_torii/src/routing.rs`,
+`crates/iroha_torii/src/iso20022_bridge.rs`,
+`crates/iroha_torii/tests/zk_roots_handler_integration.rs`,
+`crates/iroha/src/client.rs`,
+`crates/iroha/src/config/user.rs`,
+`integration_tests/src/sync.rs`,
+`crates/izanami/src/chaos.rs`,
+`crates/iroha_js_host/src/lib.rs`,
+and
+`python/iroha_python/iroha_python_rs/src/lib.rs`
+now carry the broader workspace lint cleanup:
+
+- strict workspace `clippy` is green again after clearing the remaining
+  cross-crate warnings/errors in data-model helpers, transport docs, test-only
+  Sumeragi scaffolding, Torii alias/zk regressions, config literals, and SDK
+  bindings; and
+- no additional strict `cargo clippy --workspace --all-targets -- -D warnings`
+  blockers are known in the current checkout.
+
+Validation:
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-clippy cargo clippy -p iroha_data_model --all-targets -- -D warnings`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-clippy cargo clippy --workspace --all-targets -- -D warnings`
+
+Open work for this slice now remains:
+- run the broader `cargo test --workspace` sweep when CI/runtime budget allows;
+- keep `cargo fmt --all` in mind for a future pass if unrelated formatting drift
+  resurfaces; and
+- no additional strict workspace `clippy` blockers are known after this sweep.
+
+Latest sync (2026-03-26 Torii account-alias selector consistency + OpenAPI refresh):
+`crates/iroha_core/src/state.rs`,
+`crates/iroha_torii/src/app_auth.rs`,
+`crates/iroha_torii/src/gov.rs`,
+`crates/iroha_torii/src/lib.rs`,
+`crates/iroha_torii/src/routing.rs`,
+`crates/iroha_torii/src/soracloud.rs`,
+`crates/iroha_torii/src/openapi.rs`,
+`docs/portal/static/openapi/torii.json`,
+and
+`docs/portal/static/openapi/versions/current/torii.json`
+now carry the remaining Torii alias follow-up:
+
+- app-facing Torii selectors now resolve account aliases to canonical Katakana
+  `i105` account ids consistently across app auth, governance, push,
+  repair-worker auth, account listing/query, asset-holder filters, Nexus
+  dataspace summaries, and subscription filters;
+- generated OpenAPI snapshots now describe that alias-capable contract instead
+  of the stale strict-i105-only wording; and
+- parser-focused Torii tests seed alias bindings through new test-only
+  `iroha_core::state` accessors, while short-form hardcoded account aliases now
+  use the reserved default dataspace alias `@universal` instead of assuming an
+  implicit `@sbp` dataspace.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/state.rs crates/iroha_torii/src/app_auth.rs crates/iroha_torii/src/gov.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/soracloud.rs`
+- `env CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --output docs/portal/static/openapi/versions/current/torii.json`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_core --lib parse_account_literal_resolves_aliases_in_non_default_dataspaces -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib verify_accepts_alias_account_header_and_returns_canonical_i105_account -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib ballot_plain_accepts_account_aliases -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib push_registration_accepts_account_alias_and_stores_canonical_i105 -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib sorafs_repair_worker_auth_accepts_alias_worker -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib asset_holders_get_filters_by_account_alias -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib asset_holders_query_filter_accepts_account_alias -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib accounts_query_filter_accepts_canonical_and_alias_and_rejects_non_canonical_i105_literals -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_nexus_dataspaces_account_summary_accepts_account_alias -- --nocapture`
+- `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_subscription_plans_filters_provider_alias -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the broader workspace-wide `cargo test --workspace` sweep once time
+  allows; and
+- no additional Torii account-alias resolution drift is known after the focused
+  alias regression suite and regenerated OpenAPI snapshots.
+
+Latest sync (2026-03-26 zk confidential localnet `Config` literal compatibility):
+`integration_tests/tests/zk_confidential_localnet.rs`
+now carries the remaining test-side compatibility fix for the current client
+config shape:
+
+- the pressure-submitter client template now sets
+  `soracloud_http_witness_file: None`, so the `zk_confidential_localnet` test
+  target compiles against the current `iroha::config::Config`.
+
+Validation:
+- `rustfmt --edition 2024 integration_tests/tests/zk_confidential_localnet.rs`
+- `cargo test -p integration_tests --test zk_confidential_localnet pressure_submitter_clients_applies_short_timeouts -- --exact --nocapture`
+
+Open work for this slice now remains:
+- no additional zk confidential localnet `Config` literal drift is known after
+  the focused compatibility fix and targeted test rerun.
+
+Latest sync (2026-03-26 Swift account-address bridge fallback without `NoritoBridge.xcframework`):
+`IrohaSwift/Sources/IrohaSwift/NativeBridge.swift`
+now carries the remaining Swift-side account-address bridge cleanup:
+
+- the bridge-style account-address API now falls back to the pure-Swift codec
+  when the native xcframework symbols are unavailable, instead of reporting the
+  codec as missing;
+- `parseAccountAddress(...)` and `renderAccountAddress(...)` still prefer the
+  native bridge when present, but the test and wrapper surface no longer depend
+  on `dist/NoritoBridge.xcframework` for account-address coverage; and
+- the focused Swift fixture parity test now executes instead of skipping on a
+  missing local bridge archive.
+
+Validation:
+- `cd IrohaSwift && swift test --filter AccountAddressTests`
+
+Open work for this slice now remains:
+- no additional Swift account-address bridge shim is known after the fallback
+  path and focused test rerun.
+
+Latest sync (2026-03-26 stale ASCII-corrupted / unsupported-kana account-literal sweep):
+`fixtures/account/address_vectors.json`,
+`javascript/iroha_js/test/{address,address_inspect}.test.js`,
+`javascript/iroha_js/dist/address.js`,
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`,
+`kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt`,
+`IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
+`python/iroha_python/README.md`,
+`docs/source/data_model*.md`,
+and
+`crates/ivm/docs/kotodama_grammar.md`
+now carry the remaining first-party account-literal cleanup:
+
+- stale ASCII-corrupted examples and bogus unsupported-kana placeholders were
+  replaced with canonical I105 account ids;
+- the shared address fixture now re-encodes every positive I105 vector from
+  canonical bytes, which removes the last stale multisig checksum drift; and
+- the checked-in JS `dist` bundle was rebuilt so the published package matches
+  the current Base58-plus-Iroha-poem alphabet from source.
+
+Validation:
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js`
+- `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.address.AccountAddressTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks`
+- `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.address.AccountAddressTest --console=plain`
+- `cd IrohaSwift && swift test --filter AccountAddressTests`
+- targeted `rg` sweeps for the retired stale-account-literal patterns across first-party source/docs/fixtures
+
+Open work for this slice now remains:
+- no additional first-party stale account-literal drift is known after the
+  repo-wide sweep and focused SDK fixture/test reruns.
+
+Latest sync (2026-03-26 identifier doc/spec/validation alignment):
+`docs/source/data_model.md`,
+`docs/source/data_model_and_isi_spec*.md`,
+`docs/source/sdk/js/validation*.md`,
+and
+`IrohaSwift/README.md`
+now carry the remaining public identifier wording cleanup:
+
+- public docs now distinguish canonical Base58 `AssetDefinitionId` values from
+  owner-qualified `AssetId` holdings;
+- translated/generated spec copies and JS validation guides now require
+  `<base58-asset-definition-id>#<canonical-i105-account-id>[#dataspace:<id>]`
+  wherever they describe asset identifiers; and
+- the Swift README examples now use the same canonical I105 account
+  placeholder in `assetId` examples.
+
+Validation:
+- targeted `rg` sweeps over `docs/source/data_model*.md`, `docs/source/data_model_and_isi_spec*.md`, `docs/source/sdk/js/validation*.md`, and `IrohaSwift/README.md`
+- `rg -n -F '<canonical-base58-asset-definition-id>#<canonical-i105-account-id>' docs/source IrohaSwift/README.md`
+
+Open work for this slice now remains:
+- no additional public/docs identifier drift is known after the targeted
+  sweeps over the translated specs, JS validation guides, and Swift README.
+
+Latest sync (2026-03-26 Python i105 decoder fix + broader Python suite pass):
+`python/iroha_python/src/iroha_python/address.py`,
+`python/iroha_python/tests/test_address_format.py`,
+`python/iroha_python/src/iroha_python/client.py`,
+`python/iroha_python/src/iroha_python/query.py`,
+`python/iroha_python/src/iroha_python/__init__.py`,
+`python/iroha_python/src/iroha_python/crypto.py`,
+`python/iroha_python/tests/test_rwa_client.py`,
+and
+`python/iroha_python/iroha_python_rs/src/lib.rs`
+now carry the broader Python SDK validation follow-up:
+
+- the Python I105 helpers now validate the restored mixed alphabet directly:
+  Base58 plus the 47 katakana from the Iroha poem, with halfwidth Iroha-kana
+  aliases still accepted on decode;
+- the governance ZK ballot owner-normalization path now accepts canonical
+  Python-generated i105 literals again;
+- the broader Python Torii RWA read surface remains green under the full
+  Python SDK test directory; and
+- the full `iroha_python_rs` crate test suite is now passing, not just the
+  focused `rwa_` subset.
+
+Validation:
+- `python3 -m py_compile python/iroha_python/src/iroha_python/address.py python/iroha_python/tests/test_address_format.py`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests -q`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_full cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml -- --nocapture`
+
+Open work for this slice now remains:
+- thread the live dataspace catalog through the remaining
+  `WorldReadOnly`-only alias parsing call sites so non-default dataspace
+  account labels resolve without relying on the default-catalog fallback; and
+- decide whether Python should also mirror the JS/Swift iterator and
+  account-scoped explorer RWA convenience helpers, or stop at the raw/typed
+  list/query/detail surfaces now that end-to-end parity exists.
+
+Latest sync (2026-03-26 Python RWA Torii parity + binding verification):
+`python/iroha_python/src/iroha_python/client.py`,
+`python/iroha_python/src/iroha_python/query.py`,
+`python/iroha_python/src/iroha_python/__init__.py`,
+`python/iroha_python/src/iroha_python/crypto.py`,
+`python/iroha_python/tests/test_rwa_client.py`,
+`python/iroha_python/README.md`,
+and
+`python/iroha_python/iroha_python_rs/src/lib.rs`
+now carry the next dedicated-RWA Python SDK slice:
+
+- Python now exposes dedicated chain-state and explorer RWA read APIs
+  (`list_rwas`, `query_rwas`, `list_explorer_rwas`, `get_explorer_rwa_detail`)
+  with typed DTOs and a matching `rwa_query_envelope(...)` helper instead of
+  stopping at instruction-building support;
+- the focused `iroha_python_rs` RWA binding tests are green after fixing the
+  RWA metadata instruction downcast and importing `RwaParentRef` for the
+  richer register/merge payload parser; and
+- `crypto.py` now falls back to `typing.TypeAlias` on modern interpreters, so
+  the Python package does not unnecessarily require `typing_extensions` just to
+  import the client surface in those environments.
+
+Validation:
+- `python3 -m py_compile python/iroha_python/src/iroha_python/crypto.py python/iroha_python/src/iroha_python/client.py python/iroha_python/src/iroha_python/query.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/test_rwa_client.py`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_rwa_client.py python/iroha_python/tests/test_tx_rwa.py -q`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_rwa_fresh cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml rwa_ -- --nocapture`
+
+Open work for this slice now remains:
+- thread the live dataspace catalog through the remaining
+  `WorldReadOnly`-only alias parsing call sites so non-default dataspace
+  account labels resolve without relying on the default-catalog fallback; and
+- decide whether Python should also mirror the JS/Swift iterator and
+  account-scoped explorer RWA convenience helpers, or stop at the raw/typed
+  list/query/detail surfaces now that end-to-end parity exists.
+
+Latest sync (2026-03-26 first-release identifier hard-cut):
+`crates/iroha_data_model/src/account/address.rs`,
+`crates/iroha_data_model/src/account/address/compliance_vectors.rs`,
+`crates/iroha_data_model/src/account/rekey.rs`,
+`crates/iroha_data_model/src/asset/id.rs`,
+`crates/iroha_cli/src/commands/alias.rs`,
+`crates/ivm/tests/tlv_examples.rs`,
+`IrohaSwift/Sources/IrohaSwift/AccountAddress.swift`,
+`IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
+`IrohaSwift/README.md`,
+`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt`,
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/{AccountAddress,AssetIdDecoder}.java`,
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AssetIdDecoderTests.java`,
+`javascript/iroha_js/src/address.js`,
+`python/iroha_python/src/iroha_python/address.py`,
+`fixtures/account/address_vectors.json`,
+`docs/account_structure.md`,
+and
+`docs/account_structure_sdk_alignment.md`
+now carry the stricter first-release identifier contract:
+
+- canonical account ids are I105 only, with the legacy public decoder
+  alphabets removed across the core codecs and SDK helpers;
+- account aliases remain on-chain aliases in `name@domain.dataspace` /
+  `name@dataspace` form, and the CLI validator now enforces that syntax
+  directly;
+- public asset ids remain canonical Base58 `AssetDefinitionId` values, while
+  asset aliases remain `name#domain.dataspace` / `name#dataspace`; and
+- the Android SDK no longer mis-parses asset-holding literals as bare
+  definition ids.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha_id_contract cargo check -p iroha_data_model --message-format short`
+- `CARGO_TARGET_DIR=/tmp/iroha_addr_vectors_fresh_20260326 cargo run -p iroha_data_model --example account_address_vectors` (run via a temporary output file and moved into place on success)
+- `cd IrohaSwift && swift test --filter AccountAddressTests`
+- `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugUnitTestJavaWithJavac --console=plain`
+
+Open work for this slice now remains:
+- keep future generated/public docs aligned if new identifier wording is added
+  elsewhere; the targeted sweeps in this pass found no remaining bare-asset
+  `AssetId` wording in the translated/generated docs that had drifted.
+
+Latest sync (2026-03-26 account-selector alias consistency across core + Torii):
+`crates/iroha_core/src/block.rs`,
+`crates/iroha_torii/src/routing.rs`,
+and
+`crates/iroha_torii/src/openapi.rs`
+now carry the next account-selector cleanup slice:
+
+- strict `AccountId` parsing still accepts only canonical I105
+  literals, but the world/state-backed selector layer now resolves on-chain
+  account aliases in `name@domain.dataspace` / `name@dataspace` form against
+  the live dataspace catalog;
+- the live Torii account-id path layer (`/v1/accounts/{account_id}/...`,
+  `/v1/explorer/accounts/{account_id}...`, `/v1/kaigi/relays/{relay_id}`) is
+  alias-aware again, and the Swift/JS/Python/Kotlin/Rust client account-path
+  helpers now forward aliases instead of rejecting them client-side;
+- Torii account-list and account-query filters now share the same state-backed
+  canonicalization path, so alias filters no longer diverge between
+  `GET /v1/accounts` and `POST /v1/accounts/query`; and
+- the OpenAPI source documents those alias-capable selector surfaces so the
+  public contract matches the implementation.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/block.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/openapi.rs`
+- `env CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target4 cargo test -p iroha_core --lib parse_account_literal_resolves_aliases_in_non_default_dataspaces -- --exact --nocapture` (still compiling on a cold isolated target)
+
+Open work for this slice now remains:
+- finish the focused isolated Rust verification for the new core/Torii alias
+  regression tests once the cold cargo target completes; and
+- thread the same alias-capable selector wording into any remaining generated
+  API artifacts after the code-path verification is complete.
+
+Latest sync (2026-03-26 Python dedicated RWA instruction parity):
+`python/iroha_python/iroha_python_rs/src/lib.rs`,
+`python/iroha_python/src/iroha_python/tx.py`,
+`python/iroha_python/tests/test_tx_rwa.py`,
+`python/iroha_python/README.md`,
+and
+`crates/iroha_core/src/block.rs`
+now carry the next dedicated-RWA client slice:
+
+- Python no longer stops at `transfer_rwa(...)`; the Rust extension now exposes
+  the dedicated RWA register/merge/lifecycle/control/metadata instruction
+  family, and `TransactionDraft` mirrors that surface with high-level helpers;
+- the pure-Python draft wrapper now canonicalizes scalar Numeric quantities and
+  JSON-normalizes richer RWA payload objects before they reach the native
+  binding; and
+- `WorldReadOnly`-only account-selector helpers still need the live dataspace
+  catalog threaded through them before non-default dataspace account aliases
+  resolve consistently outside the state-backed Torii paths.
+
+Validation:
+- `python3 -m py_compile python/iroha_python/src/iroha_python/tx.py python/iroha_python/tests/test_tx_rwa.py`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_tx_rwa.py -q`
+- `rustfmt --edition 2024 crates/iroha_core/src/block.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_rwa_fresh cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml rwa_ -- --nocapture`
+
+Open work for this slice now remains:
+- thread the live dataspace catalog through the remaining
+  `WorldReadOnly`-only alias parsing call sites so non-default dataspace
+  account labels resolve without relying on the baseline catalog fallback; and
+- decide whether Python should also mirror the JS/Swift iterator and
+  account-scoped explorer RWA convenience helpers, or stop at the raw/typed
+  list/query/detail surfaces now that end-to-end parity exists.
+
+Latest sync (2026-03-26 JS RWA metadata builder parity):
+`javascript/iroha_js/src/{instructionBuilders,transaction,index}.js`,
+`javascript/iroha_js/index.d.ts`,
+`javascript/iroha_js/test/{instructionBuilders,rwaBuilders.pure,transactionBuilder}.test.js`,
+`javascript/iroha_js/README.md`,
+`crates/iroha_js_host/src/lib.rs`,
+and
+`crates/iroha_core/src/block.rs`
+now carry the next dedicated-RWA client slice:
+
+- JS now exposes dedicated builders and signed-transaction wrappers for
+  `SetRwaKeyValue` and `RemoveRwaKeyValue`, matching the earlier lifecycle and
+  control helpers instead of leaving RWA metadata edits to ad hoc payload
+  assembly;
+- the native JS host now round-trips those RWA metadata instructions through
+  `RwaInstructionBox`, removing the last explicit "unsupported RWA metadata
+  instruction variant" error from the host JSON bridge; and
+- the isolated Python binding test is no longer blocked by the RWA binding
+  implementation itself, but it still pulls in an unrelated `iroha_core`
+  compile path whose `WorldReadOnly` account-alias parsing only has the default
+  dataspace catalog available today.
+
+Validation:
+- `cargo fmt --all`
+- `cd javascript/iroha_js && node --test --test-name-pattern "buildTransferRwaInstruction covers rwa transfer|rwa scalar instruction builders cover lifecycle operations" test/instructionBuilders.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/rwaBuilders.pure.test.js`
+- `cd javascript/iroha_js && node --test --test-name-pattern "buildTransferRwaTransaction returns canonical hash|buildRegisterRwaTransaction forwards canonical instruction payload|buildRwaKeyValueTransactions forward canonical instruction payloads" test/transactionBuilder.test.js`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_js_host cargo test -p iroha_js_host rwa_instruction_json_roundtrip -- --nocapture`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_rwa cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml transfer_rwa_instruction_classmethod_serializes_canonical_numeric_payload -- --nocapture`
+
+Open work for this slice now remains:
+- thread the live dataspace catalog through the remaining
+  `parse_account_literal_with_world(...)` call sites that only expose
+  `WorldReadOnly`, so non-default account-alias dataspaces keep working even on
+  the broader `iroha_core` compile path; and
+- decide whether Python should also mirror the JS/Swift iterator and
+  account-scoped explorer RWA convenience helpers, or stop at the raw/typed
+  list/query/detail surfaces now that end-to-end parity exists.
+
+Latest sync (2026-03-26 native JS RWA host parity and dotted-domain i105 helper fix):
+`crates/iroha_js_host/src/lib.rs`,
+`crates/iroha_data_model/src/account/address/vectors.rs`,
+`javascript/iroha_js/scripts/copy-native.mjs`,
+`javascript/iroha_js/src/address.js`,
+`javascript/iroha_js/test/address.test.js`,
+and the existing JS/Python RWA regression tests now move the dedicated RWA
+client slice past the pure-JS-only fallback path:
+
+- the copied macOS addon is ad-hoc signed automatically, so
+  `javascript/iroha_js/native/iroha_js_host.node` now loads under Node instead
+  of failing code-signature validation at `dlopen` time;
+- the native JS host now parses JS RWA payloads into `RwaInstructionBox`
+  variants and renders the JS-facing RWA JSON shape manually for parent edges,
+  control policies, and the other dedicated RWA instructions, so the focused
+  native instruction and transaction tests now execute against the real Norito
+  addon path instead of skipping or failing as unsupported;
+- `AccountAddress.fromAccount({ domain })` now accepts dotted domain ids such
+  as `hbl.sbp` by validating each label separately, which restores the JS
+  transaction-builder helper path that derives sample i105 authorities for the
+  native RWA transaction tests; and
+- the account-address vector helper in `iroha_data_model` now matches the
+  current `AccountAddressError` enum, removing a native-addon rebuild blocker
+  that surfaced while validating the JS host changes.
+
+Validation:
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_js_host cargo build -p iroha_js_host --lib`
+- `cd javascript/iroha_js && CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_js_host npm run build:native`
+- `cd javascript/iroha_js && node -e 'import("./src/native.js").then((m)=>{ const binding = m.getNativeBinding(); console.log("binding", !!binding, typeof binding?.noritoEncodeInstruction, typeof binding?.buildTransaction); }).catch((err)=>{ console.error(err); process.exit(1); })'`
+- `cd javascript/iroha_js && node --test --test-name-pattern "buildRegisterRwaInstruction normalizes richer lot payloads|buildTransferRwaInstruction covers rwa transfer|rwa scalar instruction builders cover lifecycle operations" test/instructionBuilders.test.js`
+- `cd javascript/iroha_js && node --test --test-name-pattern "buildTransferRwaTransaction returns canonical hash|buildRegisterRwaTransaction forwards canonical instruction payload" test/transactionBuilder.test.js`
+- `cd javascript/iroha_js && node --test --test-name-pattern "fromAccount accepts dotted domain ids without changing canonical payloads" test/address.test.js`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_tx_rwa.py -q`
+
+Open work for this slice now remains:
+- finish and rerun the isolated Rust-side Python extension test for
+  `Instruction.transfer_rwa(...)` under its separate target dir, then fold that
+  result back into the status notes once it completes cleanly; and
+- decide whether the JS client should expose first-class builders for RWA
+  metadata edits as well, instead of stopping at the dedicated lifecycle and
+  control instructions.
+
+Latest sync (2026-03-26 JS/Python RWA client parity and JS address lazy native fallback):
+`javascript/iroha_js/src/{address,normalizers,instructionBuilders,transaction,toriiClient,index}.js`,
+`javascript/iroha_js/index.d.ts`,
+`javascript/iroha_js/test/{addressNativeInterop,rwaBuilders.pure,toriiClient,toriiIterators.parity,transactionBuilder,instructionBuilders}.test.js`,
+`javascript/iroha_js/README.md`,
+`python/iroha_python/iroha_python_rs/src/lib.rs`,
+`python/iroha_python/src/iroha_python/tx.py`,
+and
+`python/iroha_python/README.md`
+now push the JS and Python client stacks past NFT-only handling for the
+dedicated RWA family:
+
+- JS now exposes first-class RWA id normalization, dedicated RWA instruction
+  builders, transaction wrappers, Torii list/query/iterate helpers, explorer
+  and account pagination helpers, and matching TypeScript declarations; and
+- Python now exposes `Instruction.transfer_rwa(...)` in the Rust extension plus
+  `TransactionDraft.transfer_rwa(...)` in the pure-Python transaction helper;
+  and
+- the JS account-address codec now resolves the native parse/render bridge
+  lazily and honours the injected `__IROHA_NATIVE_BINDING__` override, so
+  pure-JS consumers no longer hard-crash just by importing `src/address.js`
+  before deciding whether the native addon is available.
+
+Validation:
+- `cd javascript/iroha_js && npm run build:dist`
+- `cd javascript/iroha_js && npm run build:native`
+- `cd javascript/iroha_js && node -e 'import("./src/address.js").then((m)=>{ console.log("loaded", typeof m.AccountAddress); }).catch((err)=>{ console.error(err); process.exit(1); })'`
+- `cd javascript/iroha_js && node --test test/addressNativeInterop.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/rwaBuilders.pure.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern "listRwas hits rwa endpoint|listExplorerRwas encodes owner/domain filters and pagination|getExplorerRwaDetail encodes path and decodes response|queryRwas posts structured envelope|iterateAccountRwas walks explorer pagination and honours maxItems|listRwas forwards pagination/sort/filter and validates filter payloads" test/toriiClient.test.js test/toriiIterators.parity.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern "buildTransferRwaTransaction returns canonical hash|buildRegisterRwaTransaction forwards canonical instruction payload" test/transactionBuilder.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern "buildRegisterRwaInstruction normalizes richer lot payloads|buildTransferRwaInstruction covers rwa transfer|rwa scalar instruction builders cover lifecycle operations" test/instructionBuilders.test.js`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_tx_rwa.py -q`
+
+Open work for this slice now remains:
+- rerun the targeted Rust test for
+  `python/iroha_python/iroha_python_rs::Instruction::transfer_rwa(...)` once
+  the isolated-target compile completes, so the extension-side serializer path
+  is also validated locally; and
+- decide whether the JS client should expose first-class builders for dedicated
+  RWA metadata edits as well, now that the native lifecycle/control path is in
+  place.
+
+Latest sync (2026-03-26 Swift RWA builders and metadata target parity):
+`IrohaSwift/Sources/IrohaSwift/RwaInstructionBuilders.swift`,
+`IrohaSwift/Sources/IrohaSwift/AccountAddress.swift`,
+`IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift`,
+`IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift`,
+`IrohaSwift/Sources/IrohaSwift/TxBuilder.swift`,
+`crates/connect_norito_bridge/src/lib.rs`,
+and
+`IrohaSwift/README.md`
+now move the Apple SDK past Torii-only support for the dedicated RWA family:
+
+- Swift now exposes a dedicated RWA payload-builder family for
+  `RegisterRwa`, `TransferRwa`, `MergeRwas`, `RedeemRwa`, `FreezeRwa`,
+  `UnfreezeRwa`, `HoldRwa`, `ReleaseRwa`, `ForceTransferRwa`, and
+  `SetRwaControls`, with matching `IrohaSDK` convenience methods;
+- Swift-side validation now understands public RWA ids in
+  `<64-hex-hash>$<domain>` form and canonicalizes the hash portion before the
+  payload is emitted; and
+- Swift-side account validation/rendering now uses the local i105 codec first,
+  which removes the bridge-init crash from malformed-account and focused RWA
+  payload-builder tests while still preserving the native bridge as a fallback
+  for bridge-backed encode paths; and
+- the existing metadata signing path now accepts `.rwa(...)`, with the native
+  bridge wiring target kind `4` to the dedicated `RwaInstructionBox`
+  metadata-edit variants.
+
+Validation:
+- `cargo fmt --all`
+- `cd IrohaSwift && swift test --filter TransactionInputValidatorTests/testSanitizeRwaIdAcceptsCanonicalPublicLiteral`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionInputValidatorTests/testSanitizeMetadataTargetRejectsMalformedRwaId`
+- `cd IrohaSwift && swift test --skip-build --filter RwaInstructionBuildersTests/testRegisterRwaWrapsRawNewRwaObject`
+- `cd IrohaSwift && swift test --skip-build --filter RwaInstructionBuildersTests/testMergeRwasWrapsRawMergeObject`
+- `cd IrohaSwift && swift test --skip-build --filter RwaInstructionBuildersTests/testRejectsInvalidRwaIdAndQuantity`
+- `cd IrohaSwift && swift test --filter TransactionEncoderValidationTests/testSetMetadataRejectsMalformedAuthority`
+- `cd IrohaSwift && swift test --filter RwaInstructionBuildersTests`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionInputValidatorTests/testValidateAcceptsI105Authority`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionInputValidatorTests/testValidateAcceptsI105DefaultAuthorityAndCanonicalizesToI105`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionInputValidatorTests/testSanitizeMetadataTargetTrimsAccountAndDomainIds`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionEncoderValidationTests/testSetMetadataRejectsMalformedRwaTarget`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo test -p connect_norito_bridge rwa_metadata_ -- --nocapture`
+
+Open work for this slice now remains:
+- decide whether Swift should grow typed `NewRwa` / `MergeRwas` /
+  `RwaControlPolicy` value objects instead of the current JSON-carrying
+  wrappers for the richer payloads; and
+- decide whether Swift should add native signed-envelope builders for the full
+  non-metadata RWA instruction family instead of stopping at payload builders
+  plus `.rwa(...)` metadata signing.
+
+Latest sync (2026-03-26 Swift Torii RWA surface):
+`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`,
+`IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`,
+and
+`IrohaSwift/README.md`
+now give the Apple SDK first-class Torii coverage for the new RWA asset family:
+
+- Swift now exposes typed explorer RWA records/pages plus chain-state RWA list
+  pages for `/v1/explorer/rwas`, `/v1/explorer/rwas/{rwa_id}`, `/v1/rwas`,
+  and `/v1/rwas/query`;
+- `ToriiClient` now wraps those endpoints directly, including chain-state
+  pagination via `iterateRwas(...)`; and
+- the Swift README now documents the dedicated RWA helpers instead of leaving
+  the feature implicit.
+
+Validation:
+- `cd IrohaSwift && swift test --filter ToriiClientTests/testExplorerRwasParamsQueryItemsEncodePaginationAndDomain`
+- `cd IrohaSwift && swift test --filter ToriiClientTests/testExplorerRwaRecordDecodesNullStatusAndMetadataDefaults`
+- `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testGetExplorerRwaDetailEncodesPathAndDecodesResponse`
+- `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testListRwasEncodesOptions`
+- `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testQueryRwasPostsEnvelope`
+- `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testIterateRwasRespectsPagingAndMaxItems`
+
+Open work for this slice now remains:
+- decide whether the mobile SDKs should grow typed `NewRwa` / `MergeRwas` /
+  `RwaControlPolicy` value objects instead of the current JSON-carrying
+  wrappers for richer RWA payloads; and
+- decide whether Swift should add native signed-envelope builders for the full
+  non-metadata RWA instruction family instead of stopping at payload builders
+  plus `.rwa(...)` metadata signing.
+
+Latest sync (2026-03-26 alias-aware asset-definition selector runtime):
+`crates/iroha_config/src/parameters/{actual,user}.rs`,
+`crates/iroha_core/src/{block.rs,executor.rs}`,
+`crates/iroha_core/src/smartcontracts/isi/{domain.rs,soracloud.rs,staking.rs,world.rs}`,
+`crates/iroha_core/src/sumeragi/penalties.rs`,
+`crates/iroha_torii/src/{iso20022_bridge.rs,lib.rs,routing.rs}`,
+`crates/iroha_torii/tests/accounts_faucet.rs`,
+the checked-in Mochi/Kotodama examples, and the Python fixtures now close the
+remaining alias-hostile asset-definition selector paths:
+
+- Torii faucet, Torii transaction-history allow-lists, ISO 20022 currency
+  bindings, Nexus staking, and Nexus fees now accept either canonical Base58
+  asset-definition ids or active on-chain asset aliases at config parse time;
+- the corresponding runtime paths now resolve those selectors against world
+  state at the current observation timestamp, so leased aliases such as
+  `xor#universal` work for faucet transfers, faucet PoW accounting, ISO bridge
+  transaction construction, transaction-history definition filters, Nexus fee
+  charging, staking/slash escrow flows, and the domain/asset-definition
+  unregister guards; and
+- the remaining positive examples/tests that still passed alias-shaped literals
+  into typed `AssetDefinitionId` constructors in non-alias-aware contexts now
+  use canonical Base58 literals, while offline-allowance client fixtures assert
+  the canonical `asset_definition_id` field and keep alias display separate.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_config torii_faucet -- --nocapture`
+- `cargo test -p iroha_config nexus_asset_selector -- --nocapture`
+- `cargo test -p iroha_config iso_bridge_parse -- --nocapture`
+- `cargo test -p iroha_torii --features app_api --test accounts_faucet -- --nocapture`
+- `cargo test -p iroha_torii --lib iso20022_bridge::tests::runtime_accepts_asset_alias_currency_binding -- --nocapture`
+- `cargo test -p iroha_torii --lib iso20022_bridge::tests::build_transaction_accepts_asset_alias_hint -- --nocapture`
+- `cargo test -p iroha_core --lib stake_context_accepts_i105_account_literals -- --nocapture`
+
+Open work for this slice now remains:
+- rerun broader workspace verification (`cargo build --workspace`,
+  `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`)
+  when we can afford the full repo-wide build/test budget; and
+- keep the remaining public alias-oriented docs/examples as-is unless those
+  API surfaces stop resolving on-chain aliases, in which case they should be
+  migrated to canonical Base58 literals too.
+
+Latest sync (2026-03-26 security audit remediations landed):
+`crates/iroha_torii/src/{lib,gov,routing,openapi,zk_attachments}.rs`,
+`crates/iroha_p2p/src/{peer,network,transport}.rs`,
+`IrohaSwift/Sources/IrohaSwift/{Confidential,TransportSecurity,ToriiClient,TxBuilder}.swift`,
+`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/{TransportSecurity,SubscriptionToriiClient,OfflineToriiClient}.kt`,
+and
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/{TransportSecurity,SubscriptionToriiClient,OfflineToriiClient}.java`
+now close the concrete findings from `security_audit_report.md`:
+
+- Torii no longer traces raw request headers and no longer exposes the audited
+  remote server-side-signing / confidential-derive shortcuts;
+- Swift/Kotlin/Java transport sensitivity now covers canonical auth headers
+  plus seed-bearing bodies, and the audited SDK helpers fail closed instead of
+  forwarding caller `private_key` material to Torii;
+- the attachment sanitizer now requires a real OS sandbox on supported Unix
+  hosts and fails closed otherwise; and
+- TLS/QUIC P2P connections now authenticate the live transport session by
+  signing/verifying the presented certificate fingerprint inside the existing
+  handshake.
+
+Validation:
+- `cargo fmt --all`
+- `cd IrohaSwift && swift test --filter TransportSecurityTests`
+- `cd IrohaSwift && swift test --filter RemovedServerSideSigningFlow`
+- `cd IrohaSwift && swift test --filter OfflineCashEndpointsRejectRemovedServerSideSigningFlows`
+- `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.TransportSecurityClientTest --console=plain`
+- `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test` (security slice compiled; suite still fails in unrelated existing OkHttp tests)
+- `CARGO_TARGET_DIR=/tmp/iroha_security_verify cargo check -p iroha_torii --lib --message-format short`
+- `CARGO_TARGET_DIR=/tmp/iroha_security_verify cargo test -p iroha_p2p handshake_accepts_matching_transport_binding --lib -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_security_verify cargo test -p iroha_p2p handshake_rejects_mismatched_transport_binding --lib -- --nocapture`
+- `rg -n '/v1/confidential/derive-keyset|ConfidentialKeyRequest|ConfidentialKeyResponse' docs/source docs/portal IrohaSwift/README.md docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json`
+- `rg -n '"private_key"' docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json`
+
+Open work from this audit now is:
+- rerun broader Rust/SDK verification once there is budget for the full
+  workspace build/test surface and recheck the Java Android suite after the
+  unrelated OkHttp failures are addressed.
+
+Latest sync (2026-03-26 Kotlin/Java mobile SDKs now ship the dedicated RWA builder family):
+`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/`,
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/`,
+and the touched Android SDK docs now expose the first dedicated mobile RWA
+surface:
+
+- Kotlin `core-jvm` and Java/Android now both ship
+  `RegisterRwaInstruction`, `TransferRwaInstruction`,
+  `MergeRwasInstruction`, `RedeemRwaInstruction`,
+  `FreezeRwaInstruction`, `UnfreezeRwaInstruction`,
+  `HoldRwaInstruction`, `ReleaseRwaInstruction`,
+  `ForceTransferRwaInstruction`, and `SetRwaControlsInstruction`;
+- both SDKs now treat RWAs as first-class metadata targets in
+  `SetKeyValueInstruction` / `RemoveKeyValueInstruction`; and
+- Android-side canonical i105 validation now also covers `TransferRwa`
+  source/destination plus `ForceTransferRwa` destination account fields.
+
+Validation:
+- `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.RwaInstructionBuildersTest --console=plain`
+- `./gradlew :core:test --tests org.hyperledger.iroha.android.model.instructions.RwaInstructionBuilderTests --tests org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests --console=plain`
+
+Open work for this slice now remains:
+- decide whether the mobile SDKs should grow typed `NewRwa` / `MergeRwas` /
+  `RwaControlPolicy` value objects instead of the current JSON-carrying
+  wrappers for the richer RWA payloads; and
+- decide whether Swift should add native signed-envelope builders for the full
+  non-metadata RWA instruction family instead of stopping at payload builders
+  plus `.rwa(...)` metadata signing.
 
 Latest sync (2026-03-26 `iroha_python_rs` Linux test builds now discover versioned CPython shared libraries):
 `python/iroha_python/iroha_python_rs/build.rs`
@@ -31,43 +2272,6 @@ Open work for this Python-linking slice now remains:
   definition identifier or whether the parser behavior regressed independently
   of this CPython runtime discovery fix.
 
-Latest sync (2026-03-25 CUDA-featured `ivm` builds now link on this driver-only WSL host):
-`vendor/find_cuda_helper/src/lib.rs`
-now discovers driver-only CUDA library directories such as `/usr/lib/wsl/lib`
-instead of only toolkit-style install roots, and
-`crates/ivm/src/lib.rs`
-now treats CUDA runtime-error reporting correctly in the crate-level regression
-when the `cuda` feature is enabled but the backend is unavailable.
-
-- the focused `ivm --features cuda` slice now gets past the old unresolved
-  `cu*` symbol linker failure on this machine, because `cust` / `cust_raw`
-  now receive a real CUDA driver link search path even without `nvcc` or a
-  full `/usr/local/cuda` toolkit install;
-- the crate-level runtime-status regression no longer assumes
-  `errors.cuda == None` on all CUDA-featured builds, which was false on this
-  host as soon as the backend was allowed to probe live runtime state; and
-- rerunning the focused CUDA lib/integration tests now reaches execution on
-  this machine instead of dying in the linker, although the backend still
-  self-reports unavailable at runtime so the live-kernel tests currently take
-  their existing skip paths.
-
-Validation:
-- `cargo test --manifest-path vendor/find_cuda_helper/Cargo.toml`
-- `cargo fmt --all`
-- `cargo test -p ivm --features cuda acceleration_runtime_errors_default_none_or_hw_reason --lib -- --nocapture`
-- `cargo test -p ivm --features cuda --lib sha256_merkle_selftest_covers_cuda_kernels -- --nocapture`
-- `cargo test -p ivm --features cuda --test cuda -- --nocapture`
-- `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture`
-
-Open work for this CUDA slice now remains:
-- diagnose why `ivm::cuda_available()` is still false on this host even though
-  the CUDA driver loads and the focused CUDA test binaries now link and run;
-- once the backend is actually available, rerun the broader focused CUDA
-  runtime/self-test slice (`cuda_extra`, parity kernels, and other live-driver
-  regressions) and close the remaining “skipped because unavailable” backlog;
-- decide whether driver-only host discovery like `/usr/lib/wsl/lib` should be
-  pushed upstream beyond the vendored helper after this branch lands.
-
 Latest sync (2026-03-26 permission JSON decode-time canonicalization and alias-scope schema alignment):
 `crates/iroha_data_model/src/permission.rs`,
 `crates/iroha_executor_data_model/src/permission.rs`,
@@ -86,6 +2290,172 @@ Validation:
 
 Open work for this slice now remains:
 - no additional confirmed work remains in this permission/schema compatibility slice.
+
+Latest sync (2026-03-26 CUDA runtime self-tests now pass on this driver-only WSL host):
+`crates/ivm/src/cuda.rs`,
+`crates/ivm/src/gpu_manager.rs`,
+and
+`crates/ivm/cuda/signature.cu`
+now keep the live CUDA backend usable on this `/usr/lib/wsl/lib`-backed host.
+
+- `ivm::cuda_available()` now goes through `GpuManager::shared()` after CUDA
+  driver initialization instead of probing `Device::num_devices()` too early,
+  which fixes the false-negative “unavailable” result on this machine;
+- the GPU manager now retries context setup without `MAP_HOST` when the WSL
+  primary context rejects that flag, so the driver-only discovery fix from
+  `find_cuda_helper` is enough to get a usable CUDA context here;
+- `GpuManager::init()` / `shared()` now honor the configured CUDA disable
+  state and invalidate cached contexts when that policy flips, so direct
+  manager access cannot bypass `set_acceleration_config(enable_cuda = false)`;
+- the startup truth set now fails closed on recursive self-test entry, uses the
+  scalar `keccak_f1600_impl` reference instead of recursing back through the
+  CUDA gate, and rebinds the cached CUDA context on fresh worker threads, which
+  fixes the earlier Ed25519 self-test loop and the grouped SHA-256 Merkle
+  regression;
+- `signature.cu` now restores the missing `ge_p3_identity` helper, so the
+  Ed25519 signature PTX builds and loads again; and
+- the previously skipped focused runtime slice now runs live on this host:
+  `cuda_extra`, SHA/AES/Keccak/Poseidon parity tests, and the existing
+  mismatch-disable regressions all execute against a real CUDA backend.
+
+Validation:
+- `cargo test --manifest-path vendor/find_cuda_helper/Cargo.toml`
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda acceleration_runtime_errors_default_none_or_hw_reason --lib -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda cached_cuda_selftest_rebinds_context_on_new_thread --lib -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib sha256_merkle_selftest_covers_cuda_kernels -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib selftest_covers_ -- --test-threads=1`
+- `cargo test -p ivm --features cuda --test cuda -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --test cuda_extra --test cuda_parity_keccak_aes --test cuda_sha256 --test poseidon_cuda_parity -- --test-threads=1`
+- `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --test cuda_env -- --test-threads=1`
+- `cargo test -p ivm --features cuda --test gpu_manager --test gpu_determinism --test hardware_determinism -- --test-threads=1`
+- `cargo test -p ivm --features cuda --test crypto -- --test-threads=1`
+
+Open work for this CUDA slice now remains:
+- no additional confirmed work remains in this focused CUDA runtime slice; the
+  driver-only `/usr/lib/wsl/lib` discovery stays in the vendored helper for
+  this branch, and no extra upstream delta is required to close this item here.
+
+Latest sync (2026-03-26 Norito now ships an in-tree CUDA-named zstd helper artifact):
+`crates/gpuzstd_cuda/src/lib.rs`,
+`crates/gpuzstd_metal/{Cargo.toml,src/lib.rs}`,
+`crates/norito/src/core/{gpu_zstd.rs,simd_crc64.rs}`
+now close the remaining Norito CUDA-helper backlog on this host.
+
+- `gpuzstd_metal` now exposes its raw-pointer helper implementation for reuse
+  without exporting duplicate C symbols when it is linked as a dependency, and
+  the stale Linux warning noise in that crate is gone;
+- the workspace now ships a dedicated `gpuzstd_cuda` crate, so
+  `cargo build -p gpuzstd_cuda` produces an in-tree `libgpuzstd_cuda.{so,dll}`
+  helper that exports the expected `gpu_zstd_compress` /
+  `gpu_zstd_decompress` ABI;
+- Norito's Unix helper-name regression now pins `libgpuzstd_cuda.so` as the
+  preferred artifact when both the CUDA-named helper and the
+  `gpuzstd_metal` fallback exist in the same target directory;
+- the focused CUDA Stage-1 and CRC64 helper slices still pass; and
+- the broader `gpu-compression` parity graph was rerun in a fresh target dir
+  after building only `gpuzstd_cuda`, so the live runtime path now succeeds via
+  the dedicated CUDA-named helper instead of relying on the fallback artifact.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p gpuzstd_metal -- --nocapture`
+- `cargo test -p gpuzstd_cuda -- --nocapture`
+- `env CARGO_TARGET_DIR=/tmp/iroha-gpuzstd-cuda-artifact cargo build -p gpuzstd_cuda`
+- `cargo test -p norito --features cuda-stage1 --lib accel_tape_validation_tests -- --nocapture`
+- `cargo test -p norito --features cuda-crc64 gpu_crc64_self_test -- --nocapture`
+- `cargo test -p norito --features cuda-crc64 --lib gpu_min_len_defaults_and_env_override -- --nocapture`
+- `cargo test -p norito --features cuda-crc64 --lib gpu_crc64_can_load_env_stub -- --nocapture`
+- `env CARGO_TARGET_DIR=/tmp/iroha-gpuzstd-cuda-artifact cargo test -p norito --features gpu-compression --lib gpu_ -- --nocapture`
+- `env CARGO_TARGET_DIR=/tmp/iroha-gpuzstd-cuda-artifact cargo test -p norito --features gpu-compression --test compression gpu_zstd_roundtrip -- --nocapture`
+
+Open work for this Norito CUDA-helper slice now remains:
+- no additional confirmed work remains in this focused slice; the dedicated
+  CUDA-named helper artifact now exists in-tree and the current parity path was
+  rerun against it on this host.
+
+Latest sync (2026-03-26 public CUDA helper-surface coverage expansion):
+`crates/ivm/src/{cuda.rs,bn254_vec.rs}`
+now pin more of the exported CUDA runtime surface directly instead of relying
+only on startup admission.
+
+- the focused source-level `public_` CUDA lib sweep now covers the exported
+  vector helpers (`vector_add_f32`, `vadd32_cuda`, `vadd64_cuda`, `vand_cuda`,
+  `vxor_cuda`, `vor_cuda`), `sha256_compress_cuda`, `keccak_f1600_cuda`,
+  Poseidon single/batch helpers, single-round AES helpers, single-round AES
+  batch helpers, fused AES rounds, BN254 add/sub/mul, Ed25519 single/batch
+  verification, and the SHA-256 leaves/pair-reduce helpers under one direct
+  parity block;
+- `sha256_leaves_cuda` now has a focused public CPU-parity regression that
+  mirrors the existing Metal coverage and proves the exported Merkle-leaf entry
+  point, not just the internal startup truth set;
+- `sha256_compress_cuda`, `keccak_f1600_cuda`, the Poseidon public helpers, and
+  the single-round `aesenc_cuda` / `aesdec_cuda` helpers now also have focused
+  source-level parity regressions instead of depending only on startup
+  admission or separate integration tests;
+- `aesenc_batch_cuda` / `aesdec_batch_cuda` now have focused public parity
+  regressions against the scalar AES reference path, matching the existing
+  single-round Metal batch coverage instead of leaving those exported helpers
+  covered only transitively through startup admission;
+- the public BN254 and Ed25519 CUDA helpers now have the same direct source
+  parity coverage instead of relying only on startup truth sets plus the older
+  `cuda_extra` integration tests;
+- the existing public `sha256_pairs_reduce_cuda` / fused AES rounds regressions
+  still pass alongside the new tests under one focused `public_` lib sweep; and
+- the stale `mul_neon debug:` instrumentation was removed from the BN254 NEON
+  multiply helper, the macOS-only `min_metal` threshold binding now stays
+  inside the macOS branch, and the dead non-macOS Metal SHA helper stubs were
+  dropped, so the focused CUDA parity sweep no longer emits branch-local `ivm`
+  warning noise.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda --lib public_ -- --test-threads=1`
+
+Open work for this IVM CUDA public-surface slice now remains:
+- continue the deeper `ivm` accelerator review across the remaining
+  CUDA/Metal/determinism boundaries; this pass closed the direct public
+  helper parity gaps and cleaned the related `ivm` warning noise, but it did
+  not attempt a broader workspace-wide accelerator sweep.
+
+Latest sync (2026-03-25 deterministic RWA generated IDs and Torii/MCP parity coverage):
+`crates/iroha_core/src/state.rs`,
+`crates/iroha_core/src/smartcontracts/isi/rwa.rs`,
+`crates/iroha_data_model/tests/query_response_roundtrip.rs`,
+`crates/iroha_data_model/tests/instruction_impls.rs`,
+`crates/iroha_torii/src/lib.rs`,
+`crates/iroha_torii/src/mcp.rs`,
+`crates/iroha_torii/tests/mcp_endpoints.rs`,
+`crates/iroha_torii/tests/nfts_endpoints.rs`,
+and
+`crates/iroha_torii/tests/rwas_endpoints.rs`
+now close the missing RWA follow-up in the current tree:
+
+- generated `RwaId`s now use transaction-scoped deterministic ordinals so
+  repeated issue/split/merge/force-transfer flows do not collide inside a
+  single transaction;
+- the RWA data-model/query-response surface now has focused Norito and trait
+  coverage; and
+- Torii/MCP now have parity smoke coverage for RWA list/get/query aliases,
+  with the integration harness updated to supply `ConnectInfo` the same way as
+  the live server.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_data_model --test instruction_impls --test query_response_roundtrip -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=target_tmp_rwa_core cargo test -p iroha_core repeated_ -- --nocapture`
+- `cargo test -p iroha_torii --test rwas_endpoints -- --nocapture`
+- `cargo test -p iroha_torii --test nfts_endpoints -- --nocapture`
+- `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_rwas -- --nocapture`
+- `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_nfts -- --nocapture`
+- `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture`
+
+Open work for this slice now remains:
+- run broader workspace verification for the RWA path when we can afford the
+  full repo-wide test time; and
+- extend client/CLI parity verification beyond the focused Torii/MCP/data
+  model coverage shipped in this pass.
 
 Latest sync (2026-03-25 active cargo-deny dependency findings are closed):
 `Cargo.toml`
@@ -106,10 +2476,7 @@ Validation:
 
 Open work for this slice now remains:
 - monitor upstream replacements for the accepted `derivative` / `paste` debt
-  and remove the `deny.toml` exceptions when safe upgrades become available;
-  and
-- rerun the focused CUDA runtime/self-test slice on a host with live CUDA
-  driver libraries.
+  and remove the `deny.toml` exceptions when safe upgrades become available.
 
 Latest sync (2026-03-25 offline cash app-API canonical binding/proof hardening):
 `crates/iroha_torii/src/lib.rs`,
@@ -173,8 +2540,8 @@ Validation:
 
 Open work for this slice now remains:
 - no additional confirmed Torii remote-key fail-open call sites remain in this
-  `lib.rs` / `soracloud.rs` slice; the remaining confirmed security backlog is
-  now CUDA runtime validation on a CUDA-capable host.
+  `lib.rs` / `soracloud.rs` slice; the earlier CUDA runtime validation
+  backlog closed on 2026-03-26.
 
 Latest sync (2026-03-25 Torii deploy/activate burst-throttle regressions are now deterministic):
 `crates/iroha_torii/src/lib.rs`
@@ -252,8 +2619,7 @@ Validation:
 
 Open work for this slice now remains:
 - no additional confirmed work remains in this direct-handler hardening slice;
-  the remaining confirmed security backlog is now CUDA runtime validation on a
-  CUDA-capable host.
+  the earlier CUDA runtime validation backlog closed on 2026-03-26.
 
 Latest sync (2026-03-25 Soracloud private-model publish drafts now prepare encrypted bundle plans locally):
 `crates/iroha_cli/src/soracloud.rs`,
@@ -342,8 +2708,8 @@ Validation:
 
 Open work for this slice now remains:
 - no additional live operator-auth remote-IP trust-boundary issue was
-  confirmed in this pass; the remaining confirmed security backlog is now CUDA
-  runtime validation on a CUDA-capable host.
+  confirmed in this pass; the earlier CUDA runtime validation backlog closed
+  on 2026-03-26.
 
 Latest sync (2026-03-25 `BlockCreated` now seeds the exact frontier slot and contiguous RBC rescue no longer re-enters generic missing-block fetch):
 this cut transfers `committed + 1` ownership another step toward the intended single frontier state machine: accepted `BlockCreated` now marks the exact slot authoritative directly, and RBC-side “missing BlockCreated” rescue at the contiguous frontier now stays inside that slot instead of scheduling generic `FetchPendingBlock` recovery.
@@ -606,8 +2972,8 @@ Validation:
 
 Open work for this slice now remains:
 - no additional live SoraFS trusted-proxy/client-IP issue was confirmed in
-  this pass. The remaining security backlog is now CUDA runtime validation on
-  a CUDA-capable host.
+  this pass. The earlier CUDA runtime validation backlog closed on
+  2026-03-26.
 
 Latest sync (2026-03-25 Soracloud required config/secret bindings):
 Soracloud deploy/upgrade/rollback now validate declared required service
@@ -672,8 +3038,8 @@ Validation:
 
 Open work for this slice now remains:
 - this closes a fail-open default rather than a newly confirmed externally
-  reachable Connect bypass. The remaining security backlog is now CUDA runtime
-  validation on a CUDA-capable host.
+  reachable Connect bypass. The earlier CUDA runtime validation backlog closed
+  on 2026-03-26.
 
 Latest sync (2026-03-25 Soracloud service config/secret runtime materialization):
 committed Soracloud service config and secret entries now project into the
@@ -736,7 +3102,8 @@ Validation:
 
 Open work for this slice now remains:
 - no additional peer-geo trust-boundary issue from this pass. The remaining
-  security backlog is now CUDA runtime validation on a CUDA-capable host.
+  CUDA runtime validation backlog noted in earlier entries closed on
+  2026-03-26.
 
 Latest sync (2026-03-25 Soracloud service config/secret control plane):
 Soracloud now has an authoritative service-scoped config/secret mutation and
@@ -796,8 +3163,7 @@ Validation:
 
 Open work from this slice:
 - no new P2P transport-default finding remains once `tls_enabled=true`; the
-  remaining security backlog is now CUDA runtime
-  validation on a CUDA-capable host.
+  earlier CUDA runtime validation backlog closed on 2026-03-26.
 
 Latest sync (2026-03-25 local QUIC proxy bind hardening):
 the SoraFS workstation proxy now enforces its "local" trust boundary in code
@@ -3007,7 +5373,8 @@ Open work for this slice now remains:
   higher-level Torii validation path before the new faucet endpoint tests can
   execute end to end; and
 - decide whether the broader asset-definition config surface should also accept
-  human-readable `name#domain` literals like the new `torii.faucet` parser, or
+  on-chain asset aliases in `name#dataspace` / `name#domain.dataspace` form like
+  the new `torii.faucet` parser, or
   whether that convenience should stay scoped to the TAIRA faucet/operator flow.
 
 Latest sync (2026-03-24 shared Ed25519 GPU challenge preparation):
@@ -3033,12 +5400,9 @@ Validation:
 - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests`
 
 Open work for this slice now remains:
-- rerun the focused CUDA runtime/self-test slice on a host with live CUDA
-  driver libraries and toolchain support, since this environment still only
-  proves the Rust-side CUDA path through compile-time validation; and
 - continue the deeper `ivm` accelerator review across the remaining
-  CUDA/Metal/determinism boundaries once the live CUDA truth sets can be
-  exercised end to end.
+  CUDA/Metal/determinism boundaries now that the live CUDA truth sets have
+  been exercised end to end.
 
 Latest sync (2026-03-24 vector/AES startup coverage hardening):
 `crates/ivm/src/{vector.rs,cuda.rs}`
@@ -3063,9 +5427,9 @@ Validation:
 - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests`
 
 Open work for this slice now remains:
-- rerun the focused CUDA lib-test self-test slice on a host with live CUDA
-  driver libraries and toolchain support, since this machine still lacks the
-  runtime pieces needed to execute the `cust`-backed tests end to end; and
+- the focused CUDA lib-test self-test slice was later rerun successfully on
+  2026-03-26 on this WSL CUDA host, so the remaining note here is historical;
+  and
 - continue the deeper `ivm` accelerator review across the remaining
   CUDA/Metal/determinism boundaries once the live startup truth sets are fully
   stable.
@@ -3091,9 +5455,9 @@ Validation:
 - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests`
 
 Open work for this slice now remains:
-- rerun the focused CUDA lib-test self-test slice on a host with live CUDA
-  driver libraries and toolchain support, since this machine still lacks the
-  runtime pieces needed to execute the `cust`-backed tests end to end; and
+- the focused CUDA lib-test self-test slice was later rerun successfully on
+  2026-03-26 on this WSL CUDA host, so the remaining note here is historical;
+  and
 - continue the deeper `ivm` accelerator review across the remaining
   CUDA/Metal/determinism boundaries once the live startup truth sets are fully
   stable.
@@ -3129,7 +5493,7 @@ on-chain SNS work have been cleared across
 `javascript/iroha_js/test/toriiClient.test.js` and the `iroha_torii` crate:
 
 - the JS Torii client file now matches the current SDK/native contract for
-  SoraFS alias-proof fixtures, canonical/non-canonical I105 expectations, and
+  SoraFS alias-proof fixtures, canonical/non-canonical i105 expectations, and
   `label.suffix` SNS selector validation; and
 - a fresh `cargo check -p iroha_torii --lib` passes again, so the slice no
   longer has a focused Torii compile blocker.
@@ -3446,7 +5810,7 @@ Latest sync (2026-03-24 unified dataspace-aware account alias groundwork):
 now implement the first unified alias slice:
 
 - canonical account-alias parsing/formatting now supports
-  `label@domain.dataspace` and exact domainless `label@dataspace` literals,
+  `name@domain.dataspace` and exact domainless `name@dataspace` literals,
   with `DataSpaceId` stored internally and catalog aliases used only at the
   boundary;
 - account registration is now domain-optional in the data model/core register
@@ -3829,9 +6193,9 @@ was fixed:
   - `java/iroha_android/:jvm:test`
   - `java/iroha_android/:samples-android:testDebugUnitTest`
 - the account-address fixture/harness drift is now closed: the checked-in
-  compliance vectors and Android loaders both use canonical `i105` /
-  `i105_default` encodings, and the stale `ih58`/compressed fixture schema is
-  gone from the Java SDK surface.
+  compliance vectors and Android loaders both use canonical `i105`
+  encodings, and the stale `ih58`/alternate-literal fixture schema is gone
+  from the Java SDK surface.
 - remaining red in the legacy baseline:
   - `GradleHarnessTests[org.hyperledger.iroha.android.client.OfflineToriiClientTests]`
     because `listAllowancesParsesResponse()` still expects a different
@@ -8793,6 +11157,36 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
   - `docs/source/fastpq_plan.md` (definition note explaining TODO markers).
   - `vendor/icrate/**`, `vendor/halo2-axiom/**`, `vendor/halo2curves-axiom/**` (upstream TODO markers in vendored dependencies).
 
+## 2026-03-26 Kotodama / IVM Developer Experience Observability Tranche
+
+- [x] Add additive artifact-local compiler debug metadata:
+  - new `DBG1` section in `crates/ivm_abi/src/metadata.rs`
+  - function-level source map entries (`function_name`, `pc_start`, `pc_end`, `line`, `column`)
+  - function-level budget summaries (`bytecode_bytes`, `bytecode_words`, `frame_bytes`, `jump_span_words`, `jump_range_risk`)
+- [x] Thread function source locations through Kotodama AST → semantic → IR lowering so debug metadata survives compilation.
+- [x] Extend the Kotodama compiler with `CompileReport` and `compile_source_with_manifest_and_report(...)`, and add `CompilerOptions::emit_debug` so debug metadata can be emitted or stripped without changing ABI v1.
+- [x] Add structured VM-side execution diagnostics in `crates/ivm_abi/src/error.rs` and capture them in `crates/ivm/src/ivm.rs` via `IVM::last_diagnostic()`.
+- [x] Surface diagnostics through runtime entrypoints:
+  - compact validation-failure strings in `crates/iroha_core/src/smartcontracts/ivm.rs`
+  - structured `vm_diagnostic` payloads for `/v1/contracts/view` failures in `crates/iroha_torii/src/routing.rs`
+- [x] Extend tooling:
+  - `koto_compile` now supports `--emit-source-map`, `--emit-budget-report`, `--diagnostic-format`, and `--strip-debug`
+  - `koto_lint` JSON output now includes lint `severity` and `category`
+- [x] Follow-up tranche: add a dedicated local contract-view debugger command in `iroha_cli`.
+  - new `contracts debug-view` command executes read-only entrypoints locally from compiled bytecode
+  - supports optional account fixtures, durable-state fixtures, decoded return values, syscall trace output, and source snippets from `--source-file`
+- [x] Follow-up tranche: add pure `get_or(map, key, default)` plus `view fn` rejection of mutating state reads.
+  - `std::map::get_or` / `get_or` now lower to deterministic read-only selection without `MapSet` / `StateSet`
+  - `view fn` now rejects `get_or_insert_default(...)` with an explicit guidance error pointing callers to `get_or(...)`
+- [x] Follow-up tranche: add singleton struct-backed durable state lowering for `state StructName foo;`.
+  - whole-struct reads now reconstruct tuple/struct values from flattened durable child paths
+  - whole-struct writes now fan back out into child `StateSet` operations for flattened durable storage
+- [x] Follow-up tranche: embed logical source paths, enforce transitive `view fn` purity, and add an offline public-entrypoint debugger.
+  - `DBG1` source map / budget entries now carry optional logical `source_path`, `koto_compile` derives it from the input path, and VM/Torii/CLI diagnostics surface it directly
+  - `contracts debug-view` now auto-resolves source snippets from embedded `source_path` when `--source-file` is omitted, while `--source-file` remains an explicit override
+  - new `contracts debug-call` command executes `public` entrypoints offline, reporting decoded return values, queued instructions, durable-state overlay mutations, syscall trace, and structured trap diagnostics
+  - semantic `view fn` enforcement now rejects direct and transitive durable-state mutation / instruction emission before runtime instead of relying only on debugger / Torii guards
+
 ## Multisig Admission Follow-up
 1. Add an end-to-end integration test that proves an unregistered signatory can successfully complete `MultisigPropose`/`MultisigApprove` against a live multi-peer network (not just unit-level admission/execution slices).
 
@@ -8806,11 +11200,18 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 
 ## Asset ID Follow-up
 1. Completed: `AssetDefinitionId::from_str` and the public Rust selectors are Base58-only, the last checked-in capability fixtures were migrated from `aid:<hex>` to canonical Base58 addresses, and the remaining `aid:` literals in-tree are deliberate negative tests.
-2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical asset-id form: `<asset-definition-id>#<account-id>` with optional `#dataspace:<id>` for scoped balances.
-3. Completed: translated data-model docs, Swift SDK docs/examples, Swift client references, and JS Torii typings/JSDoc no longer describe legacy `aid:` literals or the old `name#domain@dataspace` alias grammar.
-4. Completed: the dead `xtask` `rewrite-legacy-asset-literals` bin target and the old alias-shaped `asset_def:name#domain` access-hint compatibility path were removed, so workspace tooling and access hints no longer rely on any first-release asset-id compatibility shim.
-5. Completed: `cargo fmt --all`, the focused `iroha_data_model` asset-id parse test, and the focused `iroha_core` access-hint regression test are green; no open first-release asset-id hard-cut work remains in this branch.
+2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical owner-qualified asset-holding form: `<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
+3. Completed: translated data-model docs, Swift SDK docs/examples, Swift client references, and JS Torii typings/JSDoc no longer describe legacy `aid:` literals or the old `name#domain.dataspace`-predecessor alias grammar.
+4. Completed: the dead `xtask` `rewrite-legacy-asset-literals` bin target and the old `asset_def:` access-hint compatibility path were removed, so workspace tooling and access hints no longer rely on any first-release asset-id compatibility shim.
+5. Completed: alias-hostile config/runtime selectors are now closed too; Torii faucet, ISO 20022 currency bindings, Nexus fee charging, and Nexus staking/slash flows resolve canonical Base58 ids or active on-chain asset aliases against world state, while non-alias-aware typed examples/tests now use canonical Base58 literals.
+6. Completed: remaining canonical-slot golden fixtures/tests/helpers were cleaned up too; the UAID portfolio snapshot now emits canonical `asset_id` + `asset_definition_id`, permission payload tests no longer serialize `name#domain#account`, Android offline-wallet allowance fixtures now use canonical asset literals, and helper scripts (`asset_flow.sh`, `deploy_localnet.sh`, `training_script_2.sh`) register canonical Base58 asset-definition ids with explicit names instead of legacy `name#domain` identifiers.
+
+## Account Literal Follow-up
+1. Completed: the canonical-slot sweep no longer leaves checked-in JSON `account_id` examples using `@domain` forms; remaining `@...` hits are short/long on-chain alias examples (`name@dataspace`, `name@domain.dataspace`), explicit negative tests, or documentation describing rejected legacy forms.
 
 ## Asset Alias Lease Follow-up
 1. Completed: translated docs and SDK-facing API references now describe the current `alias_binding` response payload, the persisted lease statuses (`permanent`, `leased_active`, `leased_grace`, `expired_pending_cleanup`), the chain-time-based alias cutoff, and the post-grace `expired_pending_cleanup` readback semantics.
 2. No dedicated alias-binding lookup/list endpoint is planned for now; asset-definition get/list/query and alias-resolution surfaces already expose `alias_binding`, and list/query now support `alias_binding.*` filter/sort selectors. Revisit only if operators need standalone lease inventory without fetching definitions.
+
+## 2026-03-27 Soracloud Live Torii Regression Follow-up
+1. No new roadmap items were opened by the March 27 Soracloud regression sweep; the UTF-8 account-header, canonical asset-definition, and NPoS fee-bootstrap fixes closed the reported `integration_tests/tests/iroha_cli.rs` failures, so the remaining roadmap stays unchanged.

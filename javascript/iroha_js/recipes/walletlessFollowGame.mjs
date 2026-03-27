@@ -102,9 +102,7 @@ async function main() {
   const sponsorId =
     trimToNull(args.get("--sponsor")) ??
     trimToNull(process.env.SPONSOR_ID) ??
-    AccountAddress.fromAccount({
-      domain: "wonderland",
-      publicKey: publicKeyFromPrivate(sessionPrivate),
+    AccountAddress.fromAccount({ publicKey: publicKeyFromPrivate(sessionPrivate),
     }).toI105();
 
   const instructions = [

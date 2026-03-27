@@ -72,9 +72,9 @@ En cas de sortie du script, écrivez un manifeste agrégé :
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -83,7 +83,7 @@ En cas de sortie du script, écrivez un manifeste agrégé :
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ corrida de CSV.
   les références aux archives se rapportent à l'emplacement du CSV. Métadonnées
   qu'aucun objet marin ne produit une erreur de validation.
 - **Contrôleurs :** celdas en blanco respetan `--default-controllers`. Proportion
-  listes de contrôleurs explicites (par exemple `i105...;i105...`) au délégué
+  listes de contrôleurs explicites (par exemple `<i105-account-id>;<i105-account-id>`) au délégué
   acteurs sans propriétaire.
 
 Los fallos se reportan con numeros de fila contextuales (par exemple

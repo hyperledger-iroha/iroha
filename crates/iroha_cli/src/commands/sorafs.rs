@@ -10747,7 +10747,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-30T00:00:00Z"
@@ -10791,7 +10791,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10827,7 +10827,7 @@ mod gateway_tests {
         assert_eq!(summary_entries[0].kind, "account_id");
         assert_eq!(
             summary_entries[0].descriptor,
-            "account_id:sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+            "account_id:sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
         );
         assert_eq!(summary_entries[1].kind, "provider");
         assert_eq!(
@@ -10844,7 +10844,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10881,8 +10881,8 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "account_alias": "routing@sora",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
                 "expires_at": "2025-02-01T00:00:00Z"
@@ -10922,8 +10922,8 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "account_alias": "routing@sora",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
                 "expires_at": "2025-02-01T00:00:00Z"
@@ -10965,8 +10965,8 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "account_alias": "routing@sora",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+                "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
                 "expires_at": "2025-02-01T00:00:00Z"
@@ -11019,7 +11019,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_alias",
-                "account_alias": "alias@sora",
+                "account_alias": "alias@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-01T00:00:00Z"
@@ -11051,7 +11051,7 @@ mod gateway_tests {
         let args = GatewayUpdateDenylistArgs {
             base_path: base_path.clone(),
             add_paths: vec![add_path],
-            remove_descriptors: vec!["account_alias:alias@sora".to_owned()],
+            remove_descriptors: vec!["account_alias:alias@dataspace".to_owned()],
             output_path: Some(output_path.clone()),
             snapshot_out: Some(snapshot_json.clone()),
             snapshot_norito_out: Some(snapshot_norito.clone()),
@@ -12087,7 +12087,7 @@ mod tests {
             .expect("i105 encode");
         let non_canonical_i105 = address
             .to_i105_for_discriminant(address::chain_discriminant().wrapping_add(1))
-            .expect("non-canonical i105 encode");
+            .expect("non-canonical I105 encode");
         (canonical, i105, non_canonical_i105)
     }
 

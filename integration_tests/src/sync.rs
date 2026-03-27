@@ -268,6 +268,7 @@ mod tests {
             transaction_ttl: ttl,
             transaction_status_timeout: ttl,
             connect_queue_root: default_connect_queue_root(),
+            soracloud_http_witness_file: None,
             sorafs_alias_cache: AliasCachePolicy::new(ttl, ttl, ttl, ttl, ttl, ttl, ttl, ttl),
             sorafs_anonymity_policy: AnonymityPolicy::default(),
             sorafs_rollout_phase: iroha_config::parameters::actual::SorafsRolloutPhase::default(),

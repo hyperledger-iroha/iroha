@@ -106,9 +106,10 @@ pub use crate::contract_artifact::{
     ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
 };
 pub use crate::metadata::{
-    CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
-    EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, MAGIC as METADATA_MAGIC,
-    ProgramMetadata, VECTOR_LENGTH_MAX,
+    CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
+    CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
+    EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
+    EmbeddedSourceMapEntryV1, MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
 };
 pub use crate::{
     aes::{
@@ -118,16 +119,23 @@ pub use crate::{
     branch_predictor::BranchPredictor,
     byte_merkle_tree::ByteMerkleTree,
     cuda::{
-        aesdec_cuda, aesenc_cuda, bn254_add_cuda, bn254_mul_cuda, bn254_sub_cuda, cuda_available,
+        aesdec_batch_cuda, aesdec_cuda, aesdec_rounds_batch_cuda, aesenc_batch_cuda, aesenc_cuda,
+        aesenc_rounds_batch_cuda, bitonic_sort_pairs, bn254_add_batch_cuda, bn254_add_cuda,
+        bn254_mul_batch_cuda, bn254_mul_cuda, bn254_sub_batch_cuda, bn254_sub_cuda, cuda_available,
         cuda_disabled, cuda_last_error_message, ed25519_verify_batch_cuda, ed25519_verify_cuda,
         keccak_f1600_cuda, poseidon2_cuda, poseidon2_cuda_many, poseidon6_cuda,
-        poseidon6_cuda_many, reset_cuda_backend_for_tests, sha256_compress_cuda, vector_add_f32,
+        poseidon6_cuda_many, reset_cuda_backend_for_tests, sha256_compress_cuda,
+        sha256_leaves_cuda, sha256_pairs_reduce_cuda, vadd32_cuda, vadd64_cuda, vand_cuda,
+        vector_add_f32, vor_cuda, vxor_cuda,
     },
     decoder::decode,
     ec::{
         ec_add, ec_add_truncated, ec_mul, ec_mul_truncated, pairing_check, pairing_check_truncated,
     },
-    error::{Perm, VMError},
+    error::{
+        Perm, VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic,
+        VmSourceLocation, VmTrapKind,
+    },
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
     host::IVMHost,
     iso20022::*,

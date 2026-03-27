@@ -10,8 +10,8 @@ function ed25519PublicKeyBytes() {
   return new Uint8Array(der.subarray(der.length - 32));
 }
 
-function demoAccountId(domain) {
-  const address = AccountAddress.fromAccount({ domain, publicKey: ed25519PublicKeyBytes() });
+function demoAccountId() {
+  const address = AccountAddress.fromAccount({ publicKey: ed25519PublicKeyBytes() });
   return address.toI105();
 }
 
@@ -22,7 +22,7 @@ function jsonResponse(status, body) {
   });
 }
 
-const ACCOUNT_ID = demoAccountId("directory");
+const ACCOUNT_ID = demoAccountId();
 const PROGRAM_ID = "identifier_lookup_retail";
 const RECEIPT = {
   payload: {

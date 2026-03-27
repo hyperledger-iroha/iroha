@@ -40,23 +40,60 @@ fn authority_has_permission(
     authority: &AccountId,
     target: &Permission,
 ) -> bool {
-    if world
-        .account_permissions_iter(authority)
-        .is_ok_and(|permissions| {
-            permissions
+    match world.account_permissions_iter(authority) {
+        Ok(permissions) => {
+            let direct_match = permissions
                 .into_iter()
-                .any(|permission| permission == target)
-        })
-    {
-        return true;
+                .any(|permission| permission == target);
+            if direct_match {
+                return true;
+            }
+        }
+        Err(error) => {
+            iroha_logger::warn!(
+                authority = %authority,
+                target_name = %target.name(),
+                target_payload = %target.payload().get(),
+                ?error,
+                "alias permission lookup could not load authority permissions"
+            );
+        }
     }
 
-    world.account_roles_iter(authority).any(|role_id| {
+    if world.account_roles_iter(authority).any(|role_id| {
         world
             .roles()
             .get(role_id)
             .is_some_and(|role| role.permissions.contains(target))
-    })
+    }) {
+        return true;
+    }
+
+    let direct_permissions: Vec<String> = world
+        .account_permissions()
+        .get(authority)
+        .map(|permissions| {
+            permissions
+                .iter()
+                .map(|permission| format!("{}:{}", permission.name(), permission.payload().get()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let roles: Vec<String> = world
+        .account_roles_iter(authority)
+        .map(|role_id| role_id.to_string())
+        .collect();
+    let account_present = world.accounts().get(authority).is_some();
+    iroha_logger::warn!(
+        authority = %authority,
+        account_present,
+        target_name = %target.name(),
+        target_payload = %target.payload().get(),
+        direct_permissions = ?direct_permissions,
+        roles = ?roles,
+        "alias permission lookup denied authority"
+    );
+    false
 }
 
 /// Return `true` when the authority holds the exact permissions required to resolve `alias`.

@@ -150,7 +150,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -160,7 +160,7 @@ fn download_qr() -> eyre::Result<()> {
 
 `ExplorerAccountQrSnapshot`, `/v1/explorer/accounts/{id}/qr` JSON-u əks etdirir
 səth: ona kanonik hesab identifikatoru, hərfi ilə göstərilən hərf daxildir
-kanonik I105 literal, şəbəkə prefiksi/səhvlərin düzəldilməsi metadatası, QR ölçüləri və
+kanonik i105 literal, şəbəkə prefiksi/səhvlərin düzəldilməsi metadatası, QR ölçüləri və
 cüzdanların/kəşfiyyatçıların birbaşa yerləşdirə biləcəyi daxili SVG yükü.
 
 ## 7. Tədbirlərə abunə olun

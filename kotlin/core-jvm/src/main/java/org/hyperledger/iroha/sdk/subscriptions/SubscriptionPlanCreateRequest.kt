@@ -6,18 +6,15 @@ import org.hyperledger.iroha.sdk.client.JsonParser
 /** Request payload for `POST /v1/subscriptions/plans`. */
 class SubscriptionPlanCreateRequest(
     authority: String,
-    privateKey: String,
     planId: String,
     plan: Map<String, Any>,
 ) {
     val authority: String = requireNonBlank(authority, "authority")
-    val privateKey: String = requireNonBlank(privateKey, "private_key")
     val planId: String = requireNonBlank(planId, "plan_id")
     val plan: Map<String, Any> = LinkedHashMap(plan)
 
     fun toJsonMap(): Map<String, Any> = buildMap {
         put("authority", authority)
-        put("private_key", privateKey)
         put("plan_id", planId)
         put("plan", plan)
     }

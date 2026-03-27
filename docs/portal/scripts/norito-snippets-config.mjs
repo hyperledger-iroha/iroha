@@ -27,9 +27,9 @@ export const SNIPPETS = [
       'Demonstrates permissioned domain creation, asset registration, and deterministic minting.',
     source: 'crates/ivm/docs/examples/13_register_and_mint.ko',
     ledgerWalkthrough: [
-      'Ensure the destination account (e.g., `i105...` for Alice) exists, mirroring the setup phase in each SDK quickstart.',
+      'Ensure the destination account (e.g., `<i105-account-id>` for Alice) exists, mirroring the setup phase in each SDK quickstart.',
       'Invoke the `register_and_mint` entrypoint to create the ROSE asset definition and mint 250 units to Alice in one transaction.',
-      'Verify balances through `client.request(FindAccountAssets)` or `iroha_cli ledger asset list --account i105...` to confirm the mint succeeded.'
+      'Verify balances through `client.request(FindAccountAssets)` or `iroha_cli ledger asset list --account <i105-account-id>` to confirm the mint succeeded.'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -40,9 +40,9 @@ export const SNIPPETS = [
       'Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instruction with inline metadata validation.',
     source: 'crates/ivm/docs/examples/08_call_transfer_asset.ko',
     ledgerWalkthrough: [
-      'Fund the contract authority (for example `i105...` for the contract account) with the asset it will transfer and grant the authority the `CanTransfer` role or equivalent permission.',
-      'Call the `call_transfer_asset` entrypoint to transfer 5 units from the contract account to Bob (`i105...`), mirroring the way on-chain automation can wrap host calls.',
-      'Verify balances via `FindAccountAssets` or `iroha_cli ledger asset list --account i105...` and inspect events to confirm the metadata guard logged the transfer context.'
+      'Fund the contract authority (for example `<i105-account-id>` for the contract account) with the asset it will transfer and grant the authority the `CanTransfer` role or equivalent permission.',
+      'Call the `call_transfer_asset` entrypoint to transfer 5 units from the contract account to Bob (`<i105-account-id>`), mirroring the way on-chain automation can wrap host calls.',
+      'Verify balances via `FindAccountAssets` or `iroha_cli ledger asset list --account <i105-account-id>` and inspect events to confirm the metadata guard logged the transfer context.'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -66,7 +66,7 @@ export const SNIPPETS = [
       'Walks through an NFT lifecycle end to end: minting to the owner, transferring, tagging metadata, and burning.',
     source: 'crates/ivm/docs/examples/12_nft_flow.ko',
     ledgerWalkthrough: [
-      'Ensure the NFT definition (for example `n0#wonderland`) exists alongside the owner/recipient accounts used in the snippet (`i105...` for Alice, `i105...` for Bob).',
+      'Ensure the NFT definition (for example `n0#wonderland`) exists alongside the owner/recipient accounts used in the snippet (`<i105-account-id>` for Alice, `<i105-account-id>` for Bob).',
       'Invoke the `nft_issue_and_transfer` entrypoint to mint the NFT, transfer it from Alice to Bob, and attach a metadata flag describing the issuance.',
       'Inspect the NFT ledger state with `iroha_cli ledger nft list --account <id>` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.'
     ],

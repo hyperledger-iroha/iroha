@@ -230,7 +230,7 @@ Local overrides کو operations runbook میں document کریں؛ retention win
 - Per-account key derivation hierarchy:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Encrypted note payloads AEAD استعمال کرتے ہیں جو ECDH-derived shared keys سے بنے ہوتے ہیں؛ optional auditor view keys asset policy کے مطابق outputs کے ساتھ attach کئے جا سکتے ہیں۔
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memos decrypt کرنے کیلئے auditor tooling، اور `iroha app zk envelope` helper جو Norito memo envelopes offline produce/inspect کرتا ہے۔ Torii `POST /v1/confidential/derive-keyset` کے ذریعے وہی derivation flow فراہم کرتا ہے اور hex/base64 دونوں forms واپس دیتا ہے تاکہ wallets programmatically key hierarchies fetch کر سکیں۔
+- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memos decrypt کرنے کیلئے auditor tooling، اور `iroha app zk envelope` helper جو Norito memo envelopes offline produce/inspect کرتا ہے۔
 
 ## Gas, Limits & DoS Controls
 - Deterministic gas schedule:

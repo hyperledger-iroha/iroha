@@ -29,8 +29,8 @@ translation_last_reviewed: 2026-02-07
 ID аккаунтов. В дефолтном комплекте уже есть два аккаунта, полученные из демо-ключей:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Подтвердите значения, выведя первые аккаунты:

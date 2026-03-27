@@ -94,7 +94,7 @@ pub fn encode_account_id_to_canonical_hex(
     AccountAddress::from_account_id(account)?.canonical_hex()
 }
 
-/// Parse an address string in strict encoded I105 form.
+/// Parse an address string in strict encoded i105 form.
 ///
 /// # Errors
 ///
