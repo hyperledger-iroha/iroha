@@ -12444,6 +12444,14 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord> {
                 &self.asset_definition_alias_bindings
             }
+            fn contract_aliases(&self) -> &impl StorageReadOnly<ContractAlias, ContractAddress> {
+                &self.contract_aliases
+            }
+            fn contract_alias_bindings(
+                &self,
+            ) -> &impl StorageReadOnly<ContractAddress, ContractAliasBindingRecord> {
+                &self.contract_alias_bindings
+            }
             fn domain_asset_definitions(
                 &self,
             ) -> &impl StorageReadOnly<DomainId, BTreeSet<AssetDefinitionId>> {
@@ -13156,6 +13164,8 @@ impl<'world> WorldBlock<'world> {
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            contract_aliases,
+            contract_alias_bindings,
             domain_asset_definitions,
             asset_definition_holders,
             asset_definition_assets,
@@ -13430,6 +13440,8 @@ impl<'world> WorldBlock<'world> {
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
         asset_definition_aliases.commit();
+        contract_alias_bindings.commit();
+        contract_aliases.commit();
         asset_definition_assets.commit();
         asset_definition_holders.commit();
         domain_asset_definitions.commit();
@@ -14208,6 +14220,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            contract_aliases,
+            contract_alias_bindings,
             domain_asset_definitions,
             asset_definition_holders,
             asset_definition_assets,
@@ -14458,6 +14472,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         assets.apply();
         asset_definition_alias_bindings.apply();
         asset_definition_aliases.apply();
+        contract_alias_bindings.apply();
+        contract_aliases.apply();
         asset_definition_assets.apply();
         asset_definition_holders.apply();
         domain_asset_definitions.apply();
@@ -21887,18 +21903,20 @@ impl<'state> StateBlock<'state> {
             .external_event_buf
             .mutate_vec(|events| events.push(time_event.into()));
 
-        // Time-trigger phase maintenance: unbind asset aliases whose grace window elapsed.
+        // Time-trigger phase maintenance: unbind aliases whose grace window elapsed.
         {
             let mut maintenance_tx = self.transaction();
             let now_ms = maintenance_tx.block_unix_timestamp_ms();
-            let removed = maintenance_tx
+            let removed_asset_aliases = maintenance_tx
                 .world
                 .sweep_expired_asset_definition_aliases(now_ms);
-            if !removed.is_empty() {
+            let removed_contract_aliases = maintenance_tx.world.sweep_expired_contract_aliases(now_ms);
+            if !removed_asset_aliases.is_empty() || !removed_contract_aliases.is_empty() {
                 iroha_logger::info!(
-                    removed = removed.len(),
+                    removed_asset_aliases = removed_asset_aliases.len(),
+                    removed_contract_aliases = removed_contract_aliases.len(),
                     now_ms,
-                    "expired asset aliases were unbound during time-trigger maintenance"
+                    "expired aliases were unbound during time-trigger maintenance"
                 );
                 maintenance_tx.apply();
             }
@@ -26684,6 +26702,7 @@ pub(crate) mod deserialize {
             take_required(&mut map, "asset_definitions")?;
         let asset_definition_alias_bindings =
             take_optional_default(&mut map, "asset_definition_alias_bindings")?;
+        let contract_alias_bindings = take_optional_default(&mut map, "contract_alias_bindings")?;
         let assets: Storage<AssetId, AssetValue> = take_required(&mut map, "assets")?;
         let account_rekey_records = take_optional_default(&mut map, "account_rekey_records")?;
         let asset_metadata = take_optional_default(&mut map, "asset_metadata")?;
@@ -26840,6 +26859,8 @@ pub(crate) mod deserialize {
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings,
+            contract_aliases: Storage::default(),
+            contract_alias_bindings,
             domain_asset_definitions: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
@@ -27007,6 +27028,12 @@ pub(crate) mod deserialize {
             .rebuild_asset_definition_alias_indexes()
             .map_err(|message| json::Error::InvalidField {
                 field: "asset_definition_aliases".into(),
+                message,
+            })?;
+        world
+            .rebuild_contract_alias_indexes()
+            .map_err(|message| json::Error::InvalidField {
+                field: "contract_aliases".into(),
                 message,
             })?;
         world.rebuild_asset_definition_indexes();

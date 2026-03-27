@@ -519,15 +519,19 @@ pub(crate) fn allows_unregistered_authority(
                 return true;
             }
 
-            instructions.iter().all(|instruction| {
-                matches!(
-                    MultisigInstructionBox::try_from(instruction),
-                    Ok(MultisigInstructionBox::Propose(_)) | Ok(MultisigInstructionBox::Approve(_))
-                )
-            })
+            instructions_allow_multisig_envelope_authority(instructions)
         }
         Executable::IvmProved(_) | Executable::Ivm(_) => false,
     }
+}
+
+fn instructions_allow_multisig_envelope_authority(instructions: &[InstructionBox]) -> bool {
+    instructions.iter().all(|instruction| {
+        matches!(
+            MultisigInstructionBox::try_from(instruction),
+            Ok(MultisigInstructionBox::Propose(_)) | Ok(MultisigInstructionBox::Approve(_))
+        )
+    })
 }
 
 fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
@@ -1701,7 +1705,13 @@ impl StateBlock<'_> {
                 .world
                 .account_roles_iter(&authority)
                 .any(|role| role.name().as_ref().starts_with("MULTISIG_SIGNATORY/"));
-            if has_multisig_role || has_multisig_state {
+            let allows_multisig_envelope_authority = match tx.as_ref().instructions() {
+                Executable::Instructions(instructions) => {
+                    instructions_allow_multisig_envelope_authority(instructions)
+                }
+                Executable::IvmProved(_) | Executable::Ivm(_) => false,
+            };
+            if (has_multisig_role || has_multisig_state) && !allows_multisig_envelope_authority {
                 warn!(
                     authority = %authority,
                     "multisig accounts cannot sign transactions directly"
@@ -4232,6 +4242,92 @@ pub mod tests {
             }
             other => panic!("expected multisig direct-sign reject, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn multisig_signatory_role_can_submit_multisig_propose_envelope() {
+        use iroha_data_model::domain::DomainId;
+        use iroha_executor_data_model::isi::multisig::MultisigPropose;
+
+        let chain: ChainId = "multisig-propose-role-allowed".parse().unwrap();
+        let home_domain: DomainId = "hbl".parse().unwrap();
+        let target_domain: DomainId = "sbp".parse().unwrap();
+
+        let signer1 = KeyPair::random();
+        let signer2 = KeyPair::random();
+        let signer1_id = AccountId::new(signer1.public_key().clone());
+        let signer2_id = AccountId::new(signer2.public_key().clone());
+        let multisig_key = KeyPair::random();
+        let multisig_id = AccountId::new(multisig_key.public_key().clone());
+        let retail_key = KeyPair::random();
+        let retail_id = AccountId::new(retail_key.public_key().clone());
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).expect("nonzero quorum"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
+                .expect("nonzero multisig ttl"),
+        };
+        let mut multisig_metadata = Metadata::default();
+        multisig_metadata.insert(
+            crate::smartcontracts::isi::multisig::spec_key(),
+            Json::new(spec),
+        );
+
+        let home = Domain::new(home_domain.clone()).build(&signer1_id);
+        let target = Domain::new(target_domain.clone()).build(&signer1_id);
+        let signer1_account = new_account_in_domain(&signer1_id, &home_domain).build(&signer1_id);
+        let signer2_account = new_account_in_domain(&signer2_id, &home_domain).build(&signer2_id);
+        let multisig_account = new_account_in_domain(&multisig_id, &home_domain)
+            .with_metadata(multisig_metadata)
+            .build(&multisig_id);
+        let mut world = World::with(
+            [home, target],
+            [signer1_account, signer2_account, multisig_account],
+            [],
+        );
+
+        let role_id: RoleId = "MULTISIG_SIGNATORY/hbl/test-envelope"
+            .parse()
+            .expect("static multisig role must parse");
+        let role = Role {
+            id: role_id.clone(),
+            permissions: Permissions::new(),
+            permission_epochs: BTreeMap::new(),
+        };
+        world.roles.insert(role_id.clone(), role);
+        world.account_roles.insert(
+            crate::role::RoleIdWithOwner::new(signer1_id.clone(), role_id),
+            (),
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
+        let tx = TransactionBuilder::new(chain.clone(), signer1_id.clone())
+            .with_instructions([InstructionBox::from(MultisigPropose::new(
+                multisig_id,
+                vec![registration.into()],
+                None,
+            ))])
+            .sign(signer1.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission must accept the signature shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(
+            result.is_ok(),
+            "multisig propose envelope should bypass direct-sign rejection for signatory roles: {result:?}"
+        );
     }
 
     #[test]

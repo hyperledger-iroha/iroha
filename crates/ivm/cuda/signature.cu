@@ -895,6 +895,10 @@ __device__ void ge_identity(ge_p3* p) {
     fe_0(p->T);
 }
 
+__device__ void ge_p3_identity(ge_p3* p) {
+    ge_identity(p);
+}
+
 __device__ void ge_neg(ge_p3* out, const ge_p3* in) {
     fe_copy(out->X, in->X);
     fe_copy(out->Y, in->Y);

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use axum::{Router, routing::post};
 use base64::Engine as _;
 use http_body_util::BodyExt as _;
+use ivm::kotodama::compiler::CompilerOptions;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -204,6 +205,27 @@ seiyaku ContractCallN3xLikeTest {{
     ivm::KotodamaCompiler::new()
         .compile_source(&src)
         .expect("compile contract call n3x-like test program")
+}
+
+fn contract_view_trap_program_with_source_path(source_path: &str) -> Vec<u8> {
+    let src = r#"
+seiyaku ContractViewTrapTest {
+  meta { abi_version: 1; }
+
+  kotoage fn main() {}
+
+  view fn explode() -> int {
+    assert(false, "boom");
+    return 1;
+  }
+}
+"#;
+    ivm::KotodamaCompiler::new_with_options(CompilerOptions {
+        debug_source_name: Some(source_path.to_owned()),
+        ..CompilerOptions::default()
+    })
+    .compile_source(src)
+    .expect("compile contract view trap test program")
 }
 
 fn contract_test_app(
@@ -628,6 +650,114 @@ async fn contracts_call_enqueues_transaction() {
     let applied_detached_submit =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
     assert_eq!(applied_detached_submit, 1);
+}
+
+#[tokio::test]
+async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+        eprintln!(
+            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
+        );
+        return;
+    }
+
+    let creds = iroha_torii::test_utils::random_authority();
+    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
+
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(world, kura, query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let queue = Arc::new(Queue::from_config(queue_cfg, events));
+    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
+    #[cfg(feature = "telemetry")]
+    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
+    #[cfg(not(feature = "telemetry"))]
+    let telemetry = iroha_torii::MaybeTelemetry::disabled();
+
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
+
+    let source_path = "contracts/view_trap_test.ko";
+    let program = contract_view_trap_program_with_source_path(source_path);
+    let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
+    let deploy_body =
+        iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
+    let deploy_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/deploy")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(deploy_body))
+        .unwrap();
+    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
+    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+
+    let applied_deploy =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+    assert_eq!(applied_deploy, 1);
+
+    let activate_body = iroha_torii::test_utils::activate_instance_request_json(
+        &creds.account,
+        &creds.private_key,
+        "apps",
+        "viewtrap.v1",
+        &code_hash_hex,
+    );
+    let activate_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/instance/activate")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(activate_body))
+        .unwrap();
+    let activate_resp = app.clone().oneshot(activate_req).await.unwrap();
+    assert_eq!(activate_resp.status(), http::StatusCode::OK);
+
+    let applied_activate =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+    assert_eq!(applied_activate, 1);
+
+    let body = iroha_torii::test_utils::contract_view_request_json(
+        &creds.account,
+        "apps",
+        "viewtrap.v1",
+        iroha_torii::test_utils::ContractViewOptions {
+            entrypoint: Some("explode"),
+            payload: None,
+            gas_limit: 10_000,
+        },
+    );
+    let req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/view")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let value: json::Value = json::from_slice(&bytes).expect("decode contract view error");
+    assert_eq!(
+        value.get("ok").and_then(json::Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        value.get("entrypoint").and_then(json::Value::as_str),
+        Some("explode")
+    );
+    assert_eq!(
+        value.get("vm_diagnostic")
+            .and_then(json::Value::as_object)
+            .and_then(|diag| diag.get("source_path"))
+            .and_then(json::Value::as_str),
+        Some(source_path)
+    );
 }
 
 #[tokio::test]

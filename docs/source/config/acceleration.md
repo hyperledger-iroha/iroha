@@ -156,11 +156,16 @@ The workspace now builds Norito with the `gpu-compression` feature enabled by de
 so GPU zstd backends are compiled in; runtime availability still depends on hardware,
 the helper backend and the `allow_gpu_compression` config flag. On Apple Silicon
 workspace builds, `gpuzstd_metal` is a target dependency of `norito`, so it is built
-automatically as part of normal Cargo builds (no separate helper build step). The
-current Metal helper runs GPU match-finding/sequence generation and uses the in-crate
-deterministic zstd frame encoder (Huffman/FSE + frame assembly) on the host; decode
-uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames until
-GPU block decode is wired in.
+automatically as part of normal Cargo builds (no separate helper build step). On
+Unix/Windows non-macOS hosts, the workspace now also ships a dedicated
+`gpuzstd_cuda` helper crate, so `cargo build -p gpuzstd_cuda` produces
+`libgpuzstd_cuda.so` / `gpuzstd_cuda.dll` in-tree. Norito prefers that CUDA-named
+artifact, then accepts the compatible workspace-built fallback
+`libgpuzstd_metal.so` / `gpuzstd_metal.dll` when it is present next to the binary or
+on the loader path. The current helper implementation still reuses the deterministic
+match-finding/frame-assembly path shared with `gpuzstd_metal` until dedicated CUDA
+kernels land; decode uses the in-crate frame decoder with a CPU zstd fallback for
+unsupported frames.
 
 | Field | Default | Purpose |
 |-------|---------|---------|

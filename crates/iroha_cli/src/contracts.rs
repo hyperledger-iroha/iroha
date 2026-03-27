@@ -7,6 +7,7 @@ use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     client::Client,
     data_model::{
+        isi::contract_alias::SetContractAlias,
         isi::smart_contract_code::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
         },
@@ -30,6 +31,9 @@ pub enum Command {
     /// Contract code helpers
     #[command(subcommand)]
     Code(CodeCommand),
+    /// Contract alias helpers
+    #[command(subcommand)]
+    Alias(AliasCommand),
     /// Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
     Deploy(DeployArgs),
     /// Submit a contract call through Torii (POST /v1/contracts/call)
@@ -55,6 +59,7 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             Command::Code(cmd) => cmd.run(context),
+            Command::Alias(cmd) => cmd.run(context),
             Command::Deploy(args) => args.run(context),
             Command::Call(args) => args.run(context),
             Command::View(args) => args.run(context),
@@ -72,6 +77,23 @@ impl Run for Command {
 pub enum CodeCommand {
     /// Fetch on-chain contract code bytes by code hash and write to a file
     Get(CodeBytesGetArgs),
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum AliasCommand {
+    /// Lease or renew an on-chain contract alias for a contract address
+    Lease(ContractAliasLeaseArgs),
+    /// Release the current on-chain alias binding for a contract address
+    Release(ContractAliasReleaseArgs),
+}
+
+impl Run for AliasCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            AliasCommand::Lease(args) => args.run(context),
+            AliasCommand::Release(args) => args.run(context),
+        }
+    }
 }
 
 impl Run for CodeCommand {
@@ -125,6 +147,56 @@ impl Run for CodeBytesGetArgs {
 }
 
 #[derive(clap::Args, Debug)]
+pub struct ContractAliasLeaseArgs {
+    /// Canonical contract address to bind.
+    #[arg(long)]
+    pub contract_address: String,
+    /// Alias literal in `name::domain.dataspace` or `name::dataspace` format.
+    #[arg(long)]
+    pub contract_alias: String,
+    /// Optional lease expiry timestamp in unix milliseconds. Omit for a permanent binding.
+    #[arg(long)]
+    pub lease_expiry_ms: Option<u64>,
+}
+
+impl Run for ContractAliasLeaseArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let contract_address = self
+            .contract_address
+            .parse()
+            .wrap_err("invalid --contract-address")?;
+        let contract_alias = self
+            .contract_alias
+            .parse()
+            .wrap_err("invalid --contract-alias")?;
+        context.submit(vec![InstructionBox::from(SetContractAlias::bind(
+            contract_address,
+            contract_alias,
+            self.lease_expiry_ms,
+        ))])
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ContractAliasReleaseArgs {
+    /// Canonical contract address whose alias binding should be cleared.
+    #[arg(long)]
+    pub contract_address: String,
+}
+
+impl Run for ContractAliasReleaseArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let contract_address = self
+            .contract_address
+            .parse()
+            .wrap_err("invalid --contract-address")?;
+        context.submit(vec![InstructionBox::from(SetContractAlias::clear(
+            contract_address,
+        ))])
+    }
+}
+
+#[derive(clap::Args, Debug)]
 pub struct DeployArgs {
     /// Authority account identifier (canonical I105 account literal)
     #[arg(long)]
@@ -173,15 +245,12 @@ impl Run for DeployArgs {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct ContractTargetArgs {
-    /// Canonical contract address. When provided it takes precedence over namespace/id.
-    #[arg(long, conflicts_with_all = ["namespace", "contract_id"])]
+    /// Canonical contract address.
+    #[arg(long, conflicts_with = "contract_alias")]
     pub contract_address: Option<String>,
-    /// Namespace hosting the contract when using the legacy binding path.
-    #[arg(long, requires = "contract_id", conflicts_with = "contract_address")]
-    pub namespace: Option<String>,
-    /// Contract id within the namespace when using the legacy binding path.
-    #[arg(long, requires = "namespace", conflicts_with = "contract_address")]
-    pub contract_id: Option<String>,
+    /// On-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[arg(long, conflicts_with = "contract_address")]
+    pub contract_alias: Option<String>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -196,6 +265,9 @@ pub struct ContractPayloadArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CallArgs {
+    /// Optional shorthand selector. Supports `entrypoint:alias`, plain alias, or contract address.
+    #[arg(value_name = "SELECTOR")]
+    pub selector: Option<String>,
     /// Authority account identifier. Defaults to the configured client authority.
     #[arg(long)]
     pub authority: Option<String>,
@@ -239,7 +311,8 @@ impl Run for CallArgs {
             .map(|value| crate::resolve_account_id(context, value))
             .transpose()
             .wrap_err("failed to resolve --fee-sponsor")?;
-        let target = resolve_contract_target(self.target)?;
+        let (target, entrypoint) =
+            resolve_contract_target(self.selector.as_deref(), self.entrypoint.as_deref(), self.target)?;
         let payload = load_contract_payload_value(
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
@@ -248,9 +321,8 @@ impl Run for CallArgs {
             &authority,
             private_key.as_ref(),
             target.contract_address.as_ref(),
-            target.namespace.as_deref(),
-            target.contract_id.as_deref(),
-            self.entrypoint.as_deref(),
+            target.contract_alias.as_ref(),
+            entrypoint.as_deref(),
             payload.as_ref(),
             None,
             self.gas_asset_id.as_deref(),
@@ -264,6 +336,9 @@ impl Run for CallArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ViewArgs {
+    /// Optional shorthand selector. Supports `entrypoint:alias`, plain alias, or contract address.
+    #[arg(value_name = "SELECTOR")]
+    pub selector: Option<String>,
     /// Authority account identifier used as the read context. Defaults to the configured client authority.
     #[arg(long)]
     pub authority: Option<String>,
@@ -283,7 +358,8 @@ impl Run for ViewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
-        let target = resolve_contract_target(self.target)?;
+        let (target, entrypoint) =
+            resolve_contract_target(self.selector.as_deref(), self.entrypoint.as_deref(), self.target)?;
         let payload = load_contract_payload_value(
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
@@ -291,9 +367,8 @@ impl Run for ViewArgs {
         let value = client.post_contract_view_json(
             &authority,
             target.contract_address.as_ref(),
-            target.namespace.as_deref(),
-            target.contract_id.as_deref(),
-            self.entrypoint.as_deref(),
+            target.contract_alias.as_ref(),
+            entrypoint.as_deref(),
             payload.as_ref(),
             self.gas_limit,
         )?;
@@ -555,35 +630,85 @@ fn load_code_bytes(code_file: Option<PathBuf>, code_b64: Option<String>) -> Resu
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedContractTarget {
     contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
-    namespace: Option<String>,
-    contract_id: Option<String>,
+    contract_alias: Option<iroha::data_model::smart_contract::ContractAlias>,
 }
 
-fn resolve_contract_target(args: ContractTargetArgs) -> Result<ResolvedContractTarget> {
-    match (
-        args.contract_address.as_deref(),
-        args.namespace.as_deref(),
-        args.contract_id.as_deref(),
-    ) {
-        (Some(address), None, None) => Ok(ResolvedContractTarget {
-            contract_address: Some(
-                address
-                    .parse()
-                    .wrap_err("invalid --contract-address canonical literal")?,
-            ),
-            namespace: None,
-            contract_id: None,
-        }),
-        (None, Some(namespace), Some(contract_id)) => Ok(ResolvedContractTarget {
-            contract_address: None,
-            namespace: Some(namespace.to_owned()),
-            contract_id: Some(contract_id.to_owned()),
-        }),
-        (None, None, None) => Err(eyre!(
-            "provide either --contract-address or both --namespace and --contract-id"
+fn resolve_contract_target(
+    selector: Option<&str>,
+    entrypoint: Option<&str>,
+    args: ContractTargetArgs,
+) -> Result<(ResolvedContractTarget, Option<String>)> {
+    if let Some(selector) = selector.map(str::trim).filter(|value| !value.is_empty()) {
+        if args.contract_address.is_some() || args.contract_alias.is_some() {
+            return Err(eyre!(
+                "selector cannot be combined with --contract-address or --contract-alias"
+            ));
+        }
+
+        if let Some((selector_entrypoint, alias_literal)) =
+            selector.split_once(':').filter(|(_, alias)| alias.contains("::"))
+        {
+            if entrypoint.is_some() {
+                return Err(eyre!(
+                    "selector shorthand with `entrypoint:alias` cannot be combined with --entrypoint"
+                ));
+            }
+            return Ok((
+                ResolvedContractTarget {
+                    contract_address: None,
+                    contract_alias: Some(
+                        alias_literal
+                            .parse()
+                            .wrap_err("invalid contract alias shorthand")?,
+                    ),
+                },
+                Some(selector_entrypoint.to_owned()),
+            ));
+        }
+
+        if let Ok(contract_address) = selector.parse() {
+            return Ok((
+                ResolvedContractTarget {
+                    contract_address: Some(contract_address),
+                    contract_alias: None,
+                },
+                entrypoint.map(ToOwned::to_owned),
+            ));
+        }
+
+        return Ok((
+            ResolvedContractTarget {
+                contract_address: None,
+                contract_alias: Some(selector.parse().wrap_err("invalid contract alias")?),
+            },
+            entrypoint.map(ToOwned::to_owned),
+        ));
+    }
+
+    match (args.contract_address.as_deref(), args.contract_alias.as_deref()) {
+        (Some(address), None) => Ok((
+            ResolvedContractTarget {
+                contract_address: Some(
+                    address
+                        .parse()
+                        .wrap_err("invalid --contract-address canonical literal")?,
+                ),
+                contract_alias: None,
+            },
+            entrypoint.map(ToOwned::to_owned),
+        )),
+        (None, Some(alias)) => Ok((
+            ResolvedContractTarget {
+                contract_address: None,
+                contract_alias: Some(alias.parse().wrap_err("invalid --contract-alias")?),
+            },
+            entrypoint.map(ToOwned::to_owned),
+        )),
+        (None, None) => Err(eyre!(
+            "provide exactly one contract target via SELECTOR, --contract-address, or --contract-alias"
         )),
         _ => Err(eyre!(
-            "provide either --contract-address or both --namespace and --contract-id"
+            "provide exactly one contract target via SELECTOR, --contract-address, or --contract-alias"
         )),
     }
 }
@@ -2129,6 +2254,98 @@ mod tests {
     }
 
     #[test]
+    fn debug_call_matches_overlay_for_public_by_call_execution() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let mut ctx = TestContext::new(authority.clone());
+        let source = r#"
+            seiyaku Demo {
+                state int counter;
+
+                kotoage fn bump(amount: int) -> int permission(Admin) {
+                    register_domain(domain("debugparity"));
+                    counter = amount;
+                    return counter;
+                }
+            }
+        "#;
+        let program = compile_contract_program(source);
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
+        let payload_json = r#"{"amount":7}"#.to_owned();
+        let args = DebugCallArgs {
+            authority: None,
+            code_file: None,
+            code_b64: Some(code_b64),
+            entrypoint: Some("bump".to_owned()),
+            gas_limit: 50_000,
+            source_file: None,
+            accounts_json: None,
+            accounts_file: None,
+            durable_state_json: None,
+            durable_state_file: None,
+            payload: ContractPayloadArgs {
+                payload_json: Some(payload_json.clone()),
+                payload_file: None,
+            },
+        };
+        args.run(&mut ctx).expect("debug call");
+        let output = ctx.take_output().expect("debug call output");
+        assert_eq!(
+            output.get("ok").and_then(norito::json::Value::as_bool),
+            Some(true)
+        );
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("gas_limit").expect("static gas_limit key"),
+            iroha_primitives::json::Json::from(50_000u64),
+        );
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static contract_entrypoint key"),
+            iroha_primitives::json::Json::from("bump"),
+        );
+        metadata.insert(
+            Name::from_str("contract_payload").expect("static contract_payload key"),
+            iroha_primitives::json::Json::from(norito::json::from_str::<norito::json::Value>(&payload_json).expect("payload json")),
+        );
+        let tx = TransactionBuilder::new(ctx.config().chain.clone(), authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
+            .sign(ctx.config().key_pair.private_key());
+        let overlay =
+            build_overlay_for_transaction_with_accounts(&tx, std::slice::from_ref(&authority))
+                .expect("overlay");
+
+        assert_eq!(
+            output
+                .get("queued_instruction_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(overlay.instruction_count() as u64)
+        );
+        let expected_queue_json =
+            norito::json::to_value(&overlay.instruction_slice().to_vec()).expect("serialize queue");
+        assert_eq!(
+            output.get("queued_instructions"),
+            Some(&expected_queue_json)
+        );
+        assert_eq!(
+            output
+                .get("durable_state_mutation_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(overlay.durable_state_overlay().len() as u64)
+        );
+        let expected_durable_json =
+            render_durable_state_overlay(overlay.durable_state_overlay()).expect("serialize durable overlay");
+        assert_eq!(
+            output.get("durable_state_overlay"),
+            Some(&expected_durable_json)
+        );
+        assert_eq!(
+            output.get("result").and_then(norito::json::Value::as_i64),
+            Some(7)
+        );
+    }
+
+    #[test]
     fn deploy_activate_instructions_prepend_domainless_self_register() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let code = minimal_program();
@@ -2201,28 +2418,56 @@ mod tests {
             iroha::data_model::nexus::DataSpaceId::new(0),
         )
         .expect("contract address");
-        let resolved = resolve_contract_target(ContractTargetArgs {
-            contract_address: Some(contract_address.to_string()),
-            namespace: None,
-            contract_id: None,
-        })
+        let (resolved, entrypoint) = resolve_contract_target(
+            None,
+            None,
+            ContractTargetArgs {
+                contract_address: Some(contract_address.to_string()),
+                contract_alias: None,
+            },
+        )
         .expect("resolved target");
         assert_eq!(resolved.contract_address, Some(contract_address));
-        assert!(resolved.namespace.is_none());
-        assert!(resolved.contract_id.is_none());
+        assert!(resolved.contract_alias.is_none());
+        assert!(entrypoint.is_none());
     }
 
     #[test]
-    fn resolve_contract_target_accepts_namespace_pair() {
-        let resolved = resolve_contract_target(ContractTargetArgs {
-            contract_address: None,
-            namespace: Some("apps".to_owned()),
-            contract_id: Some("router".to_owned()),
-        })
+    fn resolve_contract_target_accepts_contract_alias() {
+        let (resolved, entrypoint) = resolve_contract_target(
+            None,
+            None,
+            ContractTargetArgs {
+                contract_address: None,
+                contract_alias: Some("router::dex.universal".to_owned()),
+            },
+        )
         .expect("resolved target");
-        assert_eq!(resolved.namespace.as_deref(), Some("apps"));
-        assert_eq!(resolved.contract_id.as_deref(), Some("router"));
+        assert_eq!(
+            resolved.contract_alias.as_ref().map(ToString::to_string).as_deref(),
+            Some("router::dex.universal")
+        );
         assert!(resolved.contract_address.is_none());
+        assert!(entrypoint.is_none());
+    }
+
+    #[test]
+    fn resolve_contract_target_accepts_selector_shorthand() {
+        let (resolved, entrypoint) = resolve_contract_target(
+            Some("swap:router::dex.universal"),
+            None,
+            ContractTargetArgs {
+                contract_address: None,
+                contract_alias: None,
+            },
+        )
+        .expect("resolved target");
+        assert_eq!(
+            resolved.contract_alias.as_ref().map(ToString::to_string).as_deref(),
+            Some("router::dex.universal")
+        );
+        assert!(resolved.contract_address.is_none());
+        assert_eq!(entrypoint.as_deref(), Some("swap"));
     }
 
     #[test]

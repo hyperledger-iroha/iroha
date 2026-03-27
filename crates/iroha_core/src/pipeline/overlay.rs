@@ -609,6 +609,11 @@ impl TxOverlay {
         &self.instructions
     }
 
+    /// Borrow the durable smart-contract state overlay accumulated during IVM execution.
+    pub fn durable_state_overlay(&self) -> &BTreeMap<Name, Option<Vec<u8>>> {
+        &self.durable_state_overlay
+    }
+
     /// Return IVM gas used during overlay prepass, when the source executable was `Executable::Ivm`.
     pub fn ivm_gas_used(&self) -> Option<u64> {
         self.ivm_gas_used

@@ -21,9 +21,10 @@ use iroha_data_model::{
     role::{Role, RoleId},
 };
 use iroha_executor_data_model::isi::multisig::{
-    MultisigAccountState, MultisigApprove, MultisigCancel, MultisigInstructionBox,
-    MultisigProposalState, MultisigProposalTerminalState, MultisigProposalTerminalStatus,
-    MultisigProposalValue, MultisigPropose, MultisigRegister, MultisigSpec,
+    DEFAULT_MULTISIG_TTL_MS, MultisigAccountState, MultisigApprove, MultisigCancel,
+    MultisigInstructionBox, MultisigProposalState, MultisigProposalTerminalState,
+    MultisigProposalTerminalStatus, MultisigProposalValue, MultisigPropose, MultisigRegister,
+    MultisigSpec,
 };
 use mv::storage::StorageReadOnly;
 
@@ -1341,6 +1342,7 @@ fn execute_propose(
 ) -> Result<(), ValidationFail> {
     let proposer = authority.clone();
     let multisig_account = resolve_signatory_account(state_transaction, &instruction.account)?;
+    ensure_multisig_account_state_materialized(state_transaction, &multisig_account)?;
     let home_domain = multisig_home_domain(state_transaction, &multisig_account)?;
     let instructions_hash = HashOf::new(&instruction.instructions);
     let multisig_spec = multisig_spec(state_transaction, &multisig_account)?;
@@ -1435,6 +1437,7 @@ fn execute_approve(
 ) -> Result<(), ValidationFail> {
     let approver = authority.clone();
     let multisig_account = resolve_signatory_account(state_transaction, &instruction.account)?;
+    ensure_multisig_account_state_materialized(state_transaction, &multisig_account)?;
     let home_domain = multisig_home_domain(state_transaction, &multisig_account)?;
     let instructions_hash = instruction.instructions_hash;
 
@@ -1560,6 +1563,7 @@ fn execute_cancel(
 ) -> Result<(), ValidationFail> {
     let canceler = authority.clone();
     let multisig_account = resolve_signatory_account(state_transaction, &instruction.account)?;
+    ensure_multisig_account_state_materialized(state_transaction, &multisig_account)?;
     let instructions_hash = instruction.instructions_hash;
 
     if !canceler_is_authorized(&multisig_account, &canceler) {
@@ -2205,6 +2209,111 @@ fn load_multisig_account_state_optional(
     let state = norito::decode_from_bytes::<MultisigAccountState>(bytes)
         .map_err(multisig_state_decode_error)?;
     Ok(Some(state))
+}
+
+fn ensure_multisig_account_state_materialized(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    multisig_account: &AccountId,
+) -> Result<(), ValidationFail> {
+    let resolved_account = resolve_signatory_account(state_transaction, multisig_account)?;
+    let key = multisig_account_state_key(&resolved_account);
+    if state_transaction
+        .world
+        .smart_contract_state
+        .get(&key)
+        .is_some()
+    {
+        return Ok(());
+    }
+    let Some(reconstructed) =
+        reconstruct_multisig_account_state(state_transaction, &resolved_account)?
+    else {
+        return Ok(());
+    };
+    iroha_logger::warn!(
+        multisig_account = %resolved_account,
+        "reconstructing missing multisig account state from controller metadata"
+    );
+    persist_multisig_account_state(state_transaction, None, &reconstructed)?;
+    Ok(())
+}
+
+fn reconstruct_multisig_account_state(
+    state_transaction: &StateTransaction<'_, '_>,
+    multisig_account: &AccountId,
+) -> Result<Option<MultisigAccountState>, ValidationFail> {
+    let resolved_account = resolve_signatory_account(state_transaction, multisig_account)?;
+    let account = state_transaction
+        .world
+        .account(&resolved_account)
+        .map_err(map_find_error)?;
+
+    let home_domain = if let Some(raw) = account.metadata().get(&home_domain_key()) {
+        norito::json::from_str::<Option<iroha_data_model::domain::DomainId>>(raw.as_ref()).map_err(
+            |err| {
+                ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+                    "multisig home_domain malformed for `{resolved_account}`: {err}"
+                )))
+            },
+        )?
+    } else if account.linked_domains().len() == 1 {
+        account.linked_domains().iter().next().cloned()
+    } else {
+        None
+    };
+
+    if let Some(raw) = account.metadata().get(&spec_key()) {
+        let spec = norito::json::from_str::<MultisigSpec>(raw.as_ref()).map_err(|err| {
+            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+                "multisig spec malformed for `{resolved_account}`: {err}"
+            )))
+        })?;
+        return Ok(Some(MultisigAccountState::new(
+            resolved_account,
+            home_domain,
+            spec,
+        )));
+    }
+
+    let Some(policy) = account.id().multisig_policy() else {
+        return Ok(None);
+    };
+    let mut signatories = BTreeMap::new();
+    for member in policy.members() {
+        let seeded = AccountId::new(member.public_key().clone());
+        let Some(signatory_account) = state_transaction
+            .world
+            .accounts_iter()
+            .find(|candidate| candidate.id().subject_id() == seeded.subject_id())
+            .map(|candidate| candidate.id().clone())
+        else {
+            return Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound));
+        };
+        let weight = u8::try_from(member.weight()).map_err(|_| {
+            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+                "multisig member weight {} exceeds u8 for `{resolved_account}`",
+                member.weight()
+            )))
+        })?;
+        signatories.insert(signatory_account, weight);
+    }
+    let quorum = std::num::NonZeroU16::new(policy.threshold()).ok_or_else(|| {
+        ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+            "multisig threshold is zero for `{resolved_account}`"
+        )))
+    })?;
+    let transaction_ttl_ms = std::num::NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
+        .expect("default multisig ttl must be non-zero");
+
+    Ok(Some(MultisigAccountState::new(
+        resolved_account,
+        home_domain,
+        MultisigSpec {
+            signatories,
+            quorum,
+            transaction_ttl_ms,
+        },
+    )))
 }
 
 fn load_multisig_account_state(
@@ -4242,6 +4351,134 @@ mod tests {
         let propose = MultisigPropose::new(multisig_id.clone(), instructions, None);
         execute_propose(&mut state_transaction, &signer1_id, &propose)
             .expect("signatory propose without roles");
+    }
+
+    #[test]
+    fn multisig_propose_repairs_missing_state_from_controller() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let domain_id: iroha_data_model::domain::DomainId = "repairable".parse().unwrap();
+
+        let signer1 = KeyPair::random();
+        let signer2 = KeyPair::random();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+        let mut world = World::new();
+        let selector = crate::sns::selector_for_domain(&domain_id).expect("selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&signer1_id)
+            .expect("signer address");
+        let lease = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            signer1_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
+        let state = State::new_with_chain(
+            world,
+            kura,
+            query_handle,
+            ChainId::from("multisig-repair-from-controller"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&signer1_id, &mut state_transaction)
+            .expect("domain registration");
+        register_account_in_domain(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            &signer1_id,
+            "register signer1",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            &signer2_id,
+            "register signer2",
+        );
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        let multisig_id = register_multisig_account(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            &spec,
+            "register multisig account",
+        );
+
+        state_transaction
+            .world
+            .smart_contract_state
+            .remove(multisig_account_state_key(&multisig_id));
+        state_transaction
+            .world
+            .smart_contract_state
+            .remove(multisig_signatory_index_key(&signer1_id));
+        state_transaction
+            .world
+            .smart_contract_state
+            .remove(multisig_signatory_index_key(&signer2_id));
+        let account = state_transaction
+            .world
+            .accounts
+            .get_mut(&multisig_id)
+            .expect("registered multisig");
+        account.metadata = Metadata::default();
+        account.insert((*MULTISIG_CREATED_VIA_KEY).clone(), Json::new("implicit"));
+
+        let instructions: Vec<InstructionBox> = Vec::new();
+        let propose = MultisigPropose::new(multisig_id.clone(), instructions, None);
+        execute_propose(&mut state_transaction, &signer1_id, &propose)
+            .expect("state repair should allow signatory proposal");
+
+        let repaired =
+            load_multisig_account_state(&state_transaction, &multisig_id).expect("repaired state");
+        assert_eq!(
+            repaired.home_domain,
+            Some(domain_id.clone()),
+            "repair should infer the home domain from linked domains"
+        );
+        assert!(
+            repaired
+                .spec
+                .signatories
+                .keys()
+                .any(|account| account.subject_id() == signer1_id.subject_id()),
+            "repaired spec should include signer1"
+        );
+        assert!(
+            repaired
+                .spec
+                .signatories
+                .keys()
+                .any(|account| account.subject_id() == signer2_id.subject_id()),
+            "repaired spec should include signer2"
+        );
+        assert!(
+            !load_signatory_memberships(&state_transaction, &signer1_id).is_empty(),
+            "repair should repopulate the signatory index for signer1"
+        );
+        assert!(
+            !load_signatory_memberships(&state_transaction, &signer2_id).is_empty(),
+            "repair should repopulate the signatory index for signer2"
+        );
     }
 
     #[test]

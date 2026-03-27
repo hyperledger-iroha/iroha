@@ -104,6 +104,20 @@ impl JsonKeyCodec for crate::smart_contract::ContractAlias {
     }
 }
 
+impl JsonKeyCodec for crate::smart_contract::ContractAddress {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(self.as_ref(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        encoded
+            .parse()
+            .map_err(|err: crate::smart_contract::ContractAddressError| {
+                json::Error::Message(err.to_string())
+            })
+    }
+}
+
 impl JsonKeyCodec for crate::confidential::ConfidentialParamsId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);

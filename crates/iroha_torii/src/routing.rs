@@ -6816,6 +6816,7 @@ pub async fn handle_post_contract_call(
         public_key_hex,
         signature_b64,
         contract_address,
+        contract_alias,
         namespace,
         contract_id,
         entrypoint,
@@ -6830,16 +6831,31 @@ pub async fn handle_post_contract_call(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
 
-    let prepared = if let Some(contract_address) = contract_address.as_ref() {
-        prepare_contract_call_by_address(&state, contract_address)?
-    } else {
-        let namespace = namespace.as_deref().ok_or_else(|| {
-            conversion_error("namespace is required when contract_address is omitted".to_owned())
-        })?;
-        let contract_id = contract_id.as_deref().ok_or_else(|| {
-            conversion_error("contract_id is required when contract_address is omitted".to_owned())
-        })?;
-        prepare_contract_call(&state, namespace, contract_id)?
+    let prepared = match (
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+        namespace.as_deref(),
+        contract_id.as_deref(),
+    ) {
+        (Some(_), Some(_), _, _) => {
+            return Err(conversion_error(
+                "exactly one of contract_address or contract_alias must be provided".to_owned(),
+            ));
+        }
+        (Some(contract_address), None, None, None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
+        (None, Some(contract_alias), None, None) => {
+            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
+        }
+        (None, None, Some(namespace), Some(contract_id)) => {
+            prepare_contract_call(&state, namespace, contract_id)?
+        }
+        _ => {
+            return Err(conversion_error(
+                "provide exactly one contract target via contract_address, contract_alias, or namespace+contract_id".to_owned(),
+            ));
+        }
     };
     let PreparedContractCall {
         code_bytes,
@@ -7020,6 +7036,7 @@ pub async fn handle_post_contract_view(
     let ContractViewDto {
         authority,
         contract_address,
+        contract_alias,
         namespace,
         contract_id,
         entrypoint,
@@ -7031,16 +7048,31 @@ pub async fn handle_post_contract_view(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
 
-    let prepared = if let Some(contract_address) = contract_address.as_ref() {
-        prepare_contract_call_by_address(&state, contract_address)?
-    } else {
-        let namespace = namespace.as_deref().ok_or_else(|| {
-            conversion_error("namespace is required when contract_address is omitted".to_owned())
-        })?;
-        let contract_id = contract_id.as_deref().ok_or_else(|| {
-            conversion_error("contract_id is required when contract_address is omitted".to_owned())
-        })?;
-        prepare_contract_call(&state, namespace, contract_id)?
+    let prepared = match (
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+        namespace.as_deref(),
+        contract_id.as_deref(),
+    ) {
+        (Some(_), Some(_), _, _) => {
+            return Err(conversion_error(
+                "exactly one of contract_address or contract_alias must be provided".to_owned(),
+            ));
+        }
+        (Some(contract_address), None, None, None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
+        (None, Some(contract_alias), None, None) => {
+            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
+        }
+        (None, None, Some(namespace), Some(contract_id)) => {
+            prepare_contract_call(&state, namespace, contract_id)?
+        }
+        _ => {
+            return Err(conversion_error(
+                "provide exactly one contract target via contract_address, contract_alias, or namespace+contract_id".to_owned(),
+            ));
+        }
     };
     let PreparedContractCall {
         code_bytes,
@@ -12498,6 +12530,23 @@ fn prepare_contract_call_by_address(
 }
 
 #[cfg(feature = "app_api")]
+fn prepare_contract_call_by_alias(
+    state: &CoreState,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    now_ms: u64,
+) -> core::result::Result<PreparedContractCall, Error> {
+    let world = state.world_view();
+    let contract_address = world
+        .contract_address_by_alias_at(contract_alias, now_ms)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    prepare_contract_call_by_address(state, &contract_address)
+}
+
+#[cfg(feature = "app_api")]
 fn resolve_public_contract_deploy_dataspace(
     state: &CoreState,
     dataspace_alias: Option<&str>,
@@ -12609,13 +12658,16 @@ pub struct ContractCallDto {
     /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
     #[norito(default)]
     pub signature_b64: Option<String>,
-    /// Optional canonical contract address. When provided, it takes precedence over namespace/id.
+    /// Optional canonical contract address.
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
-    /// Target namespace hosting the contract instance.
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Internal legacy namespace binding path.
     #[norito(default)]
     pub namespace: Option<String>,
-    /// Logical contract identifier within the namespace.
+    /// Internal legacy contract identifier within the namespace binding path.
     #[norito(default)]
     pub contract_id: Option<String>,
     /// Optional entrypoint selector; defaults to `main`.
@@ -12687,13 +12739,16 @@ pub struct ContractCallResponseDto {
 pub struct ContractViewDto {
     /// Account identity used as the read authority and host context.
     pub authority: iroha_data_model::account::AccountId,
-    /// Optional canonical contract address. When provided, it takes precedence over namespace/id.
+    /// Optional canonical contract address.
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
-    /// Target namespace hosting the contract instance.
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Internal legacy namespace binding path.
     #[norito(default)]
     pub namespace: Option<String>,
-    /// Logical contract identifier within the namespace.
+    /// Internal legacy contract identifier within the namespace binding path.
     #[norito(default)]
     pub contract_id: Option<String>,
     /// Optional entrypoint selector; defaults to `main`.
@@ -19913,9 +19968,9 @@ const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "<deleted-offline-allowances>";
+const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "/v1/offline/allowances";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "<deleted-offline-allowances-query>";
+const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "/v1/offline/allowances/query";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_CERTIFICATES_ISSUE: &str = "<deleted-offline-certificates-issue>";
 #[cfg(feature = "app_api")]
@@ -34788,7 +34843,7 @@ pub struct ListFilterParams {
     pub sort: Option<String>,
 }
 
-/// GET parameters for `<deleted-offline-allowances>`.
+/// GET parameters for `/v1/offline/allowances`.
 ///
 /// Extends [`ListFilterParams`] with roadmap-required verdict/expiry filters while keeping the
 /// compact query string layout.
@@ -34796,7 +34851,7 @@ pub struct ListFilterParams {
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
-struct OfflineAllowanceListParams {
+pub(crate) struct OfflineAllowanceListParams {
     /// Optional JSON-encoded filter expression.
     pub filter: Option<String>,
     /// Optional limit for pagination.
@@ -45695,7 +45750,7 @@ fn offline_summary_item_to_json(item: &OfflineCounterSummaryListItem) -> Value {
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-async fn handle_v1_offline_allowances(
+pub async fn handle_v1_offline_allowances(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineAllowanceListParams>,
     telemetry: MaybeTelemetry,
@@ -45872,7 +45927,7 @@ pub async fn handle_v1_offline_revocations(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-async fn handle_v1_offline_allowances_query(
+pub async fn handle_v1_offline_allowances_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,

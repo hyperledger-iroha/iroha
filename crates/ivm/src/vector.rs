@@ -2701,7 +2701,7 @@ fn metal_sha256_compress(_state: &mut [u32; 8], _block: &[u8; 64]) -> bool {
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
+pub(crate) fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
     if !metal_runtime_allowed() {
         return None;
     }
@@ -2768,12 +2768,12 @@ pub fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
 }
 
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
-pub fn metal_sha256_leaves(_blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
+pub(crate) fn metal_sha256_leaves(_blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
     None
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
+pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     if !metal_runtime_allowed() {
         return None;
     }
@@ -2861,7 +2861,7 @@ pub fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
 }
 
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
-pub fn metal_sha256_pairs_reduce(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
+pub(crate) fn metal_sha256_pairs_reduce(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
 }
 
@@ -5312,6 +5312,16 @@ mod tests {
             metal_time.as_secs_f64() * 1.10 < cpu_time.as_secs_f64(),
             "Metal path must be >10% faster: cpu {cpu_time:?}, metal {metal_time:?}"
         );
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "metal")))]
+    #[test]
+    fn metal_sha256_merkle_helpers_return_none_without_metal_feature() {
+        let block = [0u8; 64];
+        let digest = [0u8; 32];
+
+        assert_eq!(metal_sha256_leaves(&[block]), None);
+        assert_eq!(metal_sha256_pairs_reduce(&[digest]), None);
     }
 
     #[cfg(all(target_os = "macos", feature = "metal"))]

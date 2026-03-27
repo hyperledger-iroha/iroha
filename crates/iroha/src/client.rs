@@ -8605,8 +8605,7 @@ impl Client {
         authority: &iroha_data_model::account::AccountId,
         private_key: Option<&iroha_crypto::PrivateKey>,
         contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
-        namespace: Option<&str>,
-        contract_id: Option<&str>,
+        contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
         entrypoint: Option<&str>,
         payload: Option<&norito::json::Value>,
         creation_time_ms: Option<u64>,
@@ -8631,11 +8630,8 @@ impl Client {
                 norito::json::to_value(contract_address)?,
             );
         }
-        if let Some(namespace) = namespace {
-            body.insert("namespace".into(), namespace.into());
-        }
-        if let Some(contract_id) = contract_id {
-            body.insert("contract_id".into(), contract_id.into());
+        if let Some(contract_alias) = contract_alias {
+            body.insert("contract_alias".into(), norito::json::to_value(contract_alias)?);
         }
         if let Some(entrypoint) = entrypoint {
             body.insert("entrypoint".into(), entrypoint.into());
@@ -8671,8 +8667,7 @@ impl Client {
         &self,
         authority: &iroha_data_model::account::AccountId,
         contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
-        namespace: Option<&str>,
-        contract_id: Option<&str>,
+        contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
         entrypoint: Option<&str>,
         payload: Option<&norito::json::Value>,
         gas_limit: u64,
@@ -8686,11 +8681,8 @@ impl Client {
                 norito::json::to_value(contract_address)?,
             );
         }
-        if let Some(namespace) = namespace {
-            body.insert("namespace".into(), namespace.into());
-        }
-        if let Some(contract_id) = contract_id {
-            body.insert("contract_id".into(), contract_id.into());
+        if let Some(contract_alias) = contract_alias {
+            body.insert("contract_alias".into(), norito::json::to_value(contract_alias)?);
         }
         if let Some(entrypoint) = entrypoint {
             body.insert("entrypoint".into(), entrypoint.into());

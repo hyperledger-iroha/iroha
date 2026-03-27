@@ -4,7 +4,12 @@ Status
 - Metal: SHA‑256 compression and batched leaf hashing/reduction used for Merkle
   roots are accelerated on macOS; bitwise vector kernels (add/and/xor/or) are
   wired through `vector::*` helpers with deterministic fallbacks.
-- CUDA: A `build.rs` script compiles kernels in `cuda/` to PTX at build time and copies bundled `*.ptx` files if `nvcc` is unavailable; vector helpers, SHA‑256, Merkle leaf hashing/reduction, Keccak, Poseidon2/6 permutations, and BN254 add/sub/mul all have GPU paths with automatic parity self‑tests.
+- CUDA: A `build.rs` script compiles kernels in `cuda/` to PTX at build time
+  and copies bundled `*.ptx` files if `nvcc` is unavailable; vector helpers,
+  SHA‑256, Merkle leaf hashing/reduction, Keccak, Poseidon2/6 permutations,
+  AES rounds/batches, BN254 add/sub/mul, Ed25519 batch verification, and the
+  scheduler bitonic-sort helper all have explicit CUDA entry points with
+  deterministic fallback/disable-path coverage.
 - Python (`iroha_python.gpu`) and Java (`CudaAccelerators`) bindings surface CUDA availability
   probes together with optional Poseidon/BN254 wrappers, returning fallbacks when hardware support
   is missing so applications can branch deterministically.
@@ -70,16 +75,16 @@ fall back to the scalar backend.
 - **Synchronous Commits** – The VM waits for all kernels in a cycle to finish before applying their outputs to the state. Results are committed sequentially in instruction order as done for CPU execution.
 - **Golden Self‑tests and Auto‑Disable** – On startup/first use, GPU backends (Metal, CUDA) execute small golden vectors (vadd32, SHA‑256, Keccak). Any mismatch disables the backend at runtime and the VM falls back to CPU scalar/SIMD paths, preserving correctness.
 - **Deterministic Work Assignment** – Mapping from instruction index to GPU ID is purely data driven (e.g., `gpu_id = hash(tx_id, instr_index) % 8`). Every node derives the same mapping and thus launches kernels in the same sequence.
-- **Runtime selection + fallbacks** – `AccelerationConfig` and env overrides (`IVM_DISABLE_{CUDA,METAL}`, `IVM_FORCE_*_SELFTEST_FAIL`) short‑circuit GPU use. CUDA helpers either return `None` (Poseidon/Keccak/BN254) or a CPU result wrapped in `Some` (AES rounds) so callers always get deterministic outputs. Tests in `crates/ivm/tests/cuda_disable_on_mismatch.rs` cover forced self‑test failures and config disables for SHA‑256, Poseidon, and AES.
+- **Runtime selection + fallbacks** – `AccelerationConfig` and env overrides (`IVM_DISABLE_{CUDA,METAL}`, `IVM_FORCE_*_SELFTEST_FAIL`) short‑circuit GPU use. CUDA helpers either return `None` (Poseidon/Keccak/BN254/bitonic sort) or a CPU result wrapped in `Some` (AES rounds) so callers always get deterministic outputs. Tests in `crates/ivm/tests/cuda_disable_on_mismatch.rs` cover forced self‑test failures and config disables for SHA‑256, Poseidon, AES, and the bitonic-sort helper.
 
 ## Summary Roadmap
 
-1. Implement CUDA kernels for vector helpers and SHA‑256.
-   - `sha256_compress_cuda` is now built from `cuda/sha256.ptx` and is invoked by the `SHA256BLOCK` opcode when GPUs are available. The kernel performs the same integer operations as the CPU reference ensuring bitwise identical output.
-   - On macOS, `sha256_compress_metal` is compiled at startup and used when a Metal device is detected. This compute pass mirrors the CPU algorithm exactly so results remain deterministic.
-2. Extend to Poseidon, SHA‑3 and AES once initial infrastructure is stable.
-3. Add CUDA kernels for signature checks (Ed25519 batching) building on the existing BN254 field pipeline.
-4. Integrate a `GpuManager` that tracks available devices and schedules workloads deterministically across them.
+1. Keep the explicit CUDA helper surface stable and directly tested.
+   - `sha256_compress_cuda`, the Merkle helpers, Poseidon2/6, Keccak, AES rounds/batches, BN254 add/sub/mul, Ed25519 batch verification, and `bitonic_sort_pairs` all have focused parity or fallback/disable-path coverage.
+   - On macOS, the matching Metal helpers remain subject to the same deterministic fallback contract.
+2. Continue broader live-hardware validation on dedicated CUDA hosts.
+   - The remaining work in this design slice is operator-side soak, benchmark, and parity reruns on real CUDA hardware rather than missing helper implementations in the current tree.
+3. Keep deterministic multi-GPU scheduling and failure handling aligned across the scheduler and public helper entry points as new CUDA consumers are added.
 
 By restricting GPU code to deterministic integer operations and committing results in program order, offloading does not alter the VM’s observable behaviour. Nodes without GPUs simply fall back to the existing Rust implementations and produce identical outputs.
 

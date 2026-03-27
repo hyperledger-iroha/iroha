@@ -6,7 +6,14 @@ results stay identical to the CPU path – but all nodes in a consensus group mu
 use homogeneous GPU hardware for deterministic performance.
 
 Note
-- CUDA kernel coverage is partial and PTX build integration is not yet automated. Enabling the `cuda` feature without the expected PTX artifacts will cause the runtime to fall back to CPU paths. A follow-up task will add a `build.rs` that produces and embeds PTX modules for the supported kernels.
+- CUDA PTX build integration is automated: `build.rs` compiles `cuda/*.cu`
+  with `nvcc` when available, falls back to bundled `.ptx` artifacts when they
+  exist, and otherwise emits deterministic stub PTX so the runtime keeps CUDA
+  disabled and falls back to CPU paths cleanly. The public CUDA helper surface
+  now covers vectors, SHA‑256/Merkle, Keccak, Poseidon2/6, AES rounds/batches,
+  BN254 arithmetic, Ed25519 batch verification, and the scheduler bitonic-sort
+  helper, with focused fallback/disable-path tests guarding the fail-closed
+  behavior.
 
 ## Metal on macOS
 
