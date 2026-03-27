@@ -171,6 +171,10 @@ struct ParsedArgs {
 struct LintOutput {
     code: String,
     message: String,
+    severity: String,
+    category: String,
+    line: Option<u64>,
+    column: Option<u64>,
 }
 
 struct SourceAnalysisResult {
@@ -334,6 +338,10 @@ fn analyze_source(
             .map(|warning| LintOutput {
                 code: warning.code.to_string(),
                 message: warning.localized_message(language),
+                severity: warning.severity.as_str().to_string(),
+                category: warning.category.as_str().to_string(),
+                line: warning.source.as_ref().map(|source| source.line as u64),
+                column: warning.source.as_ref().map(|source| source.column as u64),
             })
             .collect();
         Some(outputs)
@@ -605,6 +613,10 @@ fn lint_to_json(lint: &Option<Vec<LintOutput>>) -> Value {
                 .map(|w| {
                     json_object(vec![
                         json_entry("code", to_value(&w.code)),
+                        json_entry("severity", to_value(&w.severity)),
+                        json_entry("category", to_value(&w.category)),
+                        json_entry("line", w.line.map_or(Value::Null, Value::from)),
+                        json_entry("column", w.column.map_or(Value::Null, Value::from)),
                         json_entry("message", to_value(&w.message)),
                     ])
                 })

@@ -517,8 +517,7 @@ pub mod genesis_instructions_json {
         isi::{
             ActivatePublicLaneValidator, Grant, GrantBox, InstructionBox, Mint, MintBox, Register,
             RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter, Transfer,
-            TransferBox,
-            register::RegisterBox,
+            TransferBox, register::RegisterBox,
         },
         metadata::Metadata,
         nexus::LaneId,
@@ -854,15 +853,11 @@ pub mod genesis_instructions_json {
 
         let alias = match fields.remove("alias") {
             None | Some(Value::Null) => None,
-            Some(Value::String(value)) => Some(
-                value
-                    .parse()
-                    .map_err(|err| {
-                        json::Error::Message(format!(
-                            "invalid SetAssetDefinitionAlias.alias `{value}`: {err}"
-                        ))
-                    })?,
-            ),
+            Some(Value::String(value)) => Some(value.parse().map_err(|err| {
+                json::Error::Message(format!(
+                    "invalid SetAssetDefinitionAlias.alias `{value}`: {err}"
+                ))
+            })?),
             Some(other) => {
                 return Err(json::Error::Message(format!(
                     "expected string or null for SetAssetDefinitionAlias.alias, found {other:?}"
@@ -889,7 +884,9 @@ pub mod genesis_instructions_json {
         }
 
         let instruction = match alias {
-            Some(alias) => SetAssetDefinitionAlias::bind(asset_definition_id, alias, lease_expiry_ms),
+            Some(alias) => {
+                SetAssetDefinitionAlias::bind(asset_definition_id, alias, lease_expiry_ms)
+            }
             None => SetAssetDefinitionAlias::clear(asset_definition_id),
         };
         Ok(Some(InstructionBox::from(instruction)))
@@ -1130,8 +1127,9 @@ pub mod genesis_instructions_json {
                 });
         }
 
-        if let Some(set_asset_definition_alias) =
-            instruction.as_any().downcast_ref::<SetAssetDefinitionAlias>()
+        if let Some(set_asset_definition_alias) = instruction
+            .as_any()
+            .downcast_ref::<SetAssetDefinitionAlias>()
         {
             let mut fields = Map::new();
             fields.insert(
@@ -1153,10 +1151,7 @@ pub mod genesis_instructions_json {
                 },
             );
             let mut outer = Map::new();
-            outer.insert(
-                "SetAssetDefinitionAlias".to_string(),
-                Value::Object(fields),
-            );
+            outer.insert("SetAssetDefinitionAlias".to_string(), Value::Object(fields));
             return Some(Value::Object(outer));
         }
 
@@ -1268,6 +1263,7 @@ pub mod genesis_instructions_json {
 
         #[allow(unused_imports)]
         use iroha_data_model::{
+            asset::AssetDefinitionAlias,
             domain::Domain,
             isi::{
                 GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox,
@@ -1281,7 +1277,6 @@ pub mod genesis_instructions_json {
                 AccountId, AssetDefinitionId, AssetId, Grant, InstructionBox, Mint, Register,
                 Transfer,
             },
-            asset::AssetDefinitionAlias,
         };
         use iroha_executor_data_model::permission::parameter::CanSetParameters;
         use iroha_primitives::json::Json;
@@ -1349,7 +1344,8 @@ pub mod genesis_instructions_json {
                 .into(),
                 Grant::account_permission(CanSetParameters, account_id.clone()).into(),
                 SetParameter::new(parameter.clone()).into(),
-                SetAssetDefinitionAlias::bind(asset_def_id.clone(), asset_alias.clone(), None).into(),
+                SetAssetDefinitionAlias::bind(asset_def_id.clone(), asset_alias.clone(), None)
+                    .into(),
             ];
 
             let mut json_text = String::new();

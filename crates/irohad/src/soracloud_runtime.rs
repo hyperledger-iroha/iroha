@@ -8709,6 +8709,8 @@ mod tests {
         ivm::EmbeddedEntrypointDescriptor {
             name: name.to_owned(),
             kind: EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -8737,6 +8739,7 @@ mod tests {
                 .iter()
                 .map(|name| soracloud_entrypoint(name, 0))
                 .collect(),
+            states: Vec::new(),
         };
         let mut bytes = metadata.encode();
         bytes.extend_from_slice(&contract_interface.encode_section());

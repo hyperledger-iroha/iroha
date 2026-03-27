@@ -240,7 +240,9 @@ fn validate_alias_scope_component(name: &str, value: &str) -> Result<()> {
         return Err(eyre!("{name} must not be empty"));
     }
     if trimmed != value {
-        return Err(eyre!("{name} must not contain leading or trailing whitespace"));
+        return Err(eyre!(
+            "{name} must not contain leading or trailing whitespace"
+        ));
     }
     Ok(())
 }
@@ -456,7 +458,8 @@ mod tests {
         command: Command,
     }
 
-    const SAMPLE_ACCOUNT_ID: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const SAMPLE_ACCOUNT_ID: &str =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
     #[test]
     fn parse_voprf_args() {
@@ -712,23 +715,29 @@ mod tests {
     #[test]
     fn alias_by_account_helper_prints_result() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
-        alias_by_account_with(&mut ctx, SAMPLE_ACCOUNT_ID, Some("sbp"), Some("hbl"), |_, _, _, _| {
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "account_id": SAMPLE_ACCOUNT_ID,
-                    "total": 1,
-                    "items": [{
-                        "alias": "merchant@hbl.sbp",
-                        "dataspace": "sbp",
-                        "domain": "hbl",
-                        "is_primary": true
-                    }],
-                    "source": "on_chain"
-                }))?)
-                .unwrap())
-        })
+        alias_by_account_with(
+            &mut ctx,
+            SAMPLE_ACCOUNT_ID,
+            Some("sbp"),
+            Some("hbl"),
+            |_, _, _, _| {
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({
+                        "account_id": SAMPLE_ACCOUNT_ID,
+                        "total": 1,
+                        "items": [{
+                            "alias": "merchant@hbl.sbp",
+                            "dataspace": "sbp",
+                            "domain": "hbl",
+                            "is_primary": true
+                        }],
+                        "source": "on_chain"
+                    }))?)
+                    .unwrap())
+            },
+        )
         .expect("helper should succeed");
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("merchant@hbl.sbp"));

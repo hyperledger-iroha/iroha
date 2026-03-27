@@ -5592,8 +5592,7 @@ impl IVMHost for WsvHost {
                         asset_id,
                         amount,
                         self.allow_contract_runtime_asset_transfer_bypass,
-                    )
-                    {
+                    ) {
                         Ok(0)
                     } else {
                         Err(VMError::PermissionDenied)

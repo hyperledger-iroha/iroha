@@ -1022,9 +1022,11 @@ pub mod query {
                             .is_some_and(|domain| label.domain.as_ref() != Some(domain))
                 })
                 .map(|label| {
-                    let alias = label.to_literal(&state_ro.nexus().dataspace_catalog).map_err(
-                        |err| Error::Conversion(format!("invalid account alias binding: {err}")),
-                    )?;
+                    let alias = label
+                        .to_literal(&state_ro.nexus().dataspace_catalog)
+                        .map_err(|err| {
+                            Error::Conversion(format!("invalid account alias binding: {err}"))
+                        })?;
                     let dataspace = state_ro
                         .nexus()
                         .dataspace_catalog
@@ -1699,8 +1701,8 @@ pub mod query {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.write().dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(
-                vec![
+            state.nexus.write().dataspace_catalog =
+                iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
                         id: iroha_data_model::nexus::DataSpaceId::new(9),
@@ -1708,9 +1710,8 @@ pub mod query {
                         description: None,
                         fault_tolerance: 1,
                     },
-                ],
-            )
-            .expect("catalog");
+                ])
+                .expect("catalog");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -1757,8 +1758,8 @@ pub mod query {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let mut state = State::new(World::default(), kura, query_handle);
-            state.nexus.write().dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(
-                vec![
+            state.nexus.write().dataspace_catalog =
+                iroha_data_model::nexus::DataSpaceCatalog::new(vec![
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
                         id: iroha_data_model::nexus::DataSpaceId::new(9),
@@ -1766,9 +1767,8 @@ pub mod query {
                         description: None,
                         fault_tolerance: 1,
                     },
-                ],
-            )
-            .expect("catalog");
+                ])
+                .expect("catalog");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());

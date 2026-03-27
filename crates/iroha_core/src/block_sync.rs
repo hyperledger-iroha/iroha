@@ -780,6 +780,13 @@ fn unknown_prev_fallback_start_height(
     }
 }
 
+fn should_pause_proactive_block_sync_gossip(
+    height_changed: bool,
+    contiguous_frontier_pressure_active: bool,
+) -> bool {
+    height_changed || contiguous_frontier_pressure_active
+}
+
 fn append_recent_chain_hashes_for_unknown_prev(
     seen_blocks: &mut BTreeSet<HashOf<BlockHeader>>,
     kura: &Kura,
@@ -2045,6 +2052,22 @@ mod unknown_prev_hash_tests {
         assert!(requested_latest);
         assert_eq!(start_height.get(), 16);
     }
+
+    #[test]
+    fn proactive_block_sync_gossip_pauses_while_height_advances() {
+        assert!(
+            should_pause_proactive_block_sync_gossip(true, false),
+            "local height progress should suppress proactive latest-block gossip",
+        );
+        assert!(
+            !should_pause_proactive_block_sync_gossip(false, false),
+            "stall recovery must keep proactive block-sync gossip enabled",
+        );
+        assert!(
+            should_pause_proactive_block_sync_gossip(false, true),
+            "contiguous frontier pressure should keep block sync out of near-tip recovery",
+        );
+    }
 }
 
 /// Structure responsible for block synchronization between peers.
@@ -2179,8 +2202,20 @@ impl BlockSynchronizer {
             .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
         let peers_changed = self.peer_set_changed(&peers);
         let height_changed = now_height != previous_height;
+        let contiguous_frontier_pressure_active =
+            self.sumeragi.should_pause_block_sync_latest_gossip();
+        if should_pause_proactive_block_sync_gossip(
+            height_changed,
+            contiguous_frontier_pressure_active,
+        ) {
+            // Block sync should recover stalled peers, not compete with contiguous-frontier
+            // delivery while the local node is already advancing normally.
+            self.gossip_backoff = self.gossip_period;
+            self.gossip_next_deadline = now.checked_add(self.gossip_period).unwrap_or(now);
+            return;
+        }
         // Repeated unknown-prev traffic from faulty peers is not local progress.
-        let progress = height_changed || peers_changed;
+        let progress = peers_changed;
         if progress {
             self.gossip_backoff = self.gossip_period;
             let next = now.checked_add(self.gossip_period).unwrap_or(now);
@@ -5138,6 +5173,8 @@ pub mod message {
                             let now = Instant::now();
                             let unknown_prev_cooldown =
                                 unknown_prev_response_cooldown(block_sync.gossip_period);
+                            let frontier_block_sync_pause_active =
+                                block_sync.sumeragi.should_pause_block_sync_latest_gossip();
                             let (fallback_start_height, should_request_latest) =
                                 unknown_prev_fallback_start_height(
                                     &block_sync.kura,
@@ -5179,7 +5216,11 @@ pub mod message {
                                 .repeat_count
                                 .max(peer_share_decision.repeat_count);
                             if share_unknown_prev {
+                                let local_tip_cannot_help =
+                                    u64::try_from(fallback_start_height.get()).unwrap_or(u64::MAX)
+                                        >= now_height;
                                 if should_request_latest
+                                    && !frontier_block_sync_pause_active
                                     && (matches!(
                                         unknown_prev_share_mode,
                                         UnknownPrevShareMode::Full
@@ -5190,17 +5231,45 @@ pub mod message {
                                         .await;
                                     requested_latest = true;
                                 }
-                                warn!(
-                                    peer = %block_sync.peer,
-                                    requester = %peer_id,
-                                    block = %hash,
-                                    requested_latest,
-                                    fallback_start_height = fallback_start_height.get(),
-                                    share_mode = ?unknown_prev_share_mode,
-                                    repeat_count = unknown_prev_repeat_count,
-                                    "Block hash not found; sharing from fallback anchor"
-                                );
-                                fallback_start_height
+                                if frontier_block_sync_pause_active {
+                                    debug!(
+                                        peer = %block_sync.peer,
+                                        requester = %peer_id,
+                                        block = %hash,
+                                        fallback_start_height = fallback_start_height.get(),
+                                        share_mode = ?unknown_prev_share_mode,
+                                        repeat_count = unknown_prev_repeat_count,
+                                        "suppressing fallback-anchor share while frontier lane owns recovery"
+                                    );
+                                    share_unknown_prev = false;
+                                    nonzero_ext::nonzero!(1_usize)
+                                } else if local_tip_cannot_help {
+                                    debug!(
+                                        peer = %block_sync.peer,
+                                        requester = %peer_id,
+                                        block = %hash,
+                                        requested_latest,
+                                        fallback_start_height = fallback_start_height.get(),
+                                        local_height = now_height,
+                                        share_mode = ?unknown_prev_share_mode,
+                                        repeat_count = unknown_prev_repeat_count,
+                                        "suppressing fallback-anchor share because local tip cannot advance the requester"
+                                    );
+                                    share_unknown_prev = false;
+                                    nonzero_ext::nonzero!(1_usize)
+                                } else {
+                                    warn!(
+                                        peer = %block_sync.peer,
+                                        requester = %peer_id,
+                                        block = %hash,
+                                        requested_latest,
+                                        fallback_start_height = fallback_start_height.get(),
+                                        share_mode = ?unknown_prev_share_mode,
+                                        repeat_count = unknown_prev_repeat_count,
+                                        "Block hash not found; sharing from fallback anchor"
+                                    );
+                                    fallback_start_height
+                                }
                             } else {
                                 debug!(
                                     peer = %block_sync.peer,
@@ -6140,6 +6209,181 @@ pub mod message {
                 assert!(
                     second_pending > first_pending,
                     "repeated unknown-prev incremental fallback should trigger an additional latest-block probe request"
+                );
+            });
+        }
+
+        #[test]
+        fn get_blocks_after_unknown_prev_probe_skips_latest_request_while_frontier_pressure_active()
+        {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, _block_rx) = test_sumeragi_handle(1);
+                sumeragi.set_contiguous_frontier_pressure_active_for_tests(true);
+                let kura = Kura::blank_kura_for_testing();
+                let state = State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                );
+
+                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                {
+                    let mut peers_block = state.world.peers.block();
+                    let mut peers_tx = peers_block.transaction();
+                    peers_tx.push(registered_peer_id.clone());
+                    peers_tx.apply();
+                    peers_block.commit();
+                }
+
+                let state = Arc::new(state);
+                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    local_peer_id,
+                );
+
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    trusted_peers: BTreeSet::new(),
+                    gossip_period: Duration::from_millis(1),
+                    gossip_max_period: Duration::from_millis(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_millis(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+
+                let prev_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0xB3; Hash::LENGTH]));
+                let latest_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0xB4; Hash::LENGTH]));
+                let msg = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+                    registered_peer_id.clone(),
+                    Some(prev_hash),
+                    Some(latest_hash),
+                    BTreeSet::new(),
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+
+                assert_eq!(
+                    block_sync
+                        .request_tracker
+                        .pending
+                        .get(&registered_peer_id)
+                        .map_or(0, |entry| entry.pending),
+                    0,
+                    "unknown-prev fallback must not restart latest-block probing while contiguous frontier pressure remains active",
+                );
+            });
+        }
+
+        #[test]
+        fn get_blocks_after_unknown_prev_probe_skips_latest_request_while_frontier_lane_active() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, _block_rx) = test_sumeragi_handle(1);
+                sumeragi.set_frontier_lane_active_for_tests(true);
+                let kura = Kura::blank_kura_for_testing();
+                let state = State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                );
+
+                let registered_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                {
+                    let mut peers_block = state.world.peers.block();
+                    let mut peers_tx = peers_block.transaction();
+                    peers_tx.push(registered_peer_id.clone());
+                    peers_tx.apply();
+                    peers_block.commit();
+                }
+
+                let state = Arc::new(state);
+                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    local_peer_id,
+                );
+
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    trusted_peers: BTreeSet::new(),
+                    gossip_period: Duration::from_millis(1),
+                    gossip_max_period: Duration::from_millis(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_millis(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+
+                let prev_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0xC3; Hash::LENGTH]));
+                let latest_hash =
+                    HashOf::from_untyped_unchecked(Hash::prehashed([0xC4; Hash::LENGTH]));
+                let msg = message::Message::GetBlocksAfter(message::GetBlocksAfter::new(
+                    registered_peer_id.clone(),
+                    Some(prev_hash),
+                    Some(latest_hash),
+                    BTreeSet::new(),
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+
+                assert_eq!(
+                    block_sync
+                        .request_tracker
+                        .pending
+                        .get(&registered_peer_id)
+                        .map_or(0, |entry| entry.pending),
+                    0,
+                    "active frontier lane must suppress latest-block probing before fallback sharing",
                 );
             });
         }

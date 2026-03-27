@@ -66,6 +66,8 @@ fn hf_generated_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypoint
     ivm::EmbeddedEntrypointDescriptor {
         name: name.to_owned(),
         kind: EntryPointKind::Public,
+        params: Vec::new(),
+        return_type: None,
         permission: None,
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -105,6 +107,7 @@ pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
         ]
         .into_iter()
         .collect(),
+        states: Vec::new(),
     };
     let mut bytes = metadata.encode();
     bytes.extend_from_slice(&contract_interface.encode_section());

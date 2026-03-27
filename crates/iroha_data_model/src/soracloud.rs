@@ -9373,11 +9373,9 @@ mod tests {
         AccountId::new(keypair.public_key().clone())
     }
 
-    fn sample_asset_definition_id(_asset_definition_id: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
-            "rose".parse().expect("name"),
-        )
+    fn sample_asset_definition_id(asset_definition_id: &str) -> AssetDefinitionId {
+        AssetDefinitionId::parse_address_literal(asset_definition_id)
+            .expect("sample asset definition id literal should parse")
     }
 
     fn sample_model_provenance_ref() -> SoraModelProvenanceRefV1 {

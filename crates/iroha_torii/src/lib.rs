@@ -369,25 +369,26 @@ pub use routing::handle_get_proof_tags;
 pub use routing::handle_p2p_ws;
 pub use routing::{
     ActivateInstanceDto, ActivateInstanceResponseDto, ContractCallDto, ContractCallResponseDto,
-    DeployAndActivateInstanceDto, DeployAndActivateInstanceResponseDto, DeployContractDto,
-    DeployContractResponseDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
-    KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
-    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigCancelRequestDto,
-    MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto,
-    PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions,
-    RegisterPinManifestDto, RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
+    ContractViewDto, ContractViewResponseDto, DeployAndActivateInstanceDto,
+    DeployAndActivateInstanceResponseDto, DeployContractDto, DeployContractResponseDto,
+    EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
+    KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
+    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
+    MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
+    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
+    RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
     SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
     ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs, handle_get_contract_code_bytes,
     handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_call,
     handle_post_contract_deploy, handle_post_contract_instance,
-    handle_post_contract_instance_activate, handle_post_sorafs_register_manifest,
-    handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
-    handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
-    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
-    handle_v1_new_view_json, handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
-    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots,
-    handle_v1_zk_submit_proof, handle_v1_zk_verify, handle_v1_zk_vote_tally,
-    signed_find_proof_by_id,
+    handle_post_contract_instance_activate, handle_post_contract_view,
+    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
+    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
+    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
+    handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
+    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
+    handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots, handle_v1_zk_submit_proof,
+    handle_v1_zk_verify, handle_v1_zk_vote_tally, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -775,9 +776,9 @@ fn lookup_aliases_by_account_on_chain(
         Ok(items) => items,
         Err(iroha_data_model::query::error::QueryExecutionFail::NotFound) => return Ok(None),
         Err(err) => {
-            return Err(Error::Query(
-                iroha_data_model::ValidationFail::QueryFailed(err),
-            ));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                err,
+            )));
         }
     };
     Ok(Some((
@@ -2260,7 +2261,7 @@ async fn enforce_soracloud_signed_mutation_request(
         Err(error) => return Ok(error.into_response()),
     };
 
-    if let Ok(value) = HeaderValue::from_str(&verified.account.to_string()) {
+    if let Ok(value) = HeaderValue::from_bytes(verified.account.to_string().as_bytes()) {
         parts.headers.insert(
             HeaderName::from_static(soracloud::VERIFIED_ACCOUNT_HEADER),
             value,
@@ -12989,6 +12990,53 @@ async fn handler_post_contract_call(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_contract_view(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::ContractViewDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("view"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/view",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("view"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_contract_view(app.state.clone(), request).await {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("view"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_contract_call_multisig_propose(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -13141,7 +13189,8 @@ async fn handler_post_multisig_spec(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-    let response = crate::routing::handle_post_multisig_spec(app.state.clone(), NoritoJson(request)).await;
+    let response =
+        crate::routing::handle_post_multisig_spec(app.state.clone(), NoritoJson(request)).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -18638,6 +18687,7 @@ impl Torii {
                     post(handler_post_contract_instance_activate),
                 )
                 .route("/v1/contracts/call", post(handler_post_contract_call))
+                .route("/v1/contracts/view", post(handler_post_contract_view))
                 .route(
                     "/v1/contracts/call/multisig/propose",
                     post(handler_post_contract_call_multisig_propose),
@@ -26651,8 +26701,8 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             code_b64: code_b64.clone(),
+            dataspace: None,
         };
-
         // Exhaust the exact handler key up front so this regression does not depend
         // on how quickly the first deploy request completes on the current host.
         let key = super::rate_limit_key(
@@ -27459,6 +27509,8 @@ pub(crate) mod tests_runtime_handlers {
                 entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                     name: "main".to_owned(),
                     kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                    params: Vec::new(),
+                    return_type: None,
                     permission: None,
                     read_keys: Vec::new(),
                     write_keys: Vec::new(),
@@ -27467,6 +27519,7 @@ pub(crate) mod tests_runtime_handlers {
                     triggers: Vec::new(),
                     entry_pc: 0,
                 }],
+                states: Vec::new(),
             };
             let mut out = meta.encode();
             out.extend_from_slice(&interface.encode_section());
@@ -27484,6 +27537,7 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account,
             private_key: clone_private_key(&creds.private_key),
             code_b64,
+            dataspace: None,
         };
         let resp = super::handler_post_contract_deploy(
             State(app),
@@ -27503,6 +27557,20 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             v.get("ok").and_then(norito::json::Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            v.get("dataspace").and_then(norito::json::Value::as_str),
+            Some("universal")
+        );
+        assert_eq!(
+            v.get("deploy_nonce").and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            v.get("contract_address")
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|value| !value.is_empty()),
+            "expected canonical contract address in deploy response"
         );
         assert_eq!(
             v.get("code_hash_hex")
@@ -29370,11 +29438,15 @@ mod tests {
             "exactly one primary alias should be reported"
         );
         assert!(
-            dto.items.iter().any(|item| item.alias == "banking@sbp.universal"),
+            dto.items
+                .iter()
+                .any(|item| item.alias == "banking@sbp.universal"),
             "primary alias should be present"
         );
         assert!(
-            dto.items.iter().any(|item| item.alias == "public@universal"),
+            dto.items
+                .iter()
+                .any(|item| item.alias == "public@universal"),
             "secondary alias should be present"
         );
     }
@@ -32511,11 +32583,18 @@ mod tests {
         use tower::ServiceExt as _;
 
         async fn probe(headers: HeaderMap, body: Bytes) -> axum::response::Response {
-            let verified = headers.contains_key(axum::http::HeaderName::from_static(
-                soracloud::VERIFIED_SIGNER_HEADER,
-            ));
+            let verified_account = headers
+                .get(axum::http::HeaderName::from_static(
+                    soracloud::VERIFIED_ACCOUNT_HEADER,
+                ))
+                .and_then(|value| std::str::from_utf8(value.as_bytes()).ok());
+            let verified_signer = headers
+                .get(axum::http::HeaderName::from_static(
+                    soracloud::VERIFIED_SIGNER_HEADER,
+                ))
+                .and_then(|value| value.to_str().ok());
             axum::response::Response::builder()
-                .status(if verified {
+                .status(if verified_account.is_some() && verified_signer.is_some() {
                     StatusCode::OK
                 } else {
                     StatusCode::INTERNAL_SERVER_ERROR

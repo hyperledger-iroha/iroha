@@ -11,6 +11,8 @@ fn entrypoint(
     ivm::EmbeddedEntrypointDescriptor {
         name: name.to_owned(),
         kind,
+        params: Vec::new(),
+        return_type: None,
         permission: None,
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -39,6 +41,7 @@ fn contract_artifact(
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints,
+        states: Vec::new(),
     };
     let mut bytes = meta.encode();
     bytes.extend_from_slice(&interface.encode_section());

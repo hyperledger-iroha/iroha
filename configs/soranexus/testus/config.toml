@@ -26,6 +26,11 @@ public_address = "testus.mof3.sora.org:1337"
 address = "0.0.0.0:18080"
 public_address = "https://testus.mof3.sora.org:18080"
 
+[torii.onboarding]
+authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
+private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
+allowed_permissions = []
+
 [torii.faucet]
 authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"

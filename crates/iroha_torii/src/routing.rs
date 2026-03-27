@@ -6406,6 +6406,8 @@ pub struct ContractStateQuery {
     pub offset: Option<u64>,
     /// Prefix query limit (default 1000, max 10_000).
     pub limit: Option<u64>,
+    /// Optional decoded output mode. Supported: `json`.
+    pub decode: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -6417,6 +6419,10 @@ pub struct ContractStateEntry {
     pub value_b64: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub value_len: Option<u64>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub value_json: Option<norito::json::Value>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub decode_error: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -6433,6 +6439,406 @@ pub struct ContractStateResponse {
     pub limit: u64,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContractStateDecodeMode {
+    Json,
+}
+
+#[cfg(feature = "app_api")]
+fn parse_contract_state_decode_mode(
+    raw: Option<&str>,
+) -> core::result::Result<Option<ContractStateDecodeMode>, String> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(None),
+        Some("json") => Ok(Some(ContractStateDecodeMode::Json)),
+        Some(other) => Err(format!(
+            "unsupported decode mode `{other}`; supported values: json"
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn register_contract_state_schema(
+    registry: &mut BTreeMap<String, Option<ivm::EmbeddedStateType>>,
+    name: String,
+    ty: ivm::EmbeddedStateType,
+) {
+    match registry.get_mut(&name) {
+        Some(slot @ Some(existing)) if *existing == ty => {}
+        Some(slot) => *slot = None,
+        None => {
+            registry.insert(name, Some(ty));
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn collect_contract_state_schemas(
+    world: &impl WorldReadOnly,
+) -> BTreeMap<String, Option<ivm::EmbeddedStateType>> {
+    let mut registry = BTreeMap::new();
+    for (_, code_hash) in world.contract_instances().iter() {
+        let Some(code_bytes) = world.contract_code().get(code_hash) else {
+            continue;
+        };
+        let Ok(parsed) = ivm::ProgramMetadata::parse(code_bytes.as_slice()) else {
+            continue;
+        };
+        let Some(contract_interface) = parsed.contract_interface else {
+            continue;
+        };
+        for state in contract_interface.states {
+            register_contract_state_schema(&mut registry, state.name, state.ty);
+        }
+    }
+    registry
+}
+
+#[cfg(feature = "app_api")]
+fn contract_state_child_base(base: &str, suffix: &str) -> String {
+    format!("{base}_{suffix}")
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_state_scalar_json(
+    bytes: &[u8],
+    ty: &ivm::EmbeddedStateType,
+) -> core::result::Result<norito::json::Value, String> {
+    let tlv = ivm::pointer_abi::validate_tlv_bytes(bytes)
+        .map_err(|err| format!("invalid durable TLV: {err}"))?;
+    let payload = tlv.payload;
+    use ivm::pointer_abi::PointerType;
+
+    match ty {
+        ivm::EmbeddedStateType::Int => {
+            if tlv.type_id != PointerType::NoritoBytes {
+                return Err("expected NoritoBytes payload for int state".into());
+            }
+            let value: i64 =
+                norito::decode_from_bytes(payload).map_err(|err| format!("decode int: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::Bool => {
+            if tlv.type_id != PointerType::NoritoBytes {
+                return Err("expected NoritoBytes payload for bool state".into());
+            }
+            let value: i64 =
+                norito::decode_from_bytes(payload).map_err(|err| format!("decode bool: {err}"))?;
+            Ok(norito::json::Value::from(value != 0))
+        }
+        ivm::EmbeddedStateType::FixedU128
+        | ivm::EmbeddedStateType::Amount
+        | ivm::EmbeddedStateType::Balance => {
+            if tlv.type_id != PointerType::NoritoBytes {
+                return Err("expected NoritoBytes payload for numeric state".into());
+            }
+            let value: iroha_primitives::numeric::Numeric = norito::decode_from_bytes(payload)
+                .map_err(|err| format!("decode numeric: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::Json => {
+            if tlv.type_id != PointerType::Json {
+                return Err("expected Json payload for json state".into());
+            }
+            let value: iroha_primitives::json::Json =
+                norito::decode_from_bytes(payload).map_err(|err| format!("decode json: {err}"))?;
+            value
+                .try_into_any_norito::<norito::json::Value>()
+                .map_err(|err| format!("convert json payload: {err}"))
+        }
+        ivm::EmbeddedStateType::Name => {
+            if tlv.type_id != PointerType::Name {
+                return Err("expected Name payload for Name state".into());
+            }
+            let value: iroha_data_model::prelude::Name =
+                norito::decode_from_bytes(payload).map_err(|err| format!("decode name: {err}"))?;
+            Ok(norito::json::Value::from(value.as_ref().to_owned()))
+        }
+        ivm::EmbeddedStateType::AccountId => {
+            if tlv.type_id != PointerType::AccountId {
+                return Err("expected AccountId payload for AccountId state".into());
+            }
+            let value: iroha_data_model::account::AccountId = norito::decode_from_bytes(payload)
+                .map_err(|err| format!("decode account id: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::AssetDefinitionId => {
+            if tlv.type_id != PointerType::AssetDefinitionId {
+                return Err(
+                    "expected AssetDefinitionId payload for AssetDefinitionId state".into(),
+                );
+            }
+            let value: iroha_data_model::asset::AssetDefinitionId =
+                norito::decode_from_bytes(payload)
+                    .map_err(|err| format!("decode asset definition id: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::AssetId => {
+            if tlv.type_id != PointerType::AssetId {
+                return Err("expected AssetId payload for AssetId state".into());
+            }
+            let value: iroha_data_model::asset::AssetId = norito::decode_from_bytes(payload)
+                .map_err(|err| format!("decode asset id: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::NftId => {
+            if tlv.type_id != PointerType::NftId {
+                return Err("expected NftId payload for NftId state".into());
+            }
+            let value: iroha_data_model::nft::NftId = norito::decode_from_bytes(payload)
+                .map_err(|err| format!("decode nft id: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::DomainId => {
+            if tlv.type_id != PointerType::DomainId {
+                return Err("expected DomainId payload for DomainId state".into());
+            }
+            let value: iroha_data_model::domain::DomainId = norito::decode_from_bytes(payload)
+                .map_err(|err| format!("decode domain id: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::DataSpaceId => {
+            if tlv.type_id != PointerType::DataSpaceId {
+                return Err("expected DataSpaceId payload for DataSpaceId state".into());
+            }
+            let value: iroha_data_model::nexus::DataSpaceId = norito::decode_from_bytes(payload)
+                .map_err(|err| format!("decode dataspace id: {err}"))?;
+            Ok(norito::json::Value::from(value.to_string()))
+        }
+        ivm::EmbeddedStateType::Blob | ivm::EmbeddedStateType::Bytes => Ok(
+            norito::json::Value::from(base64::engine::general_purpose::STANDARD.encode(payload)),
+        ),
+        ivm::EmbeddedStateType::String => {
+            let value: String = norito::decode_from_bytes(payload)
+                .map_err(|err| format!("decode string: {err}"))?;
+            Ok(norito::json::Value::from(value))
+        }
+        ivm::EmbeddedStateType::Tuple(_)
+        | ivm::EmbeddedStateType::Struct { .. }
+        | ivm::EmbeddedStateType::Map { .. } => {
+            Err("composite state values must be decoded through the composite helpers".into())
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_state_value_json(
+    base: &str,
+    ty: &ivm::EmbeddedStateType,
+    get_value: &impl Fn(&str) -> Option<Vec<u8>>,
+) -> core::result::Result<norito::json::Value, String> {
+    match ty {
+        ivm::EmbeddedStateType::Struct { fields, .. } => {
+            let mut object = norito::json::Map::new();
+            for field in fields {
+                let child = contract_state_child_base(base, &field.name);
+                object.insert(
+                    field.name.clone().into(),
+                    decode_contract_state_value_json(&child, &field.ty, get_value)?,
+                );
+            }
+            Ok(norito::json::Value::Object(object))
+        }
+        ivm::EmbeddedStateType::Tuple(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                let child = contract_state_child_base(base, &index.to_string());
+                values.push(decode_contract_state_value_json(&child, item, get_value)?);
+            }
+            Ok(norito::json::Value::Array(values))
+        }
+        ivm::EmbeddedStateType::Map { .. } => Err("nested durable maps are not supported".into()),
+        _ => {
+            let bytes = get_value(base).ok_or_else(|| format!("state path `{base}` not found"))?;
+            decode_contract_state_scalar_json(bytes.as_slice(), ty)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_state_map_value_json(
+    base: &str,
+    value_ty: &ivm::EmbeddedStateType,
+    key_suffix: &str,
+    get_value: &impl Fn(&str) -> Option<Vec<u8>>,
+) -> core::result::Result<norito::json::Value, String> {
+    match value_ty {
+        ivm::EmbeddedStateType::Struct { fields, .. } => {
+            let mut object = norito::json::Map::new();
+            for field in fields {
+                let child = contract_state_child_base(base, &field.name);
+                object.insert(
+                    field.name.clone().into(),
+                    decode_contract_state_map_value_json(&child, &field.ty, key_suffix, get_value)?,
+                );
+            }
+            Ok(norito::json::Value::Object(object))
+        }
+        ivm::EmbeddedStateType::Tuple(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                let child = contract_state_child_base(base, &index.to_string());
+                values.push(decode_contract_state_map_value_json(
+                    &child, item, key_suffix, get_value,
+                )?);
+            }
+            Ok(norito::json::Value::Array(values))
+        }
+        ivm::EmbeddedStateType::Map { .. } => Err("nested durable maps are not supported".into()),
+        _ => {
+            let path = format!("{base}/{key_suffix}");
+            let bytes = get_value(&path).ok_or_else(|| format!("state path `{path}` not found"))?;
+            decode_contract_state_scalar_json(bytes.as_slice(), value_ty)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn match_contract_state_map_key_suffix(
+    base: &str,
+    value_ty: &ivm::EmbeddedStateType,
+    stored_path: &str,
+) -> Option<String> {
+    match value_ty {
+        ivm::EmbeddedStateType::Struct { fields, .. } => fields.iter().find_map(|field| {
+            match_contract_state_map_key_suffix(
+                &contract_state_child_base(base, &field.name),
+                &field.ty,
+                stored_path,
+            )
+        }),
+        ivm::EmbeddedStateType::Tuple(items) => {
+            items.iter().enumerate().find_map(|(index, item)| {
+                match_contract_state_map_key_suffix(
+                    &contract_state_child_base(base, &index.to_string()),
+                    item,
+                    stored_path,
+                )
+            })
+        }
+        ivm::EmbeddedStateType::Map { .. } => None,
+        _ => stored_path
+            .strip_prefix(&format!("{base}/"))
+            .map(str::to_owned),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_state_path_json(
+    registry: &BTreeMap<String, Option<ivm::EmbeddedStateType>>,
+    logical_path: &str,
+    get_value: &impl Fn(&str) -> Option<Vec<u8>>,
+) -> core::result::Result<norito::json::Value, String> {
+    let direct = registry
+        .get(logical_path)
+        .ok_or_else(|| format!("no embedded state schema found for path `{logical_path}`"))?;
+    if let Some(schema) = direct {
+        return decode_contract_state_value_json(logical_path, schema, get_value);
+    }
+
+    let Some((base, key_suffix)) = logical_path.rsplit_once('/') else {
+        return Err(format!("state schema for `{logical_path}` is ambiguous"));
+    };
+    let Some(state_schema) = registry.get(base) else {
+        return Err(format!(
+            "no embedded state schema found for path `{logical_path}`"
+        ));
+    };
+    let Some(schema) = state_schema else {
+        return Err(format!("state schema for `{base}` is ambiguous"));
+    };
+    match schema {
+        ivm::EmbeddedStateType::Map { value, .. } => {
+            decode_contract_state_map_value_json(base, value, key_suffix, get_value)
+        }
+        _ => Err(format!(
+            "path `{logical_path}` does not refer to a state map entry"
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn contract_state_value_exists(
+    base: &str,
+    ty: &ivm::EmbeddedStateType,
+    has_value: &impl Fn(&str) -> bool,
+) -> bool {
+    match ty {
+        ivm::EmbeddedStateType::Struct { fields, .. } => fields.iter().any(|field| {
+            contract_state_value_exists(
+                &contract_state_child_base(base, &field.name),
+                &field.ty,
+                has_value,
+            )
+        }),
+        ivm::EmbeddedStateType::Tuple(items) => items.iter().enumerate().any(|(index, item)| {
+            contract_state_value_exists(
+                &contract_state_child_base(base, &index.to_string()),
+                item,
+                has_value,
+            )
+        }),
+        ivm::EmbeddedStateType::Map { .. } => false,
+        _ => has_value(base),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn contract_state_map_entry_exists(
+    base: &str,
+    value_ty: &ivm::EmbeddedStateType,
+    key_suffix: &str,
+    has_value: &impl Fn(&str) -> bool,
+) -> bool {
+    match value_ty {
+        ivm::EmbeddedStateType::Struct { fields, .. } => fields.iter().any(|field| {
+            contract_state_map_entry_exists(
+                &contract_state_child_base(base, &field.name),
+                &field.ty,
+                key_suffix,
+                has_value,
+            )
+        }),
+        ivm::EmbeddedStateType::Tuple(items) => items.iter().enumerate().any(|(index, item)| {
+            contract_state_map_entry_exists(
+                &contract_state_child_base(base, &index.to_string()),
+                item,
+                key_suffix,
+                has_value,
+            )
+        }),
+        ivm::EmbeddedStateType::Map { .. } => false,
+        _ => has_value(&format!("{base}/{key_suffix}")),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn contract_state_logical_path_exists(
+    registry: &BTreeMap<String, Option<ivm::EmbeddedStateType>>,
+    logical_path: &str,
+    has_value: &impl Fn(&str) -> bool,
+) -> bool {
+    let Some(schema) = registry.get(logical_path) else {
+        let Some((base, key_suffix)) = logical_path.rsplit_once('/') else {
+            return false;
+        };
+        let Some(Some(state_schema)) = registry.get(base) else {
+            return false;
+        };
+        return match state_schema {
+            ivm::EmbeddedStateType::Map { value, .. } => {
+                contract_state_map_entry_exists(base, value, key_suffix, has_value)
+            }
+            _ => false,
+        };
+    };
+    let Some(schema) = schema else {
+        return false;
+    };
+    contract_state_value_exists(logical_path, schema, has_value)
 }
 
 #[cfg(feature = "app_api")]
@@ -6471,17 +6877,29 @@ pub async fn handle_get_contract_state(
     let include_value = q.include_value.unwrap_or(true);
     let default_limit = 1000u64;
     let max_limit = 10_000u64;
+    let decode_mode =
+        parse_contract_state_decode_mode(q.decode.as_deref()).map_err(conversion_error)?;
 
     let world = state.world_view();
     let storage = world.smart_contract_state();
+    let schema_registry = matches!(decode_mode, Some(ContractStateDecodeMode::Json))
+        .then(|| collect_contract_state_schemas(&world));
+    let get_value = |path: &str| storage.get(path).cloned();
+    let has_value = |path: &str| storage.get(path).is_some();
 
-    let encode_entry = |path: &str, value: Option<&Vec<u8>>, found: bool| {
+    let encode_entry = |path: &str,
+                        value: Option<&Vec<u8>>,
+                        found: bool,
+                        value_json: Option<norito::json::Value>,
+                        decode_error: Option<String>| {
         if !include_value {
             return ContractStateEntry {
                 path: path.to_string(),
                 found,
                 value_b64: None,
                 value_len: None,
+                value_json,
+                decode_error,
             };
         }
         let (value_b64, value_len) = if let Some(bytes) = value {
@@ -6497,18 +6915,37 @@ pub async fn handle_get_contract_state(
             found,
             value_b64,
             value_len,
+            value_json,
+            decode_error,
         }
     };
 
     if let Some(path_raw) = q.path {
         let name = parse_name(&path_raw, "path")?;
         let path = name.as_ref();
-        let stored = storage.get(path).ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        let stored = storage.get(path);
+        let logical_found = schema_registry
+            .as_ref()
+            .is_some_and(|registry| contract_state_logical_path_exists(registry, path, &has_value));
+
+        let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
+            (Some(ContractStateDecodeMode::Json), Some(registry)) => {
+                match decode_contract_state_path_json(registry, path, &get_value) {
+                    Ok(value) => (Some(value), None),
+                    Err(err) if stored.is_some() || logical_found => (None, Some(err)),
+                    Err(_) => (None, None),
+                }
+            }
+            _ => (None, None),
+        };
+
+        if stored.is_none() && !logical_found {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
-        let entry = encode_entry(path, Some(stored), true);
+            )));
+        }
+
+        let entry = encode_entry(path, stored, true, value_json, decode_error);
         return Ok(JsonBody(ContractStateResponse {
             path: Some(path.to_string()),
             paths: None,
@@ -6538,8 +6975,21 @@ pub async fn handle_get_contract_state(
         for name in parsed {
             let path = name.as_ref();
             let stored = storage.get(path);
-            let found = stored.is_some();
-            entries.push(encode_entry(path, stored, found));
+            let logical_found = schema_registry.as_ref().is_some_and(|registry| {
+                contract_state_logical_path_exists(registry, path, &has_value)
+            });
+            let found = stored.is_some() || logical_found;
+            let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
+                (Some(ContractStateDecodeMode::Json), Some(registry)) => {
+                    match decode_contract_state_path_json(registry, path, &get_value) {
+                        Ok(value) => (Some(value), None),
+                        Err(err) if found => (None, Some(err)),
+                        Err(_) => (None, None),
+                    }
+                }
+                _ => (None, None),
+            };
+            entries.push(encode_entry(path, stored, found, value_json, decode_error));
             paths.push(path.to_string());
         }
         let limit = entries.len() as u64;
@@ -6562,6 +7012,69 @@ pub async fn handle_get_contract_state(
     let mut entries = Vec::new();
     let mut skipped = 0u64;
     let mut has_more = false;
+
+    if let (Some(ContractStateDecodeMode::Json), Some(registry)) =
+        (decode_mode, schema_registry.as_ref())
+    {
+        if let Some(Some(ivm::EmbeddedStateType::Map { value, .. })) = registry.get(prefix_str) {
+            let mut key_suffixes = BTreeSet::new();
+            for (key, _) in storage.range(prefix.clone()..) {
+                let key_str = key.as_ref();
+                if !key_str.starts_with(prefix_str) {
+                    break;
+                }
+                if let Some(key_suffix) =
+                    match_contract_state_map_key_suffix(prefix_str, value, key_str)
+                {
+                    key_suffixes.insert(key_suffix);
+                }
+            }
+
+            for key_suffix in key_suffixes {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                if entries.len() >= limit as usize {
+                    has_more = true;
+                    break;
+                }
+                let logical_path = format!("{prefix_str}/{key_suffix}");
+                let (value_json, decode_error) = match decode_contract_state_map_value_json(
+                    prefix_str,
+                    value,
+                    &key_suffix,
+                    &get_value,
+                ) {
+                    Ok(value_json) => (Some(value_json), None),
+                    Err(err) => (None, Some(err)),
+                };
+                entries.push(encode_entry(
+                    &logical_path,
+                    None,
+                    true,
+                    value_json,
+                    decode_error,
+                ));
+            }
+
+            let next_offset = if has_more {
+                Some(offset + entries.len() as u64)
+            } else {
+                None
+            };
+            return Ok(JsonBody(ContractStateResponse {
+                path: None,
+                paths: None,
+                prefix: Some(prefix_str.to_string()),
+                entries,
+                offset,
+                limit,
+                next_offset,
+            }));
+        }
+    }
+
     for (key, value) in storage.range(prefix.clone()..) {
         let key_str = key.as_ref();
         if !key_str.starts_with(prefix_str) {
@@ -6575,7 +7088,24 @@ pub async fn handle_get_contract_state(
             has_more = true;
             break;
         }
-        entries.push(encode_entry(key_str, Some(value), true));
+        let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
+            (Some(ContractStateDecodeMode::Json), Some(registry))
+                if registry.contains_key(key_str) =>
+            {
+                match decode_contract_state_path_json(registry, key_str, &get_value) {
+                    Ok(value_json) => (Some(value_json), None),
+                    Err(err) => (None, Some(err)),
+                }
+            }
+            _ => (None, None),
+        };
+        entries.push(encode_entry(
+            key_str,
+            Some(value),
+            true,
+            value_json,
+            decode_error,
+        ));
     }
     let next_offset = if has_more {
         Some(offset + entries.len() as u64)
@@ -6595,11 +7125,25 @@ pub async fn handle_get_contract_state(
 
 #[cfg(all(test, feature = "app_api"))]
 mod contract_state_tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
+    use base64::Engine as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+    use ivm::pointer_abi::PointerType;
 
     use super::*;
+
+    fn make_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(7 + payload.len() + 32);
+        bytes.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+        bytes.push(1);
+        bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(payload);
+        let digest: [u8; 32] = iroha_crypto::Hash::new(payload).into();
+        bytes.extend_from_slice(&digest);
+        bytes
+    }
 
     #[tokio::test]
     async fn contract_state_prefix_empty_on_blank_state() {
@@ -6621,6 +7165,61 @@ mod contract_state_tests {
         assert!(response.entries.is_empty());
         assert_eq!(response.offset, 0);
         assert_eq!(response.next_offset, None);
+    }
+
+    #[test]
+    fn decode_contract_state_scalar_json_returns_lossless_strings_for_ints() {
+        let payload = norito::to_bytes(&9_223_372_036_854_775_000_i64).expect("encode int");
+        let decoded = decode_contract_state_scalar_json(
+            &make_tlv(PointerType::NoritoBytes, &payload),
+            &ivm::EmbeddedStateType::Int,
+        )
+        .expect("decode int");
+        assert_eq!(
+            decoded,
+            norito::json::Value::from("9223372036854775000".to_owned())
+        );
+    }
+
+    #[test]
+    fn decode_contract_state_map_value_json_preserves_struct_field_encodings() {
+        let mut storage = BTreeMap::<String, Vec<u8>>::new();
+        let status_payload = norito::to_bytes(&1_i64).expect("encode status");
+        storage.insert(
+            "Requests_status/mr123".to_owned(),
+            make_tlv(PointerType::NoritoBytes, &status_payload),
+        );
+        storage.insert(
+            "Requests_approval_alias_fqn/mr123".to_owned(),
+            make_tlv(PointerType::Blob, b"banking@sbp"),
+        );
+
+        let schema = ivm::EmbeddedStateType::Struct {
+            name: "MintRequestRecord".to_owned(),
+            fields: vec![
+                ivm::EmbeddedStateFieldDescriptor {
+                    name: "status".to_owned(),
+                    ty: ivm::EmbeddedStateType::Int,
+                },
+                ivm::EmbeddedStateFieldDescriptor {
+                    name: "approval_alias_fqn".to_owned(),
+                    ty: ivm::EmbeddedStateType::Blob,
+                },
+            ],
+        };
+
+        let decoded = decode_contract_state_map_value_json("Requests", &schema, "mr123", &|path| {
+            storage.get(path).cloned()
+        })
+        .expect("decode map entry");
+
+        assert_eq!(
+            decoded,
+            norito::json::json!({
+                "status": "1",
+                "approval_alias_fqn": base64::engine::general_purpose::STANDARD.encode("banking@sbp"),
+            })
+        );
     }
 }
 
@@ -6866,6 +7465,8 @@ pub async fn handle_post_contract_call(
         private_key,
         public_key_hex,
         signature_b64,
+        contract_address,
+        contract_alias,
         namespace,
         contract_id,
         entrypoint,
@@ -6880,22 +7481,52 @@ pub async fn handle_post_contract_call(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
 
-    let prepared = prepare_contract_call(&state, &namespace, &contract_id)?;
+    let prepared = match (
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+        namespace.as_deref(),
+        contract_id.as_deref(),
+    ) {
+        (Some(_), Some(_), _, _) => {
+            return Err(conversion_error(
+                "exactly one of contract_address or contract_alias must be provided".to_owned(),
+            ));
+        }
+        (Some(contract_address), None, None, None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
+        (None, Some(contract_alias), None, None) => {
+            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
+        }
+        (None, None, Some(namespace), Some(contract_id)) => {
+            prepare_contract_call(&state, namespace, contract_id)?
+        }
+        _ => {
+            return Err(conversion_error(
+                "provide exactly one contract target via contract_address, contract_alias, or namespace+contract_id".to_owned(),
+            ));
+        }
+    };
     let PreparedContractCall {
         code_bytes,
         code_hash,
         abi_hash,
         manifest,
+        namespace,
+        contract_id,
+        contract_address,
     } = prepared;
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
-    ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
+    let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
 
     let metadata = build_contract_call_metadata(
         &manifest,
         &namespace,
         &contract_id,
+        contract_address.as_ref(),
         Some(resolved_entrypoint),
-        payload.as_ref(),
+        normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
         fee_sponsor.as_ref(),
         gas_limit,
@@ -6913,8 +7544,33 @@ pub async fn handle_post_contract_call(
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     let response =
-        if private_key.is_some() {
-            return Err(reject_server_side_signing("/v1/contracts/call"));
+        if let Some(private_key) = private_key {
+            let tx = builder.sign(&private_key.0);
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                tx,
+                telemetry,
+                "/v1/contracts/call",
+            )
+            .await?;
+            ContractCallResponseDto {
+                ok: true,
+                submitted: true,
+                namespace,
+                contract_id,
+                contract_address,
+                code_hash_hex,
+                abi_hash_hex,
+                creation_time_ms,
+                tx_hash_hex: Some(tx_hash_hex),
+                transaction_scaffold_b64: None,
+                signed_transaction_b64: None,
+                signing_message_b64: None,
+                entrypoint: response_entrypoint.clone(),
+            }
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
@@ -6974,6 +7630,7 @@ pub async fn handle_post_contract_call(
                 submitted: true,
                 namespace,
                 contract_id,
+                contract_address,
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -6998,6 +7655,7 @@ pub async fn handle_post_contract_call(
                 submitted: false,
                 namespace,
                 contract_id,
+                contract_address,
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -7018,6 +7676,118 @@ pub async fn handle_post_contract_call(
     Ok(resp)
 }
 
+/// POST /v1/contracts/view — execute a read-only contract view entrypoint locally.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_contract_view(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<ContractViewDto>,
+) -> Result<impl IntoResponse> {
+    let ContractViewDto {
+        authority,
+        contract_address,
+        contract_alias,
+        namespace,
+        contract_id,
+        entrypoint,
+        payload,
+        gas_limit,
+    } = req;
+
+    if gas_limit == 0 {
+        return Err(conversion_error("gas_limit must be positive".to_owned()));
+    }
+
+    let prepared = match (
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+        namespace.as_deref(),
+        contract_id.as_deref(),
+    ) {
+        (Some(_), Some(_), _, _) => {
+            return Err(conversion_error(
+                "exactly one of contract_address or contract_alias must be provided".to_owned(),
+            ));
+        }
+        (Some(contract_address), None, None, None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
+        (None, Some(contract_alias), None, None) => {
+            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
+        }
+        (None, None, Some(namespace), Some(contract_id)) => {
+            prepare_contract_call(&state, namespace, contract_id)?
+        }
+        _ => {
+            return Err(conversion_error(
+                "provide exactly one contract target via contract_address, contract_alias, or namespace+contract_id".to_owned(),
+            ));
+        }
+    };
+    let PreparedContractCall {
+        code_bytes,
+        code_hash,
+        abi_hash,
+        manifest,
+        namespace,
+        contract_id,
+        contract_address,
+    } = prepared;
+    let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
+    let entrypoint_descriptor = ensure_view_contract_entrypoint(&manifest, resolved_entrypoint)?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let result = match execute_contract_view(
+        &state,
+        &authority,
+        &code_bytes,
+        resolved_entrypoint,
+        entrypoint_descriptor,
+        normalized_payload.clone(),
+        gas_limit,
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            let body = norito::json::to_json_pretty(&ContractViewErrorResponseDto {
+                ok: false,
+                namespace,
+                contract_id,
+                contract_address,
+                code_hash_hex: hex::encode(code_hash.as_ref()),
+                abi_hash_hex: hex::encode(abi_hash.as_ref()),
+                entrypoint: resolved_entrypoint.to_owned(),
+                error: err.message,
+                vm_diagnostic: err.vm_diagnostic,
+            })
+            .unwrap_or_else(|_| "{}".into());
+            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+            *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            return Ok(resp);
+        }
+    };
+
+    let body = norito::json::to_json_pretty(&ContractViewResponseDto {
+        ok: true,
+        namespace,
+        contract_id,
+        contract_address,
+        code_hash_hex: hex::encode(code_hash.as_ref()),
+        abi_hash_hex: hex::encode(abi_hash.as_ref()),
+        entrypoint: resolved_entrypoint.to_owned(),
+        result,
+    })
+    .unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
 #[cfg(feature = "app_api")]
 const DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT: u64 = 5_000;
 
@@ -7030,28 +7800,612 @@ fn current_time_millis() -> u64 {
 }
 
 #[cfg(feature = "app_api")]
-fn ensure_public_contract_entrypoint(
-    manifest: &manifest::ContractManifest,
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContractSchemaType {
+    Unit,
+    Int,
+    Numeric,
+    Bool,
+    String,
+    Json,
+    Name,
+    AccountId,
+    AssetDefinitionId,
+    AssetId,
+    DomainId,
+    NftId,
+    Blob,
+    Bytes,
+    DataSpaceId,
+    AxtDescriptor,
+    AssetHandle,
+    ProofBlob,
+    Tuple(Vec<ContractSchemaType>),
+}
+
+#[cfg(feature = "app_api")]
+fn advertised_contract_entrypoint<'a>(
+    manifest: &'a manifest::ContractManifest,
     selector: &str,
-) -> Result<()> {
+) -> Result<&'a manifest::EntrypointDescriptor> {
     let advertised_entrypoints = manifest.entrypoints.as_ref().ok_or_else(|| {
         conversion_error(
             "stored contract manifest does not advertise callable entrypoints".to_owned(),
         )
     })?;
-    let descriptor = advertised_entrypoints
+    advertised_entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{selector}`")))
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_contract_entrypoint_kind<'a>(
+    manifest: &'a manifest::ContractManifest,
+    selector: &str,
+    expected: manifest::EntryPointKind,
+) -> Result<&'a manifest::EntrypointDescriptor> {
+    let descriptor = advertised_contract_entrypoint(manifest, selector)?;
+    if descriptor.kind != expected {
+        let expected_kind = match expected {
+            manifest::EntryPointKind::Public => "public by-call",
+            manifest::EntryPointKind::View => "read-only view",
+            manifest::EntryPointKind::Hajimari => "hajimari",
+            manifest::EntryPointKind::Kaizen => "kaizen",
+        };
+        return Err(conversion_error(format!(
+            "contract entrypoint `{selector}` is not a {expected_kind} entrypoint"
+        )));
+    }
+    Ok(descriptor)
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_public_contract_entrypoint<'a>(
+    manifest: &'a manifest::ContractManifest,
+    selector: &str,
+) -> Result<&'a manifest::EntrypointDescriptor> {
+    ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::Public)
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_view_contract_entrypoint<'a>(
+    manifest: &'a manifest::ContractManifest,
+    selector: &str,
+) -> Result<&'a manifest::EntrypointDescriptor> {
+    ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::View)
+}
+
+#[cfg(feature = "app_api")]
+fn split_schema_list(input: &str) -> Result<Vec<String>> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0_i32;
+    for ch in input.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return Err(conversion_error(format!(
+                        "invalid contract schema type `{input}`"
+                    )));
+                }
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                items.push(current.trim().to_owned());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    if depth != 0 {
+        return Err(conversion_error(format!(
+            "invalid contract schema type `{input}`"
+        )));
+    }
+    if !current.trim().is_empty() {
+        items.push(current.trim().to_owned());
+    }
+    Ok(items)
+}
+
+#[cfg(feature = "app_api")]
+fn parse_contract_schema_type(raw: &str) -> Result<ContractSchemaType> {
+    let trimmed = raw.trim();
+    if trimmed == "()" {
+        return Ok(ContractSchemaType::Unit);
+    }
+    if trimmed.starts_with('(') && trimmed.ends_with(')') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        if inner.trim().is_empty() {
+            return Ok(ContractSchemaType::Tuple(Vec::new()));
+        }
+        let items = split_schema_list(inner)?
+            .into_iter()
+            .map(|item| parse_contract_schema_type(&item))
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(ContractSchemaType::Tuple(items));
+    }
+    match trimmed {
+        "int" => Ok(ContractSchemaType::Int),
+        "fixed_u128" | "Amount" | "Balance" => Ok(ContractSchemaType::Numeric),
+        "bool" => Ok(ContractSchemaType::Bool),
+        "string" => Ok(ContractSchemaType::String),
+        "Json" => Ok(ContractSchemaType::Json),
+        "Name" => Ok(ContractSchemaType::Name),
+        "AccountId" => Ok(ContractSchemaType::AccountId),
+        "AssetDefinitionId" => Ok(ContractSchemaType::AssetDefinitionId),
+        "AssetId" => Ok(ContractSchemaType::AssetId),
+        "DomainId" => Ok(ContractSchemaType::DomainId),
+        "NftId" => Ok(ContractSchemaType::NftId),
+        "Blob" => Ok(ContractSchemaType::Blob),
+        "bytes" => Ok(ContractSchemaType::Bytes),
+        "DataSpaceId" => Ok(ContractSchemaType::DataSpaceId),
+        "AxtDescriptor" => Ok(ContractSchemaType::AxtDescriptor),
+        "AssetHandle" => Ok(ContractSchemaType::AssetHandle),
+        "ProofBlob" => Ok(ContractSchemaType::ProofBlob),
+        _ => Err(conversion_error(format!(
+            "unsupported contract schema type `{trimmed}`"
+        ))),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_numeric_json_value(value: &Value) -> bool {
+    match value {
+        Value::String(raw) => raw.parse::<iroha_primitives::numeric::Numeric>().is_ok(),
+        Value::Number(norito::json::native::Number::I64(_))
+        | Value::Number(norito::json::native::Number::U64(_)) => true,
+        _ => false,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_contract_value(
+    schema: &ContractSchemaType,
+    value: &Value,
+    field_name: &str,
+) -> Result<()> {
+    let ok = match schema {
+        ContractSchemaType::Unit => matches!(value, Value::Null),
+        ContractSchemaType::Int => matches!(
+            value,
+            Value::Number(norito::json::native::Number::I64(_))
+                | Value::Number(norito::json::native::Number::U64(_))
+        ),
+        ContractSchemaType::Numeric => validate_numeric_json_value(value),
+        ContractSchemaType::Bool => matches!(value, Value::Bool(_)),
+        ContractSchemaType::String => matches!(value, Value::String(_)),
+        ContractSchemaType::Json => true,
+        ContractSchemaType::Name => match value {
+            Value::String(raw) => Name::from_str(raw).is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::AccountId => match value {
+            Value::String(raw) => iroha_data_model::account::AccountId::parse_encoded(raw).is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::AssetDefinitionId => match value {
+            Value::String(raw) => raw
+                .parse::<iroha_data_model::asset::AssetDefinitionId>()
+                .is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::AssetId => match value {
+            Value::String(raw) => raw.parse::<iroha_data_model::asset::AssetId>().is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::DomainId => match value {
+            Value::String(raw) => raw.parse::<iroha_data_model::domain::DomainId>().is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::NftId => match value {
+            Value::String(raw) => raw.parse::<iroha_data_model::nft::NftId>().is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::Blob | ContractSchemaType::Bytes => match value {
+            Value::String(raw) => {
+                let raw = raw.strip_prefix("0x").unwrap_or(raw);
+                raw.len() % 2 == 0 && hex::decode(raw).is_ok()
+            }
+            _ => false,
+        },
+        ContractSchemaType::DataSpaceId => match value {
+            Value::String(raw) => raw.parse::<u64>().is_ok(),
+            Value::Number(norito::json::native::Number::I64(v)) => *v >= 0,
+            Value::Number(norito::json::native::Number::U64(_)) => true,
+            _ => false,
+        },
+        ContractSchemaType::AxtDescriptor
+        | ContractSchemaType::AssetHandle
+        | ContractSchemaType::ProofBlob => matches!(value, Value::String(_)),
+        ContractSchemaType::Tuple(items) => match value {
+            Value::Array(values) if values.len() == items.len() => items
+                .iter()
+                .zip(values.iter())
+                .all(|(schema, value)| validate_contract_value(schema, value, field_name).is_ok()),
+            _ => false,
+        },
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(conversion_error(format!(
+            "contract payload field `{field_name}` does not match the declared schema"
+        )))
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_contract_payload(
+    descriptor: &manifest::EntrypointDescriptor,
+    payload: Option<&IrohaJson>,
+) -> Result<Option<IrohaJson>> {
+    if descriptor.params.is_empty() {
+        if let Some(payload) = payload {
+            let parsed = json::parse_value(payload.get())
+                .map_err(|err| conversion_error(format!("invalid contract payload JSON: {err}")))?;
+            match parsed {
+                Value::Object(ref map) if map.is_empty() => {}
+                _ => {
+                    return Err(conversion_error(
+                        "contract payload must be an empty JSON object for zero-parameter entrypoints"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        return Ok(None);
+    }
+
+    let payload = payload.ok_or_else(|| {
+        conversion_error("contract payload is required for parameterized entrypoints".to_owned())
+    })?;
+    let parsed = json::parse_value(payload.get())
+        .map_err(|err| conversion_error(format!("invalid contract payload JSON: {err}")))?;
+    let object = match parsed {
+        Value::Object(map) => map,
+        _ => {
+            return Err(conversion_error(
+                "contract payload must be a JSON object keyed by parameter name".to_owned(),
+            ));
+        }
+    };
+
+    let mut normalized = Map::new();
+    for param in &descriptor.params {
+        let value = object.get(&param.name).ok_or_else(|| {
+            conversion_error(format!(
+                "missing contract payload field `{}` for entrypoint `{}`",
+                param.name, descriptor.name
+            ))
+        })?;
+        let schema = parse_contract_schema_type(&param.type_name)?;
+        validate_contract_value(&schema, value, &param.name)?;
+        normalized.insert(param.name.clone(), value.clone());
+    }
+
+    for key in object.keys() {
+        if !descriptor.params.iter().any(|param| param.name == *key) {
+            return Err(conversion_error(format!(
+                "unexpected contract payload field `{key}` for entrypoint `{}`",
+                descriptor.name
+            )));
+        }
+    }
+
+    Ok(Some(IrohaJson::from(Value::Object(normalized))))
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_contract_entrypoint_pc(
+    code_bytes: &[u8],
+    selector: &str,
+    expected: manifest::EntryPointKind,
+) -> Result<u64> {
+    let parsed = ivm::ProgramMetadata::parse(code_bytes)
+        .map_err(|err| conversion_error(format!("invalid contract artifact: {err}")))?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+        conversion_error(
+            "contract entrypoint metadata requires a self-describing contract artifact".to_owned(),
+        )
+    })?;
+    let descriptor = contract_interface
+        .entrypoints
         .iter()
         .find(|candidate| candidate.name == selector)
         .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{selector}`")))?;
-    if !matches!(
-        descriptor.kind,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
-    ) {
+    if descriptor.kind != expected {
         return Err(conversion_error(format!(
-            "contract entrypoint `{selector}` is not a public by-call entrypoint"
+            "contract artifact entrypoint `{selector}` does not match the requested entrypoint kind"
         )));
     }
-    Ok(())
+    Ok(prefix_len + descriptor.entry_pc)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_view_result_value(
+    vm: &ivm::IVM,
+    start_register: usize,
+    schema: &ContractSchemaType,
+) -> Result<(Value, usize)> {
+    use iroha_core::smartcontracts::ivm::host::CoreHost;
+    use ivm::PointerType;
+
+    let pointer_string = |ptr: u64| -> Result<String> {
+        if ptr == 0 {
+            return Err(conversion_error(
+                "contract view returned a null pointer for a non-nullable type".to_owned(),
+            ));
+        }
+        Ok(ptr.to_string())
+    };
+
+    match schema {
+        ContractSchemaType::Unit => Ok((Value::Null, 0)),
+        ContractSchemaType::Int => {
+            let raw = vm.register(start_register);
+            let value = i64::try_from(raw).map_err(|_| {
+                conversion_error("contract view int return overflowed i64".to_owned())
+            })?;
+            Ok((Value::from(value), 1))
+        }
+        ContractSchemaType::Bool => Ok((Value::Bool(vm.register(start_register) != 0), 1)),
+        ContractSchemaType::Numeric => {
+            let ptr = vm.register(start_register);
+            let value: iroha_primitives::numeric::Numeric =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes).map_err(|err| {
+                    conversion_error(format!("failed to decode numeric return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::String => Err(conversion_error(
+            "string contract view returns are not supported yet".to_owned(),
+        )),
+        ContractSchemaType::Json => {
+            let ptr = vm.register(start_register);
+            let value = CoreHost::decode_tlv_json(vm, ptr)
+                .map_err(|err| conversion_error(format!("failed to decode JSON return: {err}")))?;
+            let parsed = json::parse_value(value.get())
+                .map_err(|err| conversion_error(format!("invalid JSON return payload: {err}")))?;
+            Ok((parsed, 1))
+        }
+        ContractSchemaType::Name => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::name::Name =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::Name).map_err(|err| {
+                    conversion_error(format!("failed to decode Name return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::AccountId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::account::AccountId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AccountId).map_err(|err| {
+                    conversion_error(format!("failed to decode AccountId return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::AssetDefinitionId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::asset::AssetDefinitionId = CoreHost::decode_tlv_typed(
+                vm,
+                ptr,
+                PointerType::AssetDefinitionId,
+            )
+            .map_err(|err| {
+                conversion_error(format!("failed to decode AssetDefinitionId return: {err}"))
+            })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::AssetId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::asset::AssetId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetId).map_err(|err| {
+                    conversion_error(format!("failed to decode AssetId return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::DomainId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::domain::DomainId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DomainId).map_err(|err| {
+                    conversion_error(format!("failed to decode DomainId return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::NftId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::nft::NftId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NftId).map_err(|err| {
+                    conversion_error(format!("failed to decode NftId return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::Blob | ContractSchemaType::Bytes => {
+            let ptr = vm.register(start_register);
+            let value = CoreHost::decode_tlv_blob(vm, ptr)
+                .map_err(|err| conversion_error(format!("failed to decode blob return: {err}")))?;
+            Ok((Value::from(format!("0x{}", hex::encode(value))), 1))
+        }
+        ContractSchemaType::DataSpaceId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::nexus::DataSpaceId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DataSpaceId).map_err(|err| {
+                    conversion_error(format!("failed to decode DataSpaceId return: {err}"))
+                })?;
+            Ok((Value::from(value.as_u64()), 1))
+        }
+        ContractSchemaType::AxtDescriptor => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::nexus::AxtDescriptor =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AxtDescriptor).map_err(|err| {
+                    conversion_error(format!("failed to decode AxtDescriptor return: {err}"))
+                })?;
+            let json_value = norito::json::to_value(&value).map_err(|err| {
+                conversion_error(format!("failed to serialize AxtDescriptor return: {err}"))
+            })?;
+            Ok((json_value, 1))
+        }
+        ContractSchemaType::AssetHandle => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::nexus::AssetHandle =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetHandle).map_err(|err| {
+                    conversion_error(format!("failed to decode AssetHandle return: {err}"))
+                })?;
+            let json_value = norito::json::to_value(&value).map_err(|err| {
+                conversion_error(format!("failed to serialize AssetHandle return: {err}"))
+            })?;
+            Ok((json_value, 1))
+        }
+        ContractSchemaType::ProofBlob => {
+            let ptr = vm.register(start_register);
+            let value = pointer_string(ptr)?;
+            Ok((Value::from(value), 1))
+        }
+        ContractSchemaType::Tuple(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            let mut consumed = 0_usize;
+            for item in items {
+                let (value, used) =
+                    decode_contract_view_result_value(vm, start_register + consumed, item)?;
+                values.push(value);
+                consumed += used;
+            }
+            Ok((Value::Array(values), consumed))
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+struct ContractViewExecutionError {
+    message: String,
+    vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
+}
+
+#[cfg(feature = "app_api")]
+fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnosticDto {
+    ContractViewVmDiagnosticDto {
+        trap_kind: format!("{:?}", diag.trap_kind),
+        message: diag.message.clone(),
+        pc: diag.pc,
+        function: diag
+            .source
+            .as_ref()
+            .and_then(|source| source.function.clone()),
+        source_path: diag.source.as_ref().and_then(|source| source.path.clone()),
+        line: diag.source.as_ref().and_then(|source| source.line),
+        column: diag.source.as_ref().and_then(|source| source.column),
+        gas_limit: diag.budget.gas_limit,
+        gas_remaining: diag.budget.gas_remaining,
+        gas_used: diag.budget.gas_used,
+        cycles: diag.budget.cycles,
+        max_cycles: diag.budget.max_cycles,
+        stack_limit_bytes: diag.budget.stack_limit_bytes,
+        stack_bytes_used: diag.budget.stack_bytes_used,
+        entrypoint_pc: diag.context.entrypoint_pc,
+        current_function: diag.context.current_function.clone(),
+        opcode: diag.context.opcode,
+        syscall: diag.context.syscall,
+        predecoded_loaded: diag.context.predecoded_loaded,
+        predecoded_hit: diag.context.predecoded_hit,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn execute_contract_view(
+    state: &CoreState,
+    authority: &iroha_data_model::account::AccountId,
+    code_bytes: &[u8],
+    selector: &str,
+    descriptor: &manifest::EntrypointDescriptor,
+    payload: Option<IrohaJson>,
+    gas_limit: u64,
+) -> std::result::Result<IrohaJson, ContractViewExecutionError> {
+    let entry_pc =
+        resolve_contract_entrypoint_pc(code_bytes, selector, manifest::EntryPointKind::View)
+            .map_err(|err| ContractViewExecutionError {
+                message: err.to_string(),
+                vm_diagnostic: None,
+            })?;
+    let query_view = state.query_view();
+    let mut vm = query_view.ivm.clone();
+    let mut host = if let Some(args) = payload {
+        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+            authority.clone(),
+            query_view.accounts_snapshot(),
+            args,
+        )
+    } else {
+        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts(
+            authority.clone(),
+            query_view.accounts_snapshot(),
+        )
+    };
+    host.set_crypto_config(Arc::clone(&query_view.crypto));
+    host.set_halo2_config(&query_view.zk.halo2);
+    host.set_chain_id(&query_view.chain_id);
+    host.set_axt_timing(query_view.nexus.axt);
+    host.set_durable_state_snapshot_from_world(&query_view.world);
+    host.set_public_inputs_from_parameters(query_view.world.parameters());
+    host.set_vrf_epoch_seeds_from_world(&query_view.world);
+
+    vm.load_program(code_bytes)
+        .map_err(|err| ContractViewExecutionError {
+            message: format!("failed to load contract view bytecode: {err}"),
+            vm_diagnostic: None,
+        })?;
+    vm.set_gas_limit(gas_limit);
+    vm.set_register(1, vm.memory.code_len());
+    vm.set_program_counter(entry_pc)
+        .map_err(|err| ContractViewExecutionError {
+            message: format!("failed to seek to contract view entrypoint: {err}"),
+            vm_diagnostic: None,
+        })?;
+    vm.run_with_host(&mut host)
+        .map_err(|err| ContractViewExecutionError {
+            message: format!("contract view execution failed: {err}"),
+            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+        })?;
+
+    let queued = host.drain_instructions();
+    if !queued.is_empty() {
+        return Err(ContractViewExecutionError {
+            message: "view entrypoint attempted to emit instructions".to_owned(),
+            vm_diagnostic: None,
+        });
+    }
+    let durable_overlay = host.drain_durable_state_overlay();
+    if !durable_overlay.is_empty() {
+        return Err(ContractViewExecutionError {
+            message: "view entrypoint attempted to mutate durable state".to_owned(),
+            vm_diagnostic: None,
+        });
+    }
+
+    let schema = descriptor
+        .return_type
+        .as_deref()
+        .map(parse_contract_schema_type)
+        .transpose()
+        .map_err(|err| ContractViewExecutionError {
+            message: err.to_string(),
+            vm_diagnostic: None,
+        })?
+        .unwrap_or(ContractSchemaType::Unit);
+    let (value, _) = decode_contract_view_result_value(&vm, 10, &schema).map_err(|err| {
+        ContractViewExecutionError {
+            message: err.to_string(),
+            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+        }
+    })?;
+    Ok(IrohaJson::from(value))
 }
 
 #[cfg(feature = "app_api")]
@@ -7059,6 +8413,7 @@ fn build_contract_call_metadata(
     manifest: &manifest::ContractManifest,
     namespace: &str,
     contract_id: &str,
+    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
     entrypoint: Option<&str>,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
@@ -7075,6 +8430,11 @@ fn build_contract_call_metadata(
     metadata.insert(ns_key, IrohaJson::new(namespace.to_owned()));
     let cid_key = Name::from_str("contract_id").expect("static metadata key `contract_id`");
     metadata.insert(cid_key, IrohaJson::new(contract_id.to_owned()));
+    if let Some(contract_address) = contract_address {
+        let address_key =
+            Name::from_str("contract_address").expect("static metadata key `contract_address`");
+        metadata.insert(address_key, IrohaJson::new(contract_address.to_string()));
+    }
 
     if let Some(selector) = entrypoint {
         let ep_key = Name::from_str("contract_entrypoint")
@@ -7162,6 +8522,7 @@ fn build_multisig_contract_call_instructions(
         manifest,
         namespace,
         contract_id,
+        None,
         Some(entrypoint),
         payload,
         gas_asset_id,
@@ -8215,6 +9576,8 @@ mod contract_entrypoint_validation_tests {
         let manifest = manifest_with_entrypoints(Some(vec![EntrypointDescriptor {
             name: "boot".to_owned(),
             kind: manifest::EntryPointKind::Hajimari,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -8481,6 +9844,8 @@ mod multisig_selector_tests {
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                 name: "main".to_owned(),
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -8489,6 +9854,7 @@ mod multisig_selector_tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            states: Vec::new(),
         };
         out.extend_from_slice(&interface.encode_section());
         out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
@@ -9304,7 +10670,10 @@ mod multisig_selector_tests {
         .expect("mint request approvals");
         assert_eq!(
             list_hashes(&mint_request_items.items),
-            BTreeSet::from([mint_request_hash.clone(), contract_mint_request_hash.clone()])
+            BTreeSet::from([
+                mint_request_hash.clone(),
+                contract_mint_request_hash.clone()
+            ])
         );
 
         let JsonBody(issuance_swap_items) = handle_post_multisig_approvals_list(
@@ -9889,6 +11258,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         code_hash,
         abi_hash: _,
         manifest,
+        ..
     } = prepared;
     ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
@@ -11726,6 +13096,9 @@ pub struct DeployContractDto {
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Base64-encoded compiled `.to` bytecode
     pub code_b64: String,
+    /// Optional dataspace alias for the deployment. Defaults to `universal`.
+    #[norito(default)]
+    pub dataspace: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -11741,6 +13114,12 @@ pub struct DeployContractDto {
 pub struct DeployContractResponseDto {
     /// Whether deploy succeeded
     pub ok: bool,
+    /// Canonical Bech32m contract address activated by the deployment.
+    pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    /// Dataspace alias hosting the activated contract instance.
+    pub dataspace: String,
+    /// Successful deploy nonce consumed for address derivation.
+    pub deploy_nonce: u64,
     /// Hex-encoded code hash
     pub code_hash_hex: String,
     /// Hex-encoded ABI hash (if present)
@@ -11873,6 +13252,94 @@ fn prepare_contract_call(
         code_hash: binding,
         abi_hash: verified.abi_hash,
         manifest,
+        namespace: namespace.to_owned(),
+        contract_id: contract_id.to_owned(),
+        contract_address: contract_id.parse().ok(),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_contract_call_by_address(
+    state: &CoreState,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+) -> core::result::Result<PreparedContractCall, Error> {
+    let dataspace_id = contract_address
+        .dataspace_id()
+        .map_err(|err| conversion_error(err.to_string()))?;
+    let dataspace_alias = state
+        .nexus_snapshot()
+        .dataspace_catalog
+        .by_id(dataspace_id)
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    let mut prepared = prepare_contract_call(state, &dataspace_alias, contract_address.as_ref())?;
+    prepared.contract_address = Some(contract_address.clone());
+    Ok(prepared)
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_contract_call_by_alias(
+    state: &CoreState,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    now_ms: u64,
+) -> core::result::Result<PreparedContractCall, Error> {
+    let world = state.world_view();
+    let contract_address = world
+        .contract_address_by_alias_at(contract_alias, now_ms)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    prepare_contract_call_by_address(state, &contract_address)
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_public_contract_deploy_dataspace(
+    state: &CoreState,
+    dataspace_alias: Option<&str>,
+) -> core::result::Result<(String, iroha_data_model::nexus::DataSpaceId), Error> {
+    let requested = dataspace_alias.unwrap_or("universal");
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    let dataspace = catalog.by_alias(requested).ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    })?;
+    if dataspace.alias != "universal" {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "address-first public deploy currently supports only the universal dataspace"
+                    .into(),
+            ),
+        ));
+    }
+    Ok((dataspace.alias.clone(), dataspace.id))
+}
+
+#[cfg(feature = "app_api")]
+fn contract_deploy_nonce_for_authority(
+    state: &CoreState,
+    authority: &iroha_data_model::account::AccountId,
+) -> core::result::Result<u64, Error> {
+    let key = Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)
+        .expect("static deploy nonce metadata key");
+    let world = state.world_view();
+    let Ok(account) = world.account(authority) else {
+        return Ok(0);
+    };
+    let Some(raw) = account.metadata().get(&key) else {
+        return Ok(0);
+    };
+    raw.try_into_any_norito::<u64>().map_err(|_| {
+        conversion_error(format!(
+            "account metadata `{}` must be an unsigned integer",
+            iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+        ))
     })
 }
 
@@ -11943,10 +13410,18 @@ pub struct ContractCallDto {
     /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
     #[norito(default)]
     pub signature_b64: Option<String>,
-    /// Target namespace hosting the contract instance.
-    pub namespace: String,
-    /// Logical contract identifier within the namespace.
-    pub contract_id: String,
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Internal legacy namespace binding path.
+    #[norito(default)]
+    pub namespace: Option<String>,
+    /// Internal legacy contract identifier within the namespace binding path.
+    #[norito(default)]
+    pub contract_id: Option<String>,
     /// Optional entrypoint selector; defaults to `main`.
     #[norito(default)]
     pub entrypoint: Option<String>,
@@ -11978,6 +13453,9 @@ pub struct ContractCallResponseDto {
     pub namespace: String,
     /// Contract id targeted by the call.
     pub contract_id: String,
+    /// Canonical contract address targeted by the call, when available.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
     /// Hex-encoded code hash of the invoked bytecode.
     pub code_hash_hex: String,
     /// Hex-encoded ABI hash for the invoked bytecode.
@@ -11999,6 +13477,113 @@ pub struct ContractCallResponseDto {
     /// Entrypoint selector used for the call, if provided.
     #[norito(default)]
     pub entrypoint: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for invoking a read-only contract view entrypoint.
+pub struct ContractViewDto {
+    /// Account identity used as the read authority and host context.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Internal legacy namespace binding path.
+    #[norito(default)]
+    pub namespace: Option<String>,
+    /// Internal legacy contract identifier within the namespace binding path.
+    #[norito(default)]
+    pub contract_id: Option<String>,
+    /// Optional entrypoint selector; defaults to `main`.
+    #[norito(default)]
+    pub entrypoint: Option<String>,
+    /// Optional Norito JSON payload forwarded to the contract.
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+    /// Caller-specified gas limit for the local read execution (must be > 0).
+    pub gas_limit: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload returned after executing a read-only contract view.
+pub struct ContractViewResponseDto {
+    /// Whether execution succeeded.
+    pub ok: bool,
+    /// Namespace targeted by the query.
+    pub namespace: String,
+    /// Contract id targeted by the query.
+    pub contract_id: String,
+    /// Canonical contract address targeted by the query, when available.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Hex-encoded code hash of the queried bytecode.
+    pub code_hash_hex: String,
+    /// Hex-encoded ABI hash for the queried bytecode.
+    pub abi_hash_hex: String,
+    /// Entrypoint selector executed for the view.
+    pub entrypoint: String,
+    /// Decoded result payload.
+    pub result: IrohaJson,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+pub struct ContractViewVmDiagnosticDto {
+    pub trap_kind: String,
+    pub message: String,
+    pub pc: u64,
+    #[norito(default)]
+    pub function: Option<String>,
+    #[norito(default)]
+    pub source_path: Option<String>,
+    #[norito(default)]
+    pub line: Option<u32>,
+    #[norito(default)]
+    pub column: Option<u32>,
+    pub gas_limit: u64,
+    pub gas_remaining: u64,
+    pub gas_used: u64,
+    pub cycles: u64,
+    pub max_cycles: u64,
+    pub stack_limit_bytes: u64,
+    pub stack_bytes_used: u64,
+    #[norito(default)]
+    pub entrypoint_pc: Option<u64>,
+    #[norito(default)]
+    pub current_function: Option<String>,
+    #[norito(default)]
+    pub opcode: Option<u16>,
+    #[norito(default)]
+    pub syscall: Option<u32>,
+    pub predecoded_loaded: bool,
+    #[norito(default)]
+    pub predecoded_hit: Option<bool>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+pub struct ContractViewErrorResponseDto {
+    pub ok: bool,
+    pub namespace: String,
+    pub contract_id: String,
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    pub code_hash_hex: String,
+    pub abi_hash_hex: String,
+    pub entrypoint: String,
+    pub error: String,
+    #[norito(default)]
+    pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -12447,6 +14032,9 @@ struct PreparedContractCall {
     code_hash: iroha_crypto::Hash,
     abi_hash: iroha_crypto::Hash,
     manifest: manifest::ContractManifest,
+    namespace: String,
+    contract_id: String,
+    contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
 }
 
 // ---------------------- Subscription API DTOs ----------------------
@@ -13529,7 +15117,8 @@ pub struct RecordReplicationFailureResponseDto {
     pub recorded: bool,
 }
 
-/// POST /v1/contracts/deploy — accept `.to` bytecode, compute hashes, and submit RegisterSmartContractCode.
+/// POST /v1/contracts/deploy — accept `.to` bytecode, derive a canonical contract address,
+/// register the code, and activate a public universal contract instance.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_deploy(
@@ -13539,12 +15128,38 @@ pub async fn handle_post_contract_deploy(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<DeployContractDto>,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::smart_contract_code, prelude as dm};
-    let signer = KeyPair::from(req.private_key.0.clone());
-    let prepared = prepare_contract_deployment(&req.code_b64, &signer)?;
-    let authority: dm::AccountId = req.authority.clone().into();
+    use iroha_data_model::{
+        isi::{smart_contract_code, smart_contract_code::ActivateContractInstance},
+        prelude as dm,
+    };
+    let DeployContractDto {
+        authority,
+        private_key,
+        code_b64,
+        dataspace,
+    } = req;
+    let signer = KeyPair::from(private_key.0.clone());
+    let prepared = prepare_contract_deployment(&code_b64, &signer)?;
+    let authority: dm::AccountId = authority.into();
+    let (dataspace_alias, dataspace_id) =
+        resolve_public_contract_deploy_dataspace(&state, dataspace.as_deref())?;
+    let deploy_nonce = contract_deploy_nonce_for_authority(&state, &authority)?;
+    let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_data_model::account::address::chain_discriminant(),
+        &authority,
+        deploy_nonce,
+        dataspace_id,
+    )
+    .map_err(|err| conversion_error(err.to_string()))?;
+    let next_nonce = deploy_nonce
+        .checked_add(1)
+        .ok_or_else(|| conversion_error("contract deploy nonce overflow".to_owned()))?;
+    let deploy_nonce_key =
+        Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)
+            .expect("static deploy nonce metadata key");
 
-    // Construct transaction: RegisterSmartContractCode + RegisterSmartContractBytes (store manifest + code)
+    // Construct transaction: self-register authority, store manifest/code, activate canonical
+    // universal binding, and advance the successful deploy nonce.
     let isi_code = smart_contract_code::RegisterSmartContractCode {
         manifest: prepared.manifest.clone(),
     };
@@ -13560,10 +15175,20 @@ pub async fn handle_post_contract_deploy(
                 ))),
                 dm::InstructionBox::from(isi_code),
                 dm::InstructionBox::from(isi_bytes),
+                dm::InstructionBox::from(ActivateContractInstance {
+                    namespace: dataspace_alias.clone(),
+                    contract_id: contract_address.to_string(),
+                    code_hash: prepared.code_hash,
+                }),
+                dm::InstructionBox::from(dm::SetKeyValue::account(
+                    authority.clone(),
+                    deploy_nonce_key,
+                    dm::Json::new(next_nonce),
+                )),
             ]
             .into_iter(),
         )
-        .sign(&req.private_key.0);
+        .sign(&private_key.0);
 
     // Submit via queue
     handle_transaction_with_metrics(
@@ -13580,6 +15205,9 @@ pub async fn handle_post_contract_deploy(
 
     let body = norito::json::to_json_pretty(&DeployContractResponseDto {
         ok: true,
+        contract_address,
+        dataspace: dataspace_alias,
+        deploy_nonce,
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
         abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
     })
@@ -15906,6 +17534,8 @@ mod deploy_tests {
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                 name: "main".to_owned(),
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -15914,6 +17544,7 @@ mod deploy_tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
+            states: Vec::new(),
         };
         out.extend_from_slice(&interface.encode_section());
         out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
@@ -15944,6 +17575,7 @@ mod deploy_tests {
             authority: iroha_data_model::account::AccountId::of(kp.public_key().clone()),
             private_key: iroha_data_model::prelude::ExposedPrivateKey(kp.private_key().clone()),
             code_b64,
+            dataspace: None,
         };
 
         #[cfg(feature = "telemetry")]
@@ -37561,10 +39193,6 @@ pub async fn handle_v1_accounts_faucet(
     let source_asset_id = AssetId::new(asset_definition_id.clone(), faucet.authority.clone());
     let (destination_balance, source_balance) = {
         let world = app.state.world_view();
-        if world.account(&account_id).is_err() {
-            return Err(faucet_invalid_request("account does not exist"));
-        }
-
         let destination_balance = match world.asset(&destination_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
             Err(_) => iroha_primitives::numeric::Numeric::zero(),

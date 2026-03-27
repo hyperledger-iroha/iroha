@@ -1809,11 +1809,55 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/contracts/deploy".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Deploy a public contract.",
+            "Deploy contract bytecode, derive a canonical contract address, and activate it in the target dataspace (default `universal`).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/instance".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Create a contract instance.",
+            "Create a contract instance from registered code.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/instance/activate".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Activate a contract instance.",
+            "Activate a previously created contract instance.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/contracts/call".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
-            "Call a contract instance.",
-            "Invoke a contract instance entrypoint.",
+            "Call a deployed contract.",
+            "Invoke a contract entrypoint by canonical contract address or by the legacy namespace and contract id compatibility binding.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/view".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Execute a read-only contract view.",
+            "Execute a manifest-validated read-only contract view entrypoint and return its decoded result.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),

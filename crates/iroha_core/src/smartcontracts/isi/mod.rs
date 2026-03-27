@@ -136,6 +136,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::domain_link::LinkAccountDomain>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::BindAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountLabel>,
+    dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::UnlinkAccountDomain>,
     dispatch_instruction::<iroha_data_model::isi::identifier::RegisterIdentifierPolicy>,
     dispatch_instruction::<iroha_data_model::isi::identifier::ActivateIdentifierPolicy>,

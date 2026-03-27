@@ -1066,7 +1066,7 @@ impl Actor {
     fn handoff_contiguous_frontier_missing_payload_recovery(
         &mut self,
         height: u64,
-        view: u64,
+        _view: u64,
         first_seen: Instant,
         now: Instant,
     ) -> Option<super::FrontierRecoveryAdvance> {
@@ -1075,42 +1075,18 @@ impl Actor {
         if height != frontier_height || height != self.active_consensus_round_height() {
             return None;
         }
-
-        let existing_reason = self
-            .frontier_recovery
-            .filter(|state| state.frontier_height == height)
-            .map(|state| state.last_cause);
-        if existing_reason.is_none() {
-            let dependency_progress_at =
-                self.same_height_no_proposal_storm_dependency_progress_at(height);
-            self.frontier_recovery = Some(super::FrontierRecoveryState {
-                frontier_height: height,
-                phase: super::FrontierRecoveryPhase::CatchUp,
-                entered_at: first_seen,
-                last_progress_at: dependency_progress_at.unwrap_or(first_seen),
-                last_dependency_progress_at: dependency_progress_at,
-                last_action_at: None,
-                no_progress_windows: 0,
-                cleanup_done: false,
-                last_view: view,
-                last_rotation_view: None,
-                last_cause: "missing_payload",
-            });
+        let _ = first_seen;
+        if self.frontier_slot_lag_window_expired(height, now)
+            || self.frontier_slot_deep_catchup_active_at_height(height)
+        {
+            return Some(self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnLagWindowExpired {
+                    reason: "frontier_stall_reset",
+                },
+            ));
         }
-
-        let allow_rotation = !self
-            .phase_tracker
-            .current_view(height)
-            .is_some_and(|current| current > view);
-        Some(self.advance_frontier_recovery(
-            existing_reason.unwrap_or("missing_payload"),
-            height,
-            view,
-            false,
-            true,
-            allow_rotation,
-            now,
-        ))
+        Some(self.handle_frontier_slot_event(now, super::FrontierSlotEvent::OnFetchRetryDue))
     }
 
     pub(super) fn request_missing_block(
@@ -1121,6 +1097,30 @@ impl Actor {
         priority: super::MissingBlockPriority,
         targets: &[PeerId],
     ) {
+        if self.frontier_slot_is_exact_height(height)
+            && !self.frontier_slot_allows_deep_catchup(height, "frontier_gap_realign")
+        {
+            let now = Instant::now();
+            let mut targets = super::missing_block_request_targets_without_local(
+                &self.common_config.peer.id,
+                targets,
+            )
+            .into_iter();
+            let leader = targets.next();
+            let voters = targets.collect();
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnFutureGapObserved {
+                    block_hash,
+                    view,
+                    leader,
+                    voters,
+                    exact_fetch_armed: true,
+                    requester: None,
+                },
+            );
+            return;
+        }
         if self.should_suppress_lock_rejected_block_fetch(
             height,
             block_hash,
@@ -1717,6 +1717,93 @@ impl Actor {
                 progress = true;
                 continue;
             }
+            let local_height = self.committed_height_snapshot();
+            let frontier_height = local_height.saturating_add(1);
+            let keep_through_height = frontier_height.saturating_add(1);
+            let frontier_exact_owner_unresolved = self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height && slot.exact_fetch_armed && !slot.body_present
+            });
+            if stats_snapshot.height > keep_through_height {
+                let (
+                    pending_removed,
+                    missing_removed,
+                    deferred_updates_removed,
+                    deferred_qcs_removed,
+                    hints_removed,
+                    proposals_removed,
+                    seen_removed,
+                ) = self.prune_future_consensus_state_above_height(keep_through_height, now, true);
+                if missing_removed > 0 {
+                    super::status::inc_missing_request_pruned_stale_height(
+                        u64::try_from(missing_removed).unwrap_or(u64::MAX),
+                    );
+                    self.update_missing_block_gauges();
+                }
+                let evicted_total = pending_removed
+                    .saturating_add(deferred_updates_removed)
+                    .saturating_add(deferred_qcs_removed)
+                    .saturating_add(hints_removed)
+                    .saturating_add(proposals_removed)
+                    .saturating_add(seen_removed);
+                if evicted_total > 0 {
+                    super::status::inc_pending_queue_evictions_total(
+                        u64::try_from(evicted_total).unwrap_or(u64::MAX),
+                    );
+                }
+                let exact_retry_emitted = if frontier_exact_owner_unresolved {
+                    self.retry_frontier_block_body_fetch(now)
+                } else {
+                    false
+                };
+                let requested = if frontier_exact_owner_unresolved {
+                    false
+                } else {
+                    self.request_range_pull_from_anchor(
+                        keep_through_height,
+                        "missing_block_far_ahead_retry",
+                        now,
+                    )
+                };
+                if requested {
+                    self.note_missing_block_height_attempt(
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        super::MissingBlockRecoveryStage::RangePullFromAnchor,
+                        None,
+                        now,
+                    );
+                }
+                debug_assert!(
+                    self.pending
+                        .missing_block_requests
+                        .values()
+                        .all(|request| request.height <= keep_through_height),
+                    "retrying far-ahead missing blocks must prune per-hash state above the two-lane frontier window"
+                );
+                warn!(
+                    height = stats_snapshot.height,
+                    view = stats_snapshot.view,
+                    phase = ?stats_snapshot.phase,
+                    block = ?block_hash,
+                    local_height,
+                    keep_through_height,
+                    range_pull_height = keep_through_height,
+                    pending_removed,
+                    missing_removed,
+                    deferred_updates_removed,
+                    deferred_qcs_removed,
+                    hints_removed,
+                    proposals_removed,
+                    seen_removed,
+                    frontier_exact_owner_unresolved,
+                    exact_retry_emitted,
+                    requested,
+                    "pruned far-ahead missing-block retry state at the contiguous frontier"
+                );
+                progress = true;
+                continue;
+            }
             let expected_epoch = self.epoch_for_height(stats_snapshot.height);
             let mut signers = BTreeSet::new();
             let mut roster: Option<Vec<PeerId>> = None;
@@ -1802,7 +1889,58 @@ impl Actor {
                 .filter(|roster| !roster.is_empty())
                 .map(super::network_topology::Topology::new);
 
-            let local_height = self.committed_height_snapshot();
+            if stats_snapshot.height == frontier_height {
+                let routed = if let Some(topology) = topology.as_ref() {
+                    self.handle_frontier_body_gap_with_topology(
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        &signers,
+                        topology,
+                        /*exact_fetch_armed*/ true,
+                        now,
+                    )
+                } else {
+                    if self.update_frontier_slot(
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        None,
+                        BTreeSet::new(),
+                        /*block_created_seen*/ false,
+                        /*exact_fetch_armed*/ true,
+                        false,
+                        None,
+                        None,
+                        now,
+                    ) {
+                        self.clear_missing_block_request(
+                            &block_hash,
+                            MissingBlockClearReason::Obsolete,
+                        );
+                        self.clear_missing_block_view_change(&block_hash);
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if routed {
+                    progress = true;
+                    continue;
+                }
+            }
+            if stats_snapshot.height == keep_through_height {
+                self.next_slot_prefetch = Some(super::FrontierPrefetchSlot {
+                    height: stats_snapshot.height,
+                    view: stats_snapshot.view,
+                    block_hash,
+                });
+                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+                self.clear_missing_block_view_change(&block_hash);
+                progress = true;
+                continue;
+            }
+
             let far_ahead_retry = stats_snapshot.height > local_height.saturating_add(1);
             let far_ahead_retry_suppressed = far_ahead_retry
                 && !self.frontier_catchup_far_ahead_replay_allowed(stats_snapshot.height, now);
@@ -3146,10 +3284,47 @@ impl Actor {
             let contiguous_frontier = height == self.committed_height_snapshot().saturating_add(1)
                 && height == self.active_consensus_round_height();
             if contiguous_frontier {
-                let _ = self.seed_frontier_recovery_for_missing_payload(height, view, now);
+                let _ = if matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
+                    self.handle_frontier_slot_event(
+                        now,
+                        super::FrontierSlotEvent::OnCommitQcObserved { block_hash, view },
+                    )
+                } else {
+                    self.handle_frontier_slot_event(
+                        now,
+                        super::FrontierSlotEvent::OnVoteObserved {
+                            block_hash,
+                            view,
+                            voter: None,
+                        },
+                    )
+                };
+                let exact_owner_routed = self.handle_frontier_body_gap_with_topology(
+                    block_hash,
+                    height,
+                    view,
+                    signers,
+                    signature_topology,
+                    /*exact_fetch_armed*/ true,
+                    now,
+                );
+                let exact_retry_emitted = if exact_owner_routed {
+                    self.retry_frontier_block_body_fetch(now)
+                } else {
+                    false
+                };
+                debug!(
+                    height,
+                    view,
+                    phase = ?phase,
+                    block = %block_hash,
+                    exact_owner_routed,
+                    exact_retry_emitted,
+                    "routing vote-backed contiguous frontier payload miss through exact body repair"
+                );
             }
             let cooldown = self.rebroadcast_cooldown();
-            if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
+            if !contiguous_frontier && self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
                 let local_peer = self.common_config.peer.id();
                 let targets = rebroadcast_targets_for_qc(local_peer, signers, signature_topology);
                 let fetch_freshness_cap =
@@ -4758,6 +4933,24 @@ impl Actor {
                 "received QC for unknown block; caching without updating locks/highest"
             );
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
+            let _ = if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnCommitQcObserved {
+                        block_hash: qc.subject_block_hash,
+                        view: qc.view,
+                    },
+                )
+            } else {
+                self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnVoteObserved {
+                        block_hash: qc.subject_block_hash,
+                        view: qc.view,
+                        voter: None,
+                    },
+                )
+            };
             if self.handle_frontier_body_gap_with_topology(
                 qc.subject_block_hash,
                 qc.height,
@@ -4919,6 +5112,32 @@ impl Actor {
         };
         if !accepted {
             return Ok(());
+        }
+        if qc.height == self.committed_height_snapshot().saturating_add(1)
+            && matches!(
+                qc.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            )
+        {
+            let _ = if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                self.handle_frontier_slot_event(
+                    Instant::now(),
+                    super::FrontierSlotEvent::OnCommitQcObserved {
+                        block_hash: qc.subject_block_hash,
+                        view: qc.view,
+                    },
+                )
+            } else {
+                self.handle_frontier_slot_event(
+                    Instant::now(),
+                    super::FrontierSlotEvent::OnVoteObserved {
+                        block_hash: qc.subject_block_hash,
+                        view: qc.view,
+                        voter: None,
+                    },
+                )
+            };
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             super::status::record_commit_qc(qc.clone());

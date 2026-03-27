@@ -183,6 +183,10 @@ impl Actor {
         self.subsystems.propose.proposal_cache =
             ProposalCache::new(self.recovery_pending_proposal_cap());
         self.subsystems.propose.authoritative_block_slots.clear();
+        self.subsystems
+            .propose
+            .authoritative_block_frontiers
+            .clear();
         self.subsystems.propose.proposals_seen.clear();
         self.qc_cache.clear();
         self.vote_log.clear();

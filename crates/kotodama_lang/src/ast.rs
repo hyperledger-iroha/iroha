@@ -10,6 +10,12 @@ pub struct Program {
     pub contract_meta: Option<ContractMeta>,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+pub struct SourceLocation {
+    pub line: usize,
+    pub column: usize,
+}
+
 /// Visibility of a function when exposed to the host/runtime.
 #[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub enum FunctionVisibility {
@@ -32,6 +38,8 @@ pub enum FunctionKind {
     Hajimari,
     /// Contract upgrade hook (`kaizen`).
     Kaizen,
+    /// Read-only public query entrypoint (`view fn`).
+    View,
 }
 
 /// Parsed modifiers associated with a function.
@@ -53,9 +61,8 @@ pub enum Item {
     Struct(StructDef),
     /// Contract-level constant declaration.
     Const(ConstDecl),
-    /// Contract-level durable state declaration. For now, the compiler lowers
-    /// these to ephemeral allocations per run; durable host-backed storage is
-    /// pending and tracked in the roadmap/docs.
+    /// Contract-level durable state declaration lowered to host-backed state
+    /// paths, including flattened singleton struct/tuple children.
     State(StateDecl),
     /// Contract-level trigger declaration (manifest-only metadata).
     Trigger(TriggerDecl),
@@ -112,6 +119,7 @@ pub struct Function {
     pub ret_ty: Option<TypeExpr>,
     pub body: Block,
     pub modifiers: FunctionModifiers,
+    pub location: SourceLocation,
 }
 
 #[derive(Debug, PartialEq, Clone)]
