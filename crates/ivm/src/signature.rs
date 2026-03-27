@@ -207,6 +207,12 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
     }
     #[cfg(feature = "cuda")]
     let maybe_cuda = crate::cuda::cuda_available() && !crate::cuda::cuda_disabled();
+    #[cfg(feature = "cuda")]
+    let mut cuda_inputs = if maybe_cuda {
+        Some((Vec::new(), Vec::new(), Vec::new(), Vec::new()))
+    } else {
+        None
+    };
 
     let mut parsed = Vec::with_capacity(items.len());
     #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -216,16 +222,7 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
         None
     };
 
-    #[cfg(all(target_os = "macos", feature = "metal"))]
-    let mut metal_index = 0usize;
-
-    for item in items.iter() {
-        #[cfg(all(target_os = "macos", feature = "metal"))]
-        let current_index = {
-            let idx = metal_index;
-            metal_index += 1;
-            idx
-        };
+    for (_index, item) in items.iter().enumerate() {
         let Ok(sig) = Ed25519Signature::from_slice(&item.signature) else {
             parsed.push(None);
             continue;
@@ -244,7 +241,19 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
             ));
             sigs.push(item.signature);
             pks.push(item.public_key);
-            map.push(current_index);
+            map.push(_index);
+        }
+
+        #[cfg(feature = "cuda")]
+        if let Some((ref mut sigs, ref mut pks, ref mut hrams, ref mut map)) = cuda_inputs {
+            hrams.push(ed25519_challenge_scalar_bytes(
+                &item.signature,
+                pk.as_bytes(),
+                item.message,
+            ));
+            sigs.push(item.signature);
+            pks.push(item.public_key);
+            map.push(_index);
         }
 
         parsed.push(Some((sig, pk)));
@@ -254,6 +263,21 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
     if let Some((sigs, pks, hrams, map)) = metal_inputs {
         if !sigs.is_empty() {
             if let Some(out) = crate::vector::metal_ed25519_verify_batch(&sigs, &pks, &hrams) {
+                if out.len() == map.len() {
+                    let mut results = vec![false; items.len()];
+                    for (idx, ok) in map.into_iter().zip(out.into_iter()) {
+                        results[idx] = ok;
+                    }
+                    return results;
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    if let Some((sigs, pks, hrams, map)) = cuda_inputs {
+        if !sigs.is_empty() {
+            if let Some(out) = crate::cuda::ed25519_verify_batch_cuda(&sigs, &pks, &hrams) {
                 if out.len() == map.len() {
                     let mut results = vec![false; items.len()];
                     for (idx, ok) in map.into_iter().zip(out.into_iter()) {

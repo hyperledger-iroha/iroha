@@ -4,6 +4,8 @@ use std::sync::{Arc, OnceLock, atomic::AtomicU64};
 #[cfg(feature = "cuda")]
 use cust::context::CurrentContext;
 #[cfg(feature = "cuda")]
+use cust::error::CudaError;
+#[cfg(feature = "cuda")]
 use cust::init;
 #[cfg(feature = "cuda")]
 use cust::prelude::*;
@@ -21,7 +23,21 @@ pub struct GpuContext {
 impl GpuContext {
     fn new(device: Device) -> cust::error::CudaResult<Self> {
         let context = Context::new(device)?;
-        context.set_flags(ContextFlags::SCHED_AUTO | ContextFlags::MAP_HOST)?;
+        // WSL/driver-only hosts can expose a working primary context while rejecting
+        // `MAP_HOST` on `cuDevicePrimaryCtxSetFlags_v2` with `CUDA_ERROR_INVALID_VALUE`.
+        // None of the current IVM CUDA paths require pinned host mappings, so keep
+        // the context usable by retrying with the scheduler flag only.
+        let preferred_flags = ContextFlags::SCHED_AUTO | ContextFlags::MAP_HOST;
+        match context.set_flags(preferred_flags) {
+            Ok(()) => {}
+            Err(err) => {
+                if let Some(fallback_flags) = map_host_flag_fallback(err) {
+                    context.set_flags(fallback_flags)?;
+                } else {
+                    return Err(err);
+                }
+            }
+        }
         Ok(GpuContext { device, context })
     }
 
@@ -32,6 +48,14 @@ impl GpuContext {
         CurrentContext::set_current(&self.context).ok()?;
         let stream = Stream::new(StreamFlags::DEFAULT, None).ok()?;
         func(&stream)
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn map_host_flag_fallback(err: CudaError) -> Option<ContextFlags> {
+    match err {
+        CudaError::InvalidValue | CudaError::PrimaryContextActive => Some(ContextFlags::SCHED_AUTO),
+        _ => None,
     }
 }
 
@@ -83,9 +107,25 @@ fn manager_cache() -> &'static RwLock<GpuManagerCache> {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_manager_enabled() -> bool {
+    !crate::cuda::cuda_disabled()
+}
+
+#[cfg(feature = "cuda")]
+fn clear_cached_manager(version: u64) {
+    let cache = manager_cache();
+    let mut guard = cache.write();
+    guard.manager = None;
+    guard.version = version;
+}
+
+#[cfg(feature = "cuda")]
 impl GpuManager {
     /// Initialize and create contexts for all detected GPUs.
     pub fn init() -> Option<Self> {
+        if !cuda_manager_enabled() {
+            return None;
+        }
         init(CudaFlags::empty()).ok()?;
         let count = Device::num_devices().ok()?;
         if count == 0 {
@@ -133,6 +173,10 @@ impl GpuManager {
 
     /// Return a handle to the global GPU manager, initializing it on first use.
     pub fn shared() -> Option<GpuManagerHandle> {
+        if !cuda_manager_enabled() {
+            clear_cached_manager(CONFIG_VERSION.load(std::sync::atomic::Ordering::SeqCst));
+            return None;
+        }
         let target_version = CONFIG_VERSION.load(std::sync::atomic::Ordering::SeqCst);
         // Fast path: cached manager matches current configuration
         if let Some(handle) = {
@@ -167,15 +211,16 @@ impl GpuManager {
             .map(|mgr| GpuManagerHandle::new(Arc::clone(mgr)))
     }
 
+    pub(crate) fn invalidate_cache() {
+        let new_version = CONFIG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        clear_cached_manager(new_version);
+    }
+
     /// Set a configuration cap for the number of GPUs (0 = auto/no cap).
     pub fn set_max_gpus(limit: Option<usize>) {
         let v = limit.unwrap_or(0);
         CONFIG_MAX_GPUS.store(v, std::sync::atomic::Ordering::SeqCst);
-        let new_version = CONFIG_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-        let cache = manager_cache();
-        let mut guard = cache.write();
-        guard.manager = None;
-        guard.version = new_version;
+        Self::invalidate_cache();
     }
 }
 
@@ -232,6 +277,22 @@ impl GpuManager {
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_host_flag_fallback_drops_map_host_for_known_primary_context_errors() {
+        assert_eq!(
+            super::map_host_flag_fallback(CudaError::InvalidValue),
+            Some(ContextFlags::SCHED_AUTO)
+        );
+        assert_eq!(
+            super::map_host_flag_fallback(CudaError::PrimaryContextActive),
+            Some(ContextFlags::SCHED_AUTO)
+        );
+        assert_eq!(
+            super::map_host_flag_fallback(CudaError::InvalidDevice),
+            None
+        );
+    }
 
     #[test]
     fn set_max_gpus_invalidates_cached_manager() {

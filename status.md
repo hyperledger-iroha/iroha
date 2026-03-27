@@ -19,6 +19,99 @@ Last updated: 2026-03-26
 - Validation:
   - `cargo test -p fastpq_prover --test trace_commitment -- --nocapture` (pass)
 
+## 2026-03-26 Follow-up: CUDA helper root exports and no-CUDA stubs are aligned again
+- Extended the CUDA review in
+  `crates/ivm/src/lib.rs`,
+  `crates/ivm/src/cuda.rs`,
+  `crates/ivm/src/signature.rs`,
+  `crates/ivm/src/byte_merkle_tree.rs`,
+  and the focused fallback/disable regressions under
+  `crates/ivm/tests/`.
+- The shipped behavior in this slice:
+  - the crate root now re-exports the CUDA batch/vector/Merkle helper family
+    (`aesenc_batch_cuda`, `aesdec_batch_cuda`,
+    `aesenc_rounds_batch_cuda`, `aesdec_rounds_batch_cuda`,
+    `sha256_leaves_cuda`, `sha256_pairs_reduce_cuda`,
+    `vadd32_cuda`, `vadd64_cuda`, `vand_cuda`, `vxor_cuda`, `vor_cuda`),
+    matching the helper set already implemented in `cuda.rs`;
+  - the matching no-CUDA stubs now exist for those helpers too, so non-CUDA
+    builds expose a coherent explicit-helper surface instead of only a partial
+    subset;
+  - `cuda_disable_on_mismatch.rs` and `cuda_fallback.rs` now call the newly
+    public helper entry points directly, pinning both the CPU-fallback behavior
+    under disabled CUDA and the fail-closed `None` stubs in non-CUDA builds;
+    and
+  - `cargo test -p ivm --features cuda --benches --no-run` is green again, so
+    `bench_aes_cuda.rs` no longer references missing crate-root exports.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --test cuda_fallback -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --benches --no-run` (pass)
+- Remaining implementation gap:
+  - continue the broader `ivm` accelerator review across the remaining
+    CUDA/Metal/determinism boundaries beyond the public helper, disable-path,
+    Ed25519 batch-wrapper, and root-export regressions closed in this pass.
+
+## 2026-03-26 Follow-up: public Ed25519 batch verification now uses the CUDA batch helper
+- Extended the CUDA review in
+  `crates/ivm/src/signature.rs`
+  and
+  `crates/ivm/tests/ed25519_batch.rs`
+  so the public batch-verification wrapper now uses the existing CUDA batch
+  kernel instead of only the per-signature CUDA path.
+- The shipped behavior in this slice:
+  - `verify_ed25519_batch_items(...)` now builds one CUDA batch of
+    `(signature, public_key, hram)` tuples and calls
+    `ed25519_verify_batch_cuda(...)` first when CUDA is live, reducing launch
+    overhead without changing deterministic verification results;
+  - malformed entries still fail closed to `false`, and the wrapper still
+    falls back to the existing CPU/per-item verification path if the CUDA batch
+    helper declines; and
+  - a new CUDA-host regression now compares the public wrapper directly
+    against the dedicated CUDA batch helper on the same mixed-validity input
+    set, so the batch wiring cannot silently regress back to the slower
+    per-signature path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --test ed25519_batch -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --test cuda_extra test_cuda_ed25519_verify_batch -- --nocapture --test-threads=1` (pass)
+- Remaining implementation gap:
+  - continue the broader `ivm` accelerator review across the remaining
+    CUDA/Metal/determinism boundaries beyond the public helper, disable-path,
+    and Ed25519 batch-wrapper regressions closed in this pass.
+
+## 2026-03-26 Follow-up: CUDA disable-path regressions now preserve deterministic CPU fallback
+- Fixed the next concrete `ivm` CUDA audit finding in
+  `crates/ivm/src/cuda.rs`
+  and widened the focused acceptance coverage in
+  `crates/ivm/tests/cuda_disable_on_mismatch.rs`.
+- The shipped behavior in this slice:
+  - the fused `aesenc_rounds_batch_cuda` and `aesdec_rounds_batch_cuda`
+    helpers now return the real CPU-computed multi-round AES result when CUDA
+    is disabled or when CUDA self-tests fail, instead of incorrectly returning
+    the input blocks unchanged;
+  - the public `aesenc_n_rounds_many` and `aesdec_n_rounds_many` wrappers are
+    now covered explicitly under forced-self-test-failure and config-disabled
+    CUDA states, so the fused fallback path cannot silently drift again;
+  - `cuda_disable_on_mismatch.rs` now serializes and restores global CUDA
+    env/config state, removing test-order sensitivity from the disable-path
+    regression while keeping the existing fail-closed policy checks; and
+  - the non-macOS `--features cuda` sweep also no longer emits the local
+    `merkle_metal_min_leaves` dead-code warning, because the Metal-only
+    threshold getter now stays cfg-gated to macOS or tests; and
+  - the same focused acceptance sweep now asserts the explicit CUDA SHA-256,
+    Poseidon, vector, Keccak, BN254, and Ed25519 helpers either fail closed or
+    fall back to the documented CPU behavior once the backend is disabled.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --lib public_ -- --test-threads=1` (pass)
+- Remaining implementation gap:
+  - continue the broader `ivm` accelerator review across the remaining
+    CUDA/Metal/determinism boundaries beyond the public helper and disable-path
+    regressions closed in this pass.
+
 ## 2026-03-26 Follow-up: `iroha_core` test-helper transaction lifetimes compile again
 - Updated
   `crates/iroha_core/src/state.rs`
@@ -998,26 +1091,131 @@ Last updated: 2026-03-26
     runs, but the suite still reports one unrelated failure in
     `repo_cash_leg_parser_validates_fields`)
 
-## 2026-03-25 Follow-up: CUDA-featured `ivm` builds now link on driver-only WSL hosts
-- Fixed the vendored CUDA locator in `vendor/find_cuda_helper/src/lib.rs` so
-  CUDA-featured builds also discover driver-only library directories such as
-  `/usr/lib/wsl/lib` instead of requiring a full toolkit-style root like
-  `/usr/local/cuda`.
-- This closes the immediate `--features cuda` blocker on this machine:
-  `cust`/`cust_raw` now receive a real `-L ... -lcuda` link path, so focused
-  `ivm` CUDA tests link and execute instead of failing with unresolved `cu*`
-  symbols.
-- Tightened the `ivm` crate-level runtime-status regression in
-  `crates/ivm/src/lib.rs` so CUDA-enabled builds now accept the correct
-  contract: `errors.cuda` is `None` only when CUDA is actually available, and
-  otherwise carries a sticky unavailable/disable reason.
+## 2026-03-26 Follow-up: CUDA runtime self-tests now pass on this driver-only WSL host
+- Completed the live CUDA runtime follow-up in
+  `crates/ivm/src/cuda.rs`,
+  `crates/ivm/src/gpu_manager.rs`,
+  and
+  `crates/ivm/cuda/signature.cu`.
+- The shipped behavior in this slice:
+  - `ivm::cuda_available()` now reports the real backend state on this host,
+    because the CUDA self-test no longer probes device count before
+    `cust::init()` and instead reuses `GpuManager::shared()` for driver-backed
+    discovery;
+  - WSL/driver-only contexts that reject `MAP_HOST` now retry with
+    `ContextFlags::SCHED_AUTO`, which keeps the `/usr/lib/wsl/lib` discovery
+    fix usable without changing deterministic kernel behavior;
+  - `GpuManager::init()` / `shared()` now respect the configured CUDA disable
+    state and invalidate cached contexts when that policy flips, so direct
+    manager access cannot bypass `set_acceleration_config(enable_cuda = false)`
+    or reuse stale contexts after a backend reset;
+  - the CUDA startup truth set now fails closed on recursive entry, uses the
+    scalar `keccak_f1600_impl` reference instead of recursing back through the
+    public CUDA-gated helper, and rebinds the cached CUDA context on fresh
+    worker threads, fixing both the earlier Ed25519 self-test loop and the
+    grouped SHA-256 Merkle regression;
+  - `signature.cu` restores `ge_p3_identity`, so the Ed25519 signature PTX
+    builds and loads again on this host; and
+  - the focused CUDA runtime backlog that previously skipped because
+    `cuda_available()` was false now runs live: `tests/cuda.rs`,
+    `tests/cuda_extra.rs`, `tests/cuda_parity_keccak_aes.rs`,
+    `tests/cuda_sha256.rs`, `tests/poseidon_cuda_parity.rs`, and
+    `tests/cuda_disable_on_mismatch.rs` all pass against a real CUDA backend.
+- Added focused regressions that pin the new behavior in source:
+  - `cached_cuda_selftest_rebinds_context_on_new_thread` proves cached
+    self-test success rebinds the CUDA context on fresh worker threads before
+    public helpers load PTX; and
+  - `nested_cuda_selftest_requests_fail_closed` plus
+    `sha256_merkle_selftest_survives_prior_cuda_truth_sets` cover the recursive
+    self-test gate and the prior test-order-sensitive SHA-256 path.
 - Validation:
   - `cargo test --manifest-path vendor/find_cuda_helper/Cargo.toml` (pass)
   - `cargo fmt --all` (pass)
-  - `cargo test -p ivm --features cuda acceleration_runtime_errors_default_none_or_hw_reason --lib -- --nocapture` (pass)
-  - `cargo test -p ivm --features cuda --lib sha256_merkle_selftest_covers_cuda_kernels -- --nocapture` (pass; binary links and executes, CUDA backend still reports unavailable on this host so the focused self-test exits through the existing skip path)
-  - `cargo test -p ivm --features cuda --test cuda -- --nocapture` (pass; focused CUDA integration tests now link and run, but skip because `ivm::cuda_available()` is still false at runtime)
-  - `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture` (pass)
+  - `cargo test -p ivm --features cuda acceleration_runtime_errors_default_none_or_hw_reason --lib -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda cached_cuda_selftest_rebinds_context_on_new_thread --lib -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --lib sha256_merkle_selftest_covers_cuda_kernels -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --lib selftest_covers_ -- --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --test cuda -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --test cuda_extra --test cuda_parity_keccak_aes --test cuda_sha256 --test poseidon_cuda_parity -- --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --test cuda_env -- --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --test gpu_manager --test gpu_determinism --test hardware_determinism -- --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --test crypto -- --test-threads=1` (pass)
+
+## 2026-03-26 Follow-up: Norito now ships and validates an in-tree `gpuzstd_cuda` helper
+- Closed the remaining Norito CUDA-helper backlog in
+  `crates/gpuzstd_cuda/src/lib.rs`,
+  `crates/gpuzstd_metal/{Cargo.toml,src/lib.rs}`,
+  and `crates/norito/src/core/{gpu_zstd.rs,simd_crc64.rs}`.
+- The shipped behavior in this slice:
+  - the CRC64 helper gate still cfg-splits its `GpuBackend` enum, so
+    `--features cuda-crc64` stays warning-free on this Linux host;
+  - `gpuzstd_metal` now exposes its shared raw-pointer zstd helper
+    implementation for reuse without exporting duplicate C symbols when linked
+    as a dependency, and the earlier dead-code / unused-import warnings are
+    gone from the focused helper test graph;
+  - the workspace now ships a dedicated `gpuzstd_cuda` crate that exports the
+    expected `gpu_zstd_compress` / `gpu_zstd_decompress` ABI under the
+    `libgpuzstd_cuda.{so,dll}` artifact name;
+  - Norito's Unix helper-name regression now pins the CUDA-named artifact as
+    the preferred choice when both helper libraries exist in the same target
+    directory; and
+  - the focused `gpu-compression` parity graph was rerun in a fresh target dir
+    after building `gpuzstd_cuda`, so the live runtime path now succeeds
+    through the dedicated CUDA-named helper instead of depending on the
+    `gpuzstd_metal` fallback artifact.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p gpuzstd_metal -- --nocapture` (pass)
+  - `cargo test -p gpuzstd_cuda -- --nocapture` (pass)
+  - `env CARGO_TARGET_DIR=/tmp/iroha-gpuzstd-cuda-artifact cargo build -p gpuzstd_cuda` (pass)
+  - `cargo test -p norito --features cuda-stage1 --lib accel_tape_validation_tests -- --nocapture` (pass)
+  - `cargo test -p norito --features cuda-crc64 gpu_crc64_self_test -- --nocapture` (pass)
+  - `cargo test -p norito --features cuda-crc64 --lib gpu_min_len_defaults_and_env_override -- --nocapture` (pass)
+  - `cargo test -p norito --features cuda-crc64 --lib gpu_crc64_can_load_env_stub -- --nocapture` (pass)
+  - `env CARGO_TARGET_DIR=/tmp/iroha-gpuzstd-cuda-artifact cargo test -p norito --features gpu-compression --lib gpu_ -- --nocapture` (pass)
+  - `env CARGO_TARGET_DIR=/tmp/iroha-gpuzstd-cuda-artifact cargo test -p norito --features gpu-compression --test compression gpu_zstd_roundtrip -- --nocapture` (pass)
+
+## 2026-03-26 Follow-up: public CUDA helper surface now has direct source-level parity coverage
+- Extended the `ivm` CUDA regression layer in
+  `crates/ivm/src/{cuda.rs,bn254_vec.rs}` beyond startup admission for two more
+  exported helpers, then expanded the same focused sweep to the broader public
+  CUDA API.
+- The shipped behavior in this slice:
+  - the focused `public_` CUDA lib sweep now directly covers the exported
+    vector helpers, `sha256_compress_cuda`, `keccak_f1600_cuda`, Poseidon
+    single/batch helpers, single-round AES helpers, single-round/fused AES
+    batch helpers, BN254 add/sub/mul, Ed25519 single/batch verification, and
+    the SHA-256 leaves/pair-reduce helpers under one source-level parity block;
+  - `sha256_leaves_cuda` now has a focused public parity regression against the
+    scalar SHA-256 leaf path, mirroring the existing Metal leaf coverage and
+    proving the exported Merkle-leaf helper directly;
+  - `sha256_compress_cuda`, `keccak_f1600_cuda`, the Poseidon public helpers,
+    and the single-round `aesenc_cuda` / `aesdec_cuda` helpers now also have
+    focused source-level parity regressions instead of depending only on
+    startup truth sets or separate integration tests;
+  - `aesenc_batch_cuda` and `aesdec_batch_cuda` now have focused public parity
+    regressions against the scalar AES round helpers, matching the existing
+    Metal single-round batch coverage instead of depending only on the startup
+    truth set;
+  - the public BN254 and Ed25519 CUDA helpers now have the same direct
+    source-level parity coverage instead of relying only on startup truth sets
+    plus the older `cuda_extra` integration tests;
+  - the same focused `public_` lib sweep still keeps the earlier public
+    `sha256_pairs_reduce_cuda` and fused AES rounds regressions green; and
+  - the stale `mul_neon debug:` instrumentation is gone from
+    `bn254_vec.rs`, the macOS-only `min_metal` binding no longer warns on
+    Linux/CUDA hosts, and the dead non-macOS Metal SHA helper stubs were
+    removed, so the focused CUDA public-parity sweep no longer emits
+    branch-local `ivm` warning noise.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --lib public_ -- --test-threads=1` (pass)
+- Remaining implementation gap:
+  - continue the deeper `ivm` accelerator review across the remaining
+    CUDA/Metal/determinism boundaries; this pass closed the direct public
+    helper parity gaps and cleaned the related `ivm` warning noise, but it did
+    not attempt a broader accelerator sweep.
 
 ## 2026-03-25 Follow-up: `ivm` now re-exports Metal helper stubs on non-macOS targets
 - Fixed the crate-root `ivm` public API so the Metal helper surface is exported
@@ -1129,8 +1327,7 @@ Last updated: 2026-03-26
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo check -p iroha_crypto --tests --message-format short` (pass)
 - Remaining implementation gap:
   - the active dependency advisory tranche is closed for the current tree; the
-    remaining confirmed security backlog is now CUDA runtime validation on a
-    CUDA-capable host.
+    earlier CUDA runtime validation backlog closed on 2026-03-26.
 
 ## 2026-03-25 Follow-up: offline cash app-API requests now require canonical device binding/proof and active lineages cannot hop devices
 - Hardened `crates/iroha_torii/src/lib.rs`,
@@ -1226,8 +1423,8 @@ Last updated: 2026-03-26
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-soracloud-remote-key cargo test -p iroha_torii --lib contract_activate_rate_limit_throttles_after_burst -- --nocapture` (pass)
 - Remaining implementation gap:
   - no additional confirmed Torii remote-key fail-open call sites remain in
-    this `lib.rs` / `soracloud.rs` slice; the remaining confirmed security
-    backlog is now CUDA runtime validation on a CUDA-capable host.
+    this `lib.rs` / `soracloud.rs` slice; the earlier CUDA runtime validation
+    backlog closed on 2026-03-26.
 
 ## 2026-03-25 Follow-up: `model-publish-private` now imports pinned Hugging Face snapshots through `PrivateModelSourceV1`
 - Extended `crates/iroha_data_model/src/soracloud.rs`,
@@ -1289,8 +1486,7 @@ Last updated: 2026-03-26
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-remote-key cargo test -p iroha_torii --lib multisig_spec_requires_signed_request_for_alias_selector -- --nocapture` (pass)
 - Remaining implementation gap:
   - this closes the currently confirmed direct-handler fallback cluster; the
-    remaining confirmed security backlog is now CUDA runtime validation on a
-    CUDA-capable host.
+    earlier CUDA runtime validation backlog closed on 2026-03-26.
 
 ## 2026-03-25 Follow-up: `model-publish-private` now prepares encrypted upload plans from raw admitted model directories
 - Extended `crates/iroha_cli/src/soracloud.rs`,
@@ -1400,8 +1596,8 @@ Last updated: 2026-03-26
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-operator-auth-key CARGO_TARGET_DIR=/tmp/iroha-codex-target-operator-auth-key cargo test -p iroha_torii --lib operator_auth_rejects_forwarded_mtls_from_untrusted_proxy -- --nocapture` (pass)
 - Remaining implementation gap:
   - no additional live operator-auth remote-IP trust-boundary issue was
-    confirmed in this pass; the remaining confirmed security backlog is now
-    CUDA runtime validation on a CUDA-capable host.
+    confirmed in this pass; the earlier CUDA runtime validation backlog closed
+    on 2026-03-26.
 
 ## 2026-03-25 Follow-up: Soracloud ordinary handlers can now read authoritative secret envelopes
 - Extended the Soracloud runtime/ABI secret-ingestion path across
@@ -1643,8 +1839,8 @@ Last updated: 2026-03-26
   - `CARGO_HOME=/tmp/iroha-cargo-home-trusted-proxy CARGO_TARGET_DIR=/tmp/iroha-codex-target-trusted-proxy cargo test -p iroha_config --test fixtures torii_transport_trusted_proxy_cidrs_default_to_empty -- --nocapture` (pass)
 - Remaining implementation gap:
   - no additional live SoraFS trusted-proxy/client-IP issue was confirmed in
-    this pass. The remaining security backlog is now CUDA runtime validation
-    on a CUDA-capable host.
+    this pass. The earlier CUDA runtime validation backlog closed on
+    2026-03-26.
 
 ## 2026-03-25 Follow-up: multilane custom-genesis pre-exec and mobile asset-id automation are closed
 - Closed the remaining asset-adjacent follow-up items that were still open after the
@@ -1894,8 +2090,7 @@ Last updated: 2026-03-26
   - `CARGO_HOME=/tmp/iroha-cargo-home-sec14 CARGO_TARGET_DIR=/tmp/iroha-codex-target-peer-geo cargo test -p iroha_config torii_peer_geo_parse_ -- --nocapture` (pass)
 - Remaining implementation gap:
   - no live peer-geo plaintext fallback remains in the current tree. The
-    remaining security backlog is now CUDA runtime validation on a
-    CUDA-capable host.
+    earlier CUDA runtime validation backlog closed on 2026-03-26.
 
 ## 2026-03-25 Follow-up: Soracloud service config/secret control plane landed
 - Extended the Soracloud service control plane across
@@ -2252,9 +2447,8 @@ Last updated: 2026-03-26
   - `cargo check -p ivm` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; `build.rs` still warns because `nvcc` is absent on this host)
 - Remaining implementation gap:
-  - this host still cannot link or execute the `cust`-backed CUDA test
-    binaries, so the new public-kernel regressions are compile-validated here
-    but still need runtime execution on a CUDA-capable machine.
+  - this runtime-validation gap was later closed on 2026-03-26, when the same
+    WSL CUDA host executed the public-kernel regressions end to end.
 
 ## 2026-03-24 Follow-up: public Metal Merkle-pair and multi-round AES batch entry points now have focused regressions
 - Extended the `ivm` Metal regression layer in
@@ -4666,10 +4860,8 @@ Last updated: 2026-03-26
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; only `build.rs` warnings remain because `nvcc` is absent on this host)
 - Remaining implementation gap:
-  - rerun the focused CUDA runtime/self-test slice on a host with live CUDA
-    driver libraries and toolchain support, so the shared challenge helper and
-    the earlier mirrored Ed25519 normalization fixes are exercised beyond
-    compile-only validation.
+  - this runtime/self-test follow-up was later completed on 2026-03-26 on the
+    same WSL CUDA host, so the compile-only note here is historical.
 
 ## 2026-03-24 Follow-up: IVM startup truth sets now cover live vector and AES batch kernels
 - Hardened the sampled `ivm` accelerator admission path in
@@ -4694,9 +4886,8 @@ Last updated: 2026-03-26
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; `nvcc` is still absent on this host, so build.rs warns while Rust-side CUDA admission logic still compiles)
 - Remaining implementation gap:
   - the startup-admission coverage gaps for the sampled vector/AES kernels are
-    closed in code, but focused CUDA runtime/self-test execution still needs a
-    host with live CUDA driver symbols to validate the expanded truth set
-    beyond `cargo check`.
+    closed in code, and the focused CUDA runtime/self-test follow-up later ran
+    on 2026-03-26 on the same WSL CUDA host.
 
 ## 2026-03-24 Follow-up: CUDA startup truth set now covers live Merkle kernels
 - Closed the next accelerator-admission gap in `crates/ivm/src/cuda.rs`.
@@ -4715,9 +4906,8 @@ Last updated: 2026-03-26
   - `cargo fmt --all` (pass)
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; `nvcc` is absent on this host, so build.rs warns while Rust-side CUDA admission logic still compiles)
 - Remaining implementation gap:
-  - rerun the focused CUDA runtime/self-test slice on a host with live CUDA
-    driver libraries and toolchain support, so the new Merkle startup probes
-    and the earlier mirrored Ed25519 fix are exercised beyond `cargo check`.
+  - this CUDA runtime/self-test follow-up later completed on 2026-03-26 on
+    the same WSL CUDA host, so the earlier compile-only note is historical.
 
 ## 2026-03-24 Follow-up: Metal Ed25519 signature self-test now stays enabled under focused regression coverage
 - Tightened the focused Metal regression in `crates/ivm/src/vector.rs` now
@@ -4812,9 +5002,8 @@ Last updated: 2026-03-26
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; runtime CUDA execution is still host-limited)
 - Remaining implementation gap:
-  - rerun the focused CUDA runtime/self-test slice on a host with live CUDA
-    driver libraries and toolchain support, so the mirrored normalization fix
-    is exercised beyond `cargo check`.
+  - this CUDA runtime/self-test follow-up later completed on 2026-03-26 on
+    the same WSL CUDA host, so the earlier compile-only note is historical.
 
 ## 2026-03-24 Follow-up: Metal now degrades per-pipeline instead of dropping the whole backend on Ed25519 mismatch
 - Hardened the Metal startup path in `crates/ivm/src/vector.rs` so this host
