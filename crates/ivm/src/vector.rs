@@ -2701,7 +2701,7 @@ fn metal_sha256_compress(_state: &mut [u32; 8], _block: &[u8; 64]) -> bool {
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
+pub(crate) fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
     if !metal_runtime_allowed() {
         return None;
     }
@@ -2767,13 +2767,8 @@ pub fn metal_sha256_leaves(blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
     })
 }
 
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-pub fn metal_sha256_leaves(_blocks: &[[u8; 64]]) -> Option<Vec<[u8; 32]>> {
-    None
-}
-
 #[cfg(all(target_os = "macos", feature = "metal"))]
-pub fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
+pub(crate) fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     if !metal_runtime_allowed() {
         return None;
     }
@@ -2858,11 +2853,6 @@ pub fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
             Some(root)
         })
     })
-}
-
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
-pub fn metal_sha256_pairs_reduce(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
-    None
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]

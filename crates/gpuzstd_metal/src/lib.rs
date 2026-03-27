@@ -1,4 +1,4 @@
-//! GPU-assisted zstd helper for Norito (Metal).
+//! GPU-assisted zstd helper for Norito (Metal/shared backend).
 //!
 //! C ABI:
 //! - gpu_zstd_compress(src_ptr, src_len, level, dst_ptr, dst_len)
@@ -23,7 +23,15 @@ const RC_GPU_UNAVAILABLE: i32 = 3;
 const RC_ZSTD: i32 = 4;
 
 const CHUNK_SIZE: u32 = 32 * 1024;
+#[cfg_attr(
+    not(all(target_os = "macos", target_arch = "aarch64")),
+    allow(dead_code)
+)]
 const MIN_MATCH: u32 = 3;
+#[cfg_attr(
+    not(all(target_os = "macos", target_arch = "aarch64")),
+    allow(dead_code)
+)]
 const MAX_MATCH: u32 = 64;
 
 #[repr(C)]
@@ -196,13 +204,12 @@ struct GpuSequences {
     seqs: Vec<GpuZstdSequence>,
 }
 
-#[unsafe(no_mangle)]
-/// Compress `src` into `dst` using the Metal-assisted zstd path.
+/// Compress `src` into `dst` using the shared helper path.
 ///
 /// # Safety
 /// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
 /// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
-pub unsafe extern "C" fn gpu_zstd_compress(
+pub unsafe fn compress_ffi(
     src: *const u8,
     src_len: usize,
     level: i32,
@@ -249,13 +256,29 @@ pub unsafe extern "C" fn gpu_zstd_compress(
     RC_OK
 }
 
+#[cfg(feature = "c-abi")]
 #[unsafe(no_mangle)]
-/// Decompress `src` into `dst` using the Metal-assisted zstd path.
+/// Compress `src` into `dst` using the Metal/shared helper path.
 ///
 /// # Safety
 /// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
 /// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
-pub unsafe extern "C" fn gpu_zstd_decompress(
+pub unsafe extern "C" fn gpu_zstd_compress(
+    src: *const u8,
+    src_len: usize,
+    level: i32,
+    dst: *mut u8,
+    dst_len: *mut usize,
+) -> i32 {
+    unsafe { compress_ffi(src, src_len, level, dst, dst_len) }
+}
+
+/// Decompress `src` into `dst` using the shared helper path.
+///
+/// # Safety
+/// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
+/// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
+pub unsafe fn decompress_ffi(
     src: *const u8,
     src_len: usize,
     dst: *mut u8,
@@ -286,9 +309,26 @@ pub unsafe extern "C" fn gpu_zstd_decompress(
     RC_OK
 }
 
+#[cfg(feature = "c-abi")]
+#[unsafe(no_mangle)]
+/// Decompress `src` into `dst` using the Metal/shared helper path.
+///
+/// # Safety
+/// `src` must point to `src_len` readable bytes. `dst` must point to a writable buffer whose
+/// capacity is provided via `*dst_len`. `dst_len` must be non-null and writable.
+pub unsafe extern "C" fn gpu_zstd_decompress(
+    src: *const u8,
+    src_len: usize,
+    dst: *mut u8,
+    dst_len: *mut usize,
+) -> i32 {
+    unsafe { decompress_ffi(src, src_len, dst, dst_len) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     use crate::{fse, huffman};
     use std::time::Instant;
 
