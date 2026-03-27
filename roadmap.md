@@ -1,6 +1,32 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
+
+Latest sync (2026-03-27 Metal Merkle helper fallback alignment):
+`crates/ivm/src/vector.rs`
+now closes the next concrete Metal/no-feature API mismatch in the ongoing
+accelerator audit.
+
+- non-`metal` macOS builds now expose fail-closed stubs for
+  `metal_sha256_leaves(...)` and `metal_sha256_pairs_reduce(...)`, matching the
+  fallback pattern already used by `metal_available()` and
+  `metal_sha256_compress(...)`;
+- `crates/ivm/src/byte_merkle_tree.rs` therefore compiles again on macOS
+  without the `metal` feature instead of failing to resolve those helper
+  symbols from the Metal acceleration branches; and
+- a focused unit test now pins the no-feature stub behavior directly.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --no-run`
+- `cargo test -p ivm metal_sha256_merkle_helpers_return_none_without_metal_feature -- --nocapture`
+
+Open work for this accelerator review slice now remains:
+- continue the broader `ivm` accelerator audit across the remaining
+  CUDA/Metal/determinism boundaries beyond the no-feature helper-surface drift
+  fixed in this pass; and
+- rerun broader `ivm` suites when runtime budget allows, since this repair
+  only exercised compile coverage plus the focused non-Metal fallback test.
 
 Latest sync (2026-03-26 FASTPQ trace-commitment fixture refresh):
 `crates/fastpq_prover/tests/fixtures/transfer.norito`,
