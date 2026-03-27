@@ -790,7 +790,7 @@ fn metal_device_visible_via_api() -> bool {
     !devices.is_empty()
 }
 
-#[cfg(all(not(feature = "fastpq-gpu"), target_os = "macos"))]
+#[cfg(all(target_os = "macos", not(feature = "fastpq-gpu")))]
 fn metal_device_visible_via_api() -> bool {
     false
 }

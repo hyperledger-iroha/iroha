@@ -109,7 +109,8 @@ pub use crate::metadata::{
     CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
     CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
     EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
-    EmbeddedSourceMapEntryV1, MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
+    EmbeddedSourceMapEntryV1, EmbeddedStateFieldDescriptor, EmbeddedStateType,
+    MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
 };
 pub use crate::{
     aes::{
@@ -157,8 +158,6 @@ pub use crate::{
     sha3::{keccak_f1600, sha3_absorb_block},
     zk_poseidon::{pair_hash_bytes, pair_hash_u64},
 };
-pub use ivm_abi::metadata::{EmbeddedStateFieldDescriptor, EmbeddedStateType};
-
 pub use iroha_crypto::{MerkleProof, MerkleTree};
 /// Syscall policy determined by `ProgramMetadata.abi_version`.
 pub use ivm_abi::SyscallPolicy;

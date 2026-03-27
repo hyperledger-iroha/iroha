@@ -1320,33 +1320,33 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         )?;
     }
 
-    let ds1_submitter = leader_targeted_client_for_lane(
+    let nexus_alice_submitter = leader_targeted_client_for_lane(
         &network,
         &alice,
         &ALICE_ID,
         ALICE_KEYPAIR.private_key(),
-        DS1_LANE_INDEX,
+        NEXUS_LANE_INDEX,
     );
-    let ds2_submitter = leader_targeted_client_for_lane(
+    let nexus_bob_submitter = leader_targeted_client_for_lane(
         &network,
         &bob,
         &BOB_ID,
         BOB_KEYPAIR.private_key(),
-        DS2_LANE_INDEX,
+        NEXUS_LANE_INDEX,
     );
     let (ds1_observation, ds2_observation) = {
         let _phase = phase_timings.phase("route probes ds1+ds2: tx submit + route wait");
         rt.block_on(async {
             tokio::try_join!(
                 wait_for_route_probe_approval(
-                    &ds1_submitter,
+                    &nexus_alice_submitter,
                     InstructionBox::from(Log::new(Level::INFO, "route probe ds1".to_string())),
                     LaneId::new(DS1_LANE_INDEX),
                     DataSpaceId::new(DS1_ID_U64),
                     "route probe ds1",
                 ),
                 wait_for_route_probe_approval(
-                    &ds2_submitter,
+                    &nexus_bob_submitter,
                     InstructionBox::from(Log::new(Level::INFO, "route probe ds2".to_string())),
                     LaneId::new(DS2_LANE_INDEX),
                     DataSpaceId::new(DS2_ID_U64),
@@ -1419,14 +1419,20 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let alice_ds2_asset = AssetId::new(ds2_asset_def.clone(), ALICE_ID.clone());
     let bob_ds2_asset = AssetId::new(ds2_asset_def.clone(), BOB_ID.clone());
 
-    let setup_grants_barrier_target = {
-        let submitter = leader_targeted_client_for_lane(
-            &network,
-            &alice,
-            &ALICE_ID,
-            ALICE_KEYPAIR.private_key(),
-            DS1_LANE_INDEX,
+    {
+        let _phase = phase_timings.phase("route probes: wrong-dataspace query/assert");
+        ensure!(
+            asset_balance(&nexus_alice_submitter, &alice_ds1_asset)? == Numeric::from(100_u32),
+            "Alice ds1 balance query through Nexus ingress did not route to ds1"
         );
+        ensure!(
+            asset_balance(&nexus_bob_submitter, &bob_ds2_asset)? == Numeric::from(200_u32),
+            "Bob ds2 balance query through Nexus ingress did not route to ds2"
+        );
+    }
+
+    let setup_grants_barrier_target = {
+        let submitter = nexus_alice_submitter.clone();
         let _phase = phase_timings.phase("setup grants: tx submit enqueue");
         let pre_barrier_height = alice
             .get_sumeragi_status_wire()

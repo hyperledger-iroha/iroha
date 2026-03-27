@@ -2,6 +2,47 @@
 
 Last updated: 2026-03-27
 
+## 2026-03-27 Follow-up: Nexus Torii ingress now proxies cross-dataspace transactions and signed queries
+- Extended the Nexus ingress-routing follow-up in
+  `crates/iroha_core/src/{lib.rs,queue.rs,queue/router.rs,torii_proxy.rs}`,
+  `crates/iroha_torii/src/{lib.rs,routing.rs}`,
+  `crates/irohad/src/main.rs`,
+  `integration_tests/tests/nexus/cross_dataspace_localnet.rs`,
+  and
+  `crates/fastpq_prover/src/backend.rs`
+  so Torii can forward Nexus-bound requests to authoritative peers instead of
+  depending on clients hitting a node inside the target dataspace directly.
+- The shipped behavior in this slice:
+  - `iroha_core` now exposes versioned Torii P2P proxy envelopes plus public
+    helpers for ingress route resolution, including authority-based query route
+    resolution against the Nexus routing policy;
+  - Torii now tracks its local peer id, subscribes to Torii proxy messages on
+    the P2P control plane, proxies `POST /transaction` submissions to active
+    authoritative lane validators when the ingress node is not authoritative,
+    and preserves route headers plus a new `x-iroha-routed-by` marker on the
+    returned response;
+  - signed `POST /query` requests now resolve the same authority-based Nexus
+    routing policy at ingress and proxy to an authoritative peer when the
+    ingress node is outside the selected dataspace, while local responses also
+    gain the same routing headers;
+  - the cross-dataspace localnet regression now submits its route probes and a
+    representative setup transaction through Nexus-lane peers, and it asserts
+    that Alice/Bob balance queries still resolve correctly through the wrong
+    dataspace ingress; and
+  - a pre-existing macOS cfg bug in `fastpq_prover` is now guarded so the
+    focused verification path no longer fails before reaching the touched
+    crates when `fastpq-gpu` is disabled.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core resolve_query_routing_decision --lib --message-format short` (pass)
+  - `cargo test -p iroha_torii handler_post_transaction_uses_tx_rate_limiter --lib --message-format short` (blocked by unrelated pre-existing `crates/iroha_torii/src/routing.rs` compile failures around missing `ivm::EmbeddedStateType` / `EmbeddedStateFieldDescriptor` and an invalid `norito::json::json!` path)
+- Residual note:
+  - this slice intentionally stops at authoritative forwarding for transactions
+    and targeted signed-query routing; broader fan-out/merge semantics for
+    unsupported read surfaces such as the remaining `/v1/nexus/*` aggregate
+    reads are still open follow-up work once the existing Torii baseline
+    compile blockers are cleared.
+
 ## 2026-03-27 Follow-up: reverse alias lookup docs now pin the universal-account model explicitly
 - Clarified the contributor and public data-model docs after catching a test
   fixture regression that briefly treated domain context as if it were part of

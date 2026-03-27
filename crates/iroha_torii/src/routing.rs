@@ -5751,14 +5751,12 @@ mod multisig_guard_tests {
     }
 }
 
-#[iroha_futures::telemetry_future]
-async fn handle_transaction_inner(
+pub(crate) fn accept_transaction_for_ingress(
     chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
     tx: SignedTransaction,
-    _telemetry: &MaybeTelemetry,
-) -> Result<RoutingDecision> {
+    telemetry: &MaybeTelemetry,
+) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
     let (max_clock_drift, tx_limits, state_view) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -5774,7 +5772,7 @@ async fn handle_transaction_inner(
             "rejecting transaction directly signed by multisig account"
         );
         #[cfg(feature = "telemetry")]
-        _telemetry.with_metrics(|tel| {
+        telemetry.with_metrics(|tel| {
             tel.inc_torii_multisig_direct_sign_reject();
             let signature_count = tx.signature_count() as u64;
             let signature_limit = tx_limits.max_signatures().get();
@@ -5797,18 +5795,18 @@ async fn handle_transaction_inner(
         iroha_data_model::account::AccountController::Multisig(_) => "multisig",
     };
     let crypto_cfg = state.crypto();
-    let accepted_tx = match AcceptedTransaction::accept(
+    match iroha_core::tx::AcceptedTransaction::accept(
         tx,
         &chain_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
     ) {
-        Ok(tx) => tx,
+        Ok(tx) => Ok(tx),
         Err(err) => {
             iroha_logger::warn!(?err, "transaction rejected during admission");
             #[cfg(feature = "telemetry")]
-            _telemetry.with_metrics(|tel| {
+            telemetry.with_metrics(|tel| {
                 if let AcceptTransactionFail::TransactionLimit(limit) = &err {
                     if limit.reason.starts_with(SIGNATURE_LIMIT_REASON_PREFIX) {
                         tel.inc_torii_signature_limit_reject(
@@ -5822,14 +5820,16 @@ async fn handle_transaction_inner(
                     tel.inc_torii_nts_unhealthy_reject();
                 }
             });
-            return Err(Error::AcceptTransaction(err));
+            Err(Error::AcceptTransaction(err))
         }
-    };
-    iroha_logger::debug!(
-        tx = %accepted_tx.as_ref().hash(),
-        "transaction accepted by Torii; enqueuing"
-    );
+    }
+}
 
+pub(crate) fn push_accepted_transaction_for_ingress(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
+) -> Result<RoutingDecision> {
     queue
         .push_with_lane_with_state(accepted_tx, state.as_ref())
         .map_err(|queue::Failure { tx, err }| {
@@ -5852,6 +5852,22 @@ async fn handle_transaction_inner(
                 "transaction enqueued successfully"
             );
         })
+}
+
+#[iroha_futures::telemetry_future]
+async fn handle_transaction_inner(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    tx: SignedTransaction,
+    _telemetry: &MaybeTelemetry,
+) -> Result<RoutingDecision> {
+    let accepted_tx = accept_transaction_for_ingress(chain_id, state.clone(), tx, _telemetry)?;
+    iroha_logger::debug!(
+        tx = %accepted_tx.as_ref().hash(),
+        "transaction accepted by Torii; enqueuing"
+    );
+    push_accepted_transaction_for_ingress(queue, state, accepted_tx)
 }
 
 pub async fn handle_transaction(
@@ -6467,11 +6483,9 @@ fn register_contract_state_schema(
     name: String,
     ty: ivm::EmbeddedStateType,
 ) {
-    match registry.get(&name) {
+    match registry.get_mut(&name) {
         Some(Some(existing)) if *existing == ty => {}
-        Some(_) => {
-            registry.insert(name, None);
-        }
+        Some(slot) => *slot = None,
         None => {
             registry.insert(name, Some(ty));
         }
@@ -11071,13 +11085,15 @@ mod multisig_selector_tests {
         let freeze_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
-            vec![dm::SetAssetTransferFreeze::new(
-                signer_two_id.clone(),
-                asset_definition_id.clone(),
-                true,
-                Some("risk review".to_owned()),
-            )
-            .into()],
+            vec![
+                dm::SetAssetTransferFreeze::new(
+                    signer_two_id.clone(),
+                    asset_definition_id.clone(),
+                    true,
+                    Some("risk review".to_owned()),
+                )
+                .into(),
+            ],
             1_700_000_000_160,
             4_000_000_000_000,
             BTreeSet::new(),
@@ -11086,12 +11102,14 @@ mod multisig_selector_tests {
         let blacklist_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
-            vec![dm::SetAssetTransferBlacklist::new(
-                signer_two_id.clone(),
-                asset_definition_id.clone(),
-                true,
-            )
-            .into()],
+            vec![
+                dm::SetAssetTransferBlacklist::new(
+                    signer_two_id.clone(),
+                    asset_definition_id.clone(),
+                    true,
+                )
+                .into(),
+            ],
             1_700_000_000_170,
             4_000_000_000_000,
             BTreeSet::new(),
@@ -11100,21 +11118,23 @@ mod multisig_selector_tests {
         let limits_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
-            vec![dm::SetAssetTransferControl::new(
-                signer_two_id.clone(),
-                asset_definition_id,
-                vec![
-                    dm::AssetTransferLimit {
-                        window: dm::AssetTransferControlWindow::Day,
-                        cap_amount: Some(125_u32.into()),
-                    },
-                    dm::AssetTransferLimit {
-                        window: dm::AssetTransferControlWindow::Month,
-                        cap_amount: Some(500_u32.into()),
-                    },
-                ],
-            )
-            .into()],
+            vec![
+                dm::SetAssetTransferControl::new(
+                    signer_two_id.clone(),
+                    asset_definition_id,
+                    vec![
+                        dm::AssetTransferLimit {
+                            window: dm::AssetTransferControlWindow::Day,
+                            cap_amount: Some(125_u32.into()),
+                        },
+                        dm::AssetTransferLimit {
+                            window: dm::AssetTransferControlWindow::Month,
+                            cap_amount: Some(500_u32.into()),
+                        },
+                    ],
+                )
+                .into(),
+            ],
             1_700_000_000_180,
             4_000_000_000_000,
             BTreeSet::new(),
@@ -11361,13 +11381,15 @@ mod multisig_selector_tests {
         let freeze_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
-            vec![dm::SetAssetTransferFreeze::new(
-                signer_two_id.clone(),
-                asset_definition_id.clone(),
-                true,
-                Some("risk review".to_owned()),
-            )
-            .into()],
+            vec![
+                dm::SetAssetTransferFreeze::new(
+                    signer_two_id.clone(),
+                    asset_definition_id.clone(),
+                    true,
+                    Some("risk review".to_owned()),
+                )
+                .into(),
+            ],
             1_700_000_000_190,
             4_000_000_000_000,
             BTreeSet::new(),
@@ -11417,7 +11439,8 @@ mod multisig_selector_tests {
             dm::ScopedAccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
         let controlled_account_id: dm::AccountId = scoped_account_id.clone().into();
         let asset_definition_id = test_asset_definition_id();
-        let definition = dm::AssetDefinition::numeric(asset_definition_id.clone()).build(&authority);
+        let definition =
+            dm::AssetDefinition::numeric(asset_definition_id.clone()).build(&authority);
         let domain = Domain::new(domain_id).build(&authority);
 
         let record = dm::AssetTransferControlRecord {
@@ -11467,7 +11490,10 @@ mod multisig_selector_tests {
         assert!(!response.control.blacklisted);
         assert_eq!(response.control.limits.len(), 2);
         assert_eq!(response.control.limits[0].window, "DAY");
-        assert_eq!(response.control.limits[0].cap_amount.as_deref(), Some("100"));
+        assert_eq!(
+            response.control.limits[0].cap_amount.as_deref(),
+            Some("100")
+        );
         assert_eq!(response.usages.len(), 1);
         assert_eq!(response.usages[0].window, "DAY");
         assert_eq!(response.usages[0].spent_amount, "25");
@@ -21564,7 +21590,12 @@ const CONTEXT_NEXUS_PUBLIC_LANE_REWARDS: &str = ENDPOINT_NEXUS_PUBLIC_LANE_REWAR
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Debug,
+    Default,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
 )]
 pub struct PublicLaneValidatorsQueryParams {
     #[norito(default)]
@@ -21573,7 +21604,12 @@ pub struct PublicLaneValidatorsQueryParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Debug,
+    Default,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
 )]
 pub struct PublicLaneStakeQueryParams {
     #[norito(default)]
@@ -21582,7 +21618,12 @@ pub struct PublicLaneStakeQueryParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Debug,
+    Default,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
 )]
 pub struct PublicLaneRewardsQueryParams {
     #[norito(default)]
@@ -21596,7 +21637,12 @@ pub struct PublicLaneRewardsQueryParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Debug,
+    Default,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
 )]
 pub struct NexusDataspacesAccountSummaryQueryParams {
     #[norito(default)]
@@ -36333,7 +36379,12 @@ fn parse_offline_platform_policy(s: &str) -> Option<AndroidIntegrityPolicy> {
 /// Common GET list params: optional JSON filter + pagination.
 #[cfg(feature = "app_api")]
 #[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
 )]
 pub struct ListFilterParams {
     /// Optional JSON-encoded FilterExpr for compact GET filters.
@@ -36908,7 +36959,12 @@ struct OfflineStateResponse {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
 )]
 pub struct AccountAssetsGetParams {
     /// Optional limit for pagination.
@@ -36924,7 +36980,12 @@ pub struct AccountAssetsGetParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
 )]
 pub struct AccountTransactionsGetParams {
     /// Optional limit for pagination.
@@ -36938,7 +36999,12 @@ pub struct AccountTransactionsGetParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
 )]
 pub struct AssetHolderGetParams {
     /// Optional limit for pagination.
