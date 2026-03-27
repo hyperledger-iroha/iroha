@@ -6502,21 +6502,26 @@ async fn handler_asset_definition_get(
     AxPath(asset): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        return routing::handle_v1_asset_definition(app.state.clone(), AxPath(asset)).await;
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/assets/definitions/{asset}",
+            enforce,
+        )
+        .await?;
     }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
+    Ok(execute_torii_fanout_singleton_read(
         &app,
-        &headers,
-        Some(remote_ip),
-        "v1/assets/definitions/{asset}",
-        enforce,
+        ToriiReadEndpointV1::AssetDefinitionGet,
+        vec![asset],
+        None,
+        Vec::new(),
     )
-    .await?;
-    routing::handle_v1_asset_definition(app.state.clone(), AxPath(asset)).await
+    .await)
 }
 
 #[cfg(feature = "app_api")]
@@ -10489,6 +10494,42 @@ fn merged_list_response(
 }
 
 #[cfg(feature = "app_api")]
+fn merged_singleton_response(
+    payloads: Vec<Value>,
+    routed_by: &'static str,
+) -> Result<Response, Response> {
+    let mut unique_payloads = BTreeMap::<Vec<u8>, Value>::new();
+    for payload in payloads {
+        unique_payloads
+            .entry(canonical_json_bytes(&payload)?)
+            .or_insert(payload);
+    }
+
+    match unique_payloads.len() {
+        0 => Err(torii_proxy_error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no dataspace returned a matching result",
+        )),
+        1 => {
+            let payload = unique_payloads
+                .into_values()
+                .next()
+                .expect("singleton map length should be one");
+            let mut response =
+                crate::utils::respond_value_with_format(payload, ResponseFormat::Json);
+            insert_routed_by_header(&mut response, routed_by);
+            Ok(response)
+        }
+        _ => Err(torii_proxy_error_response(
+            StatusCode::CONFLICT,
+            "route_conflict",
+            "multiple dataspaces returned conflicting singleton results",
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn merged_portfolio_response(
     payloads: Vec<Value>,
     routed_by: &'static str,
@@ -10822,6 +10863,20 @@ mod torii_routed_read_tests {
             .collect();
         assert_eq!(ids, vec!["a", "b", "c"]);
         assert_eq!(json["total"].as_u64(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn merged_singleton_response_rejects_conflicting_payloads() {
+        let response = merged_singleton_response(
+            vec![
+                norito::json!({"id": "asset#a"}),
+                norito::json!({"id": "asset#b"}),
+            ],
+            "proxy",
+        )
+        .expect_err("conflicting singleton payloads should fail");
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
@@ -11401,6 +11456,16 @@ async fn execute_torii_read_request_locally(
                 routed_by,
             )
         }
+        ToriiReadEndpointV1::AssetDefinitionGet => {
+            let Ok(asset) = torii_proxy_path_arg(&request, 0, "asset") else {
+                return torii_proxy_path_arg(&request, 0, "asset").unwrap_err();
+            };
+            finish_torii_read_result(
+                routing::handle_v1_asset_definition(app.state.clone(), AxPath(asset)).await,
+                routing_decision,
+                routed_by,
+            )
+        }
         ToriiReadEndpointV1::AssetDefinitionsList => {
             let params = match decode_torii_proxy_query::<routing::ListFilterParams>(
                 request.query_string.as_deref(),
@@ -11769,6 +11834,62 @@ async fn execute_torii_fanout_list_read(
         }
         Err(response) => response,
     }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_fanout_singleton_read(
+    app: &SharedAppState,
+    endpoint: ToriiReadEndpointV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    body: Vec<u8>,
+) -> Response {
+    let routes = torii_all_dataspace_routes(app.as_ref());
+    if routes.is_empty() {
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            "no Nexus dataspace routes are configured",
+        );
+    }
+
+    let mut payloads = Vec::new();
+    let mut last_not_found = None;
+    for route in &routes {
+        let response = execute_torii_read_for_route(
+            app,
+            *route,
+            torii_read_request(
+                endpoint,
+                *route,
+                path_args.clone(),
+                query_string.clone(),
+                body.clone(),
+            ),
+        )
+        .await;
+        if response.status() == StatusCode::NOT_FOUND {
+            last_not_found = Some(response);
+            continue;
+        }
+        match torii_json_body_value(response).await {
+            Ok(payload) => payloads.push(payload),
+            Err(response) => return response,
+        }
+    }
+
+    if payloads.is_empty() {
+        return last_not_found.unwrap_or_else(|| {
+            torii_proxy_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "no dataspace returned a matching result",
+            )
+        });
+    }
+
+    merged_singleton_response(payloads, routed_by_for_routes(app, &routes))
+        .unwrap_or_else(|response| response)
 }
 
 #[cfg(feature = "app_api")]
@@ -15585,6 +15706,47 @@ async fn handler_post_multisig_approvals_get(
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_get"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_asset_transfer_control_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<crate::routing::AssetTransferControlGetRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        &format!("v1/controls/asset-transfer/get:{}", viewer.subject),
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("asset_transfer_control_get"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_asset_transfer_control_get(
+        app.state.clone(),
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("asset_transfer_control_get"));
             Err(err)
         }
     }
@@ -20741,6 +20903,10 @@ impl Torii {
                 .route(
                     "/v1/multisig/approvals/get",
                     post(handler_post_multisig_approvals_get),
+                )
+                .route(
+                    "/v1/controls/asset-transfer/get",
+                    post(handler_post_asset_transfer_control_get),
                 );
             #[cfg(not(feature = "app_api"))]
             let group = group;

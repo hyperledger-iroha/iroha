@@ -66,6 +66,8 @@ pub enum ToriiReadEndpointV1 {
     AccountsPortfolio,
     /// `GET /v1/assets/definitions`
     AssetDefinitionsList,
+    /// `GET /v1/assets/definitions/{asset}`
+    AssetDefinitionGet,
     /// `POST /v1/assets/definitions/query`
     AssetDefinitionsQuery,
     /// `GET /v1/assets/definitions/{asset}/holders`
