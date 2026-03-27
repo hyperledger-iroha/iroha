@@ -25,12 +25,12 @@
   ],
   "spend_limits": [
     {
-      "asset_definition": "xor#sora",
+      "asset_definition": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "max_per_tx_nanos": 5000000,
       "max_per_day_nanos": 20000000
     },
     {
-      "asset_definition": "usd#bank",
+      "asset_definition": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
       "max_per_tx_nanos": 2000000,
       "max_per_day_nanos": 10000000
     }

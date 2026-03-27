@@ -1403,34 +1403,33 @@ impl Executor {
         // Disallow direct signing with multisig accounts; only explicit multisig
         // proposal/approval envelopes with bundled multisig signatures are allowed.
         {
-            let account = state_transaction.world.account(authority).map_err(|err| {
-                ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
-            })?;
-            if account.id().controller().multisig_policy().is_some() {
-                let only_custom_instruction_envelopes = matches!(
-                    transaction.instructions(),
-                    Executable::Instructions(items)
-                        if !items.is_empty()
-                            && items.iter().all(|instruction| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<CustomInstruction>()
-                                    .is_some()
-                            })
-                );
-                if only_custom_instruction_envelopes {
-                    // Allowed: custom instruction envelopes are validated by their respective
-                    // runtime handlers (including multisig propose/approve/register paths).
-                } else {
-                    #[cfg(feature = "telemetry")]
-                    crate::telemetry::record_social_rejection(
-                        state_transaction.telemetry,
-                        "multisig_direct_sign",
+            if let Ok(account) = state_transaction.world.account(authority) {
+                if account.id().controller().multisig_policy().is_some() {
+                    let only_custom_instruction_envelopes = matches!(
+                        transaction.instructions(),
+                        Executable::Instructions(items)
+                            if !items.is_empty()
+                                && items.iter().all(|instruction| {
+                                    instruction
+                                        .as_any()
+                                        .downcast_ref::<CustomInstruction>()
+                                        .is_some()
+                                })
                     );
-                    return Err(ValidationFail::NotPermitted(
-                    "direct signing with multisig accounts is forbidden; use multisig propose/approve"
-                        .to_owned(),
-                ));
+                    if only_custom_instruction_envelopes {
+                        // Allowed: custom instruction envelopes are validated by their respective
+                        // runtime handlers (including multisig propose/approve/register paths).
+                    } else {
+                        #[cfg(feature = "telemetry")]
+                        crate::telemetry::record_social_rejection(
+                            state_transaction.telemetry,
+                            "multisig_direct_sign",
+                        );
+                        return Err(ValidationFail::NotPermitted(
+                            "direct signing with multisig accounts is forbidden; use multisig propose/approve"
+                                .to_owned(),
+                        ));
+                    }
                 }
             }
         }
@@ -1802,7 +1801,12 @@ impl Executor {
                     })?;
                 runtime.vm.set_gas_limit(effective_limit);
                 if let Err(err) = runtime.vm.run_with_host(&mut host) {
-                    return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(&err));
+                    return Err(
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &runtime.vm,
+                            &err,
+                        ),
+                    );
                 }
                 let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
 

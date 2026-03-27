@@ -45,6 +45,16 @@ pub struct ContractCallOptions<'a> {
     pub gas_limit: u64,
 }
 
+/// Parameters for invoking a read-only contract view within Torii integration tests.
+pub struct ContractViewOptions<'a> {
+    /// Optional entry point function to execute; defaults to main when `None`.
+    pub entrypoint: Option<&'a str>,
+    /// Serialized JSON payload passed to the contract view.
+    pub payload: Option<&'a norito::json::Value>,
+    /// Upper bound on gas consumption for the local view execution.
+    pub gas_limit: u64,
+}
+
 /// Drain queued transactions and apply a single block at the given height.
 ///
 /// Returns the number of applied transactions. Panics if any transaction fails
@@ -155,6 +165,8 @@ pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
             name: "main".to_owned(),
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -327,6 +339,29 @@ pub fn contract_call_request_json(
     entries.push(crate::json_entry("gas_limit", options.gas_limit));
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract call request")
+}
+
+/// Build JSON string for contract view request body.
+pub fn contract_view_request_json(
+    account: &AccountId,
+    namespace: &str,
+    contract_id: &str,
+    options: ContractViewOptions<'_>,
+) -> String {
+    let mut entries = vec![
+        crate::json_entry("authority", account.clone()),
+        crate::json_entry("namespace", namespace),
+        crate::json_entry("contract_id", contract_id),
+    ];
+    if let Some(ep) = options.entrypoint {
+        entries.push(crate::json_entry("entrypoint", ep));
+    }
+    if let Some(value) = options.payload {
+        entries.push(crate::json_entry("payload", value.clone()));
+    }
+    entries.push(crate::json_entry("gas_limit", options.gas_limit));
+    let value = crate::json_object(entries);
+    norito::json::to_json(&value).expect("serialize contract view request")
 }
 
 /// Build JSON string for combined deploy+activate request body.

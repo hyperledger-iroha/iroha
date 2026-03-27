@@ -27,6 +27,8 @@ pub const HEADER_SIZE: usize = 17;
 pub const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 /// Embedded contract interface section marker used by self-describing contract artifacts.
 pub const CONTRACT_INTERFACE_SECTION_MAGIC: [u8; 4] = *b"CNTR";
+/// Embedded contract debug section marker used by self-describing contract artifacts.
+pub const CONTRACT_DEBUG_SECTION_MAGIC: [u8; 4] = *b"DBG1";
 /// Embedded contract feature bit: zero-knowledge mode.
 pub const CONTRACT_FEATURE_BIT_ZK: u64 = 1 << 0;
 /// Embedded contract feature bit: vector mode.
@@ -35,12 +37,15 @@ pub const CONTRACT_FEATURE_BIT_VECTOR: u64 = 1 << 1;
 pub const CONTRACT_FEATURE_KNOWN_BITS: u64 = CONTRACT_FEATURE_BIT_ZK | CONTRACT_FEATURE_BIT_VECTOR;
 
 const CONTRACT_INTERFACE_SECTION_HEADER_SIZE: usize = 8;
+const CONTRACT_DEBUG_SECTION_HEADER_SIZE: usize = 8;
 
 /// Artifact-local entrypoint metadata carried inside the required `CNTR` section.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedEntrypointDescriptor {
     pub name: String,
     pub kind: EntryPointKind,
+    pub params: Vec<iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor>,
+    pub return_type: Option<String>,
     pub permission: Option<String>,
     pub read_keys: Vec<String>,
     pub write_keys: Vec<String>,
@@ -57,6 +62,8 @@ impl EmbeddedEntrypointDescriptor {
         EntrypointDescriptor {
             name: self.name.clone(),
             kind: self.kind,
+            params: self.params.clone(),
+            return_type: self.return_type.clone(),
             permission: self.permission.clone(),
             read_keys: self.read_keys.clone(),
             write_keys: self.write_keys.clone(),
@@ -75,6 +82,62 @@ pub struct EmbeddedContractInterfaceV1 {
     pub access_set_hints: Option<AccessSetHints>,
     pub kotoba: Vec<KotobaTranslationEntry>,
     pub entrypoints: Vec<EmbeddedEntrypointDescriptor>,
+}
+
+/// Source location emitted for function-level compiler debug metadata.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct EmbeddedSourceLocation {
+    #[norito(default)]
+    pub source_path: Option<String>,
+    pub line: u32,
+    pub column: u32,
+}
+
+/// Function-level source mapping emitted inside the optional `DBG1` section.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct EmbeddedSourceMapEntryV1 {
+    pub function_name: String,
+    /// Function start PC relative to the executable instruction stream.
+    pub pc_start: u64,
+    /// Function end PC relative to the executable instruction stream.
+    pub pc_end: u64,
+    pub source: EmbeddedSourceLocation,
+}
+
+/// Function-level budget summary emitted inside the optional `DBG1` section.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct EmbeddedFunctionBudgetReportV1 {
+    pub function_name: String,
+    pub pc_start: u64,
+    pub pc_end: u64,
+    pub bytecode_bytes: u32,
+    pub bytecode_words: u32,
+    pub frame_bytes: u32,
+    pub jump_span_words: u32,
+    pub jump_range_risk: bool,
+    pub source: Option<EmbeddedSourceLocation>,
+}
+
+/// Decoded payload of the optional `DBG1` section carried by contract artifacts.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct EmbeddedContractDebugInfoV1 {
+    pub source_map: Vec<EmbeddedSourceMapEntryV1>,
+    pub budget_report: Vec<EmbeddedFunctionBudgetReportV1>,
+}
+
+impl EmbeddedContractDebugInfoV1 {
+    #[must_use]
+    pub fn encode_section(&self) -> Vec<u8> {
+        let payload =
+            norito::to_bytes(self).expect("embedded contract debug encoding must succeed");
+        let payload_len =
+            u32::try_from(payload.len()).expect("embedded contract debug exceeds u32");
+        let mut section = Vec::with_capacity(CONTRACT_DEBUG_SECTION_HEADER_SIZE + payload.len());
+        section.extend_from_slice(&CONTRACT_DEBUG_SECTION_MAGIC);
+        section.extend_from_slice(&payload_len.to_le_bytes());
+        section.extend_from_slice(&payload);
+        section
+    }
 }
 
 impl EmbeddedContractInterfaceV1 {
@@ -127,6 +190,8 @@ pub struct ParsedProgramMetadata {
     pub code_offset: usize,
     /// Decoded embedded contract interface for self-describing 1.1 contract artifacts.
     pub contract_interface: Option<EmbeddedContractInterfaceV1>,
+    /// Optional compiler debug metadata for self-describing 1.1 contract artifacts.
+    pub contract_debug: Option<EmbeddedContractDebugInfoV1>,
 }
 
 impl ParsedProgramMetadata {
@@ -182,6 +247,7 @@ impl ProgramMetadata {
         // host/runtime may clamp or ignore it depending on policy.
         let mut code_offset = header_len;
         let mut contract_interface = None;
+        let mut contract_debug = None;
 
         if bytes.len() >= code_offset + 4
             && bytes[code_offset..code_offset + 4] == CONTRACT_INTERFACE_SECTION_MAGIC
@@ -189,6 +255,14 @@ impl ProgramMetadata {
             let (decoded_interface, next_offset) =
                 parse_contract_interface_section(bytes, header_len)?;
             contract_interface = Some(decoded_interface);
+            code_offset = next_offset;
+        }
+
+        if bytes.len() >= code_offset + 4
+            && bytes[code_offset..code_offset + 4] == CONTRACT_DEBUG_SECTION_MAGIC
+        {
+            let (decoded_debug, next_offset) = parse_contract_debug_section(bytes, code_offset)?;
+            contract_debug = Some(decoded_debug);
             code_offset = next_offset;
         }
 
@@ -230,6 +304,7 @@ impl ProgramMetadata {
             header_len,
             code_offset,
             contract_interface,
+            contract_debug,
         })
     }
 
@@ -294,6 +369,34 @@ fn parse_contract_interface_section(
         return Err(VMError::InvalidMetadata);
     }
     let decoded = norito::decode_from_bytes::<EmbeddedContractInterfaceV1>(
+        &bytes[payload_start..payload_end],
+    )
+    .map_err(|_| VMError::InvalidMetadata)?;
+    Ok((decoded, payload_end))
+}
+
+fn parse_contract_debug_section(
+    bytes: &[u8],
+    start: usize,
+) -> Result<(EmbeddedContractDebugInfoV1, usize), VMError> {
+    if bytes.len() < start + CONTRACT_DEBUG_SECTION_HEADER_SIZE {
+        return Err(VMError::InvalidMetadata);
+    }
+    if bytes[start..start + 4] != CONTRACT_DEBUG_SECTION_MAGIC {
+        return Err(VMError::InvalidMetadata);
+    }
+    let len_bytes: [u8; 4] = bytes[start + 4..start + 8]
+        .try_into()
+        .map_err(|_| VMError::InvalidMetadata)?;
+    let payload_len = u32::from_le_bytes(len_bytes) as usize;
+    let payload_start = start + CONTRACT_DEBUG_SECTION_HEADER_SIZE;
+    let payload_end = payload_start
+        .checked_add(payload_len)
+        .ok_or(VMError::InvalidMetadata)?;
+    if payload_end > bytes.len() {
+        return Err(VMError::InvalidMetadata);
+    }
+    let decoded = norito::decode_from_bytes::<EmbeddedContractDebugInfoV1>(
         &bytes[payload_start..payload_end],
     )
     .map_err(|_| VMError::InvalidMetadata)?;

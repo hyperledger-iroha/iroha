@@ -6815,6 +6815,8 @@ pub async fn handle_post_contract_call(
         private_key,
         public_key_hex,
         signature_b64,
+        contract_address,
+        contract_alias,
         namespace,
         contract_id,
         entrypoint,
@@ -6829,22 +6831,52 @@ pub async fn handle_post_contract_call(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
 
-    let prepared = prepare_contract_call(&state, &namespace, &contract_id)?;
+    let prepared = match (
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+        namespace.as_deref(),
+        contract_id.as_deref(),
+    ) {
+        (Some(_), Some(_), _, _) => {
+            return Err(conversion_error(
+                "exactly one of contract_address or contract_alias must be provided".to_owned(),
+            ));
+        }
+        (Some(contract_address), None, None, None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
+        (None, Some(contract_alias), None, None) => {
+            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
+        }
+        (None, None, Some(namespace), Some(contract_id)) => {
+            prepare_contract_call(&state, namespace, contract_id)?
+        }
+        _ => {
+            return Err(conversion_error(
+                "provide exactly one contract target via contract_address, contract_alias, or namespace+contract_id".to_owned(),
+            ));
+        }
+    };
     let PreparedContractCall {
         code_bytes,
         code_hash,
         abi_hash,
         manifest,
+        namespace,
+        contract_id,
+        contract_address,
     } = prepared;
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
-    ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
+    let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
 
     let metadata = build_contract_call_metadata(
         &manifest,
         &namespace,
         &contract_id,
+        contract_address.as_ref(),
         Some(resolved_entrypoint),
-        payload.as_ref(),
+        normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
         fee_sponsor.as_ref(),
         gas_limit,
@@ -6862,8 +6894,33 @@ pub async fn handle_post_contract_call(
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     let response =
-        if private_key.is_some() {
-            return Err(reject_server_side_signing("/v1/contracts/call"));
+        if let Some(private_key) = private_key {
+            let tx = builder.sign(&private_key.0);
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id,
+                queue,
+                state,
+                tx,
+                telemetry,
+                "/v1/contracts/call",
+            )
+            .await?;
+            ContractCallResponseDto {
+                ok: true,
+                submitted: true,
+                namespace,
+                contract_id,
+                contract_address,
+                code_hash_hex,
+                abi_hash_hex,
+                creation_time_ms,
+                tx_hash_hex: Some(tx_hash_hex),
+                transaction_scaffold_b64: None,
+                signed_transaction_b64: None,
+                signing_message_b64: None,
+                entrypoint: response_entrypoint.clone(),
+            }
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
@@ -6923,6 +6980,7 @@ pub async fn handle_post_contract_call(
                 submitted: true,
                 namespace,
                 contract_id,
+                contract_address,
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -6947,6 +7005,7 @@ pub async fn handle_post_contract_call(
                 submitted: false,
                 namespace,
                 contract_id,
+                contract_address,
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -6967,6 +7026,118 @@ pub async fn handle_post_contract_call(
     Ok(resp)
 }
 
+/// POST /v1/contracts/view — execute a read-only contract view entrypoint locally.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_contract_view(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<ContractViewDto>,
+) -> Result<impl IntoResponse> {
+    let ContractViewDto {
+        authority,
+        contract_address,
+        contract_alias,
+        namespace,
+        contract_id,
+        entrypoint,
+        payload,
+        gas_limit,
+    } = req;
+
+    if gas_limit == 0 {
+        return Err(conversion_error("gas_limit must be positive".to_owned()));
+    }
+
+    let prepared = match (
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+        namespace.as_deref(),
+        contract_id.as_deref(),
+    ) {
+        (Some(_), Some(_), _, _) => {
+            return Err(conversion_error(
+                "exactly one of contract_address or contract_alias must be provided".to_owned(),
+            ));
+        }
+        (Some(contract_address), None, None, None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
+        (None, Some(contract_alias), None, None) => {
+            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
+        }
+        (None, None, Some(namespace), Some(contract_id)) => {
+            prepare_contract_call(&state, namespace, contract_id)?
+        }
+        _ => {
+            return Err(conversion_error(
+                "provide exactly one contract target via contract_address, contract_alias, or namespace+contract_id".to_owned(),
+            ));
+        }
+    };
+    let PreparedContractCall {
+        code_bytes,
+        code_hash,
+        abi_hash,
+        manifest,
+        namespace,
+        contract_id,
+        contract_address,
+    } = prepared;
+    let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
+    let entrypoint_descriptor = ensure_view_contract_entrypoint(&manifest, resolved_entrypoint)?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let result = match execute_contract_view(
+        &state,
+        &authority,
+        &code_bytes,
+        resolved_entrypoint,
+        entrypoint_descriptor,
+        normalized_payload.clone(),
+        gas_limit,
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            let body = norito::json::to_json_pretty(&ContractViewErrorResponseDto {
+                ok: false,
+                namespace,
+                contract_id,
+                contract_address,
+                code_hash_hex: hex::encode(code_hash.as_ref()),
+                abi_hash_hex: hex::encode(abi_hash.as_ref()),
+                entrypoint: resolved_entrypoint.to_owned(),
+                error: err.message,
+                vm_diagnostic: err.vm_diagnostic,
+            })
+            .unwrap_or_else(|_| "{}".into());
+            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+            *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            return Ok(resp);
+        }
+    };
+
+    let body = norito::json::to_json_pretty(&ContractViewResponseDto {
+        ok: true,
+        namespace,
+        contract_id,
+        contract_address,
+        code_hash_hex: hex::encode(code_hash.as_ref()),
+        abi_hash_hex: hex::encode(abi_hash.as_ref()),
+        entrypoint: resolved_entrypoint.to_owned(),
+        result,
+    })
+    .unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
 #[cfg(feature = "app_api")]
 const DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT: u64 = 5_000;
 
@@ -6979,28 +7150,612 @@ fn current_time_millis() -> u64 {
 }
 
 #[cfg(feature = "app_api")]
-fn ensure_public_contract_entrypoint(
-    manifest: &manifest::ContractManifest,
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ContractSchemaType {
+    Unit,
+    Int,
+    Numeric,
+    Bool,
+    String,
+    Json,
+    Name,
+    AccountId,
+    AssetDefinitionId,
+    AssetId,
+    DomainId,
+    NftId,
+    Blob,
+    Bytes,
+    DataSpaceId,
+    AxtDescriptor,
+    AssetHandle,
+    ProofBlob,
+    Tuple(Vec<ContractSchemaType>),
+}
+
+#[cfg(feature = "app_api")]
+fn advertised_contract_entrypoint<'a>(
+    manifest: &'a manifest::ContractManifest,
     selector: &str,
-) -> Result<()> {
+) -> Result<&'a manifest::EntrypointDescriptor> {
     let advertised_entrypoints = manifest.entrypoints.as_ref().ok_or_else(|| {
         conversion_error(
             "stored contract manifest does not advertise callable entrypoints".to_owned(),
         )
     })?;
-    let descriptor = advertised_entrypoints
+    advertised_entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{selector}`")))
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_contract_entrypoint_kind<'a>(
+    manifest: &'a manifest::ContractManifest,
+    selector: &str,
+    expected: manifest::EntryPointKind,
+) -> Result<&'a manifest::EntrypointDescriptor> {
+    let descriptor = advertised_contract_entrypoint(manifest, selector)?;
+    if descriptor.kind != expected {
+        let expected_kind = match expected {
+            manifest::EntryPointKind::Public => "public by-call",
+            manifest::EntryPointKind::View => "read-only view",
+            manifest::EntryPointKind::Hajimari => "hajimari",
+            manifest::EntryPointKind::Kaizen => "kaizen",
+        };
+        return Err(conversion_error(format!(
+            "contract entrypoint `{selector}` is not a {expected_kind} entrypoint"
+        )));
+    }
+    Ok(descriptor)
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_public_contract_entrypoint<'a>(
+    manifest: &'a manifest::ContractManifest,
+    selector: &str,
+) -> Result<&'a manifest::EntrypointDescriptor> {
+    ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::Public)
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_view_contract_entrypoint<'a>(
+    manifest: &'a manifest::ContractManifest,
+    selector: &str,
+) -> Result<&'a manifest::EntrypointDescriptor> {
+    ensure_contract_entrypoint_kind(manifest, selector, manifest::EntryPointKind::View)
+}
+
+#[cfg(feature = "app_api")]
+fn split_schema_list(input: &str) -> Result<Vec<String>> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0_i32;
+    for ch in input.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return Err(conversion_error(format!(
+                        "invalid contract schema type `{input}`"
+                    )));
+                }
+                current.push(ch);
+            }
+            ',' if depth == 0 => {
+                items.push(current.trim().to_owned());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    if depth != 0 {
+        return Err(conversion_error(format!(
+            "invalid contract schema type `{input}`"
+        )));
+    }
+    if !current.trim().is_empty() {
+        items.push(current.trim().to_owned());
+    }
+    Ok(items)
+}
+
+#[cfg(feature = "app_api")]
+fn parse_contract_schema_type(raw: &str) -> Result<ContractSchemaType> {
+    let trimmed = raw.trim();
+    if trimmed == "()" {
+        return Ok(ContractSchemaType::Unit);
+    }
+    if trimmed.starts_with('(') && trimmed.ends_with(')') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        if inner.trim().is_empty() {
+            return Ok(ContractSchemaType::Tuple(Vec::new()));
+        }
+        let items = split_schema_list(inner)?
+            .into_iter()
+            .map(|item| parse_contract_schema_type(&item))
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(ContractSchemaType::Tuple(items));
+    }
+    match trimmed {
+        "int" => Ok(ContractSchemaType::Int),
+        "fixed_u128" | "Amount" | "Balance" => Ok(ContractSchemaType::Numeric),
+        "bool" => Ok(ContractSchemaType::Bool),
+        "string" => Ok(ContractSchemaType::String),
+        "Json" => Ok(ContractSchemaType::Json),
+        "Name" => Ok(ContractSchemaType::Name),
+        "AccountId" => Ok(ContractSchemaType::AccountId),
+        "AssetDefinitionId" => Ok(ContractSchemaType::AssetDefinitionId),
+        "AssetId" => Ok(ContractSchemaType::AssetId),
+        "DomainId" => Ok(ContractSchemaType::DomainId),
+        "NftId" => Ok(ContractSchemaType::NftId),
+        "Blob" => Ok(ContractSchemaType::Blob),
+        "bytes" => Ok(ContractSchemaType::Bytes),
+        "DataSpaceId" => Ok(ContractSchemaType::DataSpaceId),
+        "AxtDescriptor" => Ok(ContractSchemaType::AxtDescriptor),
+        "AssetHandle" => Ok(ContractSchemaType::AssetHandle),
+        "ProofBlob" => Ok(ContractSchemaType::ProofBlob),
+        _ => Err(conversion_error(format!(
+            "unsupported contract schema type `{trimmed}`"
+        ))),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_numeric_json_value(value: &Value) -> bool {
+    match value {
+        Value::String(raw) => raw.parse::<iroha_primitives::numeric::Numeric>().is_ok(),
+        Value::Number(norito::json::native::Number::I64(_))
+        | Value::Number(norito::json::native::Number::U64(_)) => true,
+        _ => false,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_contract_value(
+    schema: &ContractSchemaType,
+    value: &Value,
+    field_name: &str,
+) -> Result<()> {
+    let ok = match schema {
+        ContractSchemaType::Unit => matches!(value, Value::Null),
+        ContractSchemaType::Int => matches!(
+            value,
+            Value::Number(norito::json::native::Number::I64(_))
+                | Value::Number(norito::json::native::Number::U64(_))
+        ),
+        ContractSchemaType::Numeric => validate_numeric_json_value(value),
+        ContractSchemaType::Bool => matches!(value, Value::Bool(_)),
+        ContractSchemaType::String => matches!(value, Value::String(_)),
+        ContractSchemaType::Json => true,
+        ContractSchemaType::Name => match value {
+            Value::String(raw) => Name::from_str(raw).is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::AccountId => match value {
+            Value::String(raw) => iroha_data_model::account::AccountId::parse_encoded(raw).is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::AssetDefinitionId => match value {
+            Value::String(raw) => raw
+                .parse::<iroha_data_model::asset::AssetDefinitionId>()
+                .is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::AssetId => match value {
+            Value::String(raw) => raw.parse::<iroha_data_model::asset::AssetId>().is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::DomainId => match value {
+            Value::String(raw) => raw.parse::<iroha_data_model::domain::DomainId>().is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::NftId => match value {
+            Value::String(raw) => raw.parse::<iroha_data_model::nft::NftId>().is_ok(),
+            _ => false,
+        },
+        ContractSchemaType::Blob | ContractSchemaType::Bytes => match value {
+            Value::String(raw) => {
+                let raw = raw.strip_prefix("0x").unwrap_or(raw);
+                raw.len() % 2 == 0 && hex::decode(raw).is_ok()
+            }
+            _ => false,
+        },
+        ContractSchemaType::DataSpaceId => match value {
+            Value::String(raw) => raw.parse::<u64>().is_ok(),
+            Value::Number(norito::json::native::Number::I64(v)) => *v >= 0,
+            Value::Number(norito::json::native::Number::U64(_)) => true,
+            _ => false,
+        },
+        ContractSchemaType::AxtDescriptor
+        | ContractSchemaType::AssetHandle
+        | ContractSchemaType::ProofBlob => matches!(value, Value::String(_)),
+        ContractSchemaType::Tuple(items) => match value {
+            Value::Array(values) if values.len() == items.len() => items
+                .iter()
+                .zip(values.iter())
+                .all(|(schema, value)| validate_contract_value(schema, value, field_name).is_ok()),
+            _ => false,
+        },
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(conversion_error(format!(
+            "contract payload field `{field_name}` does not match the declared schema"
+        )))
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_contract_payload(
+    descriptor: &manifest::EntrypointDescriptor,
+    payload: Option<&IrohaJson>,
+) -> Result<Option<IrohaJson>> {
+    if descriptor.params.is_empty() {
+        if let Some(payload) = payload {
+            let parsed = json::parse_value(payload.get())
+                .map_err(|err| conversion_error(format!("invalid contract payload JSON: {err}")))?;
+            match parsed {
+                Value::Object(ref map) if map.is_empty() => {}
+                _ => {
+                    return Err(conversion_error(
+                        "contract payload must be an empty JSON object for zero-parameter entrypoints"
+                            .to_owned(),
+                    ));
+                }
+            }
+        }
+        return Ok(None);
+    }
+
+    let payload = payload.ok_or_else(|| {
+        conversion_error("contract payload is required for parameterized entrypoints".to_owned())
+    })?;
+    let parsed = json::parse_value(payload.get())
+        .map_err(|err| conversion_error(format!("invalid contract payload JSON: {err}")))?;
+    let object = match parsed {
+        Value::Object(map) => map,
+        _ => {
+            return Err(conversion_error(
+                "contract payload must be a JSON object keyed by parameter name".to_owned(),
+            ));
+        }
+    };
+
+    let mut normalized = Map::new();
+    for param in &descriptor.params {
+        let value = object.get(&param.name).ok_or_else(|| {
+            conversion_error(format!(
+                "missing contract payload field `{}` for entrypoint `{}`",
+                param.name, descriptor.name
+            ))
+        })?;
+        let schema = parse_contract_schema_type(&param.type_name)?;
+        validate_contract_value(&schema, value, &param.name)?;
+        normalized.insert(param.name.clone(), value.clone());
+    }
+
+    for key in object.keys() {
+        if !descriptor.params.iter().any(|param| param.name == *key) {
+            return Err(conversion_error(format!(
+                "unexpected contract payload field `{key}` for entrypoint `{}`",
+                descriptor.name
+            )));
+        }
+    }
+
+    Ok(Some(IrohaJson::from(Value::Object(normalized))))
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_contract_entrypoint_pc(
+    code_bytes: &[u8],
+    selector: &str,
+    expected: manifest::EntryPointKind,
+) -> Result<u64> {
+    let parsed = ivm::ProgramMetadata::parse(code_bytes)
+        .map_err(|err| conversion_error(format!("invalid contract artifact: {err}")))?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+        conversion_error(
+            "contract entrypoint metadata requires a self-describing contract artifact".to_owned(),
+        )
+    })?;
+    let descriptor = contract_interface
+        .entrypoints
         .iter()
         .find(|candidate| candidate.name == selector)
         .ok_or_else(|| conversion_error(format!("unknown contract entrypoint `{selector}`")))?;
-    if !matches!(
-        descriptor.kind,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
-    ) {
+    if descriptor.kind != expected {
         return Err(conversion_error(format!(
-            "contract entrypoint `{selector}` is not a public by-call entrypoint"
+            "contract artifact entrypoint `{selector}` does not match the requested entrypoint kind"
         )));
     }
-    Ok(())
+    Ok(prefix_len + descriptor.entry_pc)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_contract_view_result_value(
+    vm: &ivm::IVM,
+    start_register: usize,
+    schema: &ContractSchemaType,
+) -> Result<(Value, usize)> {
+    use iroha_core::smartcontracts::ivm::host::CoreHost;
+    use ivm::PointerType;
+
+    let pointer_string = |ptr: u64| -> Result<String> {
+        if ptr == 0 {
+            return Err(conversion_error(
+                "contract view returned a null pointer for a non-nullable type".to_owned(),
+            ));
+        }
+        Ok(ptr.to_string())
+    };
+
+    match schema {
+        ContractSchemaType::Unit => Ok((Value::Null, 0)),
+        ContractSchemaType::Int => {
+            let raw = vm.register(start_register);
+            let value = i64::try_from(raw).map_err(|_| {
+                conversion_error("contract view int return overflowed i64".to_owned())
+            })?;
+            Ok((Value::from(value), 1))
+        }
+        ContractSchemaType::Bool => Ok((Value::Bool(vm.register(start_register) != 0), 1)),
+        ContractSchemaType::Numeric => {
+            let ptr = vm.register(start_register);
+            let value: iroha_primitives::numeric::Numeric =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NoritoBytes).map_err(|err| {
+                    conversion_error(format!("failed to decode numeric return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::String => Err(conversion_error(
+            "string contract view returns are not supported yet".to_owned(),
+        )),
+        ContractSchemaType::Json => {
+            let ptr = vm.register(start_register);
+            let value = CoreHost::decode_tlv_json(vm, ptr)
+                .map_err(|err| conversion_error(format!("failed to decode JSON return: {err}")))?;
+            let parsed = json::parse_value(value.get())
+                .map_err(|err| conversion_error(format!("invalid JSON return payload: {err}")))?;
+            Ok((parsed, 1))
+        }
+        ContractSchemaType::Name => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::name::Name =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::Name).map_err(|err| {
+                    conversion_error(format!("failed to decode Name return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::AccountId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::account::AccountId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AccountId).map_err(|err| {
+                    conversion_error(format!("failed to decode AccountId return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::AssetDefinitionId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::asset::AssetDefinitionId = CoreHost::decode_tlv_typed(
+                vm,
+                ptr,
+                PointerType::AssetDefinitionId,
+            )
+            .map_err(|err| {
+                conversion_error(format!("failed to decode AssetDefinitionId return: {err}"))
+            })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::AssetId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::asset::AssetId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetId).map_err(|err| {
+                    conversion_error(format!("failed to decode AssetId return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::DomainId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::domain::DomainId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DomainId).map_err(|err| {
+                    conversion_error(format!("failed to decode DomainId return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::NftId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::nft::NftId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::NftId).map_err(|err| {
+                    conversion_error(format!("failed to decode NftId return: {err}"))
+                })?;
+            Ok((Value::from(value.to_string()), 1))
+        }
+        ContractSchemaType::Blob | ContractSchemaType::Bytes => {
+            let ptr = vm.register(start_register);
+            let value = CoreHost::decode_tlv_blob(vm, ptr)
+                .map_err(|err| conversion_error(format!("failed to decode blob return: {err}")))?;
+            Ok((Value::from(format!("0x{}", hex::encode(value))), 1))
+        }
+        ContractSchemaType::DataSpaceId => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::nexus::DataSpaceId =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::DataSpaceId).map_err(|err| {
+                    conversion_error(format!("failed to decode DataSpaceId return: {err}"))
+                })?;
+            Ok((Value::from(value.as_u64()), 1))
+        }
+        ContractSchemaType::AxtDescriptor => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::nexus::AxtDescriptor =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AxtDescriptor).map_err(|err| {
+                    conversion_error(format!("failed to decode AxtDescriptor return: {err}"))
+                })?;
+            let json_value = norito::json::to_value(&value).map_err(|err| {
+                conversion_error(format!("failed to serialize AxtDescriptor return: {err}"))
+            })?;
+            Ok((json_value, 1))
+        }
+        ContractSchemaType::AssetHandle => {
+            let ptr = vm.register(start_register);
+            let value: iroha_data_model::nexus::AssetHandle =
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetHandle).map_err(|err| {
+                    conversion_error(format!("failed to decode AssetHandle return: {err}"))
+                })?;
+            let json_value = norito::json::to_value(&value).map_err(|err| {
+                conversion_error(format!("failed to serialize AssetHandle return: {err}"))
+            })?;
+            Ok((json_value, 1))
+        }
+        ContractSchemaType::ProofBlob => {
+            let ptr = vm.register(start_register);
+            let value = pointer_string(ptr)?;
+            Ok((Value::from(value), 1))
+        }
+        ContractSchemaType::Tuple(items) => {
+            let mut values = Vec::with_capacity(items.len());
+            let mut consumed = 0_usize;
+            for item in items {
+                let (value, used) =
+                    decode_contract_view_result_value(vm, start_register + consumed, item)?;
+                values.push(value);
+                consumed += used;
+            }
+            Ok((Value::Array(values), consumed))
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+struct ContractViewExecutionError {
+    message: String,
+    vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
+}
+
+#[cfg(feature = "app_api")]
+fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnosticDto {
+    ContractViewVmDiagnosticDto {
+        trap_kind: format!("{:?}", diag.trap_kind),
+        message: diag.message.clone(),
+        pc: diag.pc,
+        function: diag
+            .source
+            .as_ref()
+            .and_then(|source| source.function.clone()),
+        source_path: diag.source.as_ref().and_then(|source| source.path.clone()),
+        line: diag.source.as_ref().and_then(|source| source.line),
+        column: diag.source.as_ref().and_then(|source| source.column),
+        gas_limit: diag.budget.gas_limit,
+        gas_remaining: diag.budget.gas_remaining,
+        gas_used: diag.budget.gas_used,
+        cycles: diag.budget.cycles,
+        max_cycles: diag.budget.max_cycles,
+        stack_limit_bytes: diag.budget.stack_limit_bytes,
+        stack_bytes_used: diag.budget.stack_bytes_used,
+        entrypoint_pc: diag.context.entrypoint_pc,
+        current_function: diag.context.current_function.clone(),
+        opcode: diag.context.opcode,
+        syscall: diag.context.syscall,
+        predecoded_loaded: diag.context.predecoded_loaded,
+        predecoded_hit: diag.context.predecoded_hit,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn execute_contract_view(
+    state: &CoreState,
+    authority: &iroha_data_model::account::AccountId,
+    code_bytes: &[u8],
+    selector: &str,
+    descriptor: &manifest::EntrypointDescriptor,
+    payload: Option<IrohaJson>,
+    gas_limit: u64,
+) -> std::result::Result<IrohaJson, ContractViewExecutionError> {
+    let entry_pc =
+        resolve_contract_entrypoint_pc(code_bytes, selector, manifest::EntryPointKind::View)
+            .map_err(|err| ContractViewExecutionError {
+                message: err.to_string(),
+                vm_diagnostic: None,
+            })?;
+    let query_view = state.query_view();
+    let mut vm = query_view.ivm.clone();
+    let mut host = if let Some(args) = payload {
+        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+            authority.clone(),
+            query_view.accounts_snapshot(),
+            args,
+        )
+    } else {
+        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts(
+            authority.clone(),
+            query_view.accounts_snapshot(),
+        )
+    };
+    host.set_crypto_config(Arc::clone(&query_view.crypto));
+    host.set_halo2_config(&query_view.zk.halo2);
+    host.set_chain_id(&query_view.chain_id);
+    host.set_axt_timing(query_view.nexus.axt);
+    host.set_durable_state_snapshot_from_world(&query_view.world);
+    host.set_public_inputs_from_parameters(query_view.world.parameters());
+    host.set_vrf_epoch_seeds_from_world(&query_view.world);
+
+    vm.load_program(code_bytes)
+        .map_err(|err| ContractViewExecutionError {
+            message: format!("failed to load contract view bytecode: {err}"),
+            vm_diagnostic: None,
+        })?;
+    vm.set_gas_limit(gas_limit);
+    vm.set_register(1, vm.memory.code_len());
+    vm.set_program_counter(entry_pc)
+        .map_err(|err| ContractViewExecutionError {
+            message: format!("failed to seek to contract view entrypoint: {err}"),
+            vm_diagnostic: None,
+        })?;
+    vm.run_with_host(&mut host)
+        .map_err(|err| ContractViewExecutionError {
+            message: format!("contract view execution failed: {err}"),
+            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+        })?;
+
+    let queued = host.drain_instructions();
+    if !queued.is_empty() {
+        return Err(ContractViewExecutionError {
+            message: "view entrypoint attempted to emit instructions".to_owned(),
+            vm_diagnostic: None,
+        });
+    }
+    let durable_overlay = host.drain_durable_state_overlay();
+    if !durable_overlay.is_empty() {
+        return Err(ContractViewExecutionError {
+            message: "view entrypoint attempted to mutate durable state".to_owned(),
+            vm_diagnostic: None,
+        });
+    }
+
+    let schema = descriptor
+        .return_type
+        .as_deref()
+        .map(parse_contract_schema_type)
+        .transpose()
+        .map_err(|err| ContractViewExecutionError {
+            message: err.to_string(),
+            vm_diagnostic: None,
+        })?
+        .unwrap_or(ContractSchemaType::Unit);
+    let (value, _) = decode_contract_view_result_value(&vm, 10, &schema).map_err(|err| {
+        ContractViewExecutionError {
+            message: err.to_string(),
+            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+        }
+    })?;
+    Ok(IrohaJson::from(value))
 }
 
 #[cfg(feature = "app_api")]
@@ -7008,6 +7763,7 @@ fn build_contract_call_metadata(
     manifest: &manifest::ContractManifest,
     namespace: &str,
     contract_id: &str,
+    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
     entrypoint: Option<&str>,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
@@ -7024,6 +7780,11 @@ fn build_contract_call_metadata(
     metadata.insert(ns_key, IrohaJson::new(namespace.to_owned()));
     let cid_key = Name::from_str("contract_id").expect("static metadata key `contract_id`");
     metadata.insert(cid_key, IrohaJson::new(contract_id.to_owned()));
+    if let Some(contract_address) = contract_address {
+        let address_key =
+            Name::from_str("contract_address").expect("static metadata key `contract_address`");
+        metadata.insert(address_key, IrohaJson::new(contract_address.to_string()));
+    }
 
     if let Some(selector) = entrypoint {
         let ep_key = Name::from_str("contract_entrypoint")
@@ -7111,6 +7872,7 @@ fn build_multisig_contract_call_instructions(
         manifest,
         namespace,
         contract_id,
+        None,
         Some(entrypoint),
         payload,
         gas_asset_id,
@@ -8122,6 +8884,8 @@ mod contract_entrypoint_validation_tests {
         let manifest = manifest_with_entrypoints(Some(vec![EntrypointDescriptor {
             name: "boot".to_owned(),
             kind: manifest::EntryPointKind::Hajimari,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -8388,6 +9152,8 @@ mod multisig_selector_tests {
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                 name: "main".to_owned(),
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -9740,6 +10506,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         code_hash,
         abi_hash: _,
         manifest,
+        ..
     } = prepared;
     ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
@@ -11577,6 +12344,9 @@ pub struct DeployContractDto {
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Base64-encoded compiled `.to` bytecode
     pub code_b64: String,
+    /// Optional dataspace alias for the deployment. Defaults to `universal`.
+    #[norito(default)]
+    pub dataspace: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -11592,6 +12362,12 @@ pub struct DeployContractDto {
 pub struct DeployContractResponseDto {
     /// Whether deploy succeeded
     pub ok: bool,
+    /// Canonical Bech32m contract address activated by the deployment.
+    pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    /// Dataspace alias hosting the activated contract instance.
+    pub dataspace: String,
+    /// Successful deploy nonce consumed for address derivation.
+    pub deploy_nonce: u64,
     /// Hex-encoded code hash
     pub code_hash_hex: String,
     /// Hex-encoded ABI hash (if present)
@@ -11724,6 +12500,94 @@ fn prepare_contract_call(
         code_hash: binding,
         abi_hash: verified.abi_hash,
         manifest,
+        namespace: namespace.to_owned(),
+        contract_id: contract_id.to_owned(),
+        contract_address: contract_id.parse().ok(),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_contract_call_by_address(
+    state: &CoreState,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+) -> core::result::Result<PreparedContractCall, Error> {
+    let dataspace_id = contract_address
+        .dataspace_id()
+        .map_err(|err| conversion_error(err.to_string()))?;
+    let dataspace_alias = state
+        .nexus_snapshot()
+        .dataspace_catalog
+        .by_id(dataspace_id)
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    let mut prepared = prepare_contract_call(state, &dataspace_alias, contract_address.as_ref())?;
+    prepared.contract_address = Some(contract_address.clone());
+    Ok(prepared)
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_contract_call_by_alias(
+    state: &CoreState,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    now_ms: u64,
+) -> core::result::Result<PreparedContractCall, Error> {
+    let world = state.world_view();
+    let contract_address = world
+        .contract_address_by_alias_at(contract_alias, now_ms)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    prepare_contract_call_by_address(state, &contract_address)
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_public_contract_deploy_dataspace(
+    state: &CoreState,
+    dataspace_alias: Option<&str>,
+) -> core::result::Result<(String, iroha_data_model::nexus::DataSpaceId), Error> {
+    let requested = dataspace_alias.unwrap_or("universal");
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    let dataspace = catalog.by_alias(requested).ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    })?;
+    if dataspace.alias != "universal" {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "address-first public deploy currently supports only the universal dataspace"
+                    .into(),
+            ),
+        ));
+    }
+    Ok((dataspace.alias.clone(), dataspace.id))
+}
+
+#[cfg(feature = "app_api")]
+fn contract_deploy_nonce_for_authority(
+    state: &CoreState,
+    authority: &iroha_data_model::account::AccountId,
+) -> core::result::Result<u64, Error> {
+    let key = Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)
+        .expect("static deploy nonce metadata key");
+    let world = state.world_view();
+    let Ok(account) = world.account(authority) else {
+        return Ok(0);
+    };
+    let Some(raw) = account.metadata().get(&key) else {
+        return Ok(0);
+    };
+    raw.try_into_any_norito::<u64>().map_err(|_| {
+        conversion_error(format!(
+            "account metadata `{}` must be an unsigned integer",
+            iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+        ))
     })
 }
 
@@ -11794,10 +12658,18 @@ pub struct ContractCallDto {
     /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
     #[norito(default)]
     pub signature_b64: Option<String>,
-    /// Target namespace hosting the contract instance.
-    pub namespace: String,
-    /// Logical contract identifier within the namespace.
-    pub contract_id: String,
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Internal legacy namespace binding path.
+    #[norito(default)]
+    pub namespace: Option<String>,
+    /// Internal legacy contract identifier within the namespace binding path.
+    #[norito(default)]
+    pub contract_id: Option<String>,
     /// Optional entrypoint selector; defaults to `main`.
     #[norito(default)]
     pub entrypoint: Option<String>,
@@ -11829,6 +12701,9 @@ pub struct ContractCallResponseDto {
     pub namespace: String,
     /// Contract id targeted by the call.
     pub contract_id: String,
+    /// Canonical contract address targeted by the call, when available.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
     /// Hex-encoded code hash of the invoked bytecode.
     pub code_hash_hex: String,
     /// Hex-encoded ABI hash for the invoked bytecode.
@@ -11850,6 +12725,113 @@ pub struct ContractCallResponseDto {
     /// Entrypoint selector used for the call, if provided.
     #[norito(default)]
     pub entrypoint: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for invoking a read-only contract view entrypoint.
+pub struct ContractViewDto {
+    /// Account identity used as the read authority and host context.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Internal legacy namespace binding path.
+    #[norito(default)]
+    pub namespace: Option<String>,
+    /// Internal legacy contract identifier within the namespace binding path.
+    #[norito(default)]
+    pub contract_id: Option<String>,
+    /// Optional entrypoint selector; defaults to `main`.
+    #[norito(default)]
+    pub entrypoint: Option<String>,
+    /// Optional Norito JSON payload forwarded to the contract.
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+    /// Caller-specified gas limit for the local read execution (must be > 0).
+    pub gas_limit: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload returned after executing a read-only contract view.
+pub struct ContractViewResponseDto {
+    /// Whether execution succeeded.
+    pub ok: bool,
+    /// Namespace targeted by the query.
+    pub namespace: String,
+    /// Contract id targeted by the query.
+    pub contract_id: String,
+    /// Canonical contract address targeted by the query, when available.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Hex-encoded code hash of the queried bytecode.
+    pub code_hash_hex: String,
+    /// Hex-encoded ABI hash for the queried bytecode.
+    pub abi_hash_hex: String,
+    /// Entrypoint selector executed for the view.
+    pub entrypoint: String,
+    /// Decoded result payload.
+    pub result: IrohaJson,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+pub struct ContractViewVmDiagnosticDto {
+    pub trap_kind: String,
+    pub message: String,
+    pub pc: u64,
+    #[norito(default)]
+    pub function: Option<String>,
+    #[norito(default)]
+    pub source_path: Option<String>,
+    #[norito(default)]
+    pub line: Option<u32>,
+    #[norito(default)]
+    pub column: Option<u32>,
+    pub gas_limit: u64,
+    pub gas_remaining: u64,
+    pub gas_used: u64,
+    pub cycles: u64,
+    pub max_cycles: u64,
+    pub stack_limit_bytes: u64,
+    pub stack_bytes_used: u64,
+    #[norito(default)]
+    pub entrypoint_pc: Option<u64>,
+    #[norito(default)]
+    pub current_function: Option<String>,
+    #[norito(default)]
+    pub opcode: Option<u16>,
+    #[norito(default)]
+    pub syscall: Option<u32>,
+    pub predecoded_loaded: bool,
+    #[norito(default)]
+    pub predecoded_hit: Option<bool>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+pub struct ContractViewErrorResponseDto {
+    pub ok: bool,
+    pub namespace: String,
+    pub contract_id: String,
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    pub code_hash_hex: String,
+    pub abi_hash_hex: String,
+    pub entrypoint: String,
+    pub error: String,
+    #[norito(default)]
+    pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -12298,6 +13280,9 @@ struct PreparedContractCall {
     code_hash: iroha_crypto::Hash,
     abi_hash: iroha_crypto::Hash,
     manifest: manifest::ContractManifest,
+    namespace: String,
+    contract_id: String,
+    contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
 }
 
 // ---------------------- Subscription API DTOs ----------------------
@@ -13380,7 +14365,8 @@ pub struct RecordReplicationFailureResponseDto {
     pub recorded: bool,
 }
 
-/// POST /v1/contracts/deploy — accept `.to` bytecode, compute hashes, and submit RegisterSmartContractCode.
+/// POST /v1/contracts/deploy — accept `.to` bytecode, derive a canonical contract address,
+/// register the code, and activate a public universal contract instance.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_contract_deploy(
@@ -13390,12 +14376,38 @@ pub async fn handle_post_contract_deploy(
     telemetry: MaybeTelemetry,
     NoritoJson(req): NoritoJson<DeployContractDto>,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::smart_contract_code, prelude as dm};
-    let signer = KeyPair::from(req.private_key.0.clone());
-    let prepared = prepare_contract_deployment(&req.code_b64, &signer)?;
-    let authority: dm::AccountId = req.authority.clone().into();
+    use iroha_data_model::{
+        isi::{smart_contract_code, smart_contract_code::ActivateContractInstance},
+        prelude as dm,
+    };
+    let DeployContractDto {
+        authority,
+        private_key,
+        code_b64,
+        dataspace,
+    } = req;
+    let signer = KeyPair::from(private_key.0.clone());
+    let prepared = prepare_contract_deployment(&code_b64, &signer)?;
+    let authority: dm::AccountId = authority.into();
+    let (dataspace_alias, dataspace_id) =
+        resolve_public_contract_deploy_dataspace(&state, dataspace.as_deref())?;
+    let deploy_nonce = contract_deploy_nonce_for_authority(&state, &authority)?;
+    let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_data_model::account::address::chain_discriminant(),
+        &authority,
+        deploy_nonce,
+        dataspace_id,
+    )
+    .map_err(|err| conversion_error(err.to_string()))?;
+    let next_nonce = deploy_nonce
+        .checked_add(1)
+        .ok_or_else(|| conversion_error("contract deploy nonce overflow".to_owned()))?;
+    let deploy_nonce_key =
+        Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)
+            .expect("static deploy nonce metadata key");
 
-    // Construct transaction: RegisterSmartContractCode + RegisterSmartContractBytes (store manifest + code)
+    // Construct transaction: self-register authority, store manifest/code, activate canonical
+    // universal binding, and advance the successful deploy nonce.
     let isi_code = smart_contract_code::RegisterSmartContractCode {
         manifest: prepared.manifest.clone(),
     };
@@ -13411,10 +14423,20 @@ pub async fn handle_post_contract_deploy(
                 ))),
                 dm::InstructionBox::from(isi_code),
                 dm::InstructionBox::from(isi_bytes),
+                dm::InstructionBox::from(ActivateContractInstance {
+                    namespace: dataspace_alias.clone(),
+                    contract_id: contract_address.to_string(),
+                    code_hash: prepared.code_hash,
+                }),
+                dm::InstructionBox::from(dm::SetKeyValue::account(
+                    authority.clone(),
+                    deploy_nonce_key,
+                    dm::Json::new(next_nonce),
+                )),
             ]
             .into_iter(),
         )
-        .sign(&req.private_key.0);
+        .sign(&private_key.0);
 
     // Submit via queue
     handle_transaction_with_metrics(
@@ -13431,6 +14453,9 @@ pub async fn handle_post_contract_deploy(
 
     let body = norito::json::to_json_pretty(&DeployContractResponseDto {
         ok: true,
+        contract_address,
+        dataspace: dataspace_alias,
+        deploy_nonce,
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
         abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
     })
@@ -15757,6 +16782,8 @@ mod deploy_tests {
             entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                 name: "main".to_owned(),
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -15795,6 +16822,7 @@ mod deploy_tests {
             authority: iroha_data_model::account::AccountId::of(kp.public_key().clone()),
             private_key: iroha_data_model::prelude::ExposedPrivateKey(kp.private_key().clone()),
             code_b64,
+            dataspace: None,
         };
 
         #[cfg(feature = "telemetry")]
@@ -18940,9 +19968,9 @@ const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "<deleted-offline-allowances>";
+const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "/v1/offline/allowances";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "<deleted-offline-allowances-query>";
+const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "/v1/offline/allowances/query";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_CERTIFICATES_ISSUE: &str = "<deleted-offline-certificates-issue>";
 #[cfg(feature = "app_api")]
@@ -33815,7 +34843,7 @@ pub struct ListFilterParams {
     pub sort: Option<String>,
 }
 
-/// GET parameters for `<deleted-offline-allowances>`.
+/// GET parameters for `/v1/offline/allowances`.
 ///
 /// Extends [`ListFilterParams`] with roadmap-required verdict/expiry filters while keeping the
 /// compact query string layout.
@@ -33823,7 +34851,7 @@ pub struct ListFilterParams {
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
-struct OfflineAllowanceListParams {
+pub(crate) struct OfflineAllowanceListParams {
     /// Optional JSON-encoded filter expression.
     pub filter: Option<String>,
     /// Optional limit for pagination.
@@ -37412,10 +38440,6 @@ pub async fn handle_v1_accounts_faucet(
     let source_asset_id = AssetId::new(asset_definition_id.clone(), faucet.authority.clone());
     let (destination_balance, source_balance) = {
         let world = app.state.world_view();
-        if world.account(&account_id).is_err() {
-            return Err(faucet_invalid_request("account does not exist"));
-        }
-
         let destination_balance = match world.asset(&destination_asset_id) {
             Ok(entry) => entry.value().as_ref().clone(),
             Err(_) => iroha_primitives::numeric::Numeric::zero(),
@@ -44726,7 +45750,7 @@ fn offline_summary_item_to_json(item: &OfflineCounterSummaryListItem) -> Value {
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-async fn handle_v1_offline_allowances(
+pub async fn handle_v1_offline_allowances(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineAllowanceListParams>,
     telemetry: MaybeTelemetry,
@@ -44903,7 +45927,7 @@ pub async fn handle_v1_offline_revocations(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-async fn handle_v1_offline_allowances_query(
+pub async fn handle_v1_offline_allowances_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,

@@ -66,6 +66,8 @@ fn hf_generated_entrypoint(name: &str, entry_pc: u64) -> ivm::EmbeddedEntrypoint
     ivm::EmbeddedEntrypointDescriptor {
         name: name.to_owned(),
         kind: EntryPointKind::Public,
+        params: Vec::new(),
+        return_type: None,
         permission: None,
         read_keys: Vec::new(),
         write_keys: Vec::new(),

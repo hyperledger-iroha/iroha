@@ -6,8 +6,19 @@ use integration_tests::sandbox;
 use iroha::{
     client::Client,
     crypto::KeyPair,
-    data_model::{isi::domain_link::*, prelude::*},
+    data_model::{
+        account::AccountAddress,
+        isi::domain_link::*,
+        metadata::Metadata,
+        prelude::*,
+        sns::{
+            DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameSelectorV1, PaymentProofV1,
+            RegisterNameRequestV1,
+        },
+    },
+    sns::SnsNamespacePath,
 };
+use iroha_primitives::json::Json;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use tokio::runtime::Runtime;
@@ -28,18 +39,83 @@ fn alt_client(signatory: (AccountId, KeyPair), base_client: &Client) -> Client {
     }
 }
 
-fn ensure_alias_domain(client: &Client) -> Result<()> {
-    let alias_domain: DomainId = "aid".parse()?;
-    let alias_exists = client
+fn account_controller(account: &AccountId) -> Result<NameControllerV1> {
+    let address = AccountAddress::from_account_id(account)?;
+    Ok(NameControllerV1::account(&address))
+}
+
+fn stub_payment_proof(payer: &AccountId) -> PaymentProofV1 {
+    PaymentProofV1 {
+        asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
+        gross_amount: 120,
+        net_amount: 120,
+        settlement_tx: Json::from("mock-settlement"),
+        payer: payer.clone(),
+        signature: Json::from("mock-signature"),
+    }
+}
+
+fn build_domain_register_request(
+    domain: &DomainId,
+    owner: &AccountId,
+) -> Result<RegisterNameRequestV1> {
+    Ok(RegisterNameRequestV1 {
+        selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain.name().as_ref())?,
+        owner: owner.clone(),
+        controllers: vec![account_controller(owner)?],
+        term_years: 1,
+        pricing_class_hint: Some(0),
+        payment: stub_payment_proof(owner),
+        governance: None,
+        metadata: Metadata::default(),
+    })
+}
+
+fn ensure_registered_domain(client: &Client, domain: &DomainId) -> Result<()> {
+    let domain_exists = client
         .query(FindDomains::new())
         .execute_all()?
         .into_iter()
-        .any(|domain| domain.id() == &alias_domain);
-    if alias_exists {
+        .any(|existing| existing.id() == domain);
+    if domain_exists {
         return Ok(());
     }
 
-    client.submit_blocking(Register::domain(Domain::new(alias_domain)))?;
+    // Runtime domain registration now requires a matching active SNS domain
+    // lease owned by the same authority.
+    if client
+        .sns()
+        .get_name(SnsNamespacePath::Domain, domain.name().as_ref())
+        .is_err()
+    {
+        client
+            .sns()
+            .register(&build_domain_register_request(domain, &client.account)?)?;
+    }
+
+    client.submit_blocking(Register::domain(Domain::new(domain.clone())))?;
+    Ok(())
+}
+
+fn ensure_alias_domain(client: &Client) -> Result<()> {
+    let alias_domain: DomainId = "aid".parse()?;
+    ensure_registered_domain(client, &alias_domain)
+}
+
+#[test]
+fn build_domain_register_request_uses_domain_label_and_owner_controller() -> Result<()> {
+    let domain: DomainId = "helperdomain".parse()?;
+    let (owner, _) = gen_account_in("helper_owner");
+    let request = build_domain_register_request(&domain, &owner)?;
+
+    assert_eq!(request.selector.suffix_id, DOMAIN_NAME_SUFFIX_ID);
+    assert_eq!(request.selector.normalized_label(), domain.name().as_ref());
+    assert_eq!(request.owner, owner);
+    assert_eq!(request.controllers, vec![account_controller(&owner)?]);
+    assert_eq!(request.payment.payer, owner);
+    assert_eq!(request.pricing_class_hint, Some(0));
+    assert_eq!(request.term_years, 1);
+
     Ok(())
 }
 
@@ -52,8 +128,8 @@ fn domain_links_roundtrip_without_account_registration() -> Result<()> {
     };
     let client = network.client();
 
-    let domain: DomainId = "domain_links_query".parse()?;
-    client.submit_blocking(Register::domain(Domain::new(domain.clone())))?;
+    let domain: DomainId = "domain-links-query".parse()?;
+    ensure_registered_domain(&client, &domain)?;
 
     let (probe_account, _) = gen_account_in("ghost");
     client.submit_blocking::<InstructionBox>(
@@ -106,8 +182,8 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
         return Ok(());
     }
 
-    let domain: DomainId = "receive_without_preregister".parse()?;
-    client.submit_blocking(Register::domain(Domain::new(domain.clone())))?;
+    let domain: DomainId = "receive-without-preregister".parse()?;
+    ensure_registered_domain(&client, &domain)?;
     let source_account = client.account.clone();
 
     let destination_asset = gen_account_in(&domain).0;
@@ -166,13 +242,10 @@ fn domain_links_allow_subject_authority_for_link_and_unlink() -> Result<()> {
     };
     let client = network.client();
 
-    let target_domain: DomainId = "subject_link_target".parse()?;
-    let controller_domain: DomainId = "subject_link_controller".parse()?;
-    let register_domains: [InstructionBox; 2] = [
-        Register::domain(Domain::new(target_domain.clone())).into(),
-        Register::domain(Domain::new(controller_domain.clone())).into(),
-    ];
-    client.submit_all_blocking(register_domains)?;
+    let target_domain: DomainId = "subject-link-target".parse()?;
+    let controller_domain: DomainId = "subject-link-controller".parse()?;
+    ensure_registered_domain(&client, &target_domain)?;
+    ensure_registered_domain(&client, &controller_domain)?;
 
     let (subject_account, subject_keypair) = gen_account_in(&controller_domain);
     client.submit_blocking(Register::account(Account::new(
@@ -221,8 +294,8 @@ fn domain_links_reject_unrelated_authority() -> Result<()> {
     };
     let client = network.client();
 
-    let target_domain: DomainId = "reject_unrelated_authority".parse()?;
-    client.submit_blocking(Register::domain(Domain::new(target_domain.clone())))?;
+    let target_domain: DomainId = "reject-unrelated-authority".parse()?;
+    ensure_registered_domain(&client, &target_domain)?;
 
     let (probe_account, _) = gen_account_in("probe_subject");
     client.submit_blocking::<InstructionBox>(
@@ -233,16 +306,12 @@ fn domain_links_reject_unrelated_authority() -> Result<()> {
         .into(),
     )?;
 
-    let attacker_domain: DomainId = "attacker_controller".parse()?;
+    let attacker_domain: DomainId = "attacker-controller".parse()?;
     let (attacker_account, attacker_keypair) = gen_account_in(&attacker_domain);
-    let register_attacker: [InstructionBox; 2] = [
-        Register::domain(Domain::new(attacker_domain.clone())).into(),
-        Register::account(Account::new(
-            attacker_account.to_account_id(attacker_domain),
-        ))
-        .into(),
-    ];
-    client.submit_all_blocking(register_attacker)?;
+    ensure_registered_domain(&client, &attacker_domain)?;
+    client.submit_blocking(Register::account(Account::new(
+        attacker_account.to_account_id(attacker_domain),
+    )))?;
     let attacker_client = alt_client((attacker_account, attacker_keypair), &client);
 
     let err = attacker_client
@@ -275,8 +344,8 @@ fn unlink_domain_link_preserves_materialized_asset_ownership() -> Result<()> {
         return Ok(());
     }
 
-    let domain: DomainId = "unlink_keeps_ownership".parse()?;
-    client.submit_blocking(Register::domain(Domain::new(domain.clone())))?;
+    let domain: DomainId = "unlink-keeps-ownership".parse()?;
+    ensure_registered_domain(&client, &domain)?;
 
     let destination = gen_account_in(&domain).0;
     let definition_id =

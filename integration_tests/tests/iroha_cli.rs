@@ -19,7 +19,7 @@ use iroha::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         permission::Permission,
-        prelude::{Grant, Json, Mint},
+        prelude::{FindAssetById, FindAssetsDefinitions, Grant, Json},
         soracloud::{
             AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
             SoraStateMutabilityV1,
@@ -27,12 +27,10 @@ use iroha::{
     },
 };
 use iroha_config_base::toml::WriteExt;
-use iroha_data_model::prelude::DomainId;
+use iroha_data_model::prelude::{DomainId, QueryBuilderExt};
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{
-    ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, sample_ivm_path,
-};
+use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, sample_ivm_path};
 use norito::json::{self, Value};
 use reqwest::Url;
 
@@ -61,11 +59,20 @@ fn configure_cli_program_override_from_existing_binary() {
         if std::env::var_os(TEST_NETWORK_BIN_IROHA).is_some() {
             return;
         }
+        if !should_reuse_existing_cli_binary_for_tests() {
+            return;
+        }
         if let Some(path) = find_existing_cli_binary_path() {
             let value = path.to_string_lossy().into_owned();
             set_env_var(TEST_NETWORK_BIN_IROHA, &value);
         }
     });
+}
+
+fn should_reuse_existing_cli_binary_for_tests() -> bool {
+    std::env::var("IROHA_TEST_SKIP_BUILD")
+        .ok()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 fn find_existing_cli_binary_path() -> Option<PathBuf> {
@@ -136,6 +143,13 @@ fn set_env_var(key: &str, value: &str) {
     }
 }
 
+#[allow(unsafe_code)]
+fn remove_env_var(key: &str) {
+    unsafe {
+        std::env::remove_var(key);
+    }
+}
+
 fn ivm_build_profile_exists() -> bool {
     // Mirror the check used in other integration tests
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -151,11 +165,66 @@ fn soracloud_fixture(path: &str) -> PathBuf {
     workspace_root().join(path)
 }
 
+const SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL: &str = "5PeSrQmLNwwKtruJvDZrbrm9RuMw";
 fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
-    AssetDefinitionId::new(
-        "domain".parse().expect("test domain should parse"),
-        "xor".parse().expect("test xor asset name should parse"),
-    )
+    AssetDefinitionId::parse_address_literal(SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL)
+        .expect("test lease asset definition literal should parse")
+}
+
+fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> eyre::Result<Option<u128>> {
+    let asset = match client.query_single(FindAssetById::new(asset_id.clone())) {
+        Ok(asset) => asset,
+        Err(err) => {
+            let message = format!("{err:?}");
+            if message.contains("Failed to find asset")
+                || message.contains("Find(Asset(")
+                || message.contains("Find(Account(")
+                || message.contains("QueryExecutionFail::Find")
+                || message.contains("QueryExecutionFail::NotFound")
+            {
+                return Ok(None);
+            }
+            return Err(eyre::eyre!(
+                "failed to query `{asset_id}` while verifying soracloud HF lease setup: {message}"
+            ));
+        }
+    };
+    if asset.value().scale() != 0 {
+        return Err(eyre::eyre!(
+            "expected integer numeric value for `{asset_id}`, got scale={}",
+            asset.value().scale()
+        ));
+    }
+    Ok(asset.value().try_mantissa_u128())
+}
+
+fn assert_soracloud_hf_lease_asset_ready(
+    client: &Client,
+    accounts: &[AccountId],
+    minimum_amount: u32,
+) -> eyre::Result<()> {
+    let asset_definition_id = soracloud_hf_lease_asset_definition();
+    let asset_definition_exists = client
+        .query(FindAssetsDefinitions::new())
+        .execute_all()?
+        .into_iter()
+        .any(|definition| definition.id == asset_definition_id);
+    if !asset_definition_exists {
+        return Err(eyre::eyre!(
+            "soracloud HF lease asset definition `{asset_definition_id}` is missing from test-network genesis"
+        ));
+    }
+    for account_id in accounts {
+        let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+        let observed = numeric_asset_balance_u128(client, &asset_id)?;
+        let required = u128::from(minimum_amount);
+        if observed.is_none_or(|balance| balance < required) {
+            return Err(eyre::eyre!(
+                "soracloud HF lease asset `{asset_id}` is below required bootstrap balance {required}; observed {observed:?}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 const SORACLOUD_LIVE_HF_TEST_REPO_ID: &str = "hf-internal-testing/tiny-random-gpt2";
@@ -231,6 +300,30 @@ fn binary_supports_training_job_commands_accepts_help_with_subcommand() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&script, perms).expect("set permissions");
     assert!(binary_supports_training_job_commands(&script));
+}
+
+#[test]
+fn should_reuse_existing_cli_binary_for_tests_defaults_to_false() {
+    let previous = std::env::var("IROHA_TEST_SKIP_BUILD").ok();
+    remove_env_var("IROHA_TEST_SKIP_BUILD");
+    assert!(!should_reuse_existing_cli_binary_for_tests());
+    if let Some(value) = previous {
+        set_env_var("IROHA_TEST_SKIP_BUILD", &value);
+    }
+}
+
+#[test]
+fn should_reuse_existing_cli_binary_for_tests_accepts_truthy_values() {
+    let previous = std::env::var("IROHA_TEST_SKIP_BUILD").ok();
+    set_env_var("IROHA_TEST_SKIP_BUILD", "true");
+    assert!(should_reuse_existing_cli_binary_for_tests());
+    set_env_var("IROHA_TEST_SKIP_BUILD", "1");
+    assert!(should_reuse_existing_cli_binary_for_tests());
+    if let Some(value) = previous {
+        set_env_var("IROHA_TEST_SKIP_BUILD", &value);
+    } else {
+        remove_env_var("IROHA_TEST_SKIP_BUILD");
+    }
 }
 
 fn local_program_config() -> ProgramConfig {
@@ -398,10 +491,16 @@ async fn advertise_soracloud_model_host(
     network: &iroha_test_network::Network,
 ) -> eyre::Result<()> {
     let (validator_config, peer_id, validator_account_id) = validator_program_config(network)?;
+    let validator_accounts = network
+        .peers()
+        .iter()
+        .map(|peer| AccountId::new(peer.public_key().clone()))
+        .collect::<Vec<_>>();
     network.client().submit_blocking(Grant::account_permission(
         Permission::new("CanManageSoracloud".into(), Json::new(())),
-        validator_account_id,
+        validator_account_id.clone(),
     ))?;
+    assert_soracloud_hf_lease_asset_ready(&network.client(), &validator_accounts, 100_000)?;
 
     let torii_url = network.client().torii_url.to_string();
     let heartbeat_expires_at_ms = SystemTime::now()
@@ -1639,6 +1738,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
 #[tokio::test]
 async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> eyre::Result<()> {
+    let lease_asset_definition = soracloud_hf_lease_asset_definition();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -1659,6 +1759,11 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     else {
         return Ok(());
     };
+    assert_soracloud_hf_lease_asset_ready(
+        &network.client(),
+        std::slice::from_ref(&network.client().account),
+        100_000,
+    )?;
 
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
@@ -1676,7 +1781,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     let apartment_name = "ops_agent";
     let lease_term_ms = "60000".to_string();
     let base_fee_nanos = "10000".to_string();
-    let lease_asset_definition = soracloud_hf_lease_asset_definition().to_string();
+    let lease_asset_definition = lease_asset_definition.to_string();
     let torii_url = network.client().torii_url.to_string();
     let account_id = network.client().account.to_string();
 
@@ -2062,6 +2167,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
 
 #[tokio::test]
 async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> eyre::Result<()> {
+    let lease_asset_definition = soracloud_hf_lease_asset_definition();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -2082,6 +2188,11 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     else {
         return Ok(());
     };
+    assert_soracloud_hf_lease_asset_ready(
+        &network.client(),
+        std::slice::from_ref(&network.client().account),
+        100_000,
+    )?;
 
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
@@ -2101,7 +2212,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     let lease_term_ms = lease_term_ms_value.to_string();
     let base_fee_nanos = "10000".to_string();
     let renewed_fee_nanos = "12000".to_string();
-    let lease_asset_definition = soracloud_hf_lease_asset_definition().to_string();
+    let lease_asset_definition = lease_asset_definition.to_string();
     let torii_url = network.client().torii_url.to_string();
     let account_id = network.client().account.to_string();
 
@@ -2369,12 +2480,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
 
 #[tokio::test]
 async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -> eyre::Result<()> {
-    let lease_asset_definition = AssetDefinitionId::new(
-        "wonderland"
-            .parse()
-            .expect("wonderland domain should parse"),
-        "rose".parse().expect("rose asset name should parse"),
-    );
+    let lease_asset_definition = soracloud_hf_lease_asset_definition();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -2406,18 +2512,6 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                 asset_definition: lease_asset_definition.clone(),
             },
             CARPENTER_ID.clone(),
-        ))
-        .with_genesis_instruction(Mint::asset_numeric(
-            100_000_u32,
-            AssetId::new(lease_asset_definition.clone(), ALICE_ID.clone()),
-        ))
-        .with_genesis_instruction(Mint::asset_numeric(
-            100_000_u32,
-            AssetId::new(lease_asset_definition.clone(), BOB_ID.clone()),
-        ))
-        .with_genesis_instruction(Mint::asset_numeric(
-            100_000_u32,
-            AssetId::new(lease_asset_definition.clone(), CARPENTER_ID.clone()),
         ));
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2427,6 +2521,15 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     else {
         return Ok(());
     };
+    assert_soracloud_hf_lease_asset_ready(
+        &network.client(),
+        &[
+            network.client().account.clone(),
+            BOB_ID.clone(),
+            CARPENTER_ID.clone(),
+        ],
+        100_000,
+    )?;
 
     let alice_config = ProgramConfig::from(&network.client());
     let bob_config = program_config_for_account(&network.client(), "wonderland", &BOB_KEYPAIR);

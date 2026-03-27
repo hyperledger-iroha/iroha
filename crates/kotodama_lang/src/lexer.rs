@@ -28,6 +28,8 @@ pub enum TokenKind {
     Kaizen,
     /// Public function modifier ("kotoage" or "言挙げ")
     Kotoage,
+    /// Read-only public function modifier (`view`).
+    View,
     True,
     False,
     Arrow,
@@ -533,6 +535,7 @@ impl<'a> Lexer<'a> {
             "hajimari" | "始まり" => TokenKind::Hajimari,
             "kaizen" | "改善" => TokenKind::Kaizen,
             "kotoage" | "言挙げ" => TokenKind::Kotoage,
+            "view" => TokenKind::View,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "this" => TokenKind::This,

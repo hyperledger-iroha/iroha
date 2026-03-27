@@ -224,7 +224,7 @@ fn validate_contract_interface(
                 ));
             }
             EntryPointKind::Kaizen => kaizen_seen = true,
-            EntryPointKind::Public => {}
+            EntryPointKind::Public | EntryPointKind::View => {}
         }
     }
 

@@ -164,6 +164,19 @@ fn map_overlay_error(
     }
 }
 
+fn missing_authority_requires_rejection(
+    state_tx: &crate::state::StateTransaction<'_, '_>,
+    tx: &SignedTransaction,
+    authority: &AccountId,
+    overlay_instruction_count: usize,
+    is_genesis: bool,
+) -> bool {
+    overlay_instruction_count > 0
+        && !is_genesis
+        && state_tx.world.accounts.get(authority).is_none()
+        && !crate::tx::allows_unregistered_authority(tx.instructions(), authority)
+}
+
 #[cfg(test)]
 mod overlay_error_tests {
     use iroha_data_model::{
@@ -8631,10 +8644,13 @@ pub(crate) mod valid {
                                 Some(routing_decisions[idx].dataspace_id);
                             let authority = tx.authority().clone();
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                            if overlay.instruction_count() > 0
-                                && !block.header().is_genesis()
-                                && state_tx.world.accounts.get(&authority).is_none()
-                            {
+                            if missing_authority_requires_rejection(
+                                &state_tx,
+                                tx,
+                                &authority,
+                                overlay.instruction_count(),
+                                block.header().is_genesis(),
+                            ) {
                                 return Err(TransactionRejectionReason::AccountDoesNotExist(
                                     iroha_data_model::query::error::FindError::Account(
                                         authority.clone(),
@@ -8722,9 +8738,15 @@ pub(crate) mod valid {
                                 }
                                 // ensure authority exists
                                 let missing_authority = {
+                                    let tx = txs[p.idx];
                                     let st = state_block.transaction();
-                                    !block.header().is_genesis()
-                                        && st.world.accounts.get(&p.authority).is_none()
+                                    missing_authority_requires_rejection(
+                                        &st,
+                                        tx,
+                                        &p.authority,
+                                        tx.instructions().instruction_count() as usize,
+                                        block.header().is_genesis(),
+                                    )
                                 };
                                 if missing_authority {
                                     record_amx_abort(state_block, p.idx, "commit");
@@ -8906,9 +8928,13 @@ pub(crate) mod valid {
                             state_tx.world.current_dataspace_id =
                                 Some(routing_decisions[idx].dataspace_id);
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                            let missing_authority = overlay.instruction_count() > 0
-                                && !block.header().is_genesis()
-                                && state_tx.world.accounts.get(&authority).is_none();
+                            let missing_authority = missing_authority_requires_rejection(
+                                &state_tx,
+                                tx,
+                                &authority,
+                                overlay.instruction_count(),
+                                block.header().is_genesis(),
+                            );
                             if missing_authority {
                                 Err(
                                     iroha_data_model::transaction::error::TransactionRejectionReason::AccountDoesNotExist(
@@ -9056,9 +9082,13 @@ pub(crate) mod valid {
                         state_tx.world.current_dataspace_id =
                             Some(routing_decisions[idx].dataspace_id);
                         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
-                        let missing_authority = overlay.instruction_count() > 0
-                            && !block.header().is_genesis()
-                            && state_tx.world.accounts.get(&authority).is_none();
+                        let missing_authority = missing_authority_requires_rejection(
+                            &state_tx,
+                            tx,
+                            &authority,
+                            overlay.instruction_count(),
+                            block.header().is_genesis(),
+                        );
                         if missing_authority {
                             Err(
                                 iroha_data_model::transaction::error::TransactionRejectionReason::AccountDoesNotExist(
@@ -15794,6 +15824,59 @@ mod tests {
         assert!(
             lookup(&accept_hash, "accept tx").is_ok(),
             "Second tx must succeed"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_and_record_transactions_allows_missing_authority_self_register() {
+        let chain_id = ChainId::from("missing-authority-self-register-block");
+
+        let (authority, keypair) = gen_account_in("wonderland");
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain_id.clone());
+        let (max_clock_drift, tx_limits) = {
+            let state_view = state.world.view();
+            let params = state_view.parameters();
+            (params.sumeragi().max_clock_drift(), params.transaction())
+        };
+
+        let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([
+                InstructionBox::from(Register::account(Account::new_domainless(
+                    authority.clone(),
+                ))),
+                InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
+            ])
+            .sign(keypair.private_key());
+        let crypto_cfg = state.crypto();
+        let tx = AcceptedTransaction::accept(
+            tx,
+            &chain_id,
+            max_clock_drift,
+            tx_limits,
+            crypto_cfg.as_ref(),
+        )
+        .expect("admission should accept transaction shape");
+
+        let unverified_block = BlockBuilder::new(vec![tx])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+
+        let mut state_block = state.block(unverified_block.header);
+        let valid_block = unverified_block
+            .validate_and_record_transactions(&mut state_block)
+            .unpack(|_| {});
+
+        assert!(
+            valid_block.as_ref().errors().next().is_none(),
+            "self-register block path should not produce transaction errors"
+        );
+        assert!(
+            state_block.world.accounts.get(&authority).is_some(),
+            "authority account should be materialized during block execution"
         );
     }
 

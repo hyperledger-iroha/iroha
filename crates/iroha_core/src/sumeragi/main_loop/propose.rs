@@ -1359,14 +1359,20 @@ impl Actor {
                     .propose
                     .proposal_cache
                     .insert_hint(proposal_hint);
-                let block_created_msg = self
-                    .frontier_block_created_from_proposal(&signed_block, &proposal)
-                    .map(BlockMessage::BlockCreated)
-                    .unwrap_or_else(|| {
-                        BlockMessage::BlockCreated(super::message::BlockCreated::from(
-                            &signed_block,
-                        ))
-                    });
+                let Some(block_created) =
+                    self.frontier_block_created_for_proposal_wire(&signed_block, &proposal)
+                else {
+                    warn!(
+                        height = proposal_height,
+                        view,
+                        block = %block_hash,
+                        "aborting active proposal because frontier metadata could not be rebuilt"
+                    );
+                    return Err(eyre!(
+                        "failed to rebuild authoritative frontier metadata for active proposal"
+                    ));
+                };
+                let block_created_msg = BlockMessage::BlockCreated(block_created);
                 let frame_len = super::consensus_block_wire_len(
                     self.common_config.peer.id(),
                     &block_created_msg,
@@ -1419,22 +1425,31 @@ impl Actor {
                 );
             };
 
-            let mut rbc_plan = self.prepare_rbc_plan(rbc::RbcPlanInputs {
-                signed_block: &signed_block,
-                transactions: &transactions_for_plan,
-                routing: &routing_batch,
-                payload: &payload_bytes,
-                payload_hash,
-                height: proposal_height,
-                view,
-                epoch: proposal_epoch,
-                local_validator_index,
-            })?;
+            // Loop back consensus messages locally so the leader participates immediately.
+            let frontier_block_created_ready = matches!(
+                &block_created_msg,
+                BlockMessage::BlockCreated(created) if created.frontier.is_some()
+            );
+            let mut rbc_plan = if frontier_block_created_ready {
+                None
+            } else {
+                self.prepare_rbc_plan(rbc::RbcPlanInputs {
+                    signed_block: &signed_block,
+                    transactions: &transactions_for_plan,
+                    routing: &routing_batch,
+                    payload: &payload_bytes,
+                    payload_hash,
+                    height: proposal_height,
+                    view,
+                    epoch: proposal_epoch,
+                    local_validator_index,
+                })?
+            };
             drop(payload_bytes);
 
             if let Some(plan) = rbc_plan.as_ref() {
-                // Install RBC sessions up front so local slot handling sees the transport state,
-                // but defer RBC network traffic until the frontier advertisement is enqueued.
+                // Non-frontier recovery still uses RBC transport, but exact frontier proposals
+                // are owned entirely by BlockCreated plus exact body fetch.
                 self.install_rbc_session_plan(&plan.primary)?;
                 if let Some(dup) = plan.duplicate.as_ref() {
                     self.install_rbc_session_plan(dup)?;
@@ -1442,11 +1457,6 @@ impl Actor {
                 self.publish_rbc_backlog_snapshot();
             }
 
-            // Loop back consensus messages locally so the leader participates immediately.
-            let frontier_block_created_ready = matches!(
-                &block_created_msg,
-                BlockMessage::BlockCreated(created) if created.frontier.is_some()
-            );
             let block_created_wire = Arc::new(block_created_msg.clone());
             let block_created_encoded = Arc::new(BlockMessageWire::encode_message(
                 block_created_wire.as_ref(),
@@ -1921,10 +1931,17 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let block_created = self
-            .frontier_block_created_from_proposal(&pending_block, &proposal)
-            .unwrap_or_else(|| super::message::BlockCreated::from(&pending_block));
-        let frontier_block_created_ready = block_created.frontier.is_some();
+        let Some(block_created) =
+            self.frontier_block_created_for_proposal_wire(&pending_block, &proposal)
+        else {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                "skipping cached proposal rebroadcast because frontier metadata could not be rebuilt"
+            );
+            return;
+        };
         let block_msg = Arc::new(BlockMessage::BlockCreated(block_created));
         let block_encoded = Arc::new(BlockMessageWire::encode_message(block_msg.as_ref()));
         for peer in topology.iter() {
@@ -1939,24 +1956,6 @@ impl Actor {
                 ),
             });
         }
-        if !frontier_block_created_ready {
-            let proposal_msg = Arc::new(BlockMessage::Proposal(proposal));
-            let proposal_encoded =
-                Arc::new(BlockMessageWire::encode_message(proposal_msg.as_ref()));
-            for peer in topology.iter() {
-                if peer == &local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessageWire::with_encoded(
-                        Arc::clone(&proposal_msg),
-                        Arc::clone(&proposal_encoded),
-                    ),
-                });
-            }
-        }
-
         if pending_queue_len > 0 {
             iroha_logger::info!(
                 height,
@@ -2683,6 +2682,15 @@ impl Actor {
             return false;
         }
 
+        if height == self.committed_height_snapshot().saturating_add(1) {
+            let _ = self.seed_frontier_slot_from_same_height_evidence(
+                height,
+                view_idx,
+                now,
+                "missing_qc",
+            );
+        }
+
         if let Some(block_hash) = self.authoritative_slot_owner_hash(height, view_idx) {
             if pending_queue_len > 0 {
                 debug!(
@@ -2703,12 +2711,7 @@ impl Actor {
             return false;
         }
 
-        if self
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view_idx))
-        {
+        if self.slot_has_proposal_evidence(height, view_idx) {
             if pending_queue_len > 0 {
                 debug!(
                     height,

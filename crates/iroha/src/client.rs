@@ -8554,7 +8554,8 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/contracts/deploy` with JSON body `{ authority, private_key, code_b64 }`.
+    /// POST `/v1/contracts/deploy` with JSON body
+    /// `{ authority, private_key, code_b64, dataspace? }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn post_contract_deploy_json(
@@ -8562,6 +8563,7 @@ impl Client {
         authority: &iroha_data_model::account::AccountId,
         private_key: &iroha_crypto::PrivateKey,
         code_b64: &str,
+        dataspace: Option<&str>,
     ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/contracts/deploy");
         let mut payload = norito::json::Map::new();
@@ -8573,6 +8575,9 @@ impl Client {
             ))?,
         );
         payload.insert("code_b64".into(), code_b64.into());
+        if let Some(dataspace) = dataspace {
+            payload.insert("dataspace".into(), dataspace.into());
+        }
         let body = norito::json::to_vec(&norito::json::Value::from(payload))?;
         let resp = self
             .default_request(HttpMethod::POST, url)
@@ -8588,6 +8593,118 @@ impl Client {
             ));
         }
         Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// POST `/v1/contracts/call` with a JSON body.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn post_contract_call_json(
+        &self,
+        authority: &iroha_data_model::account::AccountId,
+        private_key: Option<&iroha_crypto::PrivateKey>,
+        contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+        contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+        entrypoint: Option<&str>,
+        payload: Option<&norito::json::Value>,
+        creation_time_ms: Option<u64>,
+        gas_asset_id: Option<&str>,
+        fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+        gas_limit: u64,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/contracts/call");
+        let mut body = norito::json::Map::new();
+        body.insert("authority".into(), authority.to_string().into());
+        if let Some(private_key) = private_key {
+            body.insert(
+                "private_key".into(),
+                norito::json::to_value(&iroha_data_model::prelude::ExposedPrivateKey(
+                    private_key.clone(),
+                ))?,
+            );
+        }
+        if let Some(contract_address) = contract_address {
+            body.insert(
+                "contract_address".into(),
+                norito::json::to_value(contract_address)?,
+            );
+        }
+        if let Some(contract_alias) = contract_alias {
+            body.insert(
+                "contract_alias".into(),
+                norito::json::to_value(contract_alias)?,
+            );
+        }
+        if let Some(entrypoint) = entrypoint {
+            body.insert("entrypoint".into(), entrypoint.into());
+        }
+        if let Some(payload) = payload {
+            body.insert("payload".into(), payload.clone());
+        }
+        if let Some(creation_time_ms) = creation_time_ms {
+            body.insert("creation_time_ms".into(), creation_time_ms.into());
+        }
+        if let Some(gas_asset_id) = gas_asset_id {
+            body.insert("gas_asset_id".into(), gas_asset_id.into());
+        }
+        if let Some(fee_sponsor) = fee_sponsor {
+            body.insert("fee_sponsor".into(), fee_sponsor.to_string().into());
+        }
+        body.insert("gas_limit".into(), gas_limit.into());
+        let payload = norito::json::to_vec(&norito::json::Value::Object(body))?;
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(payload),
+        )?;
+        Self::parse_json_ok_response(&response, "contract call request")
+    }
+
+    /// POST `/v1/contracts/view` with a JSON body.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    pub fn post_contract_view_json(
+        &self,
+        authority: &iroha_data_model::account::AccountId,
+        contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+        contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+        entrypoint: Option<&str>,
+        payload: Option<&norito::json::Value>,
+        gas_limit: u64,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/contracts/view");
+        let mut body = norito::json::Map::new();
+        body.insert("authority".into(), authority.to_string().into());
+        if let Some(contract_address) = contract_address {
+            body.insert(
+                "contract_address".into(),
+                norito::json::to_value(contract_address)?,
+            );
+        }
+        if let Some(contract_alias) = contract_alias {
+            body.insert(
+                "contract_alias".into(),
+                norito::json::to_value(contract_alias)?,
+            );
+        }
+        if let Some(entrypoint) = entrypoint {
+            body.insert("entrypoint".into(), entrypoint.into());
+        }
+        if let Some(payload) = payload {
+            body.insert("payload".into(), payload.clone());
+        }
+        body.insert("gas_limit".into(), gas_limit.into());
+        let payload = norito::json::to_vec(&norito::json::Value::Object(body))?;
+        let response = self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(payload),
+        )?;
+        Self::parse_json_ok_response(&response, "contract view request")
     }
 
     /// POST `/v1/subscriptions/plans` with a JSON subscription plan payload.

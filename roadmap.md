@@ -658,6 +658,525 @@ Open work for this CUDA follow-up slice now remains:
   with actual CUDA match-finding / entropy kernels so the helper can stop
   falling back to CPU encode.
 
+Latest sync (2026-03-27 Izanami workload-side stale asset tracking is fixed, pending full-soak confirmation):
+`crates/izanami/src/instructions.rs`
+now stops publishing asset IDs into workload state before the corresponding
+transaction has actually succeeded:
+
+- asset-producing workload plans now carry success-only
+  `PlanUpdate::TrackAssetInstance` updates instead of mutating
+  `state.asset_instances` eagerly during planning;
+- failed or unconfirmed mint/transfer-style plans therefore cannot leave dead
+  asset IDs behind for later asset-metadata recipes to target; and
+- focused regressions proving both success-only tracking and failed-mint
+  metadata fallback are green.
+
+Validation:
+- `rustfmt --edition 2024 crates/izanami/src/instructions.rs`
+- `cargo test -p izanami failed_asset_plan_does_not_poison_asset_metadata_target -- --nocapture`
+- `cargo test -p izanami workload_record_result_tracks_assets_only_on_success -- --nocapture`
+- `cargo test -p izanami instructions::tests::staking_recipes_track_validator_registry -- --nocapture`
+- `cargo test -p izanami instructions::tests::bond_public_stake_tracks_share_and_uses_stake_asset -- --nocapture`
+- `cargo test -p izanami instructions::tests::asset_metadata_set_and_remove_trackers -- --nocapture`
+- `cargo test -p izanami instructions::tests::workload_record_result_applies_updates_on_success -- --nocapture`
+
+Open work from this workload fix:
+- rerun the full permissioned and NPoS preserved-peer stable soaks on this exact
+  cut to confirm the previous NPoS `Failed to find asset` rejection storm is
+  gone from the harness metrics;
+- if any workload rejections remain, classify whether they now come from a
+  different stale tracker or from a real on-chain semantic failure path; and
+- once the workload noise is clean, reevaluate the remaining stable p95 latency
+  gate without the prior `plan submission failed err=1382` distortion.
+
+Latest sync (2026-03-27 full preserved-peer stable soaks on the timeout-owner / exact-body retry cut are liveness-clean, but both modes still miss the p95 latency gate):
+the rebuilt 4-peer preserved-peer stable envelopes on
+`/tmp/izanami_permissioned_ownerhandoff_20260327T113630Z.log`
+and
+`/tmp/izanami_npos_ownerhandoff_20260327T121650Z.log`
+no longer reproduce the March 26 consensus no-progress failure:
+
+- permissioned reaches `strict/quorum=2004` with
+  `interval_p50_ms=1016` and `interval_p95_ms=1668`, then fails only the
+  stable latency gate;
+- NPoS reaches `strict/quorum=2001` with
+  `interval_p50_ms=1112` and `interval_p95_ms=2001`, then fails only the same
+  latency gate;
+- both runs have `no strict block height progress=0`,
+  `requested block-sync range pull from committed anchor=0`, and no aligned
+  liveness collapse; and
+- the preserved-peer logs also show no exact-body traffic on these soaks
+  (`FetchBlockBody=0`, `BlockBodyResponse=0`), which means the repaired
+  frontier-owner path was not actually exercised by the stable envelopes.
+
+Open work from this soak result:
+- treat current-frontier liveness as fixed on this cut and shift acceptance to
+  performance: reduce stable p95 block interval in permissioned from `1668ms`
+  and in NPoS from `2001ms` down to the `1000ms` gate;
+- isolate the NPoS workload noise before using its throughput numbers as a
+  consensus signal, because `mint_trigger_repetitions` still contributes
+  `1382` submission failures through the existing missing-asset path;
+- investigate the residual permissioned backpressure
+  (`plan submission failed err=7`,
+  `transaction queued for too long=3`,
+  `haven't got tx confirmation within 20s=4`) to see whether it is consensus
+  latency, ingress pressure, or workload harness behavior; and
+- add or rerun an explicit lagging-peer frontier repro on this exact cut,
+  because the stable soaks now prove cluster-wide liveness but do not yet show
+  nonzero `FetchBlockBody` / `BlockBodyResponse` traffic.
+
+Latest sync (2026-03-27 current-frontier timeout-owner and exact-body retry repair is implemented and targeted regressions are green):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/qc.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/votes.rs`, and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the remaining current-frontier control-flow gap identified in the
+March 26 preserved-peer soaks:
+
+- quorum-timeout for `committed + 1` now seeds and honors the `FrontierSlot`
+  from same-height prepare/commit votes or cached QCs even when the local
+  pending block is a stale competing hash;
+- vote/QC-driven current-frontier missing-payload paths bootstrap the slot
+  before exact-body routing, so `FetchBlockBody` is no longer blocked on a
+  pre-existing slot record;
+- exact-body retry and deep-catchup gating are now driven by `body_missing`
+  plus `exact_fetch_armed`, so same-height QC/vote evidence cannot strand the
+  slot in `AwaitCommitQc` with zero exact-body fetch traffic; and
+- focused regressions covering timeout handoff, vote placeholders, QC defer,
+  leader-first fetch, voter fallback, and lag-window/deep-catchup behavior all
+  pass on this cut.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/reschedule.rs crates/iroha_core/src/sumeragi/main_loop/votes.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo test -p iroha_core --lib zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_other_hash -- --nocapture`
+- `cargo test -p iroha_core --lib seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_vote_evidence -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_vote_placeholder_skips_generic_missing_block_request -- --nocapture`
+- `cargo test -p iroha_core --lib qc_missing_block_defer_contiguous_frontier_stays_on_exact_body_owner -- --nocapture`
+- `cargo test -p iroha_core --lib defer_qc_if_block_missing_with_commit_quorum_hint_seeds_contiguous_frontier_owner_create_only -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_body_repair_fetches_leader_before_voter_fallback -- --nocapture`
+- `cargo test -p iroha_core --lib request_missing_block_for_pending_rbc_holds_initial_frontier_fetch_within_ingress_grace -- --nocapture`
+- `cargo test -p iroha_core --lib retry_missing_block_requests_keeps_far_ahead_future_entries_passive_while_exact_frontier_owner_active -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_quorum_timeout_rotates_same_height_candidate_without_deep_catchup -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull -- --nocapture`
+
+Open work from this cut:
+- done in the new March 27 soak entry above; keep the code/testing notes here
+  as the implementation record for the liveness repair.
+
+Latest sync (2026-03-26 full preserved-peer stable soaks after the same-height `DeepCatchup` fix still fail in aligned `missing_qc` rotation):
+the current preserved-peer stable envelopes on
+`/tmp/izanami_permissioned_rootcausefix_20260326T193813Z.log`
+and
+`/tmp/izanami_npos_rootcausefix_20260326T193813Z.log`
+show that the old `frontier_stall_reset` dead end is gone, but both modes
+still fail liveness earlier in the handoff path:
+
+- permissioned stalls aligned at `strict/quorum=88` after reaching
+  `strict_reference_height=93`;
+- NPoS stalls aligned at `strict/quorum=8` after reaching
+  `strict_reference_height=13`;
+- both preserved-peer runs have
+  `requested block-sync range pull from committed anchor=0`,
+  so the previous committed-chain catch-up regression is no longer the active
+  failure;
+- both preserved-peer runs still have
+  `FetchBlockBody=0` and `BlockBodyResponse=0` while also logging
+  `routed contiguous missing-parent recovery through exact frontier body owner`;
+  and
+- the critical same-height timeout records show
+  `handoff_frontier_quorum_timeout_owner=false` and
+  `frontier_recovery_advance=None`, followed immediately by local
+  `view change triggered ... cause="missing_qc"` and pacemaker reproposal.
+
+Open work from this soak result:
+- make quorum-timeout for `committed + 1` actually hand ownership to the
+  frontier slot when the node has same-height commit-vote/QC evidence but is
+  still missing the payload locally;
+- stop the legacy `missing_qc` reschedule/view-change path from rotating the
+  current frontier while `handoff_frontier_quorum_timeout_owner` is false and
+  the slot should own missing-payload recovery;
+- make the slot arm real `FetchBlockBody` on that current-frontier missing-
+  payload path, since exact-body traffic is still zero in both preserved-peer
+  runs; and
+- rerun the full permissioned and NPoS preserved-peer stable soaks after that
+  handoff fix, because the acceptance gate is still cluster-wide liveness.
+
+Latest sync (2026-03-26 current-frontier liveness root cause follow-up: same-height quorum-loss now stays in slot-owned rotation instead of falling into `DeepCatchup`):
+`crates/iroha_core/src/sumeragi/main_loop.rs`
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the remaining bad state transition behind the aligned-cluster
+`frontier_stall_reset` dead end:
+
+- `FrontierSlotEvent::OnQuorumTimeout` no longer escalates `AwaitCommitQc`
+  into `DeepCatchup`; same-height quorum-loss stays in normal slot-owned
+  rebroadcast/view rotation;
+- `FrontierSlotEvent::OnLagWindowExpired` and
+  `frontier_slot_lag_window_expired(...)` are now body-specific, so only
+  stalled exact-body repair may enter `DeepCatchup`;
+- the existing exact-body deep-catchup regression still passes, so the
+  absorbing catch-up mode remains available for real frontier body misses; and
+- live current-frontier quorum-timeout recovery now explicitly stays off
+  committed-chain range pulls until the slot itself owns a real deep-catchup
+  transition.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo test -p iroha_core --lib frontier_slot_quorum_timeout_rotates_same_height_candidate_without_deep_catchup -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull -- --nocapture`
+
+Open work from this follow-up:
+- rebuild `iroha3d` / `izanami` on this exact cut and rerun the full
+  permissioned preserved-peer stable soak to confirm the aligned
+  `frontier_stall_reset` loop no longer reproduces at the current frontier;
+- rerun the full NPoS preserved-peer stable soak on the same cut once
+  permissioned liveness is confirmed, because the previous rerun was also
+  falling into the same aligned current-frontier range-pull dead end; and
+- if either soak still stalls, capture whether exact-body traffic remains zero
+  or whether a different same-height ownership path is now responsible.
+
+Latest sync (2026-03-26 current-frontier liveness root cause: stale lag expiry now ages from `last_progress_at`, not `observed_at`):
+`crates/iroha_core/src/sumeragi/main_loop.rs`
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the timer bug behind the bad same-height `DeepCatchup` transition:
+
+- `FrontierSlot::lag_started_at()` now falls back to `last_progress_at`, so
+  body/vote/QC progress refreshes the slot-owned lag window instead of letting
+  `AwaitVotes` / `AwaitCommitQc` age from the original first observation;
+- a new focused regression,
+  `frontier_slot_quorum_timeout_uses_last_progress_for_lag_window_expiry`,
+  proves a same-height slot that just observed vote progress no longer enters
+  `DeepCatchup` on the next quorum-timeout tick unless the refreshed lag window
+  really expires; and
+- the existing deep-catchup regression remains in place to ensure the slot
+  still enters `DeepCatchup` once the refreshed lag window has genuinely timed
+  out.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo test -p iroha_core --lib frontier_slot_quorum_timeout_uses_last_progress_for_lag_window_expiry -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+
+Open work from this fix:
+- rerun the full permissioned and NPoS preserved-peer stable soaks on this
+  exact cut and confirm the aligned-cluster `frontier_stall_reset` deadlock no
+  longer reproduces;
+- if either soak still stalls, capture whether `FetchBlockBody` remains zero or
+  whether the cluster is now getting stuck after same-height progress is
+  refreshed correctly; and
+- if the liveness gate is clean, reevaluate the separate NPoS p95/workload
+  noise on a fresh unchanged binary.
+
+Latest sync (2026-03-26 current-frontier ownership follow-up: same-height timeout wrappers now create the slot owner instead of short-circuiting on `committed + 1`):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/{proposal_handlers.rs,propose.rs,qc.rs,votes.rs}`,
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now close the specific lagging-peer handoff bug found while implementing the
+single-owner frontier FSM:
+
+- `seed_frontier_recovery_for_quorum_timeout(...)` and
+  `seed_frontier_recovery_for_missing_payload(...)` no longer treat
+  `height == committed + 1` as proof that a `FrontierSlot` already exists; if
+  the slot is absent they now fall through to same-height slot seeding instead
+  of returning early and reopening legacy behavior;
+- same-height commit/prepare vote and QC evidence for `committed + 1` can now
+  instantiate the frontier slot even when the original proposal was missed;
+- pacemaker proposal assembly now seeds the slot from same-height evidence
+  before deciding the height is free for a new local proposal; and
+- proposal-seen suppression now treats active `AwaitBody` / `DeepCatchup`
+  frontier-slot ownership as authoritative same-height evidence.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo test -p iroha_core --lib seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_vote_evidence -- --nocapture`
+- `cargo test -p iroha_core --lib slot_has_proposal_evidence_counts_await_body_and_deep_catchup_slot_ownership -- --nocapture`
+- `cargo test -p iroha_core --lib pacemaker_defers_reproposal_when_frontier_slot_owns_current_height -- --nocapture`
+- `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+
+Open work from this follow-up:
+- rerun the full permissioned preserved-peer stable soak on this exact cut and
+  confirm the lagging peer at `91/view=0` stays under slot-owned repair instead
+  of locally reproposing `91/view=1`;
+- if permissioned still stalls, capture whether the slot enters `DeepCatchup`
+  deterministically or whether exact-body traffic still remains zero; and
+- once the current-frontier liveness regression is clean in permissioned,
+  rerun the NPoS preserved-peer soak to verify the fix did not reopen the old
+  aligned `708/709` deadlock while the separate p95/workload issue remains
+  tracked independently.
+
+Latest sync (2026-03-26 single-owner frontier-FSM soak verdict: permissioned still fails liveness, NPoS reaches target but misses the p95 gate):
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/{qc.rs,votes.rs,block_sync.rs,proposal_handlers.rs}`,
+and
+`crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+now route `committed + 1` through one explicit `FrontierSlot` owner:
+
+- `FrontierSlot` is now a height-owned FSM with explicit mode/phase/candidate,
+  timer/quorum/repair state, and slot events/actions; same-height
+  `BlockCreated`, vote/QC, body-availability, future-gap, timeout, and
+  lag-window signals now feed that FSM instead of mutating the frontier owner
+  through competing hot paths;
+- exact `FetchBlockBody`, current-slot view rotation, and the transition into
+  absorbing `DeepCatchup` are now slot-owned for `committed + 1`; the exact
+  frontier no longer intentionally reopens generic `FetchPendingBlock` recovery
+  from `request_missing_block(...)` while the slot remains in normal mode; and
+- same-height proposal evidence now survives view changes when the slot still
+  owns an authoritative candidate, and focused tests were updated for slot-led
+  quorum-timeout suppression, deep-catch-up entry, and same-height candidate
+  preservation.
+
+Latest soak evidence on this cut:
+- permissioned still fails on aligned frontier liveness, not on throughput:
+  `no strict block height progress for 600s (strict min height 90, quorum min height 90, target 2000, tolerated_failures 0)`;
+  preserved-peer counts were
+  `FetchBlockBody=0`,
+  `BlockBodyResponse=0`,
+  `requested missing BlockCreated while awaiting RBC INIT=0`,
+  `sharing from fallback anchor=0`,
+  `commit quorum missing past timeout=5`,
+  `view change triggered=5`,
+  `routed contiguous missing-parent recovery through exact frontier body owner=4`
+- NPoS no longer reproduces the earlier aligned `708/709` deadlock and stayed
+  live to `strict/quorum=2004`, but the run still failed the stable gate on
+  `quorum p95 block interval 2133ms exceeded threshold 1000ms`
+  after reaching target; all `1494` recorded failures were repeated
+  `Failed to find asset` rejections from the stable workload plan
+  `mint_trigger_repetitions`
+- both modes removed the old frontier rescue signatures, but neither soak
+  showed live exact-body traffic
+  (`FetchBlockBody=0`, `BlockBodyResponse=0`)
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/votes.rs crates/iroha_core/src/sumeragi/main_loop/block_sync.rs crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- `cargo check -p iroha_core --lib` is currently blocked by existing unrelated
+  parser errors in `crates/ivm/src/ivm.rs`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- full permissioned stable preserved-peer soak
+- full NPoS stable preserved-peer soak
+
+Open work from this slice:
+- fix or isolate the unrelated `crates/ivm/src/ivm.rs` parse break, then rerun
+  `cargo check -p iroha_core --lib` and the focused `iroha_core` frontier test
+  set on this slot-FSM cut;
+- fix the remaining aligned permissioned liveness hole around heights
+  `88/91`: the current slot must either fetch/validate the missing exact body
+  or deterministically enter `DeepCatchup`, not align at one tip and stop with
+  zero exact-body traffic;
+- make the slot-owned exact-body lane visibly live when the frontier is really
+  missing: preserved-peer logs should show nonzero `FetchBlockBody` /
+  `BlockBodyResponse` on the failure path instead of only
+  `routed contiguous missing-parent recovery through exact frontier body owner`;
+- keep `no proposal observed for view before changing view` suppressed for a
+  same-height authoritative slot candidate and continue reducing the remaining
+  `missing_qc` / `commit quorum missing past timeout` churn that still appears
+  in both modes; and
+- debug the NPoS stable workload bug
+  (`mint_trigger_repetitions` repeatedly targets a missing asset) separately
+  from consensus so the next NPoS preserved-peer soak is a clean performance
+  comparator against the `1000ms` p95 gate.
+
+Latest sync (2026-03-26 deterministic lagging-reopen cut still fails preserved-peer stable soaks with new liveness bugs):
+the current frontier-owner tree no longer fails the stable preserved-peer
+envelope on the old fallback-anchor signature, but it still does not satisfy
+end-to-end liveness:
+
+- permissioned now fails quickly on a single marooned near-tip peer instead of
+  the one-hour p95 gate:
+  `height divergence exceeded safety window (divergence 114, threshold 16, window 60s, quorum min 78, strict reference 192, strict min 78, lagging peers 1, target 2000, tolerated_failures 0)`;
+  the lagging peer `mighty_cheetah` committed through `78`, observed /
+  proposed `79`, then looped on contiguous missing-parent recovery for `80`
+  without converging;
+- NPoS no longer split by a single lagging peer on this cut, but the whole
+  cluster still deadlocks: all four peers aligned at `strict/quorum=708`,
+  then spun on `missing_qc` / `quorum_timeout` / occasional
+  `stake_quorum_timeout` at height `709` until Izanami failed
+  `no strict block height progress for 600s`;
+- preserved peer counts confirm the old frontier signals are mostly gone but
+  the new lane still does not produce live exact-body traffic:
+  - permissioned:
+    `FetchBlockBody=0`, `BlockBodyResponse=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `sharing from fallback anchor=0`
+  - NPoS:
+    `FetchBlockBody=0`, `BlockBodyResponse=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=2`,
+    `sharing from fallback anchor=0`
+  - dominant new signatures are `no proposal observed for view before changing view`,
+    `commit quorum missing past timeout`, and large `view change triggered`
+    counts, not fallback-anchor rescue;
+- NPoS stable workload remains benchmark-contaminated by repeated
+  asset-lookup failures and later queue/confirmation timeouts, but the final
+  `708` aligned stall is still a real consensus-liveness failure independent
+  of the workload noise.
+
+Validation:
+- `cargo fmt --all`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo check -p iroha_core --lib --message-format short`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core frontier_catchup_stall_mode_throttles_reanchor_to_one_per_window_across_reasons --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core frontier_shared_window_gate_all_reasons_single_emit --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core range_pull_anchor_uses_prev_latest_pair_for_frontier_conflict_and_no_roster_reasons --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core frontier_catchup_stall_mode_window_gate_applies_to_frontier_stall_reset_reason --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core missing_qc_height_stall_mode_throttles_idle_reacquire_range_pull_to_one_per_window --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfullfix-target cargo test -p iroha_core missing_qc_height_stall_mode_throttles_qc_missing_payload_range_pull_to_one_per_window --lib -- --nocapture`
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- full permissioned stable preserved-peer soak
+- full NPoS stable preserved-peer soak
+
+Open work from this soak round:
+- remove the remaining split between contiguous missing-parent handling and the
+  frontier slot owner so a marooned `committed + 1` peer cannot sit on
+  repeated `routed contiguous missing-parent recovery through exact frontier body owner`
+  without ever issuing or completing a real exact-body transfer;
+- make the deterministic deep catch-up reopen actually terminal for a lagging
+  near-tip peer: once the shared lagging window fires, the peer must either
+  commit the frontier or decisively transition into deep catch-up instead of
+  spinning on local `79`/`80` pressure;
+- fix the aligned-cluster liveness hole at `height = committed + 1` so peers do
+  not all reach the same tip and then rotate forever on `missing_qc`,
+  `quorum_timeout`, and `stake_quorum_timeout` with no lagging peer present;
+- finish deleting the residual RBC-era frontier paths until
+  `requested missing BlockCreated while awaiting RBC INIT` reaches zero even in
+  NPoS preserved-peer runs; and
+- debug the NPoS stable workload asset-lookup failures separately so its
+  throughput numbers become a clean consensus signal again.
+
+Latest sync (2026-03-25 frontier-owner full stable soaks still fail on legacy frontier recovery):
+the current `BlockCreated` frontier-owner cut still fails both full 4-peer
+stable preserved-peer soaks at the duration deadline:
+
+- permissioned finished at height `1403` and NPoS finished at height `1387`,
+  with both runs failing `quorum p95 block interval 5001ms exceeded threshold
+  1000ms`;
+- neither mode showed any live exact-body frontier traffic
+  (`FetchBlockBody=0`, `BlockBodyResponse=0`);
+- both modes still relied on legacy frontier rescue
+  (`requested missing BlockCreated while awaiting RBC INIT` and
+  `sharing from fallback anchor`);
+- permissioned remains the cleaner consensus signal, while the NPoS stable
+  workload is additionally broken by repeated asset-lookup submission failures
+  and should not be used as a clean performance comparator until that harness
+  issue is fixed.
+
+Validation:
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- full permissioned stable preserved-peer soak
+- full NPoS stable preserved-peer soak
+
+Open work from this soak round:
+- delete the remaining frontier ownership split so `committed + 1` repair can
+  no longer fall back to missing-`BlockCreated` rescue or fallback-anchor
+  sharing, and the preserved-peer logs show nonzero exact-body fetches instead;
+- keep `BlockSyncUpdate`, anchor sharing, and generic missing-block recovery out
+  of the frontier lane entirely; and
+- debug the NPoS stable workload asset-lookup failures before treating its
+  full-hour soak numbers as meaningful consensus-only performance data.
+Latest sync (2026-03-27 domain-links SNS lease fixture repair):
+`integration_tests/tests/domain_links.rs`
+now closes the failing domain-links integration slice under the current
+SNS-backed domain-registration rules.
+
+- the test helper now provisions an active SNS domain-name lease for the
+  current authority before submitting `Register::domain(...)`, so the live
+  integration flow matches the runtime invariant instead of assuming direct
+  domain registration still works without a lease;
+- the affected test domain literals now use hyphenated labels accepted by the
+  default SNS domain pricing policy, removing the stale underscore-based
+  fixture mismatch; and
+- a small helper regression now pins the generated SNS registration payload for
+  this file, covering the owner/controller/payment defaults used by the lease
+  setup path.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test domain_links -- --nocapture`
+
+Open work for this domain-links slice now remains:
+- no confirmed open work remains for the focused `domain_links` failures fixed
+  here; broader integration suites that still create non-genesis domains
+  directly should adopt the same SNS-backed setup if they begin failing under
+  the same invariant.
+
+Latest sync (2026-03-27 Torii contract deploy route repair):
+`crates/iroha_torii/src/lib.rs`
+now closes the concrete contract-route drift behind the failing
+`deploy_and_get_contract_manifest_via_torii` integration test.
+
+- the contract/VK route group now mounts the three app-facing contract
+  mutation endpoints that already had handlers and OpenAPI/MCP references:
+  `POST /v1/contracts/deploy`,
+  `POST /v1/contracts/instance`, and
+  `POST /v1/contracts/instance/activate`;
+- a focused router regression now drives `/v1/contracts/deploy` through
+  `api_router_for_tests()` with `ConnectInfo` injected, so this failure mode
+  is pinned at the router assembly layer rather than only at the handler unit
+  layer; and
+- the original 4-peer integration test now passes end-to-end, confirming the
+  route repair in the live Torii + consensus harness.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_torii --lib contracts_deploy_route_is_mounted_in_api_router -- --nocapture`
+- `cargo test -p integration_tests --test contracts deploy_and_get_contract_manifest_via_torii -- --nocapture`
+
+Open work for this contract-route slice now remains:
+- no confirmed open work remains for the `/v1/contracts/*` Torii route
+  mounting covered by this regression; broader app-API route drift checks can
+  continue independently.
+
+Latest sync (2026-03-27 genesis bootstrap alignment for offline-allowance validation):
+`crates/iroha_test_network/src/config.rs`
+now closes the direct-test bootstrap mismatch that was still failing after the
+offline-allowance route/helper repair.
+
+- the focused `genesis_executes_offline_allowance_instruction` unit now starts
+  from a real genesis baseline with the `genesis` domain/account materialized
+  instead of an impossible empty-domain world;
+- it also seeds SNS genesis alias bootstrap state before direct block
+  validation, matching the production `populate_genesis_results(...)` path; and
+- the offline allowance fixture controller account is now built through the
+  standard account builder path so escrow/bootstrap lookups see the same shape
+  of account state as the runtime.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_test_network genesis_executes_offline_allowance_instruction -- --nocapture`
+
+Latest sync (2026-03-27 offline allowance Torii route + genesis-helper repair):
+`integration_tests/tests/address_canonicalisation.rs`
+and
+`crates/iroha_torii/src/{lib.rs,routing.rs}`
+now close the next concrete offline-allowance regression in the app-facing I105
+coverage.
+
+- the offline-allowance genesis helper now seeds a valid named asset
+  definition and no longer duplicates built-in testnet domains like `aid`,
+  which clears the genesis `ContainsErrors` failure that was blocking the
+  allowance endpoint tests;
+- a focused helper regression now inspects the built genesis block directly so
+  this helper cannot silently drift back to duplicate-domain or nameless-asset
+  registrations; and
+- Torii now mounts `GET /v1/offline/allowances` plus
+  `POST /v1/offline/allowances/query` again, and the shared endpoint constants
+  match those public paths instead of placeholder deleted-endpoint markers.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition --test address_canonicalisation -- --nocapture`
+- `cargo test -p integration_tests offline_allowances_ --test address_canonicalisation -- --nocapture`
+
+Open work for this offline-allowance slice now remains:
+- decide whether the rest of the placeholder `"<deleted-offline-...>"` Torii
+  endpoint constants and unmounted allowance/certificate surfaces should be
+  restored or pruned so OpenAPI, handlers, and route registration stay in one
+  coherent state.
+
 Latest sync (2026-03-27 Metal Merkle helper fallback alignment):
 `crates/ivm/src/vector.rs`
 now closes the next concrete Metal/no-feature API mismatch in the ongoing
@@ -10638,6 +11157,36 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
   - `docs/source/fastpq_plan.md` (definition note explaining TODO markers).
   - `vendor/icrate/**`, `vendor/halo2-axiom/**`, `vendor/halo2curves-axiom/**` (upstream TODO markers in vendored dependencies).
 
+## 2026-03-26 Kotodama / IVM Developer Experience Observability Tranche
+
+- [x] Add additive artifact-local compiler debug metadata:
+  - new `DBG1` section in `crates/ivm_abi/src/metadata.rs`
+  - function-level source map entries (`function_name`, `pc_start`, `pc_end`, `line`, `column`)
+  - function-level budget summaries (`bytecode_bytes`, `bytecode_words`, `frame_bytes`, `jump_span_words`, `jump_range_risk`)
+- [x] Thread function source locations through Kotodama AST → semantic → IR lowering so debug metadata survives compilation.
+- [x] Extend the Kotodama compiler with `CompileReport` and `compile_source_with_manifest_and_report(...)`, and add `CompilerOptions::emit_debug` so debug metadata can be emitted or stripped without changing ABI v1.
+- [x] Add structured VM-side execution diagnostics in `crates/ivm_abi/src/error.rs` and capture them in `crates/ivm/src/ivm.rs` via `IVM::last_diagnostic()`.
+- [x] Surface diagnostics through runtime entrypoints:
+  - compact validation-failure strings in `crates/iroha_core/src/smartcontracts/ivm.rs`
+  - structured `vm_diagnostic` payloads for `/v1/contracts/view` failures in `crates/iroha_torii/src/routing.rs`
+- [x] Extend tooling:
+  - `koto_compile` now supports `--emit-source-map`, `--emit-budget-report`, `--diagnostic-format`, and `--strip-debug`
+  - `koto_lint` JSON output now includes lint `severity` and `category`
+- [x] Follow-up tranche: add a dedicated local contract-view debugger command in `iroha_cli`.
+  - new `contracts debug-view` command executes read-only entrypoints locally from compiled bytecode
+  - supports optional account fixtures, durable-state fixtures, decoded return values, syscall trace output, and source snippets from `--source-file`
+- [x] Follow-up tranche: add pure `get_or(map, key, default)` plus `view fn` rejection of mutating state reads.
+  - `std::map::get_or` / `get_or` now lower to deterministic read-only selection without `MapSet` / `StateSet`
+  - `view fn` now rejects `get_or_insert_default(...)` with an explicit guidance error pointing callers to `get_or(...)`
+- [x] Follow-up tranche: add singleton struct-backed durable state lowering for `state StructName foo;`.
+  - whole-struct reads now reconstruct tuple/struct values from flattened durable child paths
+  - whole-struct writes now fan back out into child `StateSet` operations for flattened durable storage
+- [x] Follow-up tranche: embed logical source paths, enforce transitive `view fn` purity, and add an offline public-entrypoint debugger.
+  - `DBG1` source map / budget entries now carry optional logical `source_path`, `koto_compile` derives it from the input path, and VM/Torii/CLI diagnostics surface it directly
+  - `contracts debug-view` now auto-resolves source snippets from embedded `source_path` when `--source-file` is omitted, while `--source-file` remains an explicit override
+  - new `contracts debug-call` command executes `public` entrypoints offline, reporting decoded return values, queued instructions, durable-state overlay mutations, syscall trace, and structured trap diagnostics
+  - semantic `view fn` enforcement now rejects direct and transitive durable-state mutation / instruction emission before runtime instead of relying only on debugger / Torii guards
+
 ## Multisig Admission Follow-up
 1. Add an end-to-end integration test that proves an unregistered signatory can successfully complete `MultisigPropose`/`MultisigApprove` against a live multi-peer network (not just unit-level admission/execution slices).
 
@@ -10663,3 +11212,6 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 ## Asset Alias Lease Follow-up
 1. Completed: translated docs and SDK-facing API references now describe the current `alias_binding` response payload, the persisted lease statuses (`permanent`, `leased_active`, `leased_grace`, `expired_pending_cleanup`), the chain-time-based alias cutoff, and the post-grace `expired_pending_cleanup` readback semantics.
 2. No dedicated alias-binding lookup/list endpoint is planned for now; asset-definition get/list/query and alias-resolution surfaces already expose `alias_binding`, and list/query now support `alias_binding.*` filter/sort selectors. Revisit only if operators need standalone lease inventory without fetching definitions.
+
+## 2026-03-27 Soracloud Live Torii Regression Follow-up
+1. No new roadmap items were opened by the March 27 Soracloud regression sweep; the UTF-8 account-header, canonical asset-definition, and NPoS fee-bootstrap fixes closed the reported `integration_tests/tests/iroha_cli.rs` failures, so the remaining roadmap stays unchanged.

@@ -17,7 +17,8 @@ fn allow_uncertified_block_sync_roster(
     local_height: u64,
     requested_missing_block: bool,
 ) -> bool {
-    block_height == local_height.saturating_add(1) || requested_missing_block
+    let _ = (block_height, local_height);
+    requested_missing_block
 }
 
 impl Actor {
@@ -456,6 +457,11 @@ impl Actor {
             if !self.prepare_background_block_message(&mut msg) {
                 return;
             }
+            #[cfg(test)]
+            self.record_background_request(&BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: msg.clone(),
+            });
             self.dispatch_background_fallback(BackgroundRequest::Post { peer, msg });
             return;
         }
@@ -467,9 +473,9 @@ impl Actor {
             block_hash: block.hash(),
             height: block.header().height().get(),
             view: block.header().view_change_index(),
-            body: super::message::BlockBodyData::BlockCreated(super::message::BlockCreated::from(
-                block,
-            )),
+            body: super::message::BlockBodyData::BlockCreated(
+                self.frontier_block_created_for_wire(block),
+            ),
         };
         self.dispatch_fetch_pending_block_response(
             peer,
@@ -488,8 +494,13 @@ impl Actor {
         if slot.block_hash != block_hash || slot.height != height || slot.view != view {
             return;
         }
+        slot.candidate.body_state = super::FrontierBodyState::Available;
         slot.body_present = true;
-        let requesters = std::mem::take(&mut slot.pending_requesters);
+        slot.phase = super::FrontierSlotPhase::ValidateBody;
+        slot.timers.last_progress_at = Instant::now();
+        let requesters = std::mem::take(&mut slot.repair_state.pending_requesters);
+        slot.pending_requesters.clear();
+        slot.sync_compat_fields();
         for peer in requesters {
             self.send_block_body_response(peer, block);
         }
@@ -644,6 +655,10 @@ impl Actor {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
+        let local_committed_height = self.committed_height_snapshot();
+        if block_height >= local_committed_height {
+            return BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block));
+        }
         let update = super::block_sync_update_with_roster(
             block,
             self.state.as_ref(),
@@ -677,7 +692,7 @@ impl Actor {
             ConsensusMode::Npos => true,
         };
         if !send_block_sync {
-            BlockMessage::BlockCreated(super::message::BlockCreated::from(block))
+            BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block))
         } else {
             BlockMessage::BlockSyncUpdate(update)
         }
@@ -854,7 +869,7 @@ impl Actor {
         );
 
         if hintless_block_sync {
-            let created = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
+            let created = BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block));
             let header = block.header();
             for (peer, meta) in peers {
                 let hintless_policy = super::decide_hintless_block_sync_response_policy(
@@ -898,7 +913,7 @@ impl Actor {
         let bypass_rosterless_created =
             allow_hintless_block_sync_bypass && matches!(msg, BlockMessage::BlockCreated(_));
         if matches!(msg, BlockMessage::BlockSyncUpdate(_)) {
-            let created = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
+            let created = BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block));
             let created_len =
                 super::consensus_block_wire_len(self.common_config.peer.id(), &created);
             // For roster-hinted updates, include a companion BlockCreated copy so peers can
@@ -1174,6 +1189,8 @@ impl Actor {
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
         let parent_hash = block.header().prev_block_hash();
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let expected_epoch = self.epoch_for_height(block_height);
         let requested_missing_block_by_hash = self
             .pending
             .missing_block_requests
@@ -1192,6 +1209,113 @@ impl Actor {
             );
         }
         let block_known_locally = self.block_known_locally(block_hash);
+        let has_commit_votes = !commit_votes.is_empty();
+        let has_commit_evidence =
+            incoming_qc.is_some() || validator_checkpoint.is_some() || has_commit_votes;
+        self.prune_frontier_slot_state();
+        let frontier_lane_owned = (local_height.saturating_add(1)..=local_height.saturating_add(2))
+            .contains(&block_height);
+        let frontier_lane_locked = self
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height == local_height.saturating_add(1))
+            || self
+                .next_slot_prefetch
+                .as_ref()
+                .is_some_and(|slot| slot.height == local_height.saturating_add(2));
+        let frontier_lane_deep_catchup = block_height > local_height.saturating_add(1)
+            && frontier_lane_owned
+            && has_commit_evidence
+            && (requested_missing_block || block_known_locally);
+        if frontier_lane_owned && !frontier_lane_deep_catchup {
+            let mut processed_votes = 0usize;
+            let mut dropped_votes = 0usize;
+            for vote in commit_votes {
+                if vote.phase != crate::sumeragi::consensus::Phase::Commit
+                    || vote.block_hash != block_hash
+                    || vote.height != block_height
+                    || vote.view != block_view
+                    || vote.epoch != expected_epoch
+                {
+                    dropped_votes = dropped_votes.saturating_add(1);
+                    continue;
+                }
+                self.handle_vote(vote);
+                processed_votes = processed_votes.saturating_add(1);
+            }
+            if dropped_votes > 0 {
+                debug!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    dropped_votes,
+                    "dropping mismatched commit votes from contiguous frontier block sync update"
+                );
+            }
+            if block_known_locally {
+                debug!(
+                    height = block_height,
+                    view = block_view,
+                    block = %block_hash,
+                    processed_votes,
+                    has_commit_qc = incoming_qc.is_some(),
+                    has_checkpoint = validator_checkpoint.is_some(),
+                    "ignoring frontier-lane BlockSyncUpdate sidecars for a locally known block"
+                );
+                return Ok(());
+            }
+            info!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                processed_votes,
+                has_commit_qc = incoming_qc.is_some(),
+                has_checkpoint = validator_checkpoint.is_some(),
+                "routing frontier-lane BlockSyncUpdate through BlockCreated owner"
+            );
+            return self.handle_block_created_from_block_sync(
+                super::message::BlockCreated {
+                    block,
+                    frontier: None,
+                },
+                sender,
+                true,
+            );
+        }
+        if frontier_lane_deep_catchup {
+            info!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                block_known_locally,
+                has_commit_qc = incoming_qc.is_some(),
+                has_checkpoint = validator_checkpoint.is_some(),
+                has_commit_votes,
+                "processing contiguous frontier BlockSyncUpdate as deep catch-up"
+            );
+        }
+        if !block_known_locally
+            && !requested_missing_block
+            && frontier_lane_locked
+            && block_height > local_height.saturating_add(2)
+        {
+            debug!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                local_height,
+                frontier_slot_height = self.frontier_slot.as_ref().map(|slot| slot.height),
+                next_slot_prefetch_height =
+                    self.next_slot_prefetch.as_ref().map(|slot| slot.height),
+                "dropping block sync update beyond the active frontier lanes"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockSyncUpdate,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::FutureWindow,
+            );
+            return Ok(());
+        }
         let has_commit_votes = !commit_votes.is_empty();
         let has_commit_evidence =
             incoming_qc.is_some() || validator_checkpoint.is_some() || has_commit_votes;
@@ -1306,7 +1430,6 @@ impl Actor {
             let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
             (consensus_mode, mode_tag, prf_seed, local_height)
         };
-        let expected_epoch = self.epoch_for_height(block_height);
         let kura_committed_start = Instant::now();
         if let Ok(height_usize) = usize::try_from(block_height)
             && let Some(nz_height) = NonZeroUsize::new(height_usize)
@@ -1441,7 +1564,6 @@ impl Actor {
             // can be dropped before they revive the pending entry.
             requested_missing_block = true;
         }
-        let has_commit_votes = !commit_votes.is_empty();
         let mut commit_votes = Some(commit_votes);
         let mut process_commit_votes = |actor: &mut Actor| {
             let Some(commit_votes) = commit_votes.take() else {
@@ -3386,7 +3508,8 @@ impl Actor {
             && slot.height == request.height
             && slot.view == request.view
         {
-            slot.pending_requesters.insert(peer);
+            slot.repair_state.pending_requesters.insert(peer);
+            slot.sync_compat_fields();
         }
         self.record_consensus_message_handling(
             super::status::ConsensusMessageKind::FetchBlockBody,
@@ -3402,16 +3525,24 @@ impl Actor {
         response: super::message::BlockBodyResponse,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        let dedup_key = super::BlockPayloadDedupKey::BlockBodyResponse {
+            height: response.height,
+            view: response.view,
+            block_hash: response.block_hash,
+        };
         if !self.frontier_slot_is_exact_height(response.height) {
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
         let Some(slot) = self.frontier_slot.as_ref() else {
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         };
         if slot.block_hash != response.block_hash
             || slot.height != response.height
             || slot.view != response.view
         {
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
         let super::message::BlockBodyData::BlockCreated(block_created) = response.body;
@@ -3425,18 +3556,27 @@ impl Actor {
                 super::status::ConsensusMessageOutcome::Dropped,
                 super::status::ConsensusMessageReason::InvalidPayload,
             );
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
-        if let Some(slot) = self.frontier_slot.as_mut() {
-            if let Some(sender) = sender
-                .clone()
-                .filter(|peer| peer != self.common_config.peer.id())
-            {
-                slot.voters.insert(sender);
-            }
-            slot.body_present = true;
+        let sender_for_slot = sender
+            .clone()
+            .filter(|peer| peer != self.common_config.peer.id());
+        let result = self.handle_block_created(block_created, sender);
+        let body_materialized = self.frontier_block_materialized_locally(response.block_hash);
+        if body_materialized {
+            let _ = self.handle_frontier_slot_event(
+                Instant::now(),
+                super::FrontierSlotEvent::OnBodyAvailable {
+                    block_hash: response.block_hash,
+                    view: response.view,
+                    sender: sender_for_slot,
+                },
+            );
+        } else {
+            self.release_block_payload_dedup(&dedup_key);
         }
-        self.handle_block_created(block_created, sender)
+        result
     }
 
     fn prepare_known_block_qc_work(
@@ -3984,8 +4124,8 @@ mod allow_uncertified_block_sync_roster_tests {
     use super::allow_uncertified_block_sync_roster;
 
     #[test]
-    fn allows_next_height_without_explicit_request() {
-        assert!(allow_uncertified_block_sync_roster(11, 10, false));
+    fn rejects_next_height_without_explicit_request() {
+        assert!(!allow_uncertified_block_sync_roster(11, 10, false));
         assert!(!allow_uncertified_block_sync_roster(12, 10, false));
     }
 

@@ -1833,6 +1833,12 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.durable_state_overlay.clear();
     }
 
+    /// Replace the durable smart-contract state snapshot with a prebuilt offline fixture.
+    pub fn set_durable_state_snapshot(&mut self, snapshot: BTreeMap<Name, Vec<u8>>) {
+        self.durable_state_base = snapshot;
+        self.durable_state_overlay.clear();
+    }
+
     /// Set the chain id for ZK domain binding.
     pub fn set_chain_id_bytes(&mut self, chain_id: Vec<u8>) {
         self.chain_id_bytes = chain_id;

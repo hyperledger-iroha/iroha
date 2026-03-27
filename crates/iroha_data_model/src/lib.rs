@@ -368,6 +368,7 @@ pub mod prelude {
         repo::prelude::*,
         role::prelude::*,
         rwa::prelude::*,
+        smart_contract::prelude::*,
         sns::prelude::*,
         social::prelude::*,
         sorafs_uri::SorafsUri,

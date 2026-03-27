@@ -1,5 +1,22 @@
 //! This module contains data and structures related only to smart contract execution
 
+use std::{format, str::FromStr, string::String, vec::Vec};
+
+use bech32::{Bech32m, Hrp};
+use iroha_data_model_derive::model;
+use iroha_primitives::conststr::ConstString;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use thiserror::Error;
+
+use crate::{
+    account::{AccountAddressError, AccountId},
+    domain::DomainId,
+    error::ParseError,
+    name::Name,
+    nexus::{DataSpaceCatalog, DataSpaceId},
+};
+
 pub mod payloads {
     //! Contexts with function arguments for different entrypoints
 
@@ -115,6 +132,538 @@ pub mod payloads {
     }
 }
 
+/// Metadata key tracking the next public contract deploy nonce for an account.
+pub const CONTRACT_DEPLOY_NONCE_METADATA_KEY: &str = "contract_deploy_nonce";
+
+/// Default mainnet contract HRP used for Bech32m-encoded contract addresses.
+pub const CONTRACT_ADDRESS_HRP_MAINNET: &str = "sorac";
+/// Default Taira/testnet contract HRP used for Bech32m-encoded contract addresses.
+pub const CONTRACT_ADDRESS_HRP_TAIRA: &str = "tairac";
+/// Mainnet chain discriminant used by Sora Nexus address encoding.
+pub const CHAIN_DISCRIMINANT_MAINNET: u16 = 753;
+/// Taira/testnet chain discriminant used by Sora Nexus address encoding.
+pub const CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
+
+const CONTRACT_ADDRESS_VERSION_V1: u8 = 1;
+const CONTRACT_ADDRESS_TAG_V1: &[u8] = b"iroha:contract-address:v1";
+const CONTRACT_ADDRESS_HASH_LEN: usize = 20;
+const CONTRACT_ADDRESS_PAYLOAD_LEN_V1: usize = 1 + 8 + CONTRACT_ADDRESS_HASH_LEN;
+
+pub use self::model::*;
+
+#[model]
+mod model {
+    use derive_more::Display;
+
+    use super::*;
+
+    /// Canonical Bech32m-encoded public contract address.
+    #[derive(
+        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
+    )]
+    #[repr(transparent)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct ContractAlias(pub(super) ConstString);
+
+    /// Canonical Bech32m-encoded public contract address.
+    #[derive(
+        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
+    )]
+    #[repr(transparent)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct ContractAddress(pub(super) ConstString);
+}
+
+struct ContractAliasSegments<'a> {
+    name: &'a str,
+    domain: Option<&'a str>,
+    dataspace: &'a str,
+}
+
+impl ContractAlias {
+    /// Build a contract alias from validated components.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when any component is invalid.
+    pub fn from_components(
+        name: &str,
+        domain_alias: Option<&str>,
+        dataspace_alias: &str,
+    ) -> Result<Self, ParseError> {
+        let name = normalize_contract_alias_segment(name, "contract alias name")?;
+        let domain_alias = domain_alias
+            .map(|value| normalize_contract_alias_segment(value, "contract alias domain"))
+            .transpose()?;
+        let dataspace_alias =
+            normalize_contract_alias_segment(dataspace_alias, "contract alias dataspace")?;
+        let literal = domain_alias.map_or_else(
+            || format!("{name}::{dataspace_alias}"),
+            |domain_alias| format!("{name}::{domain_alias}.{dataspace_alias}"),
+        );
+        literal.parse()
+    }
+
+    /// Contract alias name segment (`<name>`).
+    #[must_use]
+    pub fn name_segment(&self) -> &str {
+        let segments = split_contract_alias_segments(self.as_ref())
+            .expect("contract alias must remain valid after construction");
+        segments.name
+    }
+
+    /// Optional alias-domain segment (`<domain>`).
+    #[must_use]
+    pub fn domain_segment(&self) -> Option<&str> {
+        let segments = split_contract_alias_segments(self.as_ref())
+            .expect("contract alias must remain valid after construction");
+        segments.domain
+    }
+
+    /// Dataspace segment (`<dataspace>`).
+    #[must_use]
+    pub fn dataspace_segment(&self) -> &str {
+        let segments = split_contract_alias_segments(self.as_ref())
+            .expect("contract alias must remain valid after construction");
+        segments.dataspace
+    }
+
+    /// Resolve the alias components against the dataspace catalog.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the dataspace alias is unknown.
+    pub fn resolve_components(
+        &self,
+        catalog: &DataSpaceCatalog,
+    ) -> Result<(Name, Option<DomainId>, DataSpaceId), ParseError> {
+        let name = self
+            .name_segment()
+            .parse()
+            .map_err(|_| ParseError::new("contract alias name segment is invalid"))?;
+        let domain = self
+            .domain_segment()
+            .map(|value| {
+                value
+                    .parse()
+                    .map_err(|_| ParseError::new("contract alias domain segment is invalid"))
+            })
+            .transpose()?;
+        let dataspace = catalog
+            .by_alias(self.dataspace_segment())
+            .map(|entry| entry.id)
+            .ok_or_else(|| ParseError::new("unknown dataspace alias in contract alias"))?;
+        Ok((name, domain, dataspace))
+    }
+}
+
+fn split_contract_alias_segments(input: &str) -> Result<ContractAliasSegments<'_>, ParseError> {
+    let (name, right) = input.split_once("::").ok_or_else(|| {
+        ParseError::new(
+            "contract alias must use `<name>::<domain>.<dataspace>` or `<name>::<dataspace>` format",
+        )
+    })?;
+    if right.contains("::") {
+        return Err(ParseError::new(
+            "contract alias must contain exactly one `::` separator",
+        ));
+    }
+    if right.contains('@') {
+        return Err(ParseError::new(
+            "contract alias must use `.` instead of `@` between domain and dataspace",
+        ));
+    }
+    let dot_count = right.bytes().filter(|byte| *byte == b'.').count();
+    if dot_count == 1 {
+        let (domain, dataspace) = right.split_once('.').expect("counted dot");
+        return Ok(ContractAliasSegments {
+            name,
+            domain: Some(domain),
+            dataspace,
+        });
+    }
+    if dot_count > 1 {
+        return Err(ParseError::new(
+            "contract alias must contain at most one `.` after `::`",
+        ));
+    }
+    Ok(ContractAliasSegments {
+        name,
+        domain: None,
+        dataspace: right,
+    })
+}
+
+fn normalize_contract_alias_segment(
+    value: &str,
+    segment: &'static str,
+) -> Result<String, ParseError> {
+    if value.is_empty() {
+        return Err(ParseError::new("contract alias segments must not be empty"));
+    }
+    if matches!(
+        segment,
+        "contract alias domain" | "contract alias dataspace"
+    ) && value.contains('.')
+    {
+        return Err(ParseError::new(match segment {
+            "contract alias domain" => "contract alias domain segment must not contain `.`",
+            "contract alias dataspace" => "contract alias dataspace segment must not contain `.`",
+            _ => "contract alias segment must not contain `.`",
+        }));
+    }
+    let normalized = Name::from_str(value).map_err(|_| {
+        ParseError::new(match segment {
+            "contract alias name" => "contract alias name segment is invalid",
+            "contract alias domain" => "contract alias domain segment is invalid",
+            "contract alias dataspace" => "contract alias dataspace segment is invalid",
+            _ => "contract alias segment is invalid",
+        })
+    })?;
+    Ok(normalized.as_ref().to_owned())
+}
+
+impl FromStr for ContractAlias {
+    type Err = ParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(ParseError::new("contract alias must not be empty"));
+        }
+        if trimmed != value {
+            return Err(ParseError::new(
+                "contract alias must not contain leading or trailing whitespace",
+            ));
+        }
+        if trimmed.chars().any(char::is_control) {
+            return Err(ParseError::new(
+                "contract alias must not contain control characters",
+            ));
+        }
+
+        let segments = split_contract_alias_segments(trimmed)?;
+        let name = normalize_contract_alias_segment(segments.name, "contract alias name")?;
+        let domain = segments
+            .domain
+            .map(|value| normalize_contract_alias_segment(value, "contract alias domain"))
+            .transpose()?;
+        let dataspace =
+            normalize_contract_alias_segment(segments.dataspace, "contract alias dataspace")?;
+        let canonical = domain.map_or_else(
+            || format!("{name}::{dataspace}"),
+            |domain| format!("{name}::{domain}.{dataspace}"),
+        );
+        Ok(Self(ConstString::from(&*canonical)))
+    }
+}
+
+impl AsRef<str> for ContractAlias {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for ContractAlias {
+    fn write_json(&self, out: &mut String) {
+        norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for ContractAlias {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        value
+            .parse()
+            .map_err(|err: ParseError| norito::json::Error::Message(err.reason.into()))
+    }
+}
+
+/// Errors returned when deriving or parsing a [`ContractAddress`].
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ContractAddressError {
+    /// The supplied literal was empty or malformed.
+    #[error("invalid contract address: {0}")]
+    InvalidLiteral(String),
+    /// Bech32m HRP parsing failed.
+    #[error("invalid contract address hrp: {0}")]
+    InvalidHrp(String),
+    /// The payload version is not recognized.
+    #[error("unsupported contract address version {0}")]
+    UnsupportedVersion(u8),
+    /// The payload length does not match the expected version layout.
+    #[error("invalid contract address payload length {found}; expected {expected}")]
+    InvalidPayloadLength {
+        /// Bytes actually decoded from the payload.
+        found: usize,
+        /// Bytes expected for the active address format version.
+        expected: usize,
+    },
+    /// Deployer account canonicalization failed during address derivation.
+    #[error("failed to derive contract address from deployer account: {0}")]
+    InvalidDeployer(String),
+}
+
+impl ContractAddress {
+    /// Derive a deterministic contract address from deployer identity, nonce, and dataspace.
+    ///
+    /// The address payload is versioned and encoded as:
+    /// `version || dataspace_id_be || blake3(preimage)[..20]`.
+    ///
+    /// The preimage is domain-separated and includes the chain discriminant so the resulting
+    /// address is network-specific.
+    pub fn derive(
+        chain_discriminant: u16,
+        deployer: &AccountId,
+        deploy_nonce: u64,
+        dataspace_id: DataSpaceId,
+    ) -> Result<Self, ContractAddressError> {
+        let hrp = contract_hrp_for_chain_discriminant(chain_discriminant);
+        let hrp =
+            Hrp::parse(&hrp).map_err(|err| ContractAddressError::InvalidHrp(err.to_string()))?;
+
+        let deployer_bytes = deployer
+            .to_account_address()
+            .and_then(|address| address.canonical_bytes())
+            .map_err(|err: AccountAddressError| {
+                ContractAddressError::InvalidDeployer(err.to_string())
+            })?;
+
+        let mut preimage =
+            Vec::with_capacity(CONTRACT_ADDRESS_TAG_V1.len() + 2 + 8 + 8 + deployer_bytes.len());
+        preimage.extend_from_slice(CONTRACT_ADDRESS_TAG_V1);
+        preimage.extend_from_slice(&chain_discriminant.to_be_bytes());
+        preimage.extend_from_slice(&dataspace_id.as_u64().to_be_bytes());
+        preimage.extend_from_slice(&deploy_nonce.to_be_bytes());
+        preimage.extend_from_slice(&deployer_bytes);
+
+        let digest = blake3::hash(&preimage);
+        let mut payload = Vec::with_capacity(CONTRACT_ADDRESS_PAYLOAD_LEN_V1);
+        payload.push(CONTRACT_ADDRESS_VERSION_V1);
+        payload.extend_from_slice(&dataspace_id.as_u64().to_be_bytes());
+        payload.extend_from_slice(&digest.as_bytes()[..CONTRACT_ADDRESS_HASH_LEN]);
+
+        let encoded = bech32::encode::<Bech32m>(hrp, &payload)
+            .map_err(|err| ContractAddressError::InvalidLiteral(err.to_string()))?;
+        encoded.parse()
+    }
+
+    /// Decode the dataspace identifier embedded in the address payload.
+    pub fn dataspace_id(&self) -> Result<DataSpaceId, ContractAddressError> {
+        let (_, payload) = decode_contract_address(self.as_ref())?;
+        let version = payload[0];
+        if version != CONTRACT_ADDRESS_VERSION_V1 {
+            return Err(ContractAddressError::UnsupportedVersion(version));
+        }
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(&payload[1..9]);
+        Ok(DataSpaceId::new(u64::from_be_bytes(bytes)))
+    }
+
+    /// Borrow the canonical encoded literal.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+}
+
+impl AsRef<str> for ContractAddress {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for ContractAddress {
+    type Err = ContractAddressError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        decode_contract_address(value)?;
+        Ok(Self(ConstString::from(value)))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for ContractAddress {
+    fn write_json(&self, out: &mut String) {
+        norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for ContractAddress {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        value
+            .parse()
+            .map_err(|err: ContractAddressError| norito::json::Error::Message(err.to_string()))
+    }
+}
+
+/// Resolve the default contract-address HRP for the provided chain discriminant.
+#[must_use]
+pub fn contract_hrp_for_chain_discriminant(chain_discriminant: u16) -> String {
+    match chain_discriminant {
+        CHAIN_DISCRIMINANT_MAINNET => CONTRACT_ADDRESS_HRP_MAINNET.to_owned(),
+        CHAIN_DISCRIMINANT_TAIRA => CONTRACT_ADDRESS_HRP_TAIRA.to_owned(),
+        other => format!("c{other:x}"),
+    }
+}
+
+fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddressError> {
+    if value.trim().is_empty() {
+        return Err(ContractAddressError::InvalidLiteral(
+            "contract address must not be empty".to_owned(),
+        ));
+    }
+    if value.trim() != value {
+        return Err(ContractAddressError::InvalidLiteral(
+            "contract address must not contain leading or trailing whitespace".to_owned(),
+        ));
+    }
+
+    let (hrp, payload) = bech32::decode(value)
+        .map_err(|err| ContractAddressError::InvalidLiteral(err.to_string()))?;
+    if payload.is_empty() {
+        return Err(ContractAddressError::InvalidPayloadLength {
+            found: 0,
+            expected: CONTRACT_ADDRESS_PAYLOAD_LEN_V1,
+        });
+    }
+
+    match payload[0] {
+        CONTRACT_ADDRESS_VERSION_V1 => {
+            if payload.len() != CONTRACT_ADDRESS_PAYLOAD_LEN_V1 {
+                return Err(ContractAddressError::InvalidPayloadLength {
+                    found: payload.len(),
+                    expected: CONTRACT_ADDRESS_PAYLOAD_LEN_V1,
+                });
+            }
+        }
+        version => return Err(ContractAddressError::UnsupportedVersion(version)),
+    }
+
+    if hrp.as_str().is_empty() {
+        return Err(ContractAddressError::InvalidLiteral(
+            "contract address hrp must not be empty".to_owned(),
+        ));
+    }
+
+    Ok((hrp, payload))
+}
+
+/// Re-export commonly used smart-contract types.
+pub mod prelude {
+    pub use super::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress, ContractAlias};
+}
+
+#[cfg(test)]
+mod contract_address_tests {
+    use iroha_crypto::KeyPair;
+
+    use super::*;
+
+    #[test]
+    fn contract_address_derivation_is_deterministic() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let first = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            7,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract address");
+        let second = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            7,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract address");
+        assert_eq!(first, second);
+        assert_eq!(
+            first.dataspace_id().expect("dataspace"),
+            DataSpaceId::GLOBAL
+        );
+        assert!(first.as_str().starts_with(CONTRACT_ADDRESS_HRP_MAINNET));
+    }
+
+    #[test]
+    fn contract_address_derivation_changes_with_nonce_and_network() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let mainnet = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("mainnet address");
+        let next_nonce = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            1,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("nonce+1 address");
+        let taira =
+            ContractAddress::derive(CHAIN_DISCRIMINANT_TAIRA, &authority, 0, DataSpaceId::GLOBAL)
+                .expect("taira address");
+
+        assert_ne!(mainnet, next_nonce);
+        assert_ne!(mainnet, taira);
+        assert!(taira.as_str().starts_with(CONTRACT_ADDRESS_HRP_TAIRA));
+    }
+
+    #[test]
+    fn contract_address_parser_rejects_invalid_literals() {
+        let err = "not-an-address"
+            .parse::<ContractAddress>()
+            .expect_err("invalid address must fail");
+        assert!(
+            matches!(
+                err,
+                ContractAddressError::InvalidLiteral(_) | ContractAddressError::InvalidHrp(_)
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn contract_alias_parses_long_literal() {
+        let alias: ContractAlias = "router::dex.universal".parse().expect("valid alias");
+        assert_eq!(alias.name_segment(), "router");
+        assert_eq!(alias.domain_segment(), Some("dex"));
+        assert_eq!(alias.dataspace_segment(), "universal");
+    }
+
+    #[test]
+    fn contract_alias_parses_short_literal() {
+        let alias: ContractAlias = "router::universal".parse().expect("valid alias");
+        assert_eq!(alias.name_segment(), "router");
+        assert_eq!(alias.domain_segment(), None);
+        assert_eq!(alias.dataspace_segment(), "universal");
+    }
+
+    #[test]
+    fn contract_alias_rejects_invalid_literals() {
+        for raw in [
+            "",
+            " ",
+            "router",
+            "router@universal",
+            "router#universal",
+            "router:::universal",
+            "router::dex.universal.extra",
+            "router::",
+            "::universal",
+        ] {
+            assert!(raw.parse::<ContractAlias>().is_err(), "must fail: {raw}");
+        }
+    }
+}
 // Smart contract manifest types and helpers.
 pub mod manifest {
     //! Manifest metadata for IVM smart contracts.
@@ -296,6 +845,12 @@ pub mod manifest {
         pub name: String,
         /// Logical kind: `kotoage`, `hajimari`, or `kaizen`.
         pub kind: EntryPointKind,
+        /// Ordered public parameters advertised by the compiler.
+        #[norito(default)]
+        pub params: Vec<EntrypointParamDescriptor>,
+        /// Declared return type for this entrypoint, when present.
+        #[norito(default)]
+        pub return_type: Option<String>,
         /// Permission required by the dispatcher before invoking this entrypoint.
         #[norito(default)]
         pub permission: Option<String>,
@@ -314,6 +869,25 @@ pub mod manifest {
         /// Trigger declarations that call this entrypoint.
         #[norito(default)]
         pub triggers: Vec<TriggerDescriptor>,
+    }
+
+    /// Declarative parameter metadata for a public or view entrypoint.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct EntrypointParamDescriptor {
+        /// Stable parameter name as declared in the Kotodama source file.
+        pub name: String,
+        /// Canonical type name advertised to clients.
+        pub type_name: String,
     }
 
     /// Localized message text for a specific language tag.
@@ -419,6 +993,8 @@ pub mod manifest {
     pub enum EntryPointKind {
         /// Public dispatcher entrypoint (`kotoage fn`).
         Public,
+        /// Read-only query entrypoint (`view fn`).
+        View,
         /// Deployment initializer (`hajimari`).
         Hajimari,
         /// Upgrade hook (`kaizen`).
@@ -540,6 +1116,11 @@ pub mod manifest {
             let entrypoint = EntrypointDescriptor {
                 name: "run".to_string(),
                 kind: EntryPointKind::Public,
+                params: vec![EntrypointParamDescriptor {
+                    name: "amount".to_string(),
+                    type_name: "Amount".to_string(),
+                }],
+                return_type: Some("int".to_string()),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),

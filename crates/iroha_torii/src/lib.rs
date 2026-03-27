@@ -369,25 +369,26 @@ pub use routing::handle_get_proof_tags;
 pub use routing::handle_p2p_ws;
 pub use routing::{
     ActivateInstanceDto, ActivateInstanceResponseDto, ContractCallDto, ContractCallResponseDto,
-    DeployAndActivateInstanceDto, DeployAndActivateInstanceResponseDto, DeployContractDto,
-    DeployContractResponseDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
-    KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
-    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigCancelRequestDto,
-    MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto,
-    PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions,
-    RegisterPinManifestDto, RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
+    ContractViewDto, ContractViewResponseDto, DeployAndActivateInstanceDto,
+    DeployAndActivateInstanceResponseDto, DeployContractDto, DeployContractResponseDto,
+    EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
+    KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
+    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
+    MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
+    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
+    RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
     SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
     ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs, handle_get_contract_code_bytes,
     handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_call,
     handle_post_contract_deploy, handle_post_contract_instance,
-    handle_post_contract_instance_activate, handle_post_sorafs_register_manifest,
-    handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
-    handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
-    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
-    handle_v1_new_view_json, handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
-    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots,
-    handle_v1_zk_submit_proof, handle_v1_zk_verify, handle_v1_zk_vote_tally,
-    signed_find_proof_by_id,
+    handle_post_contract_instance_activate, handle_post_contract_view,
+    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
+    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
+    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
+    handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
+    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
+    handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots, handle_v1_zk_submit_proof,
+    handle_v1_zk_verify, handle_v1_zk_vote_tally, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -2190,7 +2191,7 @@ async fn enforce_soracloud_signed_mutation_request(
         Err(error) => return Ok(error.into_response()),
     };
 
-    if let Ok(value) = HeaderValue::from_str(&verified.account.to_string()) {
+    if let Ok(value) = HeaderValue::from_bytes(verified.account.to_string().as_bytes()) {
         parts.headers.insert(
             HeaderName::from_static(soracloud::VERIFIED_ACCOUNT_HEADER),
             value,
@@ -4803,6 +4804,78 @@ async fn handler_offline_lineage_revoke(
     }
 
     json_ok(crate::offline_lineage::register_revocation(app.as_ref(), req).await?)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_allowances_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(p): AxQuery<crate::routing::OfflineAllowanceListParams>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return routing::handle_v1_offline_allowances(
+            app.state.clone(),
+            AxQuery(p),
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/offline/allowances",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_v1_offline_allowances(app.state.clone(), AxQuery(p), app.telemetry.clone())
+        .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_allowances_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+        crate::filter::QueryEnvelope,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return routing::handle_v1_offline_allowances_query(
+            app.state.clone(),
+            crate::utils::extractors::NoritoJson(env),
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/offline/allowances/query",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_v1_offline_allowances_query(
+        app.state.clone(),
+        crate::utils::extractors::NoritoJson(env),
+        app.telemetry.clone(),
+    )
+    .await
 }
 
 #[cfg(feature = "app_api")]
@@ -12847,6 +12920,53 @@ async fn handler_post_contract_call(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_contract_view(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::ContractViewDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("view"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/view",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("view"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_contract_view(app.state.clone(), request).await {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("view"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_contract_call_multisig_propose(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -16513,31 +16633,10 @@ fn require_signed_alias_request(
     }
 }
 
-fn ensure_alias_resolve_permission(
-    app: &SharedAppState,
-    authority: &AccountId,
-    alias: &iroha_data_model::account::rekey::AccountLabel,
-) -> Result<(), Error> {
-    let world = app.state.world_view();
-    if iroha_core::alias::authority_can_resolve_account_alias(&world, authority, alias) {
-        return Ok(());
-    }
-
-    Err(Error::Query(
-        iroha_data_model::ValidationFail::NotPermitted(
-            "missing account-alias resolve permission".to_owned(),
-        ),
-    ))
-}
-
 async fn handler_alias_resolve(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let request: routing::AliasResolveRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -16552,11 +16651,6 @@ async fn handler_alias_resolve(
         )));
     }
 
-    let nexus = app.state.nexus_snapshot();
-    let (_, alias_label) =
-        parse_account_alias_label_with_catalog(&request.alias, &nexus.dataspace_catalog)?;
-    ensure_alias_resolve_permission(&app, &authority, &alias_label)?;
-
     if let Some((alias, account_id)) = resolve_alias_on_chain(&app, &request.alias)? {
         let account_id_string = account_id.to_string();
         return alias_resolve_ok(&alias, &account_id_string, None, "on_chain");
@@ -16567,12 +16661,8 @@ async fn handler_alias_resolve(
 
 async fn handler_alias_resolve_index(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let request: routing::AliasResolveIndexRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -16580,10 +16670,6 @@ async fn handler_alias_resolve_index(
             ))
         })?;
     if let Some((alias, account_id)) = resolve_alias_index_on_chain(&app, request.index)? {
-        let nexus = app.state.nexus_snapshot();
-        let (_, alias_label) =
-            parse_account_alias_label_with_catalog(&alias, &nexus.dataspace_catalog)?;
-        ensure_alias_resolve_permission(&app, &authority, &alias_label)?;
         let account_id_string = account_id.to_string();
         return alias_resolve_index_ok(request.index, &alias, &account_id_string, "on_chain");
     }
@@ -18547,7 +18633,17 @@ impl Torii {
 
             #[cfg(feature = "app_api")]
             let group = group
+                .route("/v1/contracts/deploy", post(handler_post_contract_deploy))
+                .route(
+                    "/v1/contracts/instance",
+                    post(handler_post_contract_instance),
+                )
+                .route(
+                    "/v1/contracts/instance/activate",
+                    post(handler_post_contract_instance_activate),
+                )
                 .route("/v1/contracts/call", post(handler_post_contract_call))
+                .route("/v1/contracts/view", post(handler_post_contract_view))
                 .route(
                     "/v1/contracts/call/multisig/propose",
                     post(handler_post_contract_call_multisig_propose),
@@ -18924,6 +19020,14 @@ impl Torii {
                 .route(
                     "/v1/offline/cash/readiness",
                     get(handler_offline_cash_readiness),
+                )
+                .route(
+                    "/v1/offline/allowances",
+                    get(handler_offline_allowances_list),
+                )
+                .route(
+                    "/v1/offline/allowances/query",
+                    post(handler_offline_allowances_query),
                 )
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))
                 .route(
@@ -23697,6 +23801,31 @@ pub(crate) mod tests_runtime_handlers {
         hash
     }
 
+    pub(crate) fn record_latest_committed_header_for_test(
+        app: &SharedAppState,
+        height: u64,
+        creation_time_ms: u64,
+    ) {
+        let keypair = KeyPair::random();
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero height"),
+            None,
+            None,
+            None,
+            creation_time_ms,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let block = SignedBlock::presigned(signature, header, Vec::new());
+        let hash = store_block(app, block);
+        let mut block_hashes = app.state.block_hashes.block();
+        block_hashes.push_for_tests(hash);
+        block_hashes.commit_for_tests();
+    }
+
     #[test]
     fn pipeline_status_merge_prefers_higher_rank() {
         let now = Instant::now();
@@ -26519,8 +26648,8 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             code_b64: code_b64.clone(),
+            dataspace: None,
         };
-
         // Exhaust the exact handler key up front so this regression does not depend
         // on how quickly the first deploy request completes on the current host.
         let key = super::rate_limit_key(
@@ -27327,6 +27456,8 @@ pub(crate) mod tests_runtime_handlers {
                 entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
                     name: "main".to_owned(),
                     kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                    params: Vec::new(),
+                    return_type: None,
                     permission: None,
                     read_keys: Vec::new(),
                     write_keys: Vec::new(),
@@ -27352,6 +27483,7 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account,
             private_key: clone_private_key(&creds.private_key),
             code_b64,
+            dataspace: None,
         };
         let resp = super::handler_post_contract_deploy(
             State(app),
@@ -27373,6 +27505,20 @@ pub(crate) mod tests_runtime_handlers {
             Some(true)
         );
         assert_eq!(
+            v.get("dataspace").and_then(norito::json::Value::as_str),
+            Some("universal")
+        );
+        assert_eq!(
+            v.get("deploy_nonce").and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            v.get("contract_address")
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|value| !value.is_empty()),
+            "expected canonical contract address in deploy response"
+        );
+        assert_eq!(
             v.get("code_hash_hex")
                 .and_then(norito::json::Value::as_str)
                 .map(str::len),
@@ -27384,6 +27530,69 @@ pub(crate) mod tests_runtime_handlers {
                 .map(str::len),
             Some(64)
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn contracts_deploy_route_is_mounted_in_api_router() {
+        use axum::{
+            body::Body,
+            extract::ConnectInfo,
+            http::{Method, Request, StatusCode},
+        };
+        use tower::ServiceExt as _;
+
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let torii = Torii::new_with_handle(
+            ChainId::from("contracts-router-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            routing::MaybeTelemetry::disabled(),
+        );
+
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/contracts/deploy")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{"))
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+        let response = torii
+            .api_router_for_tests()
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -28122,7 +28331,7 @@ mod tests {
         tests_runtime_handlers::{
             app_auth_test_guard, mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
             mk_app_state_for_tests_with_options, mk_app_state_for_tests_with_world, negotiated,
-            signed_app_headers,
+            record_latest_committed_header_for_test, signed_app_headers,
         },
     };
     use iroha_core::smartcontracts::Execute;
@@ -28838,33 +29047,38 @@ mod tests {
             .expect("commit should persist alias resolve permission");
     }
 
-    fn signed_alias_headers(
-        account: &AccountId,
-        key_pair: &KeyPair,
-        uri: &axum::http::Uri,
-        body: &[u8],
-    ) -> HeaderMap {
-        signed_app_headers(account, key_pair, &axum::http::Method::POST, uri, body)
-    }
-
     #[tokio::test]
-    async fn alias_resolve_requires_signed_request() {
+    async fn alias_resolve_accepts_unsigned_request() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let alias_label = AccountLabel::new(
+            "sbp".parse().expect("domain id"),
+            "banking".parse().expect("label"),
+        );
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let account = Account::new(
+            authority
+                .clone()
+                .to_account_id("sbp".parse().expect("domain id")),
+        )
+        .with_label(Some(alias_label))
+        .build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with(
+            [domain],
+            [authority_account, account],
+            [],
+        ));
         let request = routing::AliasResolveRequestDto {
             alias: "banking@sbp.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let response = handler_alias_resolve(
-            State(mk_app_state_for_tests()),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve".parse().expect("uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect_err("unsigned request must fail")
-        .into_response();
+        let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("unsigned request should succeed")
+            .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[cfg(feature = "app_api")]
@@ -29053,43 +29267,27 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_returns_not_found_for_unknown_alias() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
-        let world = World::with([], [authority_account], []);
-        let alias =
-            AccountLabel::domainless("missing".parse().expect("label"), DataSpaceId::GLOBAL);
-        let app = mk_app_state_for_tests_with_world(world);
-        grant_alias_resolve_permissions(&app, &authority, &alias);
+        let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveRequestDto {
-            alias: alias
+            alias: AccountLabel::domainless("missing".parse().expect("label"), DataSpaceId::GLOBAL)
                 .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
                 .expect("alias literal"),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
 
-        let response = handler_alias_resolve(
-            State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
+        let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
-    async fn alias_resolve_rejects_missing_permission() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+    async fn alias_resolve_allows_unsigned_request_without_permission() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let domain_id: DomainId = "sbp".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -29108,33 +29306,23 @@ mod tests {
             alias: "banking@sbp.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
-        let response = handler_alias_resolve(
-            State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect_err("missing permission must fail")
-        .into_response();
+        let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("public alias resolve should succeed")
+            .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn alias_resolve_scans_account_labels_when_alias_index_is_missing() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let alias = "banking@sbp.universal";
         let alias_label = iroha_data_model::account::rekey::AccountLabel::new(
             "sbp".parse::<DomainId>().expect("domain id"),
             "banking".parse::<Name>().expect("label"),
         );
         let domain_id: DomainId = "sbp".parse().expect("domain id");
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let account_id = authority.clone().to_account_id(domain_id);
@@ -29143,31 +29331,15 @@ mod tests {
             .build(&authority);
         let world = World::with([domain], [authority_account, account], []);
         let app = mk_app_state_for_tests_with_world(world);
-        grant_alias_resolve_permissions(
-            &app,
-            &authority,
-            &AccountLabel::new(
-                "sbp".parse::<DomainId>().expect("domain id"),
-                "banking".parse::<Name>().expect("label"),
-            ),
-        );
         let request = routing::AliasResolveRequestDto {
             alias: alias.to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
 
-        let response = handler_alias_resolve(
-            State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
+        let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())
@@ -30251,11 +30423,7 @@ mod tests {
         );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
-        let mut block = app.state.block(header);
-        let tx = block.transaction();
-        tx.apply();
-        block.commit().expect("commit observation block");
+        record_latest_committed_header_for_test(&app, 2, after_grace);
 
         let response = handler_asset_alias_resolve(
             State(app),
@@ -30298,11 +30466,7 @@ mod tests {
         );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
-        let mut block = app.state.block(header);
-        let tx = block.transaction();
-        tx.apply();
-        block.commit().expect("commit observation block");
+        record_latest_committed_header_for_test(&app, 2, after_grace);
 
         let response = handler_asset_definition_get(
             State(app),
@@ -30355,11 +30519,7 @@ mod tests {
         );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
-        let mut block = app.state.block(header);
-        let tx = block.transaction();
-        tx.apply();
-        block.commit().expect("commit observation block");
+        record_latest_committed_header_for_test(&app, 2, after_grace);
 
         let error = parse_asset_definition_id(app.as_ref(), alias.as_ref())
             .expect_err("expired alias must stop resolving");
@@ -31922,21 +32082,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_resolve_index_requires_signed_request() {
+    async fn alias_resolve_index_accepts_unsigned_request() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let alias_label = AccountLabel::new(
+            "sbp".parse().expect("domain id"),
+            "banking".parse().expect("label"),
+        );
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let account = Account::new(
+            authority
+                .clone()
+                .to_account_id("sbp".parse().expect("domain id")),
+        )
+        .with_label(Some(alias_label))
+        .build(&authority);
         let body = norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 0 })
             .expect("encode request");
         let response = handler_alias_resolve_index(
-            State(mk_app_state_for_tests()),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve_index".parse().expect("uri"),
-            HeaderMap::new(),
+            State(mk_app_state_for_tests_with_world(World::with(
+                [domain],
+                [authority_account, account],
+                [],
+            ))),
             axum::body::Bytes::from(body),
         )
         .await
-        .expect_err("unsigned request must fail")
+        .expect("unsigned request should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -32016,9 +32191,7 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_on_chain_alias_record() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let alias_label = AccountLabel::new(
             "sbp".parse().expect("domain id"),
             "banking".parse().expect("label"),
@@ -32037,22 +32210,13 @@ mod tests {
             [authority_account, account],
             [],
         ));
-        grant_alias_resolve_permissions(&app, &authority, &alias_label);
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve_index".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
 
-        let response = handler_alias_resolve_index(
-            State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
+        let response = handler_alias_resolve_index(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())
@@ -32069,29 +32233,16 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_not_found_when_index_is_missing() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
-        let alias =
-            AccountLabel::domainless("banking".parse().expect("label"), DataSpaceId::GLOBAL);
-        grant_alias_resolve_permissions(&app, &authority, &alias);
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve_index".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
 
-        let response = handler_alias_resolve_index(
-            State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
+        let response = handler_alias_resolve_index(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
@@ -32237,11 +32388,18 @@ mod tests {
         use tower::ServiceExt as _;
 
         async fn probe(headers: HeaderMap, body: Bytes) -> axum::response::Response {
-            let verified = headers.contains_key(axum::http::HeaderName::from_static(
-                soracloud::VERIFIED_SIGNER_HEADER,
-            ));
+            let verified_account = headers
+                .get(axum::http::HeaderName::from_static(
+                    soracloud::VERIFIED_ACCOUNT_HEADER,
+                ))
+                .and_then(|value| std::str::from_utf8(value.as_bytes()).ok());
+            let verified_signer = headers
+                .get(axum::http::HeaderName::from_static(
+                    soracloud::VERIFIED_SIGNER_HEADER,
+                ))
+                .and_then(|value| value.to_str().ok());
             axum::response::Response::builder()
-                .status(if verified {
+                .status(if verified_account.is_some() && verified_signer.is_some() {
                     StatusCode::OK
                 } else {
                     StatusCode::INTERNAL_SERVER_ERROR

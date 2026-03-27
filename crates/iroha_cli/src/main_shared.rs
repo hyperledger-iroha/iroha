@@ -1694,9 +1694,20 @@ mod account {
                     context.print_data(&entry)
                 }
                 Register(args) => {
-                    let account_id = parse_register_account_id(&args.id, &args.domain)?;
-                    let instruction =
-                        iroha::data_model::isi::Register::account(Account::new(account_id));
+                    let instruction = if args.domainless {
+                        let account_id = parse_domainless_account_id(&args.id)?;
+                        iroha::data_model::isi::Register::account(Account::new_domainless(
+                            account_id,
+                        ))
+                    } else {
+                        let domain = args.domain.as_ref().ok_or_else(|| {
+                            eyre!(
+                                "`ledger account register` requires either `--domain <domain>` or `--domainless`"
+                            )
+                        })?;
+                        let account_id = parse_register_account_id(&args.id, domain)?;
+                        iroha::data_model::isi::Register::account(Account::new(account_id))
+                    };
                     context
                         .finish([instruction])
                         .wrap_err("Failed to register account")
@@ -1839,8 +1850,11 @@ mod account {
         #[arg(short, long)]
         id: String,
         /// Domain in which to materialize the account link
-        #[arg(short = 'd', long)]
-        domain: DomainId,
+        #[arg(short = 'd', long, conflicts_with = "domainless")]
+        domain: Option<DomainId>,
+        /// Register the canonical domainless account directly
+        #[arg(long, default_value_t = false, conflicts_with = "domain")]
+        domainless: bool,
     }
 
     #[derive(clap::Args, Debug)]
@@ -7260,6 +7274,13 @@ fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
 }
 
 fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedAccountId> {
+    Ok(ScopedAccountId::from_account_id(
+        parse_domainless_account_id(literal)?,
+        domain.clone(),
+    ))
+}
+
+fn parse_domainless_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
         eyre::bail!("`ledger account register --id` must be a canonical I105 account id");
@@ -7280,10 +7301,7 @@ fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedA
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
         eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
     })?;
-    Ok(ScopedAccountId::from_account_id(
-        parsed.into_account_id(),
-        domain.clone(),
-    ))
+    Ok(parsed.into_account_id())
 }
 
 fn string_from_stdin() -> Result<String> {
@@ -7413,6 +7431,21 @@ mod tests {
     };
     use tokio::runtime::Runtime;
     use url::Url;
+
+    #[test]
+    fn parse_domainless_account_id_accepts_canonical_i105_literal() {
+        let literal = "44ZQsD4b6qLunCkTq4zwtixNaRBPXshxMZa23TA2JNde33UWs67E7WCpjemcwS2YdKa78EhgEgfvR";
+        let parsed = parse_domainless_account_id(literal).expect("domainless account id");
+        assert_eq!(parsed.to_string(), literal);
+    }
+
+    #[test]
+    fn parse_register_account_id_materializes_requested_domain() {
+        let literal = "44ZQsD4b6qLunCkTq4zwtixNaRBPXshxMZa23TA2JNde33UWs67E7WCpjemcwS2YdKa78EhgEgfvR";
+        let domain: DomainId = "universal".parse().expect("domain");
+        let scoped = parse_register_account_id(literal, &domain).expect("scoped account");
+        assert_eq!(scoped.to_string(), format!("{literal}@{domain}"));
+    }
 
     #[derive(Clone, Copy, JsonSerialize)]
     struct DummyEvent;
