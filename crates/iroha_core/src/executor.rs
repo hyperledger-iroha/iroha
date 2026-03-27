@@ -482,16 +482,73 @@ pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, Valida
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct ContractRuntimeExecutionContext {
+    pub(crate) namespace: String,
+    pub(crate) contract_id: String,
+    pub(crate) entrypoint: String,
+}
+
+impl ContractRuntimeExecutionContext {
+    fn allows_bisp_runtime_asset_transfer_bypass(&self) -> bool {
+        self.namespace == "bisp"
+            && self.contract_id == "bisp"
+            && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
+    }
+}
+
+#[derive(Clone, Debug)]
 struct ContractCallExecutionContext {
+    namespace: Option<String>,
+    contract_id: Option<String>,
     entrypoint: Option<String>,
     entrypoint_pc: Option<u64>,
     args: Json,
+}
+
+impl ContractCallExecutionContext {
+    fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
+        Some(ContractRuntimeExecutionContext {
+            namespace: self.namespace.clone()?,
+            contract_id: self.contract_id.clone()?,
+            entrypoint: self.entrypoint.clone()?,
+        })
+    }
 }
 
 fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
 ) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
+    let namespace = metadata
+        .get("contract_namespace")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                ValidationFail::NotPermitted(format!("invalid contract_namespace metadata: {err}"))
+            })
+        })
+        .transpose()?
+        .map(|value| value.trim().to_owned());
+    if namespace.as_deref().is_some_and(str::is_empty) {
+        return Err(ValidationFail::NotPermitted(
+            "contract_namespace must not be empty".to_owned(),
+        ));
+    }
+
+    let contract_id = metadata
+        .get("contract_id")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                ValidationFail::NotPermitted(format!("invalid contract_id metadata: {err}"))
+            })
+        })
+        .transpose()?
+        .map(|value| value.trim().to_owned());
+    if contract_id.as_deref().is_some_and(str::is_empty) {
+        return Err(ValidationFail::NotPermitted(
+            "contract_id must not be empty".to_owned(),
+        ));
+    }
+
     let entrypoint = metadata
         .get("contract_entrypoint")
         .map(|raw| {
@@ -546,6 +603,8 @@ fn parse_contract_call_execution_context(
     };
 
     Ok(Some(ContractCallExecutionContext {
+        namespace,
+        contract_id,
         entrypoint,
         entrypoint_pc,
         args: payload.unwrap_or_default(),
@@ -1767,6 +1826,9 @@ impl Executor {
                             ))
                         })?;
                 }
+                let contract_runtime_context = contract_call_context
+                    .as_ref()
+                    .and_then(ContractCallExecutionContext::runtime_context);
                 // Attach host with a snapshot of known accounts for vendor helpers when present.
                 let accounts = Arc::new(
                     state_transaction
@@ -1807,7 +1869,7 @@ impl Executor {
                 let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
 
                 // Drain and apply queued ISIs deterministically via executor.
-                let artifacts = host.into_execution_artifacts()?;
+                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 state_transaction.last_tx_gas_used = gas_used;
 
@@ -1990,11 +2052,30 @@ impl Executor {
         authority: &AccountId,
         instruction: InstructionBox,
     ) -> Result<(), ValidationFail> {
-        self.execute_instruction_with_profile(
+        self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
             instruction,
             InstructionExecutionProfile::Runtime,
+            None,
+        )
+    }
+
+    /// Execute [`InstructionBox`] using the runtime profile and an optional
+    /// contract execution context for nested contract-originated instructions.
+    pub fn execute_instruction_with_contract_runtime_context(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    ) -> Result<(), ValidationFail> {
+        self.execute_instruction_with_profile_and_contract_runtime_context(
+            state_transaction,
+            authority,
+            instruction,
+            InstructionExecutionProfile::Runtime,
+            contract_runtime_context,
         )
     }
 
@@ -2015,22 +2096,46 @@ impl Executor {
         instruction: InstructionBox,
         profile: InstructionExecutionProfile,
     ) -> Result<(), ValidationFail> {
+        self.execute_instruction_with_profile_and_contract_runtime_context(
+            state_transaction,
+            authority,
+            instruction,
+            profile,
+            None,
+        )
+    }
+
+    fn execute_instruction_with_profile_and_contract_runtime_context(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+        profile: InstructionExecutionProfile,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    ) -> Result<(), ValidationFail> {
         trace!("Running instruction execution");
         let instr_id = instruction.id();
 
-        let result = match self {
-            Self::Initial => Self::execute_initial_instruction(
-                state_transaction,
-                authority,
-                instruction,
-                profile,
-            ),
-            Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
-                loaded_executor,
-                state_transaction,
-                authority,
-                instruction,
-            ),
+        let result = if should_bypass_contract_runtime_asset_transfer_check(
+            contract_runtime_context,
+            &instruction,
+        ) {
+            Self::execute_instruction_directly(state_transaction, authority, instruction, profile)
+        } else {
+            match self {
+                Self::Initial => Self::execute_initial_instruction(
+                    state_transaction,
+                    authority,
+                    instruction,
+                    profile,
+                ),
+                Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
+                    loaded_executor,
+                    state_transaction,
+                    authority,
+                    instruction,
+                ),
+            }
         };
         if let Err(err) = &result {
             iroha_logger::error!(
@@ -2041,6 +2146,28 @@ impl Executor {
             );
         }
         result
+    }
+
+    fn execute_instruction_directly(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+        profile: InstructionExecutionProfile,
+    ) -> Result<(), ValidationFail> {
+        let instruction_id = instruction.id();
+        instruction
+            .execute(authority, state_transaction)
+            .map_err(|err| {
+                if matches!(profile, InstructionExecutionProfile::Runtime) {
+                    iroha_logger::debug!(
+                        ?err,
+                        %instruction_id,
+                        authority = %authority,
+                        "direct executor application failed"
+                    );
+                }
+                ValidationFail::InstructionFailed(err)
+            })
     }
 
     fn multisig_account_from(role_id: &RoleId) -> Result<Option<AccountId>, ValidationFail> {
@@ -3515,7 +3642,7 @@ fn extract_transfer_asset(
             _ => None,
         };
     }
-    if !instruction.id().contains("Asset") {
+    if !instruction_has_concrete_type::<Transfer<Asset, Numeric, Account>>(instruction) {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -3540,7 +3667,7 @@ fn extract_transfer_domain(
             _ => None,
         };
     }
-    if !instruction.id().contains("Domain") {
+    if !instruction_has_concrete_type::<Transfer<Account, DomainId, Account>>(instruction) {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -3567,7 +3694,8 @@ fn extract_transfer_asset_definition(
             _ => None,
         };
     }
-    if !instruction.id().contains("AssetDefinition") {
+    if !instruction_has_concrete_type::<Transfer<Account, AssetDefinitionId, Account>>(instruction)
+    {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -3594,7 +3722,9 @@ fn extract_transfer_nft(
             _ => None,
         };
     }
-    if !instruction.id().contains("Nft") {
+    if !instruction_has_concrete_type::<Transfer<Account, iroha_data_model::NftId, Account>>(
+        instruction,
+    ) {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -3725,6 +3855,15 @@ fn can_transfer_nft(
     authority_has_permission(world, authority, &required)
 }
 
+fn should_bypass_contract_runtime_asset_transfer_check(
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    instruction: &InstructionBox,
+) -> bool {
+    contract_runtime_context
+        .is_some_and(ContractRuntimeExecutionContext::allows_bisp_runtime_asset_transfer_bypass)
+        && extract_transfer_asset(instruction).is_some()
+}
+
 fn can_transfer_asset(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -3789,6 +3928,10 @@ fn normalize_role_permission_for_initial_executor(
     }
 
     Ok(permission.clone())
+}
+
+fn instruction_has_concrete_type<T: 'static>(instruction: &InstructionBox) -> bool {
+    instruction.id() == core::any::type_name::<T>()
 }
 
 const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
@@ -3867,7 +4010,7 @@ pub(crate) fn extract_register_asset_definition(
             _ => None,
         };
     }
-    if !instruction.id().contains("AssetDefinition") {
+    if !instruction_has_concrete_type::<Register<AssetDefinition>>(instruction) {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -4586,6 +4729,37 @@ mod tests {
     }
 
     #[test]
+    fn extract_transfer_asset_definition_ignores_register_asset_definition_instruction() {
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+            "defs".parse().expect("defs domain id"),
+            "bond".parse().expect("asset definition name"),
+        );
+        let instruction = InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id).with_name("bond".to_owned()),
+        ));
+
+        assert!(
+            extract_transfer_asset_definition(&instruction).is_none(),
+            "register asset-definition instruction must not decode as transfer"
+        );
+    }
+
+    #[test]
+    fn extract_register_asset_definition_accepts_register_asset_definition_instruction() {
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+            "defs".parse().expect("defs domain id"),
+            "bond".parse().expect("asset definition name"),
+        );
+        let instruction = InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone()).with_name("bond".to_owned()),
+        ));
+
+        let reg = extract_register_asset_definition(&instruction)
+            .expect("expected to extract register asset-definition instruction");
+        assert_eq!(reg.object().id(), &asset_definition_id);
+    }
+
+    #[test]
     fn initial_executor_denies_transfer_domain_without_ownership() {
         let alice_id = ALICE_ID.clone();
         let users_domain_id: DomainId = "users".parse().expect("users domain id");
@@ -4780,6 +4954,148 @@ mod tests {
             ),
             other => panic!(
                 "initial executor should deny asset transfer without owner signature, got: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn contract_runtime_context_allows_bisp_spend_asset_transfers_only_for_bisp_spend_entrypoints()
+    {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let defs_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
+        let alice_account =
+            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
+        let user1_account =
+            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
+        let user2_account =
+            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
+        let asset_definition_id: AssetDefinitionId =
+            AssetDefinitionId::new(defs_domain_id.clone(), "coin".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("coin".to_owned())
+            .build(&user1);
+        let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
+        let source_balance = Asset::new(transfer_asset_id.clone(), Numeric::new(10, 0));
+
+        let world = World::with_assets(
+            [alice_domain, users_domain, defs_domain],
+            [alice_account, user1_account, user2_account],
+            [asset_definition],
+            [source_balance],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let executor = super::Executor::Initial;
+        let instruction = InstructionBox::from(Transfer::asset_numeric(
+            transfer_asset_id,
+            1_u32,
+            user2.clone(),
+        ));
+        let context = ContractRuntimeExecutionContext {
+            namespace: "bisp".to_owned(),
+            contract_id: "bisp".to_owned(),
+            entrypoint: "spend_to_merchant".to_owned(),
+        };
+
+        let mut stx = block.transaction();
+        executor
+            .execute_instruction_with_contract_runtime_context(
+                &mut stx,
+                &alice_id,
+                instruction,
+                Some(&context),
+            )
+            .expect("bisp spend runtime context should allow queued asset transfer");
+    }
+
+    #[test]
+    fn contract_runtime_context_does_not_bypass_non_bisp_spend_entrypoints() {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let defs_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
+        let alice_account =
+            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
+        let user1_account =
+            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
+        let user2_account =
+            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
+        let asset_definition_id: AssetDefinitionId =
+            AssetDefinitionId::new(defs_domain_id.clone(), "coin".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("coin".to_owned())
+            .build(&user1);
+        let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
+        let source_balance = Asset::new(transfer_asset_id.clone(), Numeric::new(10, 0));
+
+        let world = World::with_assets(
+            [alice_domain, users_domain, defs_domain],
+            [alice_account, user1_account, user2_account],
+            [asset_definition],
+            [source_balance],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let executor = super::Executor::Initial;
+        let instruction = InstructionBox::from(Transfer::asset_numeric(
+            transfer_asset_id,
+            1_u32,
+            user2.clone(),
+        ));
+        let context = ContractRuntimeExecutionContext {
+            namespace: "bisp".to_owned(),
+            contract_id: "bisp".to_owned(),
+            entrypoint: "create_tranche".to_owned(),
+        };
+
+        let mut stx = block.transaction();
+        let res = executor.execute_instruction_with_contract_runtime_context(
+            &mut stx,
+            &alice_id,
+            instruction,
+            Some(&context),
+        );
+        match res {
+            Err(ValidationFail::NotPermitted(msg)) => assert!(
+                msg.contains("source asset owner must sign the transaction"),
+                "unexpected rejection message: {msg}"
+            ),
+            other => panic!(
+                "non-spend contract runtime context must not bypass asset transfer checks, got: {other:?}"
             ),
         }
     }

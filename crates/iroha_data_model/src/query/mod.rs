@@ -856,6 +856,8 @@ mod model {
         FindParameters(FindParameters),
         /// Fetch linked domains for an account subject.
         FindDomainsByAccountId(account::prelude::FindDomainsByAccountId),
+        /// Fetch aliases bound to an account subject.
+        FindAliasesByAccountId(account::prelude::FindAliasesByAccountId),
         /// Fetch linked account ids for a domain.
         FindAccountIdsByDomainId(domain::prelude::FindAccountIdsByDomainId),
         /// Fetch a proof record by its identifier.
@@ -908,6 +910,8 @@ mod model {
         Parameters(Parameters),
         /// Linked domain identifier list.
         DomainIds(Vec<DomainId>),
+        /// Bound account alias records.
+        AccountAliasBindingRecords(Vec<account::AccountAliasBindingRecord>),
         /// Linked account identifier list.
         AccountIds(Vec<AccountId>),
         /// Proof record payload.
@@ -2444,6 +2448,7 @@ impl_singular_queries! {
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
     account::prelude::FindDomainsByAccountId => Vec<crate::domain::DomainId>,
+    account::prelude::FindAliasesByAccountId => Vec<account::AccountAliasBindingRecord>,
     domain::prelude::FindAccountIdsByDomainId => Vec<crate::account::AccountId>,
     proof::prelude::FindProofRecordById => crate::proof::ProofRecord,
     smart_contract::prelude::FindContractManifestByCodeHash => crate::smart_contract::manifest::ContractManifest,
@@ -2703,9 +2708,32 @@ pub mod account {
     use std::{format, string::String, vec::Vec};
 
     use derive_more::Display;
+    use norito::codec::{Decode, Encode};
 
     // Bring required IDs into scope for queries! items
     use crate::prelude::AssetDefinitionId;
+
+    /// API-facing record describing one alias bound to an account.
+    #[derive(
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    pub struct AccountAliasBindingRecord {
+        /// Canonical alias literal such as `merchant@hbl.sbp`.
+        pub alias: String,
+        /// Dataspace alias such as `sbp`.
+        pub dataspace: String,
+        /// Optional domain qualifier such as `hbl`.
+        #[norito(default)]
+        pub domain: Option<String>,
+        /// Whether this alias is the account's primary label.
+        #[norito(default)]
+        pub is_primary: bool,
+    }
 
     queries! {
             /// [`FindAccounts`] Iroha Query finds all `Account`s presented.
@@ -2743,6 +2771,21 @@ pub mod account {
                 /// Domainless account identifier whose linked domain memberships should be resolved.
                 pub id: crate::account::AccountId,
             }
+
+            /// [`FindAliasesByAccountId`] query lists aliases bound to the account subject.
+            #[derive(Display)]
+            #[display("Find aliases bound to account `{id}`")]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            pub struct FindAliasesByAccountId {
+                /// Domainless account identifier whose alias bindings should be resolved.
+                pub id: crate::account::AccountId,
+                /// Optional dataspace alias filter such as `sbp`.
+                #[norito(default)]
+                pub dataspace: Option<String>,
+                /// Optional exact domain filter such as `hbl`.
+                #[norito(default)]
+                pub domain: Option<String>,
+            }
         }
 
     impl FindAccountsWithAsset {
@@ -2759,10 +2802,28 @@ pub mod account {
         }
     }
 
+    impl FindAliasesByAccountId {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &crate::account::AccountId {
+            &self.id
+        }
+
+        /// Return the optional dataspace alias filter.
+        pub fn dataspace(&self) -> Option<&str> {
+            self.dataspace.as_deref()
+        }
+
+        /// Return the optional domain filter.
+        pub fn domain(&self) -> Option<&str> {
+            self.domain.as_deref()
+        }
+    }
+
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::{
-            FindAccountIds, FindAccounts, FindAccountsWithAsset, FindDomainsByAccountId,
+            AccountAliasBindingRecord, FindAccountIds, FindAccounts, FindAccountsWithAsset,
+            FindAliasesByAccountId, FindDomainsByAccountId,
         };
     }
 }

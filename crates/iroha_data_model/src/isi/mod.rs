@@ -140,6 +140,11 @@ impl From<crate::isi::bridge::RecordBridgeReceipt> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
+    fn from(i: crate::isi::asset_alias::SetAssetDefinitionAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 // Allow direct boxing of ZK asset and voting instructions
 impl From<crate::isi::zk::RegisterZkAsset> for InstructionBox {

@@ -691,6 +691,7 @@ mod tests {
         prelude::DomainId,
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
 
     use super::*;
@@ -723,6 +724,15 @@ mod tests {
         world
             .account_aliases_mut_for_testing()
             .insert(label.clone(), account_id.clone());
+        let mut labels = world
+            .account_aliases_by_account_mut_for_testing()
+            .get(account_id)
+            .cloned()
+            .unwrap_or_default();
+        labels.insert(label.clone());
+        world
+            .account_aliases_by_account_mut_for_testing()
+            .insert(account_id.clone(), labels);
         world.account_rekey_records_mut_for_testing().insert(
             label.clone(),
             iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),

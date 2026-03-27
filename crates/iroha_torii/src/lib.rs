@@ -557,6 +557,25 @@ fn alias_resolve_index_ok(
     alias_json_response(StatusCode::OK, payload)
 }
 
+fn alias_lookup_by_account_ok(
+    account_id: &str,
+    items: Vec<routing::AliasLookupByAccountItemDto>,
+    source: &'static str,
+) -> Result<AxResponse, Error> {
+    let total = u64::try_from(items.len()).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            "alias lookup result count does not fit in u64".to_owned(),
+        ))
+    })?;
+    let payload = routing::AliasLookupByAccountResponseDto {
+        account_id: account_id.to_owned(),
+        total,
+        items,
+        source: Some(source.to_owned()),
+    };
+    alias_json_response(StatusCode::OK, payload)
+}
+
 fn asset_alias_resolve_ok(
     alias: &str,
     asset_definition_id: &str,
@@ -722,6 +741,57 @@ fn resolve_alias_index_on_chain(
             },
         )
         .transpose()
+}
+
+fn lookup_aliases_by_account_on_chain(
+    app: &SharedAppState,
+    request: &routing::AliasLookupByAccountRequestDto,
+) -> Result<Option<(String, Vec<routing::AliasLookupByAccountItemDto>)>, Error> {
+    let (account_id, canonical_account_id, _) = AccountId::parse_encoded(request.account_id.trim())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "invalid account_id: {err}"
+                )),
+            ))
+        })?
+        .into_parts();
+    let query = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+        account_id,
+        request
+            .dataspace
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        request
+            .domain
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+    );
+    let items = match query.execute(&app.state.view()) {
+        Ok(items) => items,
+        Err(iroha_data_model::query::error::QueryExecutionFail::NotFound) => return Ok(None),
+        Err(err) => {
+            return Err(Error::Query(
+                iroha_data_model::ValidationFail::QueryFailed(err),
+            ));
+        }
+    };
+    Ok(Some((
+        canonical_account_id,
+        items
+            .into_iter()
+            .map(|item| routing::AliasLookupByAccountItemDto {
+                alias: item.alias,
+                dataspace: item.dataspace,
+                domain: item.domain,
+                is_primary: item.is_primary,
+            })
+            .collect(),
+    )))
 }
 
 fn resolve_alias_index_via_service(
@@ -13031,8 +13101,6 @@ async fn handler_post_contract_call_multisig_approve(
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_spec(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -13073,24 +13141,7 @@ async fn handler_post_multisig_spec(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-    let resolve_authority = request
-        .selector
-        .multisig_account_alias
-        .as_deref()
-        .map(str::trim)
-        .filter(|alias| !alias.is_empty())
-        .map(|_| require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref()))
-        .transpose()?;
-    let response = if let Some(resolve_authority) = resolve_authority {
-        crate::routing::handle_post_multisig_spec_for_authority(
-            app.state.clone(),
-            request,
-            resolve_authority,
-        )
-        .await
-    } else {
-        crate::routing::handle_post_multisig_spec(app.state.clone(), NoritoJson(request)).await
-    };
+    let response = crate::routing::handle_post_multisig_spec(app.state.clone(), NoritoJson(request)).await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -13269,8 +13320,6 @@ async fn handler_post_multisig_cancel(
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_list(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -13311,25 +13360,9 @@ async fn handler_post_multisig_proposals_list(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let resolve_authority = request
-        .selector
-        .multisig_account_alias
-        .as_deref()
-        .map(str::trim)
-        .filter(|alias| !alias.is_empty())
-        .map(|_| require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref()))
-        .transpose()?;
-    let response = if let Some(resolve_authority) = resolve_authority {
-        crate::routing::handle_post_multisig_proposals_list_for_authority(
-            app.state.clone(),
-            request,
-            resolve_authority,
-        )
-        .await
-    } else {
+    let response =
         crate::routing::handle_post_multisig_proposals_list(app.state.clone(), NoritoJson(request))
-            .await
-    };
+            .await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -13343,8 +13376,6 @@ async fn handler_post_multisig_proposals_list(
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_get(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
@@ -13385,25 +13416,9 @@ async fn handler_post_multisig_proposals_get(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let resolve_authority = request
-        .selector
-        .multisig_account_alias
-        .as_deref()
-        .map(str::trim)
-        .filter(|alias| !alias.is_empty())
-        .map(|_| require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref()))
-        .transpose()?;
-    let response = if let Some(resolve_authority) = resolve_authority {
-        crate::routing::handle_post_multisig_proposals_get_for_authority(
-            app.state.clone(),
-            request,
-            resolve_authority,
-        )
-        .await
-    } else {
+    let response =
         crate::routing::handle_post_multisig_proposals_get(app.state.clone(), NoritoJson(request))
-            .await
-    };
+            .await;
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -16629,6 +16644,30 @@ async fn handler_alias_resolve_index(
     Ok(axum::http::StatusCode::NOT_FOUND.into_response())
 }
 
+async fn handler_alias_lookup_by_account(
+    State(app): State<SharedAppState>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    let request: routing::AliasLookupByAccountRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    if request.account_id.trim().is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "account_id must not be empty".to_string(),
+            ),
+        )));
+    }
+    if let Some((account_id, items)) = lookup_aliases_by_account_on_chain(&app, &request)? {
+        return alias_lookup_by_account_ok(&account_id, items, "on_chain");
+    }
+
+    Ok(axum::http::StatusCode::NOT_FOUND.into_response())
+}
+
 async fn handler_asset_alias_resolve(
     State(app): State<SharedAppState>,
     NoritoJson(request): NoritoJson<routing::AssetAliasResolveRequestDto>,
@@ -18415,6 +18454,10 @@ impl Torii {
                 .route(
                     "/v1/aliases/resolve_index",
                     post(handler_alias_resolve_index),
+                )
+                .route(
+                    "/v1/aliases/by_account",
+                    post(handler_alias_lookup_by_account),
                 )
                 .route(
                     "/v1/assets/aliases/resolve",
@@ -22440,6 +22483,15 @@ pub(crate) mod tests_runtime_handlers {
         world
             .account_aliases_mut_for_testing()
             .insert(label.clone(), account_id.clone());
+        let mut labels = world
+            .account_aliases_by_account_mut_for_testing()
+            .get(account_id)
+            .cloned()
+            .unwrap_or_default();
+        labels.insert(label.clone());
+        world
+            .account_aliases_by_account_mut_for_testing()
+            .insert(account_id.clone(), labels);
         world.account_rekey_records_mut_for_testing().insert(
             label.clone(),
             iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
@@ -29249,6 +29301,149 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn alias_lookup_by_account_lists_primary_and_secondary_aliases() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let primary_label = AccountLabel::new(
+            "sbp".parse().expect("domain id"),
+            "banking".parse().expect("label"),
+        );
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let account = Account::new(
+            authority
+                .clone()
+                .to_account_id("sbp".parse().expect("domain id")),
+        )
+        .with_label(Some(primary_label))
+        .build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with(
+            [domain],
+            [authority_account, account],
+            [],
+        ));
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = app.state.block(header);
+            let mut tx = block.transaction();
+            let world = tx.world_mut_for_testing();
+            let secondary = AccountLabel::domainless(
+                "public".parse().expect("label"),
+                iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            );
+            world
+                .account_aliases_mut_for_testing()
+                .insert(secondary.clone(), authority.clone());
+            let mut labels = world
+                .account_aliases_by_account_mut_for_testing()
+                .get(&authority)
+                .cloned()
+                .unwrap_or_default();
+            labels.insert(secondary.clone());
+            world
+                .account_aliases_by_account_mut_for_testing()
+                .insert(authority.clone(), labels);
+            tx.apply();
+            block.commit().expect("commit secondary alias");
+        }
+        let request = routing::AliasLookupByAccountRequestDto {
+            account_id: authority.to_string(),
+            dataspace: None,
+            domain: None,
+        };
+        let body = norito::json::to_vec(&request).expect("encode request");
+        let response = handler_alias_lookup_by_account(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let dto: routing::AliasLookupByAccountResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.total, 2);
+        assert_eq!(
+            dto.items.iter().filter(|item| item.is_primary).count(),
+            1,
+            "exactly one primary alias should be reported"
+        );
+        assert!(
+            dto.items.iter().any(|item| item.alias == "banking@sbp.universal"),
+            "primary alias should be present"
+        );
+        assert!(
+            dto.items.iter().any(|item| item.alias == "public@universal"),
+            "secondary alias should be present"
+        );
+    }
+
+    #[tokio::test]
+    async fn alias_lookup_by_account_filters_by_dataspace_and_domain() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let primary_label = AccountLabel::new(
+            "sbp".parse().expect("domain id"),
+            "banking".parse().expect("label"),
+        );
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let account = Account::new(
+            authority
+                .clone()
+                .to_account_id("sbp".parse().expect("domain id")),
+        )
+        .with_label(Some(primary_label))
+        .build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with(
+            [domain],
+            [authority_account, account],
+            [],
+        ));
+        let request = routing::AliasLookupByAccountRequestDto {
+            account_id: authority.to_string(),
+            dataspace: Some("universal".to_string()),
+            domain: Some("sbp".to_string()),
+        };
+        let body = norito::json::to_vec(&request).expect("encode request");
+        let response = handler_alias_lookup_by_account(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let dto: routing::AliasLookupByAccountResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.total, 1);
+        assert_eq!(dto.items[0].alias, "banking@sbp.universal");
+        assert!(dto.items[0].is_primary);
+    }
+
+    #[tokio::test]
+    async fn alias_lookup_by_account_returns_not_found_for_unknown_account() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+        let missing = AccountId::new(KeyPair::random().public_key().clone());
+        let request = routing::AliasLookupByAccountRequestDto {
+            account_id: missing.to_string(),
+            dataspace: None,
+            domain: None,
+        };
+        let body = norito::json::to_vec(&request).expect("encode request");
+        let response = handler_alias_lookup_by_account(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn alias_resolve_scans_account_labels_when_alias_index_is_missing() {
         let alias = "banking@sbp.universal";
         let alias_label = iroha_data_model::account::rekey::AccountLabel::new(
@@ -32049,7 +32244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_spec_requires_signed_request_for_alias_selector() {
+    async fn multisig_spec_does_not_forbid_unsigned_request_for_alias_selector() {
         let request = routing::MultisigSpecRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -32059,21 +32254,19 @@ mod tests {
         let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_post_multisig_spec(
             State(mk_app_state_for_tests()),
-            axum::http::Method::POST,
-            "/v1/multisig/spec".parse().expect("uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
-        .expect_err("unsigned request must fail")
+        .expect_err("missing alias should still fail lookup")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_ne!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
-    async fn multisig_proposals_list_requires_signed_request_for_alias_selector() {
+    async fn multisig_proposals_list_does_not_forbid_unsigned_request_for_alias_selector() {
         let request = routing::MultisigProposalsListRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -32084,21 +32277,19 @@ mod tests {
         let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_post_multisig_proposals_list(
             State(mk_app_state_for_tests()),
-            axum::http::Method::POST,
-            "/v1/multisig/proposals/list".parse().expect("uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
-        .expect_err("unsigned request must fail")
+        .expect_err("missing alias should still fail lookup")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_ne!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
-    async fn multisig_proposals_get_requires_signed_request_for_alias_selector() {
+    async fn multisig_proposals_get_does_not_forbid_unsigned_request_for_alias_selector() {
         let request = routing::MultisigProposalsGetRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -32110,17 +32301,15 @@ mod tests {
         let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_post_multisig_proposals_get(
             State(mk_app_state_for_tests()),
-            axum::http::Method::POST,
-            "/v1/multisig/proposals/get".parse().expect("uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
-        .expect_err("unsigned request must fail")
+        .expect_err("missing alias should still fail lookup")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_ne!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

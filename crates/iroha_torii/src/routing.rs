@@ -1652,6 +1652,20 @@ pub struct AliasResolveIndexRequestDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+pub struct AliasLookupByAccountRequestDto {
+    pub account_id: String,
+    #[norito(default)]
+    pub dataspace: Option<String>,
+    #[norito(default)]
+    pub domain: Option<String>,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub struct AliasResolveResponseDto {
     pub alias: String,
     pub account_id: String,
@@ -1671,6 +1685,34 @@ pub struct AliasResolveIndexResponseDto {
     pub index: u64,
     pub alias: String,
     pub account_id: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct AliasLookupByAccountItemDto {
+    pub alias: String,
+    pub dataspace: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    pub is_primary: bool,
+}
+
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct AliasLookupByAccountResponseDto {
+    pub account_id: String,
+    pub total: u64,
+    pub items: Vec<AliasLookupByAccountItemDto>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 }
@@ -4511,6 +4553,15 @@ fn bind_account_alias_for_test(
     world
         .account_aliases_mut_for_testing()
         .insert(label.clone(), account_id.clone());
+    let mut labels = world
+        .account_aliases_by_account_mut_for_testing()
+        .get(account_id)
+        .cloned()
+        .unwrap_or_default();
+    labels.insert(label.clone());
+    world
+        .account_aliases_by_account_mut_for_testing()
+        .insert(account_id.clone(), labels);
     world.account_rekey_records_mut_for_testing().insert(
         label.clone(),
         iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
@@ -7611,6 +7662,44 @@ fn multisig_execute_trigger_is_mint_request(
 }
 
 #[cfg(feature = "app_api")]
+fn multisig_metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
+    let name = Name::from_str(key).ok()?;
+    let value = metadata.get(&name)?;
+    if let Ok(parsed) = value.try_into_any::<String>() {
+        let trimmed = parsed.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_owned());
+        }
+    }
+    value
+        .try_into_any_norito::<norito::json::Value>()
+        .ok()
+        .and_then(|parsed| multisig_json_scalar_literal(Some(&parsed)))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_contract_call_operation_type(
+    instruction: &iroha_data_model::isi::InstructionBox,
+) -> Option<&'static str> {
+    let register = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::RegisterBox>()?;
+    let iroha_data_model::isi::RegisterBox::Trigger(register_trigger) = register else {
+        return None;
+    };
+    let metadata = register_trigger.object().action().metadata();
+    let contract_id = multisig_metadata_string(metadata, "contract_id")?;
+    if !contract_id.eq_ignore_ascii_case("mint_request") {
+        return None;
+    }
+    let entrypoint = multisig_metadata_string(metadata, "contract_entrypoint")?;
+    match entrypoint.trim().to_ascii_lowercase().as_str() {
+        "create_mint_request" | "finalize_mint_request" => Some("MINT_REQUEST"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn multisig_execute_trigger_is_issuance_swap(
     trigger_id: &str,
     args: Option<&norito::json::Value>,
@@ -7660,6 +7749,10 @@ fn multisig_proposal_operation_type(
         Some(iroha_data_model::isi::MintBox::Asset(_))
     ) {
         return "MINT";
+    }
+
+    if let Some(operation_type) = multisig_contract_call_operation_type(first_instruction) {
+        return operation_type;
     }
 
     if let Some(execute_trigger) = first_instruction
@@ -9058,6 +9151,62 @@ mod multisig_selector_tests {
             BTreeSet::new(),
             None,
         );
+        let contract_manifest = manifest::ContractManifest {
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            kotoba: None,
+            provenance: None,
+        };
+        let asset_definition = test_asset_definition_id().to_string();
+        let contract_payload = IrohaJson::new(
+            norito::json::parse_value(&format!(
+                r#"{{
+                    "proposal_id":"mr_type_filter_contract",
+                    "approval_alias":"banking@sbp",
+                    "requesting_fi_dataspace":"hbl",
+                    "asset_definition":"{asset_definition}",
+                    "to_account_alias":"cbdc@hbl.sbp",
+                    "amount":"77",
+                    "requested_by_actor":{{
+                        "proposal_id":"mr_type_filter_contract",
+                        "requesting_fi_id":"hbl",
+                        "approval_alias_fqn":"banking@sbp",
+                        "creation_multisig_alias_fqn":"cbdc@hbl.sbp",
+                        "asset_id":"{asset_definition}",
+                        "amount":"77",
+                        "to_account_id":"cbdc@hbl.sbp"
+                    }}
+                }}"#,
+            ))
+            .expect("contract mint request payload"),
+        );
+        let (contract_mint_request_instructions, _) = build_multisig_contract_call_instructions(
+            &multisig_account_id,
+            "apps",
+            "mint_request",
+            "create_mint_request",
+            Some(&contract_payload),
+            None,
+            None,
+            300_000,
+            &contract_manifest,
+            &Hash::new(b"mint-request-type-filter-contract".to_vec()),
+            vec![0x01, 0x02, 0x03],
+        )
+        .expect("contract mint request instructions");
+        let contract_mint_request_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            contract_mint_request_instructions,
+            1_700_000_000_135,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
         let issuance_swap_hash = insert_active_multisig_proposal(
             &mut world,
             &multisig_account_id,
@@ -9155,7 +9304,7 @@ mod multisig_selector_tests {
         .expect("mint request approvals");
         assert_eq!(
             list_hashes(&mint_request_items.items),
-            BTreeSet::from([mint_request_hash.clone()])
+            BTreeSet::from([mint_request_hash.clone(), contract_mint_request_hash.clone()])
         );
 
         let JsonBody(issuance_swap_items) = handle_post_multisig_approvals_list(

@@ -10,7 +10,7 @@ use crate::{
     ivm_cache::IvmCache,
     metadata::{
         CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
-        EmbeddedContractInterfaceV1, HEADER_SIZE, mode,
+        EmbeddedContractInterfaceV1, EmbeddedStateType, HEADER_SIZE, mode,
     },
 };
 
@@ -162,6 +162,7 @@ fn validate_contract_interface(
 
     validate_access_set_hints(contract_interface.access_set_hints.as_ref())?;
     validate_kotoba_entries(&contract_interface.kotoba)?;
+    validate_state_descriptors(contract_interface)?;
 
     if contract_interface.entrypoints.is_empty() {
         return Err(ContractArtifactError::invalid(
@@ -330,6 +331,65 @@ fn validate_entrypoint_name(name: &str) -> Result<(), ContractArtifactError> {
         return Err(ContractArtifactError::invalid(format!(
             "entrypoint `{name}` contains unsupported characters"
         )));
+    }
+    Ok(())
+}
+
+fn validate_state_descriptors(
+    contract_interface: &EmbeddedContractInterfaceV1,
+) -> Result<(), ContractArtifactError> {
+    let mut names = BTreeSet::new();
+    for state in &contract_interface.states {
+        if state.name.trim().is_empty() {
+            return Err(ContractArtifactError::invalid(
+                "CNTR state descriptors must not use an empty name",
+            ));
+        }
+        if !names.insert(state.name.clone()) {
+            return Err(ContractArtifactError::invalid(format!(
+                "duplicate state descriptor `{}`",
+                state.name
+            )));
+        }
+        validate_state_type(&state.ty)?;
+    }
+    Ok(())
+}
+
+fn validate_state_type(ty: &EmbeddedStateType) -> Result<(), ContractArtifactError> {
+    match ty {
+        EmbeddedStateType::Tuple(items) => {
+            for item in items {
+                validate_state_type(item)?;
+            }
+        }
+        EmbeddedStateType::Struct { name, fields } => {
+            if name.trim().is_empty() {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR struct state type must not use an empty name",
+                ));
+            }
+            let mut field_names = BTreeSet::new();
+            for field in fields {
+                if field.name.trim().is_empty() {
+                    return Err(ContractArtifactError::invalid(format!(
+                        "CNTR struct `{name}` contains an empty field name"
+                    )));
+                }
+                if !field_names.insert(field.name.clone()) {
+                    return Err(ContractArtifactError::invalid(format!(
+                        "CNTR struct `{name}` contains duplicate field `{}`",
+                        field.name
+                    )));
+                }
+                validate_state_type(&field.ty)?;
+            }
+        }
+        EmbeddedStateType::Map { key, value } => {
+            validate_state_type(key)?;
+            validate_state_type(value)?;
+        }
+        _ => {}
     }
     Ok(())
 }

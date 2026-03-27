@@ -50,7 +50,8 @@ use crate::{
     encoding, instruction,
     metadata::{
         self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
-        EmbeddedEntrypointDescriptor, LITERAL_SECTION_MAGIC, ProgramMetadata,
+        EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor, EmbeddedStateFieldDescriptor,
+        EmbeddedStateType, LITERAL_SECTION_MAGIC, ProgramMetadata,
     },
     pointer_abi::PointerType,
     syscalls,
@@ -7332,6 +7333,7 @@ impl Compiler {
             &hint_reports,
             &func_start_offsets,
         )?;
+        let state_descriptors = build_state_descriptors(&typed)?;
         let access_set_hints = build_access_set_hints(&access_sets, include_hints);
         let kotoba_entries = build_kotoba_entries(&typed.kotoba_entries);
         let mut feature_bits = 0u64;
@@ -7347,6 +7349,7 @@ impl Compiler {
             access_set_hints: access_set_hints.clone(),
             kotoba: kotoba_entries.clone(),
             entrypoints: entrypoint_descriptors.clone(),
+            states: state_descriptors,
         };
 
         // Compute literal table and patch LOADs. Contract artifacts are laid out as:
@@ -7593,6 +7596,72 @@ fn build_kotoba_entries(
             },
         )
         .collect()
+}
+
+fn build_state_descriptors(typed: &TypedProgram) -> Result<Vec<EmbeddedStateDescriptor>, String> {
+    typed
+        .states
+        .iter()
+        .map(|state| {
+            Ok(EmbeddedStateDescriptor {
+                name: state.name.clone(),
+                ty: build_state_type_descriptor(&state.ty)?,
+            })
+        })
+        .collect()
+}
+
+fn build_state_type_descriptor(ty: &semantic::Type) -> Result<EmbeddedStateType, String> {
+    use semantic::Type;
+
+    Ok(match semantic::resolve_struct_type(ty) {
+        Type::Int => EmbeddedStateType::Int,
+        Type::FixedU128 => EmbeddedStateType::FixedU128,
+        Type::Amount => EmbeddedStateType::Amount,
+        Type::Balance => EmbeddedStateType::Balance,
+        Type::Bool => EmbeddedStateType::Bool,
+        Type::String => EmbeddedStateType::String,
+        Type::Blob => EmbeddedStateType::Blob,
+        Type::Bytes => EmbeddedStateType::Bytes,
+        Type::DataSpaceId => EmbeddedStateType::DataSpaceId,
+        Type::AccountId => EmbeddedStateType::AccountId,
+        Type::AssetDefinitionId => EmbeddedStateType::AssetDefinitionId,
+        Type::AssetId => EmbeddedStateType::AssetId,
+        Type::NftId => EmbeddedStateType::NftId,
+        Type::DomainId => EmbeddedStateType::DomainId,
+        Type::Name => EmbeddedStateType::Name,
+        Type::Json => EmbeddedStateType::Json,
+        Type::Tuple(items) => EmbeddedStateType::Tuple(
+            items
+                .iter()
+                .map(build_state_type_descriptor)
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        Type::Struct { name, fields } => EmbeddedStateType::Struct {
+            name,
+            fields: fields
+                .iter()
+                .map(|(field_name, field_ty)| {
+                    Ok(EmbeddedStateFieldDescriptor {
+                        name: field_name.clone(),
+                        ty: build_state_type_descriptor(field_ty)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+        },
+        Type::Map(key, value) => EmbeddedStateType::Map {
+            key: Box::new(build_state_type_descriptor(&key)?),
+            value: Box::new(build_state_type_descriptor(&value)?),
+        },
+        Type::Opaque(name) => {
+            return Err(format!(
+                "state type `{name}` was not resolved before CNTR schema emission"
+            ));
+        }
+        Type::Unit | Type::AxtDescriptor | Type::AssetHandle | Type::ProofBlob => {
+            return Err("state type is not supported in embedded state schemas".to_string());
+        }
+    })
 }
 
 fn apply_explicit_access_hints(

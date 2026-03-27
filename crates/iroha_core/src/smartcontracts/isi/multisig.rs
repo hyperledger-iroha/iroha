@@ -439,11 +439,11 @@ fn rekey_account_id(
 
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
         .world
-        .account_aliases
-        .view()
-        .iter()
-        .filter(|(_, account_id)| *account_id == old_account)
-        .map(|(label, _)| label.clone())
+        .account_aliases_by_account
+        .get(old_account)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
         .collect();
     labels_to_repoint.extend(
         state_transaction
@@ -461,8 +461,7 @@ fn rekey_account_id(
     for label in labels_to_repoint {
         state_transaction
             .world
-            .account_aliases
-            .insert(label.clone(), new_account.clone());
+            .insert_account_alias_binding(label.clone(), new_account.clone());
         let record = match state_transaction
             .world
             .account_rekey_records

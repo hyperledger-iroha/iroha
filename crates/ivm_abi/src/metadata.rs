@@ -67,6 +67,50 @@ impl EmbeddedEntrypointDescriptor {
     }
 }
 
+/// Field descriptor for embedded durable state record types.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct EmbeddedStateFieldDescriptor {
+    pub name: String,
+    pub ty: EmbeddedStateType,
+}
+
+/// Compact durable-state type schema embedded in contract artifacts.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum EmbeddedStateType {
+    Int,
+    FixedU128,
+    Amount,
+    Balance,
+    Bool,
+    String,
+    Blob,
+    Bytes,
+    DataSpaceId,
+    AccountId,
+    AssetDefinitionId,
+    AssetId,
+    NftId,
+    DomainId,
+    Name,
+    Json,
+    Tuple(Vec<EmbeddedStateType>),
+    Struct {
+        name: String,
+        fields: Vec<EmbeddedStateFieldDescriptor>,
+    },
+    Map {
+        key: Box<EmbeddedStateType>,
+        value: Box<EmbeddedStateType>,
+    },
+}
+
+/// Contract-level durable state declaration descriptor.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct EmbeddedStateDescriptor {
+    pub name: String,
+    pub ty: EmbeddedStateType,
+}
+
 /// Decoded payload of the required `CNTR` section carried by contract artifacts.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedContractInterfaceV1 {
@@ -75,6 +119,7 @@ pub struct EmbeddedContractInterfaceV1 {
     pub access_set_hints: Option<AccessSetHints>,
     pub kotoba: Vec<KotobaTranslationEntry>,
     pub entrypoints: Vec<EmbeddedEntrypointDescriptor>,
+    pub states: Vec<EmbeddedStateDescriptor>,
 }
 
 impl EmbeddedContractInterfaceV1 {

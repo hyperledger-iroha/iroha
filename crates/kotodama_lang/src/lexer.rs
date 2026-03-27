@@ -7,6 +7,7 @@
 pub enum TokenKind {
     Fn,
     Let,
+    Const,
     Return,
     Break,
     Continue,
@@ -517,6 +518,7 @@ impl<'a> Lexer<'a> {
         let kind = match ident.as_str() {
             "fn" => TokenKind::Fn,
             "let" => TokenKind::Let,
+            "const" => TokenKind::Const,
             "return" => TokenKind::Return,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,

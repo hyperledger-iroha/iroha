@@ -246,6 +246,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_gov_finalize_tool());
     tools.push(iroha_aliases_resolve_tool());
     tools.push(iroha_aliases_resolve_index_tool());
+    tools.push(iroha_aliases_by_account_tool());
     tools.push(iroha_contracts_code_get_tool());
     tools.push(iroha_contracts_code_bytes_get_tool());
     tools.push(iroha_contracts_deploy_tool());
@@ -1132,6 +1133,12 @@ async fn handle_tools_call(
         }
         "iroha.aliases.resolve_index" => {
             match dispatch_iroha_aliases_resolve_index(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.aliases.by_account" => {
+            match dispatch_iroha_aliases_by_account(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4321,6 +4328,29 @@ async fn dispatch_iroha_aliases_resolve_index(
         inbound_headers,
         Method::POST,
         "/v1/aliases/resolve_index",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_aliases_by_account(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/aliases/by_account",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -9746,6 +9776,43 @@ fn iroha_aliases_resolve_index_tool() -> ToolSpec {
     }
 }
 
+fn iroha_aliases_by_account_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.aliases.by_account".to_owned(),
+        description: "List aliases bound to an account (`/v1/aliases/by_account`).".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/aliases/by_account".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw alias-by-account payload. If omitted, flat top-level fields are forwarded as body."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.account_id`."
+                },
+                "dataspace": {
+                    "type": "string",
+                    "description": "Optional convenience shortcut for `body.dataspace`."
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "Optional convenience shortcut for `body.domain`."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     ToolSpec {
         name: name.to_owned(),
@@ -12895,6 +12962,11 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.aliases.resolve_index")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.aliases.by_account")
         );
         assert!(
             tools

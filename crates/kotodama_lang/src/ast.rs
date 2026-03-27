@@ -51,6 +51,8 @@ pub enum Item {
     Function(Function),
     /// User-defined product type with named fields.
     Struct(StructDef),
+    /// Contract-level constant declaration.
+    Const(ConstDecl),
     /// Contract-level durable state declaration. For now, the compiler lowers
     /// these to ephemeral allocations per run; durable host-backed storage is
     /// pending and tracked in the roadmap/docs.
@@ -122,6 +124,14 @@ pub struct Block {
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<(String, TypeExpr)>,
+}
+
+/// A contract-level `const` declaration: `const NAME: Type = expr;`.
+#[derive(Debug, PartialEq, Clone)]
+pub struct ConstDecl {
+    pub name: String,
+    pub ty: Option<TypeExpr>,
+    pub value: Expr,
 }
 
 /// A contract-level `state` declaration: `state Type name;`.
