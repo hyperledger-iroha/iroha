@@ -220,6 +220,23 @@ fn assert_cuda_disabled_surface_behaves() {
         "aesdec_n_rounds_many should preserve deterministic CPU output when CUDA is disabled"
     );
 
+    let original_hi = [5u64, 3, 5, 3, 3];
+    let original_lo = [7u64, 9, 1, 2, 1];
+    let mut hi = original_hi;
+    let mut lo = original_lo;
+    assert!(
+        ivm::bitonic_sort_pairs(&mut hi, &mut lo).is_none(),
+        "explicit CUDA bitonic-sort helper should fail closed while CUDA is disabled"
+    );
+    assert_eq!(
+        hi, original_hi,
+        "failed CUDA bitonic-sort helper must not mutate the high-word buffer"
+    );
+    assert_eq!(
+        lo, original_lo,
+        "failed CUDA bitonic-sort helper must not mutate the low-word buffer"
+    );
+
     let lhs = [1.0f32, -2.5, 3.25, 4.5];
     let rhs = [2.0f32, 0.5, -1.25, 3.5];
     assert!(

@@ -2,6 +2,63 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: IVM architecture spec now matches the shipped CUDA helper surface
+- Refreshed
+  `crates/ivm/docs/architecture_spec.md`
+  so the CUDA design/spec text matches the helper surface already implemented
+  in the repository.
+- The shipped behavior in this slice:
+  - the architecture note now describes Metal/CUDA acceleration as a shipped
+    best-effort helper surface with deterministic fallback tests, instead of
+    pointing to “full CUDA kernel coverage” as future work;
+  - the cryptographic opcode summary now lists `ED25519VERIFY` and
+    `ED25519BATCHVERIFY` as implemented instead of describing
+    `ED25519VERIFY` as a stub; and
+  - the hardware-acceleration roadmap now distinguishes delivered CUDA helper
+    coverage from the still-open live-hardware validation and Metal-parity
+    follow-up work.
+- Validation:
+  - `cargo test -p ivm --features cuda --lib public_ -- --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --test cuda --test cuda_extra --test cuda_sha256 --test poseidon_cuda_parity --test cuda_parity_keccak_aes --test ed25519_batch -- --nocapture --test-threads=1` (pass; host-dependent CUDA tests skip cleanly when no live device is available)
+  - `cargo test -p ivm --features cuda --test gpu_manager --test gpu_determinism --test hardware_determinism --test cuda_env -- --nocapture --test-threads=1` (pass; host-dependent CUDA tests skip cleanly when no live device is available)
+- Remaining implementation gap:
+  - no additional code regressions were confirmed in this follow-up; remaining
+    CUDA work in the current tree is centered on live-hardware soak/benchmark
+    coverage and any future Metal-parity expansion rather than missing helper
+    implementations.
+
+## 2026-03-26 Follow-up: CUDA bitonic-sort helper now uses the stable `ivm` root API
+- Extended the CUDA helper-surface review in
+  `crates/ivm/src/{lib.rs,cuda.rs}`,
+  `crates/ivm/tests/{cuda_fallback.rs,cuda_disable_on_mismatch.rs}`,
+  and
+  `crates/iroha_core/src/pipeline/gpu.rs`
+  to close the remaining public-helper mismatch in the scheduler GPU path.
+- The shipped behavior in this slice:
+  - `bitonic_sort_pairs(...)` is now re-exported from the `ivm` crate root
+    alongside the rest of the explicit CUDA helper surface, so downstream code
+    no longer needs the private `ivm::cuda` module path;
+  - `iroha_core::pipeline::gpu::sort_triplets_gpu(...)` now gates on
+    `ivm::cuda_available()` and calls `ivm::bitonic_sort_pairs(...)`, which
+    fixes the `error[E0603]` private-module failure under
+    `cargo check -p iroha_core --features cuda` and classifies no-device /
+    config-disabled hosts as `GpuSortError::Unsupported` before launch; and
+  - focused regressions now pin the CUDA bitonic helper directly on all three
+    surfaces: a live parity test in `cuda.rs`, the no-CUDA stubs in
+    `cuda_fallback.rs`, and the disabled/self-test-failed path in
+    `cuda_disable_on_mismatch.rs`, including the requirement that failed calls
+    leave the caller buffers unchanged.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --test cuda_fallback -- --nocapture` (pass)
+  - `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --lib public_bitonic_sort_pairs_match_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; test skips cleanly on hosts without a live CUDA backend)
+  - `cargo check -p iroha_core --features cuda --message-format short` (pass; pre-existing warnings remain in `iroha_crypto`, `fastpq_prover`, and `iroha_core`)
+- Remaining implementation gap:
+  - no additional confirmed code gaps remain in this focused CUDA
+    bitonic/helper-surface slice; broader live-CUDA soak and benchmark reruns
+    are still host-dependent outside this environment.
+
 ## 2026-03-26 Follow-up: FASTPQ trace-commitment golden vectors match canonical transfer-row keys again
 - Refreshed
   `crates/fastpq_prover/tests/fixtures/transfer.norito`,

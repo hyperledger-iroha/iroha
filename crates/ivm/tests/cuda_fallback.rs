@@ -27,6 +27,13 @@ fn cuda_helpers_fall_back_when_disabled() {
     assert!(ivm::aesenc_rounds_batch_cuda(&[[0u8; 16]], &[[0u8; 16]]).is_none());
     assert!(ivm::aesdec_rounds_batch_cuda(&[[0u8; 16]], &[[0u8; 16]]).is_none());
 
+    // Sorting helper returns None without CUDA.
+    let mut hi = [5u64, 3, 5, 3, 3];
+    let mut lo = [7u64, 9, 1, 2, 1];
+    assert!(ivm::bitonic_sort_pairs(&mut hi, &mut lo).is_none());
+    assert_eq!(hi, [5u64, 3, 5, 3, 3]);
+    assert_eq!(lo, [7u64, 9, 1, 2, 1]);
+
     // Vector CUDA helper entry points return None without CUDA.
     assert!(ivm::vector_add_f32(&[1.0, 2.0], &[3.0, 4.0]).is_none());
     assert!(ivm::vadd32_cuda(&[1u32, 2], &[3u32, 4]).is_none());

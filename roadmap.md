@@ -2,6 +2,64 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 IVM architecture spec CUDA-state refresh):
+`crates/ivm/docs/architecture_spec.md`
+now matches the helper surface already shipped in-tree.
+
+- the top-level note now describes Metal/CUDA acceleration as a shipped
+  best-effort surface with deterministic fallback coverage instead of treating
+  “full CUDA kernel coverage” as the next missing implementation step;
+- the cryptographic opcode summary now lists `ED25519VERIFY` and
+  `ED25519BATCHVERIFY` as implemented, instead of describing
+  `ED25519VERIFY` as a stub; and
+- the hardware-acceleration roadmap now separates delivered CUDA helper
+  coverage from the still-open live-device validation and Metal-parity follow-up.
+
+Validation:
+- `cargo test -p ivm --features cuda --lib public_ -- --test-threads=1`
+- `cargo test -p ivm --features cuda --test cuda --test cuda_extra --test cuda_sha256 --test poseidon_cuda_parity --test cuda_parity_keccak_aes --test ed25519_batch -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --test gpu_manager --test gpu_determinism --test hardware_determinism --test cuda_env -- --nocapture --test-threads=1`
+
+Open work for this CUDA-docs slice now remains:
+- keep rerunning the focused CUDA parity and benchmark suites on hosts with a
+  live CUDA backend so the operator/performance guidance reflects measured
+  hardware behavior; and
+- continue the incremental Metal-parity expansion where the shipped CUDA helper
+  surface still has no matching Metal kernel.
+
+Latest sync (2026-03-26 CUDA bitonic-sort helper public-surface + `iroha_core` compile repair):
+`crates/ivm/src/{lib.rs,cuda.rs}`,
+`crates/ivm/tests/{cuda_fallback.rs,cuda_disable_on_mismatch.rs}`,
+and
+`crates/iroha_core/src/pipeline/gpu.rs`
+now close the remaining public-helper mismatch in the scheduler GPU path.
+
+- `bitonic_sort_pairs(...)` is now re-exported from the `ivm` crate root
+  alongside the rest of the explicit CUDA helper surface, so downstream crates
+  no longer need the private `ivm::cuda` module path;
+- `iroha_core::pipeline::gpu::sort_triplets_gpu(...)` now checks
+  `ivm::cuda_available()` and calls `ivm::bitonic_sort_pairs(...)`, which
+  fixes the `E0603` private-module compile break under
+  `cargo check -p iroha_core --features cuda` and reports no-device /
+  config-disabled hosts as `Unsupported` before launch;
+- focused CUDA regressions now cover the helper directly on all surfaces: live
+  parity in `cuda.rs`, the no-CUDA stubs in `cuda_fallback.rs`, and the
+  disabled/self-test-failed path in `cuda_disable_on_mismatch.rs`; and
+- failed or unavailable bitonic-sort calls are now pinned to leave the caller
+  buffers unchanged, matching the rest of the explicit CUDA helper contract.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p ivm --test cuda_fallback -- --nocapture`
+- `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture --test-threads=1`
+- `cargo test -p ivm --features cuda --lib public_bitonic_sort_pairs_match_scalar_when_cuda_available -- --nocapture --test-threads=1`
+- `cargo check -p iroha_core --features cuda --message-format short`
+
+Open work for this CUDA helper slice now remains:
+- no additional confirmed code gaps remain in this focused bitonic/helper
+  slice; broader accelerator soak and benchmark reruns still depend on access
+  to a live CUDA host.
+
 Latest sync (2026-03-26 FASTPQ trace-commitment fixture refresh):
 `crates/fastpq_prover/tests/fixtures/transfer.norito`,
 `crates/fastpq_prover/tests/fixtures/ordering_hash.json`,
