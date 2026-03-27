@@ -2,6 +2,32 @@
 
 Last updated: 2026-03-27
 
+Latest sync (2026-03-27 domain-links SNS lease fixture repair):
+`integration_tests/tests/domain_links.rs`
+now closes the failing domain-links integration slice under the current
+SNS-backed domain-registration rules.
+
+- the test helper now provisions an active SNS domain-name lease for the
+  current authority before submitting `Register::domain(...)`, so the live
+  integration flow matches the runtime invariant instead of assuming direct
+  domain registration still works without a lease;
+- the affected test domain literals now use hyphenated labels accepted by the
+  default SNS domain pricing policy, removing the stale underscore-based
+  fixture mismatch; and
+- a small helper regression now pins the generated SNS registration payload for
+  this file, covering the owner/controller/payment defaults used by the lease
+  setup path.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test domain_links -- --nocapture`
+
+Open work for this domain-links slice now remains:
+- no confirmed open work remains for the focused `domain_links` failures fixed
+  here; broader integration suites that still create non-genesis domains
+  directly should adopt the same SNS-backed setup if they begin failing under
+  the same invariant.
+
 Latest sync (2026-03-27 Torii contract deploy route repair):
 `crates/iroha_torii/src/lib.rs`
 now closes the concrete contract-route drift behind the failing

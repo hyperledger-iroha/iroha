@@ -2,6 +2,26 @@
 
 Last updated: 2026-03-27
 
+## 2026-03-27 Follow-up: domain-links integration tests now provision SNS leases before runtime domain registration
+- Updated
+  `integration_tests/tests/domain_links.rs`
+  so the domain-links integration coverage matches the current SNS-backed
+  domain-registration invariant.
+- The shipped behavior in this slice:
+  - the test fixture path now provisions an active SNS domain-name lease for
+    the submitting authority before calling `Register::domain(...)`, matching
+    the runtime `iroha_core::smartcontracts::isi::world` precondition instead
+    of relying on the now-invalid direct registration flow;
+  - the affected test domains now use DNS/SNS-compatible hyphenated labels,
+    which keeps the fixtures valid under the default SNS domain pricing regex;
+    and
+  - a focused helper regression now pins the SNS registration payload shape so
+    owner/controller/payment defaults used by this test file do not silently
+    drift.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test domain_links -- --nocapture` (pass)
+
 ## 2026-03-27 Follow-up: Torii contract deploy routes are mounted again
 - Updated
   `crates/iroha_torii/src/lib.rs`
