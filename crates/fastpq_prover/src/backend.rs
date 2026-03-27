@@ -790,6 +790,11 @@ fn metal_device_visible_via_api() -> bool {
     !devices.is_empty()
 }
 
+#[cfg(all(not(feature = "fastpq-gpu"), target_os = "macos"))]
+fn metal_device_visible_via_api() -> bool {
+    false
+}
+
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 fn fastpq_debug_metal_enum() -> bool {
     if let Some(enabled) = overrides::metal_debug_enum_override() {

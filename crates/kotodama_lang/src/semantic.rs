@@ -5291,18 +5291,34 @@ fn bind_internal_temp(
 }
 
 pub(crate) fn resolve_struct_type(ty: &Type) -> Type {
-    if let Type::Opaque(name) = ty {
-        STRUCT_ENV.with(|env| {
+    match ty {
+        Type::Opaque(name) => STRUCT_ENV.with(|env| {
             env.borrow()
                 .get(name)
                 .map(|fields| Type::Struct {
                     name: name.clone(),
-                    fields: fields.clone(),
+                    fields: fields
+                        .iter()
+                        .map(|(field_name, field_ty)| {
+                            (field_name.clone(), resolve_struct_type(field_ty))
+                        })
+                        .collect(),
                 })
                 .unwrap_or_else(|| ty.clone())
-        })
-    } else {
-        ty.clone()
+        }),
+        Type::Map(key, value) => Type::Map(
+            Box::new(resolve_struct_type(key)),
+            Box::new(resolve_struct_type(value)),
+        ),
+        Type::Tuple(items) => Type::Tuple(items.iter().map(resolve_struct_type).collect()),
+        Type::Struct { name, fields } => Type::Struct {
+            name: name.clone(),
+            fields: fields
+                .iter()
+                .map(|(field_name, field_ty)| (field_name.clone(), resolve_struct_type(field_ty)))
+                .collect(),
+        },
+        _ => ty.clone(),
     }
 }
 
@@ -6958,6 +6974,34 @@ mod tests {
         )
         .expect("parse resolve_account_alias blob");
         analyze(&program).expect("resolve_account_alias blob should type-check");
+    }
+
+    #[test]
+    fn durable_state_maps_accept_struct_values_via_opaque_type_names() {
+        let program = parse(
+            "seiyaku Demo {
+                struct Request {
+                    status: int,
+                    alias_blob: Blob,
+                    requested_by_actor_id: Blob,
+                    requested_by_actor: Json
+                }
+                state Requests: Map<Name, Request>;
+                kotoage fn create_request(proposal_id: Name,
+                                          alias_literal: Blob,
+                                          requested_by_actor_id: Blob,
+                                          requested_by_actor: Json) {
+                    Requests[proposal_id] = Request(
+                        1,
+                        alias_literal,
+                        requested_by_actor_id,
+                        requested_by_actor
+                    );
+                }
+            }",
+        )
+        .expect("parse durable struct map");
+        analyze(&program).expect("durable struct-valued state map should type-check");
     }
 
     #[test]

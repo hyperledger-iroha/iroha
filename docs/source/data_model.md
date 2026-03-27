@@ -41,8 +41,16 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 ### Account
 - `AccountId` is the canonical domainless account identity keyed by the controller and encoded as canonical I105.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` carries explicit domain context only where a scoped view is required.
-- `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
-- Builder: `NewAccount` via `Account::new(id)`; registration requires an explicit `ScopedAccountId` domain and does not infer one from defaults.
+- `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md), and `linked_domains` is derived index state rather than part of the canonical identity.
+- Builders:
+  - `NewAccount` via `Account::new(scoped_id)` materializes an explicit domain-linked registration and therefore requires a `ScopedAccountId`.
+  - `NewAccount` via `Account::new_domainless(id)` registers only the universal account subject with no linked domain.
+- Alias model:
+  - Canonical account identity never includes a domain or dataspace segment.
+  - Account aliases are separate SNS/account-label bindings layered on top of `AccountId`.
+  - Domain-qualified aliases such as `merchant@hbl.sbp` carry both a domain and dataspace in the alias binding.
+  - Dataspace-root aliases such as `merchant@sbp` carry only the dataspace and therefore pair naturally with `Account::new_domainless(...)`.
+  - Tests and fixtures should seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately instead of encoding domain assumptions into the account identity itself.
 
 ### Asset Definitions and Assets
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` exposed textually as an unprefixed Base58 address with versioning and checksum.

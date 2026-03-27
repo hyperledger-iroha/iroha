@@ -123,6 +123,7 @@ use std::{
     sync::OnceLock,
 };
 
+use ::time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use base64::Engine;
 use blake3::hash as blake3_hash;
 use iroha_data_model::sorafs::{
@@ -6411,7 +6412,7 @@ pub struct ContractStateQuery {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct ContractStateEntry {
     pub path: String,
     pub found: bool,
@@ -6426,7 +6427,7 @@ pub struct ContractStateEntry {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct ContractStateResponse {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -6466,9 +6467,11 @@ fn register_contract_state_schema(
     name: String,
     ty: ivm::EmbeddedStateType,
 ) {
-    match registry.get_mut(&name) {
-        Some(slot @ Some(existing)) if *existing == ty => {}
-        Some(slot) => *slot = None,
+    match registry.get(&name) {
+        Some(Some(existing)) if *existing == ty => {}
+        Some(_) => {
+            registry.insert(name, None);
+        }
         None => {
             registry.insert(name, Some(ty));
         }
@@ -7213,13 +7216,13 @@ mod contract_state_tests {
         })
         .expect("decode map entry");
 
-        assert_eq!(
-            decoded,
-            norito::json::json!({
-                "status": "1",
-                "approval_alias_fqn": base64::engine::general_purpose::STANDARD.encode("banking@sbp"),
-            })
+        let mut expected = Map::new();
+        expected.insert("status".into(), Value::from("1"));
+        expected.insert(
+            "approval_alias_fqn".into(),
+            Value::from(base64::engine::general_purpose::STANDARD.encode("banking@sbp")),
         );
+        assert_eq!(decoded, Value::Object(expected));
     }
 }
 
@@ -7966,78 +7969,174 @@ fn validate_numeric_json_value(value: &Value) -> bool {
 }
 
 #[cfg(feature = "app_api")]
-fn validate_contract_value(
+fn parse_contract_i64_literal(raw: &str) -> Option<i64> {
+    if raw.is_empty() {
+        return None;
+    }
+    let bytes = raw.as_bytes();
+    let start = usize::from(bytes.first() == Some(&b'-'));
+    if start == bytes.len() || !bytes[start..].iter().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    raw.parse::<i64>().ok()
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_contract_blob_literal(raw: &str) -> Value {
+    let trimmed = raw.strip_prefix("0x").unwrap_or(raw);
+    if trimmed.len() % 2 == 0 && hex::decode(trimmed).is_ok() {
+        Value::from(trimmed.to_ascii_lowercase())
+    } else {
+        Value::from(hex::encode(raw.as_bytes()))
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_contract_value(
     schema: &ContractSchemaType,
     value: &Value,
     field_name: &str,
-) -> Result<()> {
-    let ok = match schema {
-        ContractSchemaType::Unit => matches!(value, Value::Null),
-        ContractSchemaType::Int => matches!(
-            value,
-            Value::Number(norito::json::native::Number::I64(_))
-                | Value::Number(norito::json::native::Number::U64(_))
-        ),
-        ContractSchemaType::Numeric => validate_numeric_json_value(value),
-        ContractSchemaType::Bool => matches!(value, Value::Bool(_)),
-        ContractSchemaType::String => matches!(value, Value::String(_)),
-        ContractSchemaType::Json => true,
+) -> Result<Value> {
+    match schema {
+        ContractSchemaType::Unit if matches!(value, Value::Null) => Ok(Value::Null),
+        ContractSchemaType::Unit => Err(conversion_error(format!(
+            "contract payload field `{field_name}` does not match the declared schema"
+        ))),
+        ContractSchemaType::Int => match value {
+            Value::Number(norito::json::native::Number::I64(v)) => Ok(Value::from(*v)),
+            Value::Number(norito::json::native::Number::U64(v)) => {
+                let parsed = i64::try_from(*v).map_err(|_| {
+                    conversion_error(format!(
+                        "contract payload field `{field_name}` must fit within signed 64-bit integer range"
+                    ))
+                })?;
+                Ok(Value::from(parsed))
+            }
+            Value::String(raw) => parse_contract_i64_literal(raw)
+                .map(Value::from)
+                .ok_or_else(|| {
+                    conversion_error(format!(
+                        "contract payload field `{field_name}` must be a base-10 signed 64-bit integer"
+                    ))
+                }),
+            _ => Err(conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))),
+        },
+        ContractSchemaType::Numeric if validate_numeric_json_value(value) => Ok(value.clone()),
+        ContractSchemaType::Numeric => Err(conversion_error(format!(
+            "contract payload field `{field_name}` does not match the declared schema"
+        ))),
+        ContractSchemaType::Bool if matches!(value, Value::Bool(_)) => Ok(value.clone()),
+        ContractSchemaType::Bool => Err(conversion_error(format!(
+            "contract payload field `{field_name}` does not match the declared schema"
+        ))),
+        ContractSchemaType::String if matches!(value, Value::String(_)) => Ok(value.clone()),
+        ContractSchemaType::String => Err(conversion_error(format!(
+            "contract payload field `{field_name}` does not match the declared schema"
+        ))),
+        ContractSchemaType::Json => Ok(value.clone()),
         ContractSchemaType::Name => match value {
             Value::String(raw) => Name::from_str(raw).is_ok(),
             _ => false,
-        },
+        }
+        .then(|| value.clone())
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))
+        }),
         ContractSchemaType::AccountId => match value {
             Value::String(raw) => iroha_data_model::account::AccountId::parse_encoded(raw).is_ok(),
             _ => false,
-        },
+        }
+        .then(|| value.clone())
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))
+        }),
         ContractSchemaType::AssetDefinitionId => match value {
             Value::String(raw) => raw
                 .parse::<iroha_data_model::asset::AssetDefinitionId>()
                 .is_ok(),
             _ => false,
-        },
+        }
+        .then(|| value.clone())
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))
+        }),
         ContractSchemaType::AssetId => match value {
             Value::String(raw) => raw.parse::<iroha_data_model::asset::AssetId>().is_ok(),
             _ => false,
-        },
+        }
+        .then(|| value.clone())
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))
+        }),
         ContractSchemaType::DomainId => match value {
             Value::String(raw) => raw.parse::<iroha_data_model::domain::DomainId>().is_ok(),
             _ => false,
-        },
+        }
+        .then(|| value.clone())
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))
+        }),
         ContractSchemaType::NftId => match value {
             Value::String(raw) => raw.parse::<iroha_data_model::nft::NftId>().is_ok(),
             _ => false,
-        },
+        }
+        .then(|| value.clone())
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))
+        }),
         ContractSchemaType::Blob | ContractSchemaType::Bytes => match value {
-            Value::String(raw) => {
-                let raw = raw.strip_prefix("0x").unwrap_or(raw);
-                raw.len() % 2 == 0 && hex::decode(raw).is_ok()
-            }
-            _ => false,
+            Value::String(raw) => Ok(normalize_contract_blob_literal(raw)),
+            _ => Err(conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))),
         },
         ContractSchemaType::DataSpaceId => match value {
             Value::String(raw) => raw.parse::<u64>().is_ok(),
             Value::Number(norito::json::native::Number::I64(v)) => *v >= 0,
             Value::Number(norito::json::native::Number::U64(_)) => true,
             _ => false,
-        },
+        }
+        .then(|| value.clone())
+        .ok_or_else(|| {
+            conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))
+        }),
         ContractSchemaType::AxtDescriptor
         | ContractSchemaType::AssetHandle
-        | ContractSchemaType::ProofBlob => matches!(value, Value::String(_)),
-        ContractSchemaType::Tuple(items) => match value {
-            Value::Array(values) if values.len() == items.len() => items
-                .iter()
-                .zip(values.iter())
-                .all(|(schema, value)| validate_contract_value(schema, value, field_name).is_ok()),
-            _ => false,
-        },
-    };
-    if ok {
-        Ok(())
-    } else {
-        Err(conversion_error(format!(
+        | ContractSchemaType::ProofBlob if matches!(value, Value::String(_)) => Ok(value.clone()),
+        ContractSchemaType::AxtDescriptor
+        | ContractSchemaType::AssetHandle
+        | ContractSchemaType::ProofBlob => Err(conversion_error(format!(
             "contract payload field `{field_name}` does not match the declared schema"
-        )))
+        ))),
+        ContractSchemaType::Tuple(items) => match value {
+            Value::Array(values) if values.len() == items.len() => {
+                let normalized = items
+                    .iter()
+                    .zip(values.iter())
+                    .map(|(schema, item)| normalize_contract_value(schema, item, field_name))
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Value::Array(normalized))
+            }
+            _ => Err(conversion_error(format!(
+                "contract payload field `{field_name}` does not match the declared schema"
+            ))),
+        },
     }
 }
 
@@ -8086,8 +8185,8 @@ fn normalize_contract_payload(
             ))
         })?;
         let schema = parse_contract_schema_type(&param.type_name)?;
-        validate_contract_value(&schema, value, &param.name)?;
-        normalized.insert(param.name.clone(), value.clone());
+        let normalized_value = normalize_contract_value(&schema, value, &param.name)?;
+        normalized.insert(param.name.clone(), normalized_value);
     }
 
     for key in object.keys() {
@@ -9061,6 +9160,83 @@ fn multisig_contract_call_operation_type(
 }
 
 #[cfg(feature = "app_api")]
+fn multisig_asset_transfer_control_operation(
+    instruction: &iroha_data_model::isi::InstructionBox,
+) -> Option<(&'static str, IrohaJson)> {
+    if let Some(isi) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::SetAssetTransferFreeze>()
+    {
+        let mut payload = Map::new();
+        payload.insert("account_id".into(), Value::from(isi.account_id.to_string()));
+        payload.insert(
+            "asset_definition_id".into(),
+            Value::from(isi.asset_definition_id.to_string()),
+        );
+        payload.insert("outgoing_frozen".into(), Value::from(isi.outgoing_frozen));
+        payload.insert(
+            "reason".into(),
+            isi.reason
+                .as_ref()
+                .map_or(Value::Null, |reason| Value::from(reason.clone())),
+        );
+        return Some((
+            "ASSET_TRANSFER_FREEZE",
+            IrohaJson::new(Value::Object(payload)),
+        ));
+    }
+    if let Some(isi) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::SetAssetTransferBlacklist>()
+    {
+        let mut payload = Map::new();
+        payload.insert("account_id".into(), Value::from(isi.account_id.to_string()));
+        payload.insert(
+            "asset_definition_id".into(),
+            Value::from(isi.asset_definition_id.to_string()),
+        );
+        payload.insert("blacklisted".into(), Value::from(isi.blacklisted));
+        return Some((
+            "ASSET_TRANSFER_BLACKLIST",
+            IrohaJson::new(Value::Object(payload)),
+        ));
+    }
+    if let Some(isi) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::SetAssetTransferControl>()
+    {
+        let limits = isi
+            .limits
+            .iter()
+            .map(|limit| {
+                let mut limit_json = Map::new();
+                limit_json.insert("window".into(), Value::from(limit.window.as_str()));
+                limit_json.insert(
+                    "cap_amount".into(),
+                    limit
+                        .cap_amount
+                        .as_ref()
+                        .map_or(Value::Null, |amount| Value::from(amount.to_string())),
+                );
+                Value::Object(limit_json)
+            })
+            .collect::<Vec<_>>();
+        let mut payload = Map::new();
+        payload.insert("account_id".into(), Value::from(isi.account_id.to_string()));
+        payload.insert(
+            "asset_definition_id".into(),
+            Value::from(isi.asset_definition_id.to_string()),
+        );
+        payload.insert("limits".into(), Value::Array(limits));
+        return Some((
+            "ASSET_TRANSFER_LIMITS_UPDATE",
+            IrohaJson::new(Value::Object(payload)),
+        ));
+    }
+    None
+}
+
+#[cfg(feature = "app_api")]
 fn multisig_execute_trigger_is_issuance_swap(
     trigger_id: &str,
     args: Option<&norito::json::Value>,
@@ -9093,6 +9269,12 @@ fn multisig_proposal_operation_type(
     let Some(first_instruction) = proposal.instructions.first() else {
         return "ONCHAIN_MULTISIG";
     };
+
+    if let Some((operation_type, _intent)) =
+        multisig_asset_transfer_control_operation(first_instruction)
+    {
+        return operation_type;
+    }
 
     if matches!(
         first_instruction
@@ -9136,6 +9318,14 @@ fn multisig_proposal_operation_type(
     }
 
     "ONCHAIN_MULTISIG"
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposal_intent(
+    proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+) -> Option<IrohaJson> {
+    let first_instruction = proposal.instructions.first()?;
+    multisig_asset_transfer_control_operation(first_instruction).map(|(_, intent)| intent)
 }
 
 #[cfg(feature = "app_api")]
@@ -9423,12 +9613,16 @@ fn multisig_approval_entry(
     spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
     proposal_entry: MultisigProposalEntryDto,
 ) -> MultisigApprovalEntryDto {
+    let operation_type = multisig_proposal_operation_type(&proposal_entry.proposal).to_owned();
+    let intent = multisig_proposal_intent(&proposal_entry.proposal);
     MultisigApprovalEntryDto {
         multisig_account_id,
         spec,
         proposal_id: proposal_entry.proposal_id,
         instructions_hash: proposal_entry.instructions_hash,
         proposal: proposal_entry.proposal,
+        operation_type,
+        intent,
         status: proposal_entry.status,
         terminal_at_ms: proposal_entry.terminal_at_ms,
     }
@@ -9589,6 +9783,114 @@ mod contract_entrypoint_validation_tests {
             .expect_err("non-public entrypoints must fail");
         let message = expect_conversion(err);
         assert!(message.contains("is not a public by-call entrypoint"));
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod contract_payload_normalization_tests {
+    use iroha_data_model::smart_contract::manifest::{
+        EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor,
+    };
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
+
+    use super::*;
+
+    fn int_descriptor() -> EntrypointDescriptor {
+        EntrypointDescriptor {
+            name: "create".to_owned(),
+            kind: EntryPointKind::Public,
+            params: vec![EntrypointParamDescriptor {
+                name: "amount".to_owned(),
+                type_name: "int".to_owned(),
+            }],
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }
+    }
+
+    fn blob_descriptor() -> EntrypointDescriptor {
+        EntrypointDescriptor {
+            name: "create".to_owned(),
+            kind: EntryPointKind::Public,
+            params: vec![EntrypointParamDescriptor {
+                name: "alias_literal".to_owned(),
+                type_name: "Blob".to_owned(),
+            }],
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }
+    }
+
+    fn expect_conversion(err: Error) -> String {
+        match err {
+            Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message))) => {
+                message
+            }
+            other => panic!("expected conversion error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalize_contract_payload_canonicalizes_string_ints() {
+        let descriptor = int_descriptor();
+        let string_payload = IrohaJson::new(norito::json!({ "amount": "10" }));
+        let number_payload = IrohaJson::new(norito::json!({ "amount": 10 }));
+
+        let normalized_string = normalize_contract_payload(&descriptor, Some(&string_payload))
+            .expect("string int payload should normalize")
+            .expect("payload");
+        let normalized_number = normalize_contract_payload(&descriptor, Some(&number_payload))
+            .expect("numeric int payload should normalize")
+            .expect("payload");
+
+        let left =
+            json::parse_value(normalized_string.get()).expect("normalized string payload json");
+        let right =
+            json::parse_value(normalized_number.get()).expect("normalized numeric payload json");
+        assert_eq!(left, right);
+        assert_eq!(left, norito::json!({ "amount": 10 }));
+    }
+
+    #[test]
+    fn normalize_contract_payload_rejects_out_of_range_string_ints() {
+        let descriptor = int_descriptor();
+        let payload = IrohaJson::new(norito::json!({
+            "amount": "9223372036854775808"
+        }));
+
+        let err = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect_err("overflowing string ints must fail");
+        let message = expect_conversion(err);
+        assert!(message.contains("base-10 signed 64-bit integer"));
+    }
+
+    #[test]
+    fn normalize_contract_payload_canonicalizes_utf8_blob_strings_to_hex() {
+        let descriptor = blob_descriptor();
+        let payload = IrohaJson::new(norito::json!({
+            "alias_literal": "banking@sbp"
+        }));
+
+        let normalized = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect("blob payload should normalize")
+            .expect("payload");
+        let value = json::parse_value(normalized.get()).expect("normalized blob payload json");
+        let mut expected = Map::new();
+        expected.insert(
+            "alias_literal".into(),
+            Value::from(hex::encode("banking@sbp".as_bytes())),
+        );
+        assert_eq!(value, Value::Object(expected));
     }
 }
 
@@ -10755,6 +11057,140 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
+    async fn multisig_approvals_list_filters_asset_transfer_control_operation_types() {
+        let (
+            mut world,
+            multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            _onchain_hash,
+        ) = multisig_test_world();
+        let asset_definition_id = test_asset_definition_id();
+
+        let freeze_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![dm::SetAssetTransferFreeze::new(
+                signer_two_id.clone(),
+                asset_definition_id.clone(),
+                true,
+                Some("risk review".to_owned()),
+            )
+            .into()],
+            1_700_000_000_160,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let blacklist_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![dm::SetAssetTransferBlacklist::new(
+                signer_two_id.clone(),
+                asset_definition_id.clone(),
+                true,
+            )
+            .into()],
+            1_700_000_000_170,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let limits_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![dm::SetAssetTransferControl::new(
+                signer_two_id.clone(),
+                asset_definition_id,
+                vec![
+                    dm::AssetTransferLimit {
+                        window: dm::AssetTransferControlWindow::Day,
+                        cap_amount: Some(125_u32.into()),
+                    },
+                    dm::AssetTransferLimit {
+                        window: dm::AssetTransferControlWindow::Month,
+                        cap_amount: Some(500_u32.into()),
+                    },
+                ],
+            )
+            .into()],
+            1_700_000_000_180,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let state = build_state(world);
+
+        let list_hashes = |items: &[MultisigApprovalEntryDto]| {
+            items
+                .iter()
+                .map(|item| item.instructions_hash.clone())
+                .collect::<BTreeSet<_>>()
+        };
+
+        let JsonBody(freeze_items) = handle_post_multisig_approvals_list(
+            state.clone(),
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id.clone()],
+            },
+            NoritoJson(MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                operation_type: vec!["ASSET_TRANSFER_FREEZE".to_owned()],
+                requires_my_signature: false,
+                cursor: None,
+                limit: Some(20),
+            }),
+        )
+        .await
+        .expect("freeze approvals");
+        assert_eq!(
+            list_hashes(&freeze_items.items),
+            BTreeSet::from([freeze_hash.clone()])
+        );
+
+        let JsonBody(blacklist_items) = handle_post_multisig_approvals_list(
+            state.clone(),
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id.clone()],
+            },
+            NoritoJson(MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                operation_type: vec!["ASSET_TRANSFER_BLACKLIST".to_owned()],
+                requires_my_signature: false,
+                cursor: None,
+                limit: Some(20),
+            }),
+        )
+        .await
+        .expect("blacklist approvals");
+        assert_eq!(
+            list_hashes(&blacklist_items.items),
+            BTreeSet::from([blacklist_hash.clone()])
+        );
+
+        let JsonBody(limit_items) = handle_post_multisig_approvals_list(
+            state,
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id],
+            },
+            NoritoJson(MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                operation_type: vec!["ASSET_TRANSFER_LIMITS_UPDATE".to_owned()],
+                requires_my_signature: false,
+                cursor: None,
+                limit: Some(20),
+            }),
+        )
+        .await
+        .expect("limits approvals");
+        assert_eq!(
+            list_hashes(&limit_items.items),
+            BTreeSet::from([limits_hash.clone()])
+        );
+    }
+
+    #[tokio::test]
     async fn multisig_approvals_list_keeps_relay_and_cancel_wrappers_hidden() {
         let (
             mut world,
@@ -10909,6 +11345,145 @@ mod multisig_selector_tests {
         )
         .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn multisig_approvals_get_includes_asset_transfer_control_intent() {
+        let (
+            mut world,
+            multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            _active_hash,
+        ) = multisig_test_world();
+        let asset_definition_id = test_asset_definition_id();
+        let freeze_hash = insert_active_multisig_proposal(
+            &mut world,
+            &multisig_account_id,
+            vec![dm::SetAssetTransferFreeze::new(
+                signer_two_id.clone(),
+                asset_definition_id.clone(),
+                true,
+                Some("risk review".to_owned()),
+            )
+            .into()],
+            1_700_000_000_190,
+            4_000_000_000_000,
+            BTreeSet::new(),
+            None,
+        );
+        let state = build_state(world);
+
+        let JsonBody(response) = handle_post_multisig_approvals_get(
+            state,
+            MultisigApprovalsViewerScope {
+                viewer_account_ids: vec![signer_two_id.clone()],
+            },
+            NoritoJson(MultisigApprovalsGetRequestDto {
+                proposal_id: Some(freeze_hash.clone()),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect("get asset transfer freeze approval");
+
+        assert_eq!(response.item.multisig_account_id, multisig_account_id);
+        assert_eq!(response.item.instructions_hash, freeze_hash);
+        assert_eq!(response.item.operation_type, "ASSET_TRANSFER_FREEZE");
+        let intent = response
+            .item
+            .intent
+            .expect("freeze intent")
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("intent value");
+        assert_eq!(
+            intent["account_id"].as_str(),
+            Some(signer_two_id.to_string().as_str())
+        );
+        assert_eq!(
+            intent["asset_definition_id"].as_str(),
+            Some(asset_definition_id.to_string().as_str())
+        );
+        assert_eq!(intent["outgoing_frozen"].as_bool(), Some(true));
+        assert_eq!(intent["reason"].as_str(), Some("risk review"));
+    }
+
+    #[tokio::test]
+    async fn asset_transfer_control_get_returns_stored_state_and_usage() {
+        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let scoped_account_id =
+            dm::ScopedAccountId::new(domain_id.clone(), KeyPair::random().public_key().clone());
+        let controlled_account_id: dm::AccountId = scoped_account_id.clone().into();
+        let asset_definition_id = test_asset_definition_id();
+        let definition = dm::AssetDefinition::numeric(asset_definition_id.clone()).build(&authority);
+        let domain = Domain::new(domain_id).build(&authority);
+
+        let record = dm::AssetTransferControlRecord {
+            asset_definition_id: asset_definition_id.clone(),
+            outgoing_frozen: true,
+            blacklisted: false,
+            limits: vec![
+                dm::AssetTransferLimit {
+                    window: dm::AssetTransferControlWindow::Day,
+                    cap_amount: Some(100_u32.into()),
+                },
+                dm::AssetTransferLimit {
+                    window: dm::AssetTransferControlWindow::Week,
+                    cap_amount: Some(500_u32.into()),
+                },
+            ],
+            usages: vec![dm::AssetTransferUsageBucket {
+                window: dm::AssetTransferControlWindow::Day,
+                bucket_start_ms: 1_700_000_000_000,
+                spent_amount: 25_u32.into(),
+            }],
+            updated_at_ms: Some(1_700_000_100_000),
+        };
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(dm::ASSET_TRANSFER_CONTROL_METADATA_KEY).expect("metadata key"),
+            IrohaJson::new(dm::AssetTransferControlStoreV1 {
+                controls: vec![record],
+            }),
+        );
+        let account = Account::new(scoped_account_id)
+            .with_metadata(metadata)
+            .build(&authority);
+        let state = build_state(World::with([domain], [account], [definition]));
+
+        let JsonBody(response) = handle_post_asset_transfer_control_get(
+            state,
+            NoritoJson(AssetTransferControlGetRequestDto {
+                account_id: controlled_account_id,
+                asset_definition_id,
+            }),
+        )
+        .await
+        .expect("load stored control");
+
+        assert!(response.control.outgoing_frozen);
+        assert!(!response.control.blacklisted);
+        assert_eq!(response.control.limits.len(), 2);
+        assert_eq!(response.control.limits[0].window, "DAY");
+        assert_eq!(response.control.limits[0].cap_amount.as_deref(), Some("100"));
+        assert_eq!(response.usages.len(), 1);
+        assert_eq!(response.usages[0].window, "DAY");
+        assert_eq!(response.usages[0].spent_amount, "25");
+        assert_eq!(response.usages[0].cap_amount.as_deref(), Some("100"));
+        assert_eq!(
+            response.usages[0].bucket_start,
+            format_unix_timestamp_ms_rfc3339(1_700_000_000_000).expect("bucket start")
+        );
+        assert_eq!(
+            response.control.updated_at.as_deref(),
+            Some(
+                format_unix_timestamp_ms_rfc3339(1_700_000_100_000)
+                    .expect("updated at")
+                    .as_str()
+            )
+        );
     }
 
     #[tokio::test]
@@ -12236,6 +12811,8 @@ pub async fn handle_post_multisig_approvals_get(
             spec,
             proposal_id: hash_literal.clone(),
             instructions_hash: hash_literal.clone(),
+            operation_type: multisig_proposal_operation_type(&proposal_record.proposal).to_owned(),
+            intent: multisig_proposal_intent(&proposal_record.proposal),
             proposal: proposal_record.proposal,
             status: proposal_record.status.as_str().to_owned(),
             terminal_at_ms: proposal_record.terminal_at_ms,
@@ -12258,6 +12835,121 @@ pub async fn handle_post_multisig_approvals_get(
         .ok_or_else(multisig_not_found_error)?;
 
     Ok(JsonBody(MultisigApprovalsGetResponseDto { item }))
+}
+
+#[cfg(feature = "app_api")]
+fn format_unix_timestamp_ms_rfc3339(value: u64) -> Result<String> {
+    let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1_000_000)
+        .map_err(|err| conversion_error(format!("invalid unix timestamp: {err}")))?;
+    timestamp
+        .format(&Rfc3339)
+        .map_err(|err| conversion_error(format!("failed to format timestamp: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn load_asset_transfer_control_store(
+    account_id: &iroha_data_model::account::AccountId,
+    metadata: &iroha_data_model::metadata::Metadata,
+) -> Result<iroha_data_model::asset::AssetTransferControlStoreV1> {
+    let metadata_key = iroha_data_model::name::Name::from_str(
+        iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
+    )
+    .map_err(|err| conversion_error(format!("invalid control metadata key: {err}")))?;
+    let Some(raw) = metadata.get(&metadata_key) else {
+        return Ok(iroha_data_model::asset::AssetTransferControlStoreV1::default());
+    };
+    raw.try_into_any_norito::<iroha_data_model::asset::AssetTransferControlStoreV1>()
+        .map_err(|err| {
+            conversion_error(format!(
+                "invalid account metadata `{}` on {}: {err}",
+                iroha_data_model::asset::ASSET_TRANSFER_CONTROL_METADATA_KEY,
+                account_id
+            ))
+        })
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_post_asset_transfer_control_get(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<AssetTransferControlGetRequestDto>,
+) -> Result<JsonBody<AssetTransferControlGetResponseDto>> {
+    let world = state.world_view();
+    let account = world
+        .account(&req.account_id)
+        .map_err(|_| conversion_error(format!("account not found: {}", req.account_id)))?;
+    world
+        .asset_definition(&req.asset_definition_id)
+        .map_err(|_| {
+            conversion_error(format!(
+                "asset definition not found: {}",
+                req.asset_definition_id
+            ))
+        })?;
+
+    let store = load_asset_transfer_control_store(account.id(), account.metadata())?;
+    let record = store.find(&req.asset_definition_id).cloned().unwrap_or(
+        iroha_data_model::asset::AssetTransferControlRecord {
+            asset_definition_id: req.asset_definition_id.clone(),
+            outgoing_frozen: false,
+            blacklisted: false,
+            limits: Vec::new(),
+            usages: Vec::new(),
+            updated_at_ms: None,
+        },
+    );
+
+    let cap_by_window = record
+        .limits
+        .iter()
+        .map(|limit| {
+            (
+                limit.window,
+                limit.cap_amount.as_ref().map(ToString::to_string),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    let limits = record
+        .limits
+        .iter()
+        .map(|limit| AssetTransferControlLimitDto {
+            window: limit.window.as_str().to_owned(),
+            cap_amount: limit.cap_amount.as_ref().map(ToString::to_string),
+        })
+        .collect::<Vec<_>>();
+
+    let mut usages = record
+        .usages
+        .iter()
+        .map(|usage| {
+            Ok(AssetTransferUsageBucketDto {
+                window: usage.window.as_str().to_owned(),
+                bucket_start: format_unix_timestamp_ms_rfc3339(usage.bucket_start_ms)?,
+                spent_amount: usage.spent_amount.to_string(),
+                cap_amount: cap_by_window.get(&usage.window).cloned().flatten(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    usages.sort_by(|left, right| {
+        left.window
+            .cmp(&right.window)
+            .then_with(|| left.bucket_start.cmp(&right.bucket_start))
+    });
+
+    Ok(JsonBody(AssetTransferControlGetResponseDto {
+        control: AssetTransferControlDto {
+            account_id: req.account_id,
+            asset_definition_id: req.asset_definition_id,
+            outgoing_frozen: record.outgoing_frozen,
+            blacklisted: record.blacklisted,
+            limits,
+            updated_at: record
+                .updated_at_ms
+                .map(format_unix_timestamp_ms_rfc3339)
+                .transpose()?,
+        },
+        usages,
+    }))
 }
 
 /// Fetch proof verification record by proof id.
@@ -13987,6 +14679,9 @@ pub struct MultisigApprovalEntryDto {
     pub proposal_id: String,
     pub instructions_hash: String,
     pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    pub operation_type: String,
+    #[norito(default)]
+    pub intent: Option<IrohaJson>,
     pub status: String,
     #[norito(default)]
     pub terminal_at_ms: Option<u64>,
@@ -14023,6 +14718,62 @@ pub struct MultisigApprovalsGetRequestDto {
 /// Response payload for a signer-visible multisig approval lookup.
 pub struct MultisigApprovalsGetResponseDto {
     pub item: MultisigApprovalEntryDto,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for reading asset-transfer control state for one account and asset definition.
+pub struct AssetTransferControlGetRequestDto {
+    pub account_id: iroha_data_model::account::AccountId,
+    pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// One configured asset-transfer cap.
+pub struct AssetTransferControlLimitDto {
+    pub window: String,
+    #[norito(default)]
+    pub cap_amount: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// One usage bucket currently applied to an asset-transfer control.
+pub struct AssetTransferUsageBucketDto {
+    pub window: String,
+    pub bucket_start: String,
+    pub spent_amount: String,
+    #[norito(default)]
+    pub cap_amount: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Asset-transfer control state for a single `(account_id, asset_definition_id)` pair.
+pub struct AssetTransferControlDto {
+    pub account_id: iroha_data_model::account::AccountId,
+    pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
+    pub outgoing_frozen: bool,
+    pub blacklisted: bool,
+    pub limits: Vec<AssetTransferControlLimitDto>,
+    #[norito(default)]
+    pub updated_at: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload for asset-transfer control reads.
+pub struct AssetTransferControlGetResponseDto {
+    pub control: AssetTransferControlDto,
+    #[norito(default)]
+    pub usages: Vec<AssetTransferUsageBucketDto>,
 }
 
 #[cfg(feature = "app_api")]

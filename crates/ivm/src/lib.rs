@@ -157,6 +157,7 @@ pub use crate::{
     sha3::{keccak_f1600, sha3_absorb_block},
     zk_poseidon::{pair_hash_bytes, pair_hash_u64},
 };
+pub use ivm_abi::metadata::{EmbeddedStateFieldDescriptor, EmbeddedStateType};
 
 pub use iroha_crypto::{MerkleProof, MerkleTree};
 /// Syscall policy determined by `ProgramMetadata.abi_version`.

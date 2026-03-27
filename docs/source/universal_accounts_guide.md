@@ -80,6 +80,26 @@ In concrete terms:
   FHE side because they describe the encrypted execution mechanism rather than
   the outer policy or receipt abstraction.
 
+## 1.3 Account identity versus aliases
+
+Universal-account rollout does not change the canonical account identity model:
+
+- `AccountId` remains the canonical, domainless account subject.
+- `ScopedAccountId { account, domain }` is explicit domain context for views or
+  registrations that materialize a domain link. It is not a second canonical
+  identity.
+- SNS/account aliases are separate bindings on top of that subject. A
+  domain-qualified alias such as `merchant@hbl.sbp` and a dataspace-root alias
+  such as `merchant@sbp` can both resolve to the same canonical `AccountId`.
+- `linked_domains` on stored account records is derived state from the
+  account-domain indexes. It describes currently materialized links for that
+  subject; it is not part of the canonical identifier.
+
+Implementation rule for operators, SDKs, and tests: start from the canonical
+`AccountId`, then add alias leases, dataspace/domain permissions, and explicit
+domain links separately. Do not synthesize a fake domain-scoped canonical
+account just because an alias or route carries a domain segment.
+
 Current Torii routes:
 
 | Route | Purpose |

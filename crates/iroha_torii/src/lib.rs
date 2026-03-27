@@ -13567,6 +13567,47 @@ async fn handler_post_multisig_approvals_get(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_asset_transfer_control_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    NoritoJson(request): NoritoJson<crate::routing::AssetTransferControlGetRequestDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
+        Ok(viewer) => viewer,
+        Err(response) => return Ok(response),
+    };
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        &format!("v1/controls/asset-transfer/get:{}", viewer.subject),
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("asset_transfer_control_get"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_asset_transfer_control_get(
+        app.state.clone(),
+        NoritoJson(request),
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("asset_transfer_control_get"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_sorafs_register_manifest(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
@@ -18721,6 +18762,10 @@ impl Torii {
                 .route(
                     "/v1/multisig/approvals/get",
                     post(handler_post_multisig_approvals_get),
+                )
+                .route(
+                    "/v1/controls/asset-transfer/get",
+                    post(handler_post_asset_transfer_control_get),
                 );
             #[cfg(not(feature = "app_api"))]
             let group = group;
