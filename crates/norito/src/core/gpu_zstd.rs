@@ -346,7 +346,7 @@ unsafe fn init_backend() -> Option<Backend> {
     }
     let _has_device = !device.is_null();
     let (lib, compress_fn, decompress_fn) =
-        match unsafe { load_gpu_symbols("libgpuzstd_metal.dylib") } {
+        match unsafe { load_gpu_symbols(&["libgpuzstd_metal.dylib"]) } {
             Some((lib, compress_fn, decompress_fn)) => (lib, compress_fn, decompress_fn),
             None => return None,
         };
