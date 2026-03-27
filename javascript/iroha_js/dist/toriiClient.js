@@ -7920,22 +7920,28 @@ export class ToriiClient {
       url.host === this._baseHost && protocol === this._baseProtocol;
     const initHeaders = this._createHeaders(options.headers);
     const hasCredentials = headersContainCredentials(initHeaders);
+    const canonicalAuth = options.canonicalAuth
+      ? ToriiClient._normalizeCanonicalAuth(options.canonicalAuth)
+      : null;
+    const hasCanonicalAuth = canonicalAuth !== null;
+    const hasSensitiveBody = bodyContainsSensitiveKeyMaterial(options.body, initHeaders);
+    const hasSensitiveTransport = hasCredentials || hasCanonicalAuth || hasSensitiveBody;
     const allowAbsoluteUrl = options.allowAbsoluteUrl === true;
     const methodUpper = String(method).toUpperCase();
-    if (hasCredentials) {
+    if (hasSensitiveTransport) {
       if (protocol !== this._baseProtocol) {
         throw new Error(
-          `ToriiClient: refusing to send credentials over mismatched scheme ${url.protocol}; use ${this._baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
+          `ToriiClient: refusing to send sensitive request material over mismatched scheme ${url.protocol}; use ${this._baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
         );
       }
       if (pathIsAbsolute && url.host !== this._baseHost) {
         throw new Error(
-          `ToriiClient: refusing to send credentials to mismatched host ${url.host} (expected ${this._baseHost}); use relative paths on the configured base URL.`,
+          `ToriiClient: refusing to send sensitive request material to mismatched host ${url.host} (expected ${this._baseHost}); use relative paths on the configured base URL.`,
         );
       }
       if (!this._allowInsecure && !isSecureProtocol(protocol)) {
         throw new Error(
-          `ToriiClient: refusing to send credentials over insecure protocol ${url.protocol}; use https or allowInsecure: true.`,
+          `ToriiClient: refusing to send sensitive request material over insecure protocol ${url.protocol}; use https or allowInsecure: true.`,
         );
       }
     } else if (pathIsAbsolute && !originMatches && !allowAbsoluteUrl) {
@@ -7943,11 +7949,13 @@ export class ToriiClient {
         "ToriiClient: absolute URLs are blocked when no credentials are attached; pass allowAbsoluteUrl: true to override.",
       );
     }
-    if (hasCredentials && this._allowInsecure && !isSecureProtocol(protocol)) {
+    if (hasSensitiveTransport && this._allowInsecure && !isSecureProtocol(protocol)) {
       this._emitInsecureTransportTelemetry({
         client: "torii",
         method: methodUpper,
-        hasCredentials: true,
+        hasCredentials,
+        hasSensitiveBody,
+        hasCanonicalAuth,
         allowInsecure: true,
         url: url.toString(),
         baseUrl: this._baseUrl,
@@ -7975,26 +7983,23 @@ export class ToriiClient {
       headers: initHeaders,
       body: options.body,
     };
-    if (options.canonicalAuth) {
-      const canonicalAuth = ToriiClient._normalizeCanonicalAuth(options.canonicalAuth);
-      if (canonicalAuth) {
-        const bodyForSigning =
-          init.body === undefined || init.body === null
-            ? Buffer.alloc(0)
-            : Buffer.isBuffer(init.body)
-              ? init.body
-              : Buffer.from(init.body);
-        const canonicalHeaders = buildCanonicalRequestHeaders({
-          accountId: canonicalAuth.accountId,
-          method: methodUpper,
-          path: url.pathname,
-          query: url.search.startsWith("?") ? url.search.slice(1) : url.search,
-          body: bodyForSigning,
-          privateKey: canonicalAuth.privateKey,
-        });
-        for (const [key, value] of Object.entries(canonicalHeaders)) {
-          setHeader(initHeaders, key, value);
-        }
+    if (canonicalAuth) {
+      const bodyForSigning =
+        init.body === undefined || init.body === null
+          ? Buffer.alloc(0)
+          : Buffer.isBuffer(init.body)
+            ? init.body
+            : Buffer.from(init.body);
+      const canonicalHeaders = buildCanonicalRequestHeaders({
+        accountId: canonicalAuth.accountId,
+        method: methodUpper,
+        path: url.pathname,
+        query: url.search.startsWith("?") ? url.search.slice(1) : url.search,
+        body: bodyForSigning,
+        privateKey: canonicalAuth.privateKey,
+      });
+      for (const [key, value] of Object.entries(canonicalHeaders)) {
+        setHeader(initHeaders, key, value);
       }
     }
     const retryProfileName =
@@ -15328,6 +15333,39 @@ function headersContainCredentials(headers) {
   return (
     hasHeader(headers, "authorization") ||
     hasHeader(headers, "x-api-token")
+  );
+}
+
+function bodyContainsSensitiveKeyMaterial(body, headers) {
+  if (body == null) {
+    return false;
+  }
+  const contentTypeKey = findHeaderKey(headers, "content-type");
+  const contentType =
+    contentTypeKey && headers[contentTypeKey] != null
+      ? String(headers[contentTypeKey]).toLowerCase()
+      : null;
+  const shouldInspectAsText =
+    typeof body === "string" || Boolean(contentType && contentType.includes("json"));
+  if (!shouldInspectAsText) {
+    return false;
+  }
+  let text;
+  if (typeof body === "string") {
+    text = body;
+  } else if (Buffer.isBuffer(body)) {
+    text = body.toString("utf8");
+  } else if (body instanceof Uint8Array) {
+    text = Buffer.from(body).toString("utf8");
+  } else if (ArrayBuffer.isView(body)) {
+    text = Buffer.from(body.buffer, body.byteOffset, body.byteLength).toString("utf8");
+  } else if (body instanceof ArrayBuffer) {
+    text = Buffer.from(body).toString("utf8");
+  } else {
+    return false;
+  }
+  return /"(?:private_key|privateKey|private_key_hex|privateKeyHex|private_key_bytes|privateKeyBytes|private_key_multihash|privateKeyMultihash)"\s*:/u.test(
+    text,
   );
 }
 
