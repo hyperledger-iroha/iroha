@@ -2,6 +2,23 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: FASTPQ trace-commitment golden vectors match canonical transfer-row keys again
+- Refreshed
+  `crates/fastpq_prover/tests/fixtures/transfer.norito`,
+  `crates/fastpq_prover/tests/fixtures/ordering_hash.json`,
+  and
+  `crates/fastpq_prover/tests/trace_commitment.rs`
+  so the trace-commitment golden-vector coverage matches the current canonical
+  transfer-row key encoding again.
+- The shipped behavior in this slice:
+  - the `transfer` trace-commitment fixture now carries sender/receiver row
+    keys built with the current canonical account literal format, so transfer
+    transcript verification no longer fails looking for stale row keys; and
+  - the checked-in transfer ordering-hash fixture plus transfer commitment
+    expectation now match the refreshed canonical batch again.
+- Validation:
+  - `cargo test -p fastpq_prover --test trace_commitment -- --nocapture` (pass)
+
 ## 2026-03-26 Follow-up: `iroha_core` test-helper transaction lifetimes compile again
 - Updated
   `crates/iroha_core/src/state.rs`

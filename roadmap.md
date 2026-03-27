@@ -2,6 +2,32 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 FASTPQ trace-commitment fixture refresh):
+`crates/fastpq_prover/tests/fixtures/transfer.norito`,
+`crates/fastpq_prover/tests/fixtures/ordering_hash.json`,
+and
+`crates/fastpq_prover/tests/trace_commitment.rs`
+now match the current canonical transfer-row key encoding again:
+
+- the transfer golden fixture was regenerated after account literal
+  canonicalization changed the sender/receiver row keys expected by transcript
+  verification; and
+- the checked-in transfer ordering hash plus transfer commitment expectation
+  were refreshed to the regenerated canonical batch, so the focused
+  `trace_commitment` suite is green again.
+
+Validation:
+- `cargo test -p fastpq_prover --test trace_commitment -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the broader `cargo test -p fastpq_prover` sweep when runtime budget
+  allows, since this repair only exercised the focused trace-commitment suite;
+- keep an eye on other checked-in FASTPQ fixtures when identifier display or
+  key encoding rules change again, because those fixture bytes intentionally
+  encode the canonical row keys verbatim; and
+- rerun the optional GPU/parity coverage once the required GPU toolchain is
+  available in the environment.
+
 Latest sync (2026-03-26 `iroha_core` test-helper lifetime repair):
 `crates/iroha_core/src/state.rs`
 now carries the targeted compile fix:
