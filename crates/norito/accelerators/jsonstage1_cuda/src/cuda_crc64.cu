@@ -122,6 +122,9 @@ extern "C" int norito_crc64_cuda_impl(const uint8_t* input_ptr,
     uint64_t* d_chunks = nullptr;
     cudaError_t err;
     int ret = 0;
+    dim3 block(256);
+    dim3 grid(1);
+    uint64_t crc = CRC64_INIT;
 
     err = cudaMalloc(reinterpret_cast<void**>(&d_input), input_len);
     if (err != cudaSuccess) {
@@ -141,10 +144,9 @@ extern "C" int norito_crc64_cuda_impl(const uint8_t* input_ptr,
         goto cleanup;
     }
 
-    dim3 block(256);
-    dim3 grid(static_cast<unsigned int>((chunk_count + block.x - 1) / block.x));
+    grid = dim3(static_cast<unsigned int>((chunk_count + block.x - 1) / block.x));
     crc64_chunks_kernel<<<grid, block>>>(d_input, input_len, d_chunks);
-    err = cudaDeviceSynchronize();
+    err = cudaGetLastError();
     if (err != cudaSuccess) {
         ret = 4;
         goto cleanup;
@@ -159,7 +161,6 @@ extern "C" int norito_crc64_cuda_impl(const uint8_t* input_ptr,
         goto cleanup;
     }
 
-    uint64_t crc = CRC64_INIT;
     for (size_t idx = 0; idx < chunk_count; ++idx) {
         size_t offset = idx * CRC64_CHUNK_SIZE;
         size_t remaining = input_len > offset ? input_len - offset : 0;

@@ -143,6 +143,41 @@ public final class CudaAccelerators {
     return backend().bn254Mul(requireFieldElem(a, "bn254Mul"), requireFieldElem(b, "bn254Mul"));
   }
 
+  /**
+   * Adds many BN254 field-element pairs using the CUDA backend when available.
+   *
+   * <p>Each inner array must contain four limbs. Successful results are returned as a flattened
+   * limb array in input order, with four limbs per output element.</p>
+   */
+  public static Optional<long[]> bn254AddBatch(long[][] lhs, long[][] rhs) {
+    final int batchSize = requireMatchingFieldBatchLengths(lhs, rhs, "bn254AddBatch");
+    return backend()
+        .bn254AddBatch(
+            flattenFieldBatch(lhs, "bn254AddBatch lhs"),
+            flattenFieldBatch(rhs, "bn254AddBatch rhs"),
+            batchSize);
+  }
+
+  /** Subtracts many BN254 field-element pairs using the CUDA backend when available. */
+  public static Optional<long[]> bn254SubBatch(long[][] lhs, long[][] rhs) {
+    final int batchSize = requireMatchingFieldBatchLengths(lhs, rhs, "bn254SubBatch");
+    return backend()
+        .bn254SubBatch(
+            flattenFieldBatch(lhs, "bn254SubBatch lhs"),
+            flattenFieldBatch(rhs, "bn254SubBatch rhs"),
+            batchSize);
+  }
+
+  /** Multiplies many BN254 field-element pairs using the CUDA backend when available. */
+  public static Optional<long[]> bn254MulBatch(long[][] lhs, long[][] rhs) {
+    final int batchSize = requireMatchingFieldBatchLengths(lhs, rhs, "bn254MulBatch");
+    return backend()
+        .bn254MulBatch(
+            flattenFieldBatch(lhs, "bn254MulBatch lhs"),
+            flattenFieldBatch(rhs, "bn254MulBatch rhs"),
+            batchSize);
+  }
+
   private static long[] requireFieldElem(long[] value, String context) {
     if (value == null) {
       throw new IllegalArgumentException(context + " expects a non-null field element");
@@ -151,6 +186,36 @@ public final class CudaAccelerators {
       throw new IllegalArgumentException(context + " expects four 64-bit limbs");
     }
     return value.clone();
+  }
+
+  private static int requireMatchingFieldBatchLengths(long[][] lhs, long[][] rhs, String context) {
+    if (lhs == null || rhs == null) {
+      throw new IllegalArgumentException(context + " expects non-null batches");
+    }
+    if (lhs.length != rhs.length) {
+      throw new IllegalArgumentException(context + " expects matching batch lengths");
+    }
+    return lhs.length;
+  }
+
+  private static long[] flattenFieldBatch(long[][] inputs, String context) {
+    if (inputs == null) {
+      throw new IllegalArgumentException(context + " expects a non-null batch");
+    }
+    long total = (long) inputs.length * 4L;
+    if (total > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(context + " inputs exceed maximum length");
+    }
+    long[] flattened = new long[(int) total];
+    int cursor = 0;
+    for (long[] row : inputs) {
+      if (row == null || row.length != 4) {
+        throw new IllegalArgumentException(context + " expects inner arrays of length 4");
+      }
+      System.arraycopy(row, 0, flattened, cursor, 4);
+      cursor += 4;
+    }
+    return flattened;
   }
 
   private static long[] flattenPoseidonInputs(long[][] inputs, int width, String context) {
@@ -192,6 +257,12 @@ public final class CudaAccelerators {
     Optional<long[]> bn254Sub(long[] a, long[] b);
 
     Optional<long[]> bn254Mul(long[] a, long[] b);
+
+    Optional<long[]> bn254AddBatch(long[] flattenedLhs, long[] flattenedRhs, int batchSize);
+
+    Optional<long[]> bn254SubBatch(long[] flattenedLhs, long[] flattenedRhs, int batchSize);
+
+    Optional<long[]> bn254MulBatch(long[] flattenedLhs, long[] flattenedRhs, int batchSize);
   }
 
   static class NoopBackend implements Backend {
@@ -240,6 +311,24 @@ public final class CudaAccelerators {
 
     @Override
     public Optional<long[]> bn254Mul(final long[] a, final long[] b) {
+      return Optional.empty();
+    }
+
+    @Override
+    public Optional<long[]> bn254AddBatch(
+        final long[] flattenedLhs, final long[] flattenedRhs, final int batchSize) {
+      return Optional.empty();
+    }
+
+    @Override
+    public Optional<long[]> bn254SubBatch(
+        final long[] flattenedLhs, final long[] flattenedRhs, final int batchSize) {
+      return Optional.empty();
+    }
+
+    @Override
+    public Optional<long[]> bn254MulBatch(
+        final long[] flattenedLhs, final long[] flattenedRhs, final int batchSize) {
       return Optional.empty();
     }
   }
@@ -298,6 +387,33 @@ public final class CudaAccelerators {
       long[] out = new long[4];
       return nativeBn254Mul(a.clone(), b.clone(), out) ? Optional.of(out) : Optional.empty();
     }
+
+    @Override
+    public Optional<long[]> bn254AddBatch(
+        final long[] flattenedLhs, final long[] flattenedRhs, final int batchSize) {
+      long[] out = new long[Math.multiplyExact(batchSize, 4)];
+      return nativeBn254AddBatch(flattenedLhs.clone(), flattenedRhs.clone(), out)
+          ? Optional.of(out)
+          : Optional.empty();
+    }
+
+    @Override
+    public Optional<long[]> bn254SubBatch(
+        final long[] flattenedLhs, final long[] flattenedRhs, final int batchSize) {
+      long[] out = new long[Math.multiplyExact(batchSize, 4)];
+      return nativeBn254SubBatch(flattenedLhs.clone(), flattenedRhs.clone(), out)
+          ? Optional.of(out)
+          : Optional.empty();
+    }
+
+    @Override
+    public Optional<long[]> bn254MulBatch(
+        final long[] flattenedLhs, final long[] flattenedRhs, final int batchSize) {
+      long[] out = new long[Math.multiplyExact(batchSize, 4)];
+      return nativeBn254MulBatch(flattenedLhs.clone(), flattenedRhs.clone(), out)
+          ? Optional.of(out)
+          : Optional.empty();
+    }
   }
 
   private static native boolean nativeCudaAvailable();
@@ -317,4 +433,10 @@ public final class CudaAccelerators {
   private static native boolean nativeBn254Sub(long[] a, long[] b, long[] out);
 
   private static native boolean nativeBn254Mul(long[] a, long[] b, long[] out);
+
+  private static native boolean nativeBn254AddBatch(long[] lhs, long[] rhs, long[] out);
+
+  private static native boolean nativeBn254SubBatch(long[] lhs, long[] rhs, long[] out);
+
+  private static native boolean nativeBn254MulBatch(long[] lhs, long[] rhs, long[] out);
 }

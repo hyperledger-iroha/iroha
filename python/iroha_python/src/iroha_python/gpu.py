@@ -16,8 +16,11 @@ __all__ = [
     "poseidon6_cuda",
     "poseidon6_cuda_many",
     "bn254_add_cuda",
+    "bn254_add_cuda_many",
     "bn254_sub_cuda",
+    "bn254_sub_cuda_many",
     "bn254_mul_cuda",
+    "bn254_mul_cuda_many",
 ]
 
 
@@ -107,6 +110,12 @@ def _expect_field_elem(elem: Sequence[int], context: str) -> Tuple[int, int, int
     )
 
 
+def _expect_field_elem_many(
+    elems: Sequence[Sequence[int]], context: str
+) -> Tuple[Tuple[int, int, int, int], ...]:
+    return tuple(_expect_field_elem(elem, context) for elem in elems)
+
+
 def bn254_add_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, int, int, int]]:
     """Add two BN254 field elements using the CUDA backend when available."""
 
@@ -114,6 +123,22 @@ def bn254_add_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, in
     if result is None:
         return None
     return _expect_field_elem(result, "bn254_add_cuda result")
+
+
+def bn254_add_cuda_many(
+    lhs: Sequence[Sequence[int]], rhs: Sequence[Sequence[int]]
+) -> Optional[Tuple[Tuple[int, int, int, int], ...]]:
+    """Add many BN254 field-element pairs using the CUDA backend when available."""
+
+    if len(lhs) != len(rhs):
+        raise ValueError("bn254_add_cuda_many expects matching batch lengths")
+    result = _crypto.bn254_add_cuda_many(
+        _expect_field_elem_many(lhs, "bn254_add_cuda_many lhs"),
+        _expect_field_elem_many(rhs, "bn254_add_cuda_many rhs"),
+    )
+    if result is None:
+        return None
+    return tuple(_expect_field_elem(elem, "bn254_add_cuda_many result") for elem in result)
 
 
 def bn254_sub_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, int, int, int]]:
@@ -125,6 +150,22 @@ def bn254_sub_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, in
     return _expect_field_elem(result, "bn254_sub_cuda result")
 
 
+def bn254_sub_cuda_many(
+    lhs: Sequence[Sequence[int]], rhs: Sequence[Sequence[int]]
+) -> Optional[Tuple[Tuple[int, int, int, int], ...]]:
+    """Subtract many BN254 field-element pairs using the CUDA backend when available."""
+
+    if len(lhs) != len(rhs):
+        raise ValueError("bn254_sub_cuda_many expects matching batch lengths")
+    result = _crypto.bn254_sub_cuda_many(
+        _expect_field_elem_many(lhs, "bn254_sub_cuda_many lhs"),
+        _expect_field_elem_many(rhs, "bn254_sub_cuda_many rhs"),
+    )
+    if result is None:
+        return None
+    return tuple(_expect_field_elem(elem, "bn254_sub_cuda_many result") for elem in result)
+
+
 def bn254_mul_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, int, int, int]]:
     """Multiply two BN254 field elements using the CUDA backend when available."""
 
@@ -132,3 +173,19 @@ def bn254_mul_cuda(a: Sequence[int], b: Sequence[int]) -> Optional[Tuple[int, in
     if result is None:
         return None
     return _expect_field_elem(result, "bn254_mul_cuda result")
+
+
+def bn254_mul_cuda_many(
+    lhs: Sequence[Sequence[int]], rhs: Sequence[Sequence[int]]
+) -> Optional[Tuple[Tuple[int, int, int, int], ...]]:
+    """Multiply many BN254 field-element pairs using the CUDA backend when available."""
+
+    if len(lhs) != len(rhs):
+        raise ValueError("bn254_mul_cuda_many expects matching batch lengths")
+    result = _crypto.bn254_mul_cuda_many(
+        _expect_field_elem_many(lhs, "bn254_mul_cuda_many lhs"),
+        _expect_field_elem_many(rhs, "bn254_mul_cuda_many rhs"),
+    )
+    if result is None:
+        return None
+    return tuple(_expect_field_elem(elem, "bn254_mul_cuda_many result") for elem in result)

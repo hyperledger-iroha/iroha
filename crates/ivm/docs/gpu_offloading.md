@@ -7,12 +7,13 @@ Status
 - CUDA: A `build.rs` script compiles kernels in `cuda/` to PTX at build time
   and copies bundled `*.ptx` files if `nvcc` is unavailable; vector helpers,
   SHA‑256, Merkle leaf hashing/reduction, Keccak, Poseidon2/6 permutations,
-  AES rounds/batches, BN254 add/sub/mul, Ed25519 batch verification, and the
-  scheduler bitonic-sort helper all have explicit CUDA entry points with
-  deterministic fallback/disable-path coverage.
+  AES rounds/batches, BN254 add/sub/mul plus the matching batch helpers,
+  Ed25519 verification via the shared batch kernel path, and the scheduler
+  bitonic-sort helper all have explicit CUDA entry points with deterministic
+  fallback/disable-path coverage.
 - Python (`iroha_python.gpu`) and Java (`CudaAccelerators`) bindings surface CUDA availability
-  probes together with optional Poseidon/BN254 wrappers, returning fallbacks when hardware support
-  is missing so applications can branch deterministically.
+  probes together with optional Poseidon helpers and BN254 single/batch wrappers, returning
+  fallbacks when hardware support is missing so applications can branch deterministically.
 - Developers can compare CPU vs CUDA throughput locally via Criterion benches such as `crates/ivm/benches/bench_bn254_cuda.rs` (run with `cargo bench -p ivm --bench bench_bn254_cuda --features cuda`).
 
 ## PTX Build Process
@@ -41,7 +42,7 @@ The following hotspots contain tight loops or field arithmetic that map well to 
 - **Keccak‑f1600** – the `keccak_f1600` function processes a 25‑lane state with many rotations and XORs【F:src/sha3.rs†L1-L63】.
 - **AES round helpers** – `aesenc` and `aesdec` apply S‑boxes and MixColumns over 16‑byte states【F:src/aes.rs†L132-L175】.
 - **Vector helpers** – functions like `vadd32_slice` and `vadd64_slice` perform lane-wise arithmetic on large arrays【F:src/vector.rs†L575-L613】.
-- **BN254 field arithmetic** – accelerated on CUDA via `bn254_add_kernel`, `bn254_sub_kernel`, and `bn254_mul_kernel` (see `crates/ivm/cuda/bn254.cu`) with scalar/SIMD fallbacks for hosts without GPUs; the host wrappers in `crates/ivm/src/cuda.rs` flatten operands, submit through `GpuManager`, and disable the backend on first mismatch. Tests in `crates/ivm/tests/cuda_extra.rs` cover GPU vs CPU parity.
+- **BN254 field arithmetic** – accelerated on CUDA via `bn254_add_kernel`, `bn254_sub_kernel`, and `bn254_mul_kernel` (see `crates/ivm/cuda/bn254.cu`) with scalar/SIMD fallbacks for hosts without GPUs; the host wrappers in `crates/ivm/src/cuda.rs` now support both single-element and batch submissions, reuse cached PTX modules per `GpuContext`, and disable the backend on first mismatch. Tests in `crates/ivm/tests/cuda_extra.rs` and the inline CUDA regressions cover GPU vs CPU parity.
 - **Merkle hashing** – `ByteMerkleTree::from_bytes_parallel` hashes leaves and inner nodes in parallel using Rayon threads【F:src/byte_merkle_tree.rs†L72-L98】.
 - **Signature verification** – wrappers in [`signature.rs`] dispatch to Ed25519 or Dilithium libraries to check signatures【F:src/signature.rs†L27-L63】.
 
@@ -90,13 +91,28 @@ By restricting GPU code to deterministic integer operations and committing resul
 
 ## Repository Implementation
 
-The `gpu` module exposes a `GpuManager` used by the scheduler to open CUDA contexts and assign tasks deterministically. GPU selection depends only on the task ID:
+The `gpu` module exposes a `GpuManager` used by the scheduler to open CUDA contexts and assign tasks deterministically. Public CUDA helpers now derive a stable task ID from the operation shape (for example: digest count, column count, or block count) and install it as the ambient task scope before launching kernels, so helper traffic no longer collapses onto GPU 0 on multi-GPU hosts. GPU selection still depends only on the resolved task ID:
 
 ```rust
 pub fn gpu_for_task(&self, task_id: u64) -> usize {
     (task_id as usize) % self.gpus.len()
 }
 ```
+
+The same routing rule now applies to the raw CUDA golden self-tests used during
+startup and first-use admission, so the probe traffic for Ed25519, SHA-256,
+Keccak, and AES no longer bypasses the task-scoped selection path. The CUDA
+SHA-256 pair-reduction helper also now keeps intermediate Merkle levels on
+device by ping-ponging between two fixed device buffers and copying back only
+the final root digest. The CUDA leaf-hash kernel now emits digest bytes
+directly, and `ByteMerkleTree::root_from_bytes_accel(...)` uses an internal
+CUDA root helper that hashes padded leaves and reduces the Merkle tree on the
+device before the host reads back the final digest. `GpuContext` also now caches
+PTX `Module` handles, a reusable stream, and immutable `u64` device buffers per
+device so repeated helper calls avoid reloading the same PTX, recreating the
+stream, or re-uploading Poseidon constant tables on every dispatch. The BN254
+helpers can also batch many field-element pairs into one kernel launch when
+higher layers have enough work to amortize the transfer.
 
 The number of initialised devices is capped by the `IVM_MAX_GPUS` environment variable:
 

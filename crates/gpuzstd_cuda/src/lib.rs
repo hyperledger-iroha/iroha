@@ -2,11 +2,14 @@
 //!
 //! This crate exports the same C ABI as `gpuzstd_metal`, but under the
 //! `gpuzstd_cuda` artifact name so Unix/Windows Norito builds can load an
-//! in-tree `libgpuzstd_cuda` helper directly. The implementation reuses the
-//! deterministic shared helper path from `gpuzstd_metal` until dedicated CUDA
-//! kernels land.
+//! in-tree `libgpuzstd_cuda` helper directly. Compression still reports
+//! `gpu_unavailable` until dedicated CUDA kernels land; decode continues to use
+//! the deterministic shared helper path so self-tests can distinguish missing
+//! kernels from parity failures.
 
-use gpuzstd_metal::{compress_ffi, decompress_ffi};
+use gpuzstd_metal::decompress_ffi;
+
+const RC_GPU_UNAVAILABLE: i32 = 3;
 
 /// Compress `src` into `dst` using the shared helper path exposed as the
 /// CUDA-named helper artifact.
@@ -17,13 +20,13 @@ use gpuzstd_metal::{compress_ffi, decompress_ffi};
 /// and writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn gpu_zstd_compress(
-    src: *const u8,
-    src_len: usize,
-    level: i32,
-    dst: *mut u8,
-    dst_len: *mut usize,
+    _src: *const u8,
+    _src_len: usize,
+    _level: i32,
+    _dst: *mut u8,
+    _dst_len: *mut usize,
 ) -> i32 {
-    unsafe { compress_ffi(src, src_len, level, dst, dst_len) }
+    RC_GPU_UNAVAILABLE
 }
 
 /// Decompress `src` into `dst` using the shared helper path exposed as the
@@ -49,6 +52,7 @@ mod tests {
     use std::{io::Cursor, slice};
 
     const RC_OK: i32 = 0;
+    const RC_GPU_UNAVAILABLE: i32 = 3;
     const RC_ZSTD: i32 = 4;
 
     fn try_gpu_compress(payload: &[u8]) -> Result<Vec<u8>, i32> {
@@ -89,9 +93,15 @@ mod tests {
     }
 
     #[test]
-    fn gpu_roundtrip_matches_cpu() {
+    fn gpu_compress_reports_unavailable_without_dedicated_kernels() {
         let payload = b"gpuzstd cuda roundtrip";
-        let compressed = try_gpu_compress(payload).expect("gpu compress");
+        assert_eq!(try_gpu_compress(payload), Err(RC_GPU_UNAVAILABLE));
+    }
+
+    #[test]
+    fn gpu_decode_accepts_standard_cpu_frames() {
+        let payload = b"gpuzstd cuda roundtrip";
+        let compressed = zstd::encode_all(Cursor::new(payload), 1).expect("cpu encode");
         let decoded = try_gpu_decompress(&compressed, payload.len()).expect("gpu decompress");
         assert_eq!(decoded, payload);
         let cpu_decoded = zstd::decode_all(Cursor::new(&compressed)).expect("cpu decode");

@@ -9,6 +9,19 @@ use std::{
 };
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=IVM_CUDA_NVCC");
+    println!("cargo:rerun-if-env-changed=IVM_CUDA_GENCODE");
+    println!("cargo:rerun-if-env-changed=IVM_CUDA_NVCC_EXTRA");
+    println!("cargo:rerun-if-env-changed=NVCC");
+    println!("cargo:rerun-if-env-changed=CXX");
+    println!("cargo:rerun-if-env-changed=HOST_CXX");
+    if let Ok(target) = env::var("TARGET") {
+        println!("cargo:rerun-if-env-changed=CXX_{target}");
+        println!(
+            "cargo:rerun-if-env-changed=CXX_{}",
+            target.replace('-', "_")
+        );
+    }
     if env::var_os("CARGO_FEATURE_CUDA").is_some()
         && let Err(err) = build_cuda_artifacts()
     {
@@ -30,6 +43,14 @@ fn build_cuda_artifacts() -> Result<(), Box<dyn Error>> {
     let nvcc = env::var("IVM_CUDA_NVCC")
         .or_else(|_| env::var("NVCC"))
         .unwrap_or_else(|_| "nvcc".to_string());
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let host_compiler = select_cuda_host_compiler(&target_os);
+    if let Some(host_compiler) = &host_compiler {
+        println!(
+            "cargo:warning=ivm cuda build: using CUDA host compiler {}",
+            host_compiler.display()
+        );
+    }
 
     let gencode =
         env::var("IVM_CUDA_GENCODE").unwrap_or_else(|_| "arch=compute_61,code=sm_61".to_string());
@@ -62,6 +83,9 @@ fn build_cuda_artifacts() -> Result<(), Box<dyn Error>> {
         cmd.arg("-o");
         cmd.arg(&target);
         cmd.arg("-std=c++14");
+        if let Some(host_compiler) = &host_compiler {
+            cmd.arg(format!("-ccbin={}", host_compiler.display()));
+        }
         if !gencode.trim().is_empty() {
             cmd.args(["-gencode", &gencode]);
         }
@@ -122,4 +146,28 @@ fn dump_dep_env() {
         path.push("dep_env.txt");
         let _ = fs::write(path, report);
     }
+}
+
+fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
+    if target_os != "linux" || explicit_cxx_configured() {
+        return None;
+    }
+
+    for candidate in [
+        Path::new("/usr/bin/g++-12"),
+        Path::new("/usr/local/bin/g++-12"),
+        Path::new("/bin/g++-12"),
+    ] {
+        if candidate.exists() {
+            return Some(candidate.to_path_buf());
+        }
+    }
+
+    None
+}
+
+fn explicit_cxx_configured() -> bool {
+    env::var_os("CXX").is_some()
+        || env::var_os("HOST_CXX").is_some()
+        || env::vars_os().any(|(key, _)| key.to_string_lossy().starts_with("CXX_"))
 }

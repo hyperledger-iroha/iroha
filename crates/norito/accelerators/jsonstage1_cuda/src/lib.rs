@@ -6,8 +6,49 @@
 //! Returns 0 on success, non-zero on failure.
 
 #[cfg(crc64_cuda_available)]
-extern "C" {
+unsafe extern "C" {
     fn norito_crc64_cuda_impl(input_ptr: *const u8, input_len: usize, out_crc: *mut u64) -> i32;
+}
+
+fn scan_structural_offsets(mut bytes: &[u8], mut emit: impl FnMut(u32)) -> usize {
+    let mut count = 0usize;
+    let mut base = 0usize;
+    let mut in_str = false;
+    while !bytes.is_empty() {
+        let c = bytes[0];
+        if in_str {
+            if c == b'\\' {
+                let skip = bytes.len().min(2);
+                bytes = &bytes[skip..];
+                base += skip;
+                continue;
+            }
+            if c == b'"' {
+                emit(base as u32);
+                count += 1;
+                in_str = false;
+            }
+            bytes = &bytes[1..];
+            base += 1;
+            continue;
+        }
+
+        match c {
+            b'"' => {
+                emit(base as u32);
+                count += 1;
+                in_str = true;
+            }
+            b'{' | b'}' | b'[' | b']' | b':' | b',' => {
+                emit(base as u32);
+                count += 1;
+            }
+            _ => {}
+        }
+        bytes = &bytes[1..];
+        base += 1;
+    }
+    count
 }
 
 /// Build a structural tape (offsets) for the given JSON input.
@@ -27,48 +68,20 @@ pub unsafe extern "C" fn json_stage1_build_tape(
         return 1;
     }
     let bytes = unsafe { std::slice::from_raw_parts(input_ptr, input_len) };
-    let mut offs = Vec::<u32>::with_capacity(1024);
-    let mut i = 0usize;
-    let mut in_str = false;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if in_str {
-            if c == b'\\' {
-                i = i.saturating_add(2);
-                continue;
-            }
-            if c == b'"' {
-                in_str = false;
-                offs.push(i as u32);
-                i += 1;
-                continue;
-            }
-            i += 1;
-        } else {
-            match c {
-                b'"' => {
-                    in_str = true;
-                    offs.push(i as u32);
-                    i += 1;
-                }
-                b'{' | b'}' | b'[' | b']' | b':' | b',' => {
-                    offs.push(i as u32);
-                    i += 1;
-                }
-                _ => i += 1,
-            }
-        }
-    }
-    let need = offs.len();
+    let need = scan_structural_offsets(bytes, |_| {});
     unsafe {
         *out_len = need;
     }
     if need > out_capacity {
         return 2;
     }
-    unsafe {
-        std::ptr::copy_nonoverlapping(offs.as_ptr(), out_offsets, need);
-    }
+    let out = unsafe { std::slice::from_raw_parts_mut(out_offsets, need) };
+    let mut written = 0usize;
+    scan_structural_offsets(bytes, |offset| {
+        out[written] = offset;
+        written += 1;
+    });
+    debug_assert_eq!(written, need);
     0
 }
 
@@ -126,7 +139,9 @@ pub unsafe extern "C" fn norito_crc64_cuda(
 
 #[cfg(test)]
 mod tests {
-    use super::{crc64_cpu, crc64_raw, json_stage1_build_tape, norito_crc64_cuda};
+    use super::{
+        crc64_cpu, crc64_raw, json_stage1_build_tape, norito_crc64_cuda, scan_structural_offsets,
+    };
 
     const CRC_123456789: u64 = 0x995D_C9BB_DF19_39FA;
     const CHUNK_SIZE: usize = 16 * 1024;
@@ -144,6 +159,40 @@ mod tests {
         assert_eq!(rc, 0);
         out.truncate(len);
         assert_eq!(out, vec![0, 1, 3, 4, 6]);
+    }
+
+    #[test]
+    fn escaped_quotes_keep_string_state_aligned() {
+        let s = b"{\"a\":\"b\\\"c\"}";
+        let mut out = vec![0u32; 16];
+        let mut len = 0usize;
+        let rc = unsafe {
+            json_stage1_build_tape(s.as_ptr(), s.len(), out.as_mut_ptr(), out.len(), &mut len)
+        };
+        assert_eq!(rc, 0);
+        out.truncate(len);
+        assert_eq!(out, vec![0, 1, 3, 4, 5, 10, 11]);
+    }
+
+    #[test]
+    fn capacity_errors_still_report_required_length() {
+        let s = b"{\"a\":1}";
+        let mut out = [0u32; 2];
+        let mut len = 0usize;
+        let rc = unsafe {
+            json_stage1_build_tape(s.as_ptr(), s.len(), out.as_mut_ptr(), out.len(), &mut len)
+        };
+        assert_eq!(rc, 2);
+        assert_eq!(len, 5);
+    }
+
+    #[test]
+    fn scanner_counts_match_written_offsets() {
+        let s = br#"{"left":[1,2],"right":{"quoted":"a\"b"}}"#;
+        let mut offsets = Vec::new();
+        let count = scan_structural_offsets(s, |offset| offsets.push(offset));
+        assert_eq!(count, offsets.len());
+        assert!(!offsets.is_empty());
     }
 
     #[test]

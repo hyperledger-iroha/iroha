@@ -4925,6 +4925,26 @@ mod tests {
         }
     }
 
+    fn expect_bn254_many<F>(
+        lhs: &[[u64; 4]],
+        rhs: &[[u64; 4]],
+        gpu: Option<Vec<[u64; 4]>>,
+        fallback: F,
+    ) where
+        F: Fn(FieldElem, FieldElem) -> FieldElem,
+    {
+        let expected: Vec<[u64; 4]> = lhs
+            .iter()
+            .copied()
+            .zip(rhs.iter().copied())
+            .map(|(a, b)| fallback(FieldElem(a), FieldElem(b)).0)
+            .collect();
+        match gpu {
+            Some(value) => assert_eq!(value, expected),
+            None => assert!(!super::cuda_available_py() || super::cuda_disabled_py()),
+        }
+    }
+
     #[test]
     fn cuda_probes_reflect_ivm_state() {
         assert_eq!(super::cuda_available_py(), ivm::cuda_available());
@@ -4963,6 +4983,48 @@ mod tests {
         let a = [7, 0, 0, 0];
         let b = [11, 0, 0, 0];
         expect_bn254(a, b, super::bn254_mul_cuda_py(a, b), bn254_vec::mul);
+    }
+
+    #[test]
+    fn bn254_add_many_wrapper_matches_cpu() {
+        let lhs = vec![[1, 0, 0, 0], [2, 0, 0, 0], [9, 0, 0, 0]];
+        let rhs = vec![[2, 0, 0, 0], [3, 0, 0, 0], [4, 0, 0, 0]];
+        expect_bn254_many(
+            &lhs,
+            &rhs,
+            super::bn254_add_cuda_many_py(lhs.clone(), rhs.clone()),
+            bn254_vec::add_scalar,
+        );
+        let empty = super::bn254_add_cuda_many_py(Vec::new(), Vec::new());
+        if super::cuda_available_py() && !super::cuda_disabled_py() {
+            assert_eq!(empty, Some(Vec::new()));
+        } else {
+            assert!(empty.is_none());
+        }
+    }
+
+    #[test]
+    fn bn254_sub_many_wrapper_matches_cpu() {
+        let lhs = vec![[5, 0, 0, 0], [8, 0, 0, 0], [13, 0, 0, 0]];
+        let rhs = vec![[3, 0, 0, 0], [2, 0, 0, 0], [6, 0, 0, 0]];
+        expect_bn254_many(
+            &lhs,
+            &rhs,
+            super::bn254_sub_cuda_many_py(lhs.clone(), rhs.clone()),
+            bn254_vec::sub_scalar,
+        );
+    }
+
+    #[test]
+    fn bn254_mul_many_wrapper_matches_cpu() {
+        let lhs = vec![[7, 0, 0, 0], [11, 0, 0, 0], [5, 0, 0, 0]];
+        let rhs = vec![[11, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0]];
+        expect_bn254_many(
+            &lhs,
+            &rhs,
+            super::bn254_mul_cuda_many_py(lhs.clone(), rhs.clone()),
+            bn254_vec::mul_scalar,
+        );
     }
 
     #[test]
@@ -7434,6 +7496,15 @@ fn bn254_add_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
 }
 
 #[pyfunction]
+/// Add many BN254 field-element pairs using the CUDA backend when available.
+///
+/// Returns `None` when CUDA support is unavailable or disabled at runtime, or
+/// when the input vectors differ in length.
+fn bn254_add_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<[u64; 4]>> {
+    ivm::bn254_add_batch_cuda(&lhs, &rhs)
+}
+
+#[pyfunction]
 /// Subtract two BN254 field elements using the CUDA backend when available.
 ///
 /// Returns `None` when CUDA support is unavailable or disabled at runtime.
@@ -7442,11 +7513,29 @@ fn bn254_sub_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
 }
 
 #[pyfunction]
+/// Subtract many BN254 field-element pairs using the CUDA backend when available.
+///
+/// Returns `None` when CUDA support is unavailable or disabled at runtime, or
+/// when the input vectors differ in length.
+fn bn254_sub_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<[u64; 4]>> {
+    ivm::bn254_sub_batch_cuda(&lhs, &rhs)
+}
+
+#[pyfunction]
 /// Multiply two BN254 field elements using the CUDA backend when available.
 ///
 /// Returns `None` when CUDA support is unavailable or disabled at runtime.
 fn bn254_mul_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
     ivm::bn254_mul_cuda(a, b)
+}
+
+#[pyfunction]
+/// Multiply many BN254 field-element pairs using the CUDA backend when available.
+///
+/// Returns `None` when CUDA support is unavailable or disabled at runtime, or
+/// when the input vectors differ in length.
+fn bn254_mul_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<[u64; 4]>> {
+    ivm::bn254_mul_batch_cuda(&lhs, &rhs)
 }
 
 #[pyfunction]
@@ -7616,8 +7705,11 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(poseidon6_cuda_py, module)?)?;
     module.add_function(wrap_pyfunction!(poseidon6_cuda_many_py, module)?)?;
     module.add_function(wrap_pyfunction!(bn254_add_cuda_py, module)?)?;
+    module.add_function(wrap_pyfunction!(bn254_add_cuda_many_py, module)?)?;
     module.add_function(wrap_pyfunction!(bn254_sub_cuda_py, module)?)?;
+    module.add_function(wrap_pyfunction!(bn254_sub_cuda_many_py, module)?)?;
     module.add_function(wrap_pyfunction!(bn254_mul_cuda_py, module)?)?;
+    module.add_function(wrap_pyfunction!(bn254_mul_cuda_many_py, module)?)?;
     module.add(
         "__doc__",
         "Iroha crypto and transaction helpers exposed to Python via PyO3.",

@@ -564,8 +564,11 @@ _CRYPTO_EXPORTS: List[str] = [
     "poseidon6_cuda",
     "poseidon6_cuda_many",
     "bn254_add_cuda",
+    "bn254_add_cuda_many",
     "bn254_sub_cuda",
+    "bn254_sub_cuda_many",
     "bn254_mul_cuda",
+    "bn254_mul_cuda_many",
     "SorafsAliasPolicy",
     "SorafsAliasEvaluation",
     "SorafsAliasWarning",
@@ -676,8 +679,11 @@ try:
 )
     from .gpu import (
         bn254_add_cuda,
+        bn254_add_cuda_many,
         bn254_mul_cuda,
+        bn254_mul_cuda_many,
         bn254_sub_cuda,
+        bn254_sub_cuda_many,
         cuda_available,
         cuda_disabled,
         poseidon2_cuda,

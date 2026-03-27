@@ -2,6 +2,678 @@
 
 Last updated: 2026-03-27
 
+## 2026-03-27 Follow-up: FASTPQ CUDA bench now records BN254 FFT/LDE evidence
+- Extended the FASTPQ CUDA evidence follow-up in
+  `crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs`
+  and
+  `docs/source/{benchmarks.md,fastpq_plan.md}`
+  so the raw CUDA bench/report path now carries the BN254 helper timings that
+  were added in the previous low-level kernel slice.
+- The shipped behavior in this slice:
+  - `fastpq_cuda_bench` now benchmarks deterministic BN254 FFT and LDE CPU
+    baselines alongside the existing Goldilocks FFT/IFFT/LDE and Poseidon
+    captures;
+  - the raw JSON now emits a `bn254_metrics` block under both `benchmarks` and
+    `report`, using the same `acceleration.bn254_{fft,lde}_ms` metric names the
+    wrapper and downstream evidence tooling already understand;
+  - CUDA BN254 timings now degrade cleanly to CPU-only metrics when the bench
+    resolves a GPU backend but the BN254 helper itself is unavailable in that
+    build or errors at runtime, and the raw/wrapped bundles now carry explicit
+    `bn254_warnings` strings for those downgraded timings instead of aborting
+    the capture;
+  - `wrap_benchmark.py` now preserves those BN254 warnings and no longer
+    requires Metal-only Poseidon telemetry blocks when wrapping CUDA captures;
+    and
+  - focused regressions now pin the BN254 metric block plus the operation-filter
+    behavior in both default and `fastpq-gpu` bench builds.
+- Validation:
+  - `cargo test -p fastpq_prover --bin fastpq_cuda_bench -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --bin fastpq_cuda_bench -- --nocapture` (pass)
+  - `cargo run -p fastpq_prover --bin fastpq_cuda_bench -- --rows 8 --iterations 1 --warmups 0 --column-count 2 --output /tmp/fastpq_cuda_bn254_probe.json` (pass)
+  - `cargo run -p fastpq_prover --features fastpq-gpu --bin fastpq_cuda_bench -- --rows 8 --iterations 1 --warmups 0 --column-count 2 --output /tmp/fastpq_cuda_bn254_gpu_probe.json` (pass with BN254 warnings)
+  - `python3 -m py_compile scripts/fastpq/wrap_benchmark.py scripts/fastpq/tests/test_wrap_benchmark.py` (pass)
+  - `python3 scripts/fastpq/wrap_benchmark.py --skip-acceleration-state --label device_class=test --label gpu_kind=discrete /tmp/fastpq_cuda_bn254_fft16_probe.json /tmp/fastpq_cuda_bn254_fft16_probe_wrapped.json` (pass)
+  - `python3 scripts/fastpq/wrap_benchmark.py --skip-acceleration-state --label device_class=test --label gpu_kind=discrete /tmp/fastpq_cuda_bn254_gpu_probe.json /tmp/fastpq_cuda_bn254_gpu_probe_wrapped.json` (pass)
+- Residual note:
+  - the local live-device BN254 helper path still reports `cudaError_t(1)` on
+    this host, but `fastpq_cuda_bench` now keeps the capture alive by emitting
+    CPU-only `bn254_metrics` plus explicit `bn254_warnings` instead of aborting
+    the whole JSON/report flow.
+
+## 2026-03-27 Follow-up: FASTPQ now ships low-level BN254 CUDA FFT/LDE wrappers and kernels
+- Extended the FASTPQ CUDA follow-up in
+  `crates/fastpq_prover/{src/bn254.rs,src/fastpq_cuda.rs,src/lib.rs,cuda/fastpq_cuda.cu}`
+  so the CUDA helper surface now covers BN254 FFT/LDE directly instead of
+  stopping at Goldilocks FFT/IFFT/LDE and Poseidon.
+- The shipped behavior in this slice:
+  - a new shared BN254 helper module now stages canonical-limb twiddle tables,
+    validates BN254 log sizes and cosets, and provides deterministic CPU
+    references for focused parity tests;
+  - `fastpq_bn254_fft(...)` and `fastpq_bn254_lde(...)` are now public Rust
+    CUDA helpers that accept flat canonical-limb buffers and drive new native
+    CUDA entry points;
+  - the CUDA side now uploads staged BN254 twiddles/cosets, converts canonical
+    limbs into Montgomery form on-device, and runs one block per column for the
+    deterministic BN254 FFT/LDE path; and
+  - focused regressions now pin BN254 shape validation plus CPU-vs-CUDA parity
+    for both FFT and LDE under `fastpq-gpu`.
+- Validation:
+  - `cargo test -p fastpq_prover bn254_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu bn254_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --no-run` (pass)
+
+## 2026-03-27 Follow-up: release manifests now record archived FASTPQ rollout evidence
+- Extended the FASTPQ CUDA evidence follow-up in
+  `scripts/run_release_pipeline.py`,
+  `scripts/fastpq/tests/test_release_pipeline_rollout_summary.py`,
+  and
+  `docs/source/{benchmarks.md,fastpq_plan.md,fastpq_rollout_playbook.md,release_dual_track_runbook.md}`
+  so the release pipeline’s machine-readable output keeps the same archived
+  rollout references that were already being exposed in the text summary.
+- The shipped behavior in this slice:
+  - `scripts/run_release_pipeline.py` now rewrites `release_manifest.json`
+    after rollout archival and appends an `evidence` block;
+  - `release_manifest.json.evidence.fastpq` now records the archived FASTPQ
+    rollout bundle roots, the copied `fastpq_rollout_summary.{json,md}` paths,
+    and any archived FASTPQ Grafana export path; and
+  - `release_manifest.json.evidence.cbdc` now records the validated CBDC
+    rollout bundle path when that release gate runs, so machine consumers can
+    find the same rollout artefacts without scraping `SUMMARY.txt`.
+- Validation:
+  - `python3 -m py_compile scripts/fastpq/rollout_manifest_summary.py scripts/run_release_pipeline.py scripts/fastpq/tests/test_rollout_manifest_summary.py scripts/fastpq/tests/test_release_pipeline_rollout_summary.py` (pass)
+  - direct invocations of the expanded `test_release_pipeline_rollout_summary.py`
+    helper via `python3 -c ...` (pass)
+
+## 2026-03-27 Follow-up: archived FASTPQ rollout bundles now ship reviewer-facing manifest summaries
+- Extended the FASTPQ CUDA evidence follow-up in
+  `scripts/fastpq/{rollout_manifest_summary.py,tests/test_rollout_manifest_summary.py,tests/test_release_pipeline_rollout_summary.py}`,
+  `scripts/run_release_pipeline.py`,
+  and
+  `docs/source/{benchmarks.md,fastpq_plan.md,fastpq_rollout_playbook.md}`
+  so the release pipeline preserves focused-capture scope in a compact
+  reviewer-facing summary after validated rollout bundles are copied under
+  `artifacts/releases/<version>/fastpq_rollouts/...`.
+- The shipped behavior in this slice:
+  - `python3 scripts/fastpq/rollout_manifest_summary.py` now turns a signed
+    `fastpq_bench_manifest.json` plus its archived wrapped bench files into
+    `fastpq_rollout_summary.json` and `fastpq_rollout_summary.md`;
+  - those summaries surface the selected `operation_filter`,
+    any `matrix_operation_filters`, the resolved wrapped bench filename,
+    wrapped `metadata.labels` device tags, and compact per-bench operation
+    listings so reviewers can tell whether a CUDA or Metal lane was focused or
+    full-bundle without reopening the raw JSON;
+  - the helper resolves archived bench paths robustly, including the common
+    case where the signed manifest still points at the original
+    `artifacts/fastpq_benchmarks/...` location but the archived rollout bundle
+    only contains the copied filename; and
+  - `scripts/run_release_pipeline.py --fastpq-rollout-bundle ...` now emits
+    those summary files beside each copied manifest and adds their Markdown
+    paths to the release `SUMMARY.txt`.
+- Validation:
+  - `python3 -m py_compile scripts/fastpq/rollout_manifest_summary.py scripts/run_release_pipeline.py scripts/fastpq/tests/test_rollout_manifest_summary.py scripts/fastpq/tests/test_release_pipeline_rollout_summary.py` (pass)
+  - direct invocations of the new `test_rollout_manifest_summary.py` helpers
+    via `python3 -c ...` (pass)
+  - direct invocation of `test_release_pipeline_rollout_summary.py` via
+    `python3 -c ...` (pass)
+
+## 2026-03-27 Follow-up: FASTPQ dashboard and matrix tooling now preserve focused capture scope
+- Extended the FASTPQ CUDA evidence follow-up in
+  `scripts/fastpq/{update_dashboard_panel.py,capture_matrix.py,export_poseidon_microbench.py,aggregate_poseidon_microbench.py,tests/test_update_dashboard_panel.py,tests/test_capture_matrix.py,tests/test_poseidon_microbench_tools.py}`
+  and
+  `docs/source/{benchmarks.md,fastpq_plan.md}`
+  so focused CUDA captures stay visibly partial in the remaining rollout-facing
+  tooling instead of only in the raw/wrapped JSON.
+- The shipped behavior in this slice:
+  - `python3 scripts/fastpq/update_dashboard_panel.py` now surfaces the
+    selected `operation_filter`, records `column_count` when the bundle carries
+    it, and emits a backend-specific regeneration hint so CUDA captures point
+    back to `fastpq_cuda_bench` while Metal captures keep the `fastpq_metal_bench`
+    guidance;
+  - the same dashboard helper now falls back to `all` for older multi-operation
+    bundles or to the lone stage name for older single-operation bundles, so
+    focused evidence remains explicit even when the bundle predates the new
+    `operation_filter` field; and
+  - `python3 scripts/fastpq/capture_matrix.py` now records
+    `operation_filters` per device entry in `matrix_manifest.json`, making it
+    clear whether a device row was built from full captures, focused reruns, or
+    a mix of both before that manifest feeds back into release gating;
+  - `python3 scripts/fastpq/export_poseidon_microbench.py` and
+    `python3 scripts/fastpq/aggregate_poseidon_microbench.py` now preserve the
+    selected `operation_filter`, `column_count`, and source benchmark command in
+    the standalone Poseidon microbench exports/manifest, so focused Poseidon
+    reruns do not lose their scope once they leave the wrapped bundle;
+  - `python3 scripts/fastpq/update_benchmark_history.py` now exposes the same
+    `Filter` and `Columns` fields in the generated Poseidon microbench table,
+    while falling back to `all` / `—` for older captures that predate the new
+    export metadata;
+  - `cargo xtask fastpq-bench-manifest` now records matrix-derived
+    `matrix_operation_filters` per bench when the matched matrix device entry
+    carries them, so signed release manifests preserve whether the baseline came
+    from full captures, focused reruns, or a mix; and
+  - `.gitignore` now explicitly allows `scripts/fastpq/tests/test_*.py`, so the
+    FASTPQ script regressions added in these CUDA evidence follow-ups are
+    reviewable instead of silently ignored by the generic repository-wide
+    `test_*` rule.
+- Validation:
+  - direct invocations of the new `test_update_dashboard_panel.py` and
+    `test_capture_matrix.py` helpers via `python3 -c ...` (pass)
+  - direct invocations of the new `test_poseidon_microbench_tools.py` helper
+    via `python3 -c ...` (pass)
+  - direct invocations of the expanded `test_update_benchmark_history.py`
+    Poseidon-table helpers via `python3 -c ...` (pass)
+  - `cargo test -p xtask manifest_ -- --nocapture` (pass)
+
+## 2026-03-27 Follow-up: FASTPQ manifests, history, and stage summaries now preserve CUDA operation filters
+- Extended the FASTPQ CUDA evidence follow-up in
+  `xtask/src/fastpq.rs`,
+  `scripts/fastpq/{update_benchmark_history.py,aggregate_stage_timings.py}`,
+  and
+  `scripts/fastpq/tests/{test_update_benchmark_history.py,test_aggregate_stage_timings.py}`
+  so filtered CUDA captures stay visibly partial after they leave the raw and
+  wrapped bundle stage.
+- The shipped behavior in this slice:
+  - `cargo xtask fastpq-bench-manifest` now records `operation_filter` for each
+    bench entry when the wrapped bundle carries it, so downstream manifest
+    consumers can distinguish full captures from focused FFT/IFFT/LDE/Poseidon
+    artefacts without reopening the original JSON;
+  - `python3 scripts/fastpq/update_benchmark_history.py` now surfaces that same
+    filter in the generated Stage 7 history table, with a legacy fallback that
+    treats older single-operation bundles as filtered to their lone operation
+    and older multi-operation bundles as `all`; and
+  - `python3 scripts/fastpq/aggregate_stage_timings.py` now accepts wrapped
+    FASTPQ bundle shapes directly, normalizes nested `report` blocks, and emits
+    a `Filter` column so stage-summary tables keep the selected operation
+    visible instead of assuming every input was a flat full-bundle report.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p xtask manifest_ -- --nocapture` (pass)
+  - `python3 scripts/fastpq/update_benchmark_history.py` (pass)
+  - direct tempdir-backed invocations of the new `test_update_benchmark_history.py` and `test_aggregate_stage_timings.py` helpers via `python3 -c ...` (pass)
+
+## 2026-03-27 Follow-up: CUDA wrapper now accepts nested `fastpq_cuda_bench` payloads and records the selected operation filter explicitly
+- Extended the FASTPQ CUDA bench-tooling follow-up in
+  `crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs`
+  and
+  `scripts/fastpq/{wrap_benchmark.py,tests/test_wrap_benchmark.py}`
+  after validating the real raw CUDA output and the live Python wrapper path on
+  this host.
+- The shipped behavior in this slice:
+  - `fastpq_cuda_bench` now stamps `operation_filter` into both its
+    `benchmarks` and `report` blocks, so single-operation captures stay
+    self-describing inside the JSON even if the filename gets detached from the
+    payload;
+  - `wrap_benchmark.py` now normalizes the nested
+    `{metadata, benchmarks, report}` shape emitted by `fastpq_cuda_bench`
+    before summarizing operations, filling fields like `column_count` and
+    `operation_filter` from the nested CUDA bundle when they are not present in
+    the inner `report` block alone, and it also backfills per-operation fields
+    such as `columns` from the outer benchmark entries while preferring the
+    source benchmark command/platform metadata over the old Metal-specific
+    fallback string; and
+  - the wrapper no longer trips a `NameError` on direct execution because
+    `REQUIRED_LABEL_FIELDS` is now defined before `main()` runs instead of
+    after the `if __name__ == "__main__": main()` footer.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p fastpq_prover --bin fastpq_cuda_bench -- --nocapture` (pass)
+  - `cargo run -p fastpq_prover --bin fastpq_cuda_bench -- --rows 8 --iterations 1 --warmups 0 --column-count 2 --operation lde --output /tmp/fastpq_cuda_probe.json` (pass)
+  - `python3 scripts/fastpq/wrap_benchmark.py --skip-acceleration-state --label device_class=test --label gpu_kind=discrete /tmp/fastpq_cuda_probe.json /tmp/fastpq_cuda_probe_wrapped.json` (pass)
+  - `python3 -c "from scripts.fastpq.tests.test_wrap_benchmark import test_summarize_operations_preserves_shape_and_transfer_fields, test_summarize_operations_keeps_legacy_entries_compatible, test_normalize_report_accepts_nested_fastpq_cuda_bundle, test_normalize_report_keeps_flat_payloads_unchanged; test_summarize_operations_preserves_shape_and_transfer_fields(); test_summarize_operations_keeps_legacy_entries_compatible(); test_normalize_report_accepts_nested_fastpq_cuda_bundle(); test_normalize_report_keeps_flat_payloads_unchanged(); print('ok')"` (pass)
+
+## 2026-03-27 Follow-up: `fastpq-cuda-suite` now supports focused single-operation CUDA captures end-to-end
+- Extended the FASTPQ CUDA bench-tooling follow-up in
+  `xtask/src/{fastpq.rs,main.rs}`
+  and
+  `docs/source/benchmarks.md`
+  so the higher-level CUDA suite can drive the same single-operation runs that
+  the raw bench already supports.
+- The shipped behavior in this slice:
+  - `cargo xtask fastpq-cuda-suite` now accepts
+    `--operation <fft|ifft|lde|poseidon_hash_columns|all>` plus the existing
+    Poseidon aliases via the shared `StageKind` parser, and it threads that
+    selector into the raw `fastpq_cuda_bench` invocation instead of always
+    forcing a full-bundle run;
+  - when the suite uses its default output paths, focused runs now suffix the
+    wrapped/raw artifact names with the selected operation so filtered FFT,
+    IFFT, LDE, or Poseidon captures stay self-describing instead of looking
+    like generic full-bundle exports;
+  - the suite plan JSON now records the selected operation explicitly, and it
+    only records `require_lde_mean_ms` / `require_poseidon_mean_ms` when the
+    chosen capture actually includes those operations; and
+  - the wrapper command builder now only passes the LDE and Poseidon threshold
+    flags when those metrics can exist in the filtered bundle, so focused FFT
+    and IFFT reruns wrap cleanly instead of failing on deliberately missing
+    operations.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p xtask cuda_ -- --nocapture` (pass)
+
+## 2026-03-27 Follow-up: FASTPQ CUDA FFT/IFFT/LDE now use caller roots, device workspaces, and correct coset staging
+- Extended the FASTPQ CUDA follow-up in
+  `crates/fastpq_prover/{cuda/fastpq_cuda.cu,src/fastpq_cuda.rs,src/gpu.rs,src/gpu_stub.rs,src/fft.rs}`
+  so the non-Poseidon CUDA path stops launching kernels against host pointers
+  and matches the planner's actual domain semantics again.
+- The shipped behavior in this slice:
+  - the native CUDA `fastpq_fft_cuda(...)` and `fastpq_ifft_cuda(...)` wrappers
+    now stage dense column buffers through persistent per-device workspaces,
+    launch on real device memory, and materialize results back to the caller
+    instead of passing host slices directly to CUDA kernels;
+  - the Rust GPU/planner path now threads the active trace or LDE root into the
+    CUDA wrapper surface, so the same backend can service both canonical
+    parameter sets without silently hard-coding a generic Goldilocks root of
+    unity; and
+  - the CUDA LDE path now multiplies coefficients by coset powers before the
+    FFT and performs the transform in-place on device-resident evaluation
+    buffers, replacing the earlier oversized shared-memory design that failed
+    outright on the real 32K-row workloads covered by the focused parity test;
+    and
+  - new CUDA regressions now pin both the second canonical FFT root and the
+    second canonical LDE root so the backend cannot silently fall back to one
+    hard-coded Goldilocks root of unity again.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu gpu_fft_matches_cpu_output -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu gpu_ifft_matches_cpu_output -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu gpu_lde_matches_cpu_output -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu gpu_fft_matches_cpu_output_for_latency_parameters -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu gpu_lde_matches_cpu_output_for_latency_parameters -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --no-run` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu poseidon_gpu_repeated_dispatches_match_cpu_when_backend_available -- --nocapture` (pass)
+
+## 2026-03-27 Follow-up: FASTPQ CUDA Poseidon now reuses persistent per-device workspaces across dispatches
+- Extended the FASTPQ CUDA follow-up in
+  `crates/fastpq_prover/cuda/fastpq_cuda.cu`
+  and
+  `crates/fastpq_prover/src/trace.rs`
+  so the native Poseidon wrappers stop paying the obvious `cudaMalloc` /
+  `cudaFree` churn on every call.
+- The shipped behavior in this slice:
+  - the CUDA `fastpq_poseidon_permute_cuda(...)`,
+    `fastpq_poseidon_hash_columns_cuda(...)`, and
+    `fastpq_poseidon_hash_columns_fused_cuda(...)` wrappers now keep persistent
+    payload/slice/state/hash buffers per CUDA device behind a small native
+    workspace cache instead of reallocating those buffers for each dispatch;
+  - the cache is safe for the current FASTPQ runtime because Rust still
+    serializes accelerator work with the existing GPU lane mutex, while the
+    native cache stays keyed by CUDA device so task-routed multi-GPU hosts do
+    not cross-use allocations between contexts; and
+  - a new repeated-dispatch regression now hashes the same Poseidon batch twice
+    on the live GPU path and asserts both runs stay identical to each other and
+    to the CPU reference, catching stale-buffer or cross-call contamination in
+    the reused workspace path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --no-run` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu poseidon_gpu_repeated_dispatches_match_cpu_when_backend_available -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu poseidon_fused_gpu_matches_cpu_first_level -- --nocapture` (pass)
+
+## 2026-03-27 Follow-up: workspace CUDA helper builds now share the Linux host-compiler hardening path
+- Extended the CUDA buildability follow-up in
+  `crates/norito/accelerators/jsonstage1_cuda/{build.rs,src/cuda_crc64.cu,src/lib.rs}`
+  and
+  `crates/ivm/build.rs`
+  so more of the workspace's feature-gated CUDA paths compile cleanly on this
+  Linux CUDA host instead of relying on whatever `cc-rs` or `nvcc` happen to
+  pick by default.
+- The shipped behavior in this slice:
+  - `jsonstage1_cuda` now mirrors the FASTPQ Linux CUDA build policy by forcing
+    a release-style CUDA object build, disabling `cc-rs`' automatic
+    `-ccbin=c++`, preferring `/usr/bin/g++-12` when present, and falling back to
+    NVCC's own host-compiler selection when no explicit `CXX*` override exists;
+  - the `jsonstage1_cuda` CRC64 wrapper no longer trips NVCC's
+    goto-across-initializer check, and it also removes the redundant
+    `cudaDeviceSynchronize()` ahead of the blocking host copy so the helper
+    avoids an unnecessary device-wide fence on the hot path;
+  - the `jsonstage1_cuda` Rust FFI declaration is now valid under Rust 2024 via
+    `unsafe extern "C"`; and
+  - `ivm`'s PTX build script now reruns when the CUDA/compiler env changes and
+    explicitly prefers `g++-12` on Linux when no `CXX*` override is present, so
+    the manual NVCC PTX path follows the same supported-host-compiler policy as
+    the newly fixed helper crates.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p jsonstage1_cuda --features cuda-kernel --no-run` (pass)
+  - `cargo test -p jsonstage1_cuda --features cuda-kernel -- --nocapture` (pass)
+  - `cargo test -p ivm --features cuda --no-run` (pass)
+
+## 2026-03-27 Follow-up: FASTPQ CUDA Poseidon now builds through `fastpq-gpu` on Linux and the regular/fused hash paths match CPU parity
+- Extended the FASTPQ CUDA follow-up in
+  `crates/fastpq_prover/{build.rs,src/lib.rs,src/fastpq_cuda.rs,src/trace.rs,cuda/fastpq_cuda.cu,metal/kernels/poseidon2.metal}`
+  so the actual feature-gated GPU path compiles on this Linux CUDA host and the
+  Poseidon column-hash parity checks are no longer broken once that path is live.
+- The shipped behavior in this slice:
+  - the FASTPQ build script now forces a release-style CUDA object build,
+    disables `cc-rs`' automatic `-ccbin` handling on Linux, and prefers
+    `/usr/bin/g++-12` when it exists so CUDA 12.0 stops tripping over the host's
+    default GCC 13 toolchain and the debug-only `-G` / `ptxas` conflict;
+  - the native CUDA Poseidon wrappers no longer inject redundant
+    `cudaDeviceSynchronize()` fences ahead of blocking host copies, reducing
+    obvious wrapper overhead without changing outputs;
+  - the GPU batch/fused trace call sites now pass the same
+    `fastpq:v1:trace:column:{name}` domains as the CPU hash path instead of bare
+    column names, which fixes the live CUDA leaf-hash mismatch that only became
+    visible once the feature build actually compiled; and
+  - the fused CUDA first-level parent kernel now hashes under
+    `fastpq:v1:trace:node` with the same sponge schedule as
+    `compute_merkle_level(...)`, and the same parent-domain fix has been mirrored
+    into the Metal fused kernel source so backend behavior stays aligned.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p fastpq_prover --lib gpu::tests -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --no-run` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --no-run` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu gpu_poseidon_matches_cpu_for_batched_states -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu poseidon_gpu_hashes_match_cpu_when_backend_available -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu poseidon_fused_gpu_matches_cpu_first_level -- --nocapture` (pass)
+
+## 2026-03-27 Follow-up: `ivm` Ed25519 single verification now rides the CUDA batch kernel path
+- Extended the `ivm` CUDA helper cleanup in
+  `crates/ivm/src/cuda.rs`
+  so the one-signature Ed25519 helper stops maintaining its own separate CUDA
+  launch path when the batch kernel already exists.
+- The shipped behavior in this slice:
+  - `ed25519_verify_cuda(...)` still exposes the same public API and CPU
+    fallback behavior, but it now computes the HRAM once and routes the
+    one-element case through `ed25519_verify_batch_cuda(...)` instead of
+    rebuilding a second single-item kernel launch path;
+  - the direct single helper and the singleton batch helper therefore now share
+    the same CUDA kernel admission, module lookup, stream use, and output
+    materialization logic; and
+  - focused regressions now pin single-vs-batch parity directly in addition to
+    the existing CPU-vs-CUDA helper checks.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --lib public_ed25519_verify_helpers_match_cpu_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib public_ed25519_single_helper_matches_singleton_batch_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib ed25519_selftest_covers_signature_kernel -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+
+## 2026-03-27 Follow-up: `ivm` CUDA now reuses per-device streams and cached Poseidon constant buffers
+- Extended the `ivm` CUDA host-overhead cleanup in
+  `crates/ivm/src/{gpu_manager.rs,cuda.rs}`
+  so repeated helper calls stop recreating the same stream and re-uploading the
+  same immutable Poseidon tables on every dispatch.
+- The shipped behavior in this slice:
+  - each `GpuContext` now owns a reusable CUDA `Stream`, and `with_stream(...)`
+    locks and reuses it instead of constructing a fresh stream per helper call;
+  - `GpuContext` also now caches immutable `DeviceBuffer<u64>` allocations,
+    which `poseidon2_cuda_many(...)` and `poseidon6_cuda_many(...)` use for the
+    round constants and MDS matrices after the existing host-side flattening
+    caches have been populated; and
+  - focused regressions now pin both stream reuse and device-buffer reuse
+    semantics directly while keeping the public helper surface unchanged.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --lib with_stream_reuses_cached_stream_for_same_gpu -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib cached_u64_buffer_reuses_device_allocation_for_same_key -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib public_poseidon_helpers_match_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib poseidon_kernel_reports_stride_errors_without_disabling_backend -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --lib public_aes_batch_matches_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib public_ed25519_verify_helpers_match_cpu_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+
+## 2026-03-27 Follow-up: BN254 CUDA batch helpers now reach the Python and Java bindings
+- Extended the BN254 CUDA follow-up in
+  `python/iroha_python/iroha_python_rs/src/lib.rs`,
+  `python/iroha_python/src/iroha_python/{gpu.py,__init__.py}`,
+  `crates/connect_norito_bridge/src/lib.rs`,
+  and
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/gpu/{CudaAccelerators.java,CudaAcceleratorsKotlin.java}`
+  so the new batch helpers are no longer Rust-only.
+- The shipped behavior in this slice:
+  - Python now exposes `bn254_{add,sub,mul}_cuda_many(...)` alongside the
+    existing single-element helpers, preserving tuple-of-four-limb I/O and
+    clean `None` fallback semantics when CUDA is unavailable;
+  - the Android/Java JNI bridge now exports `nativeBn254{Add,Sub,Mul}Batch`
+    entry points, and the `CudaAccelerators` / `CudaAcceleratorsKotlin` facades
+    expose matching `*Batch` helpers with input validation that mirrors the
+    existing Poseidon batch surface; and
+  - focused Rust and Java-side facade tests now cover the new batch wrappers,
+    although this host could only run the Java checks via source inspection and
+    direct tool probing because the installed JRE is Java 8 and the Android
+    Gradle plugin requires Java 11+.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_python_rs bn254_ -- --nocapture` (pass)
+  - `cargo test -p connect_norito_bridge --no-run` (pass)
+  - `GRADLE_USER_HOME=/tmp/iroha-gradle ./gradlew test --console=plain --tests org.hyperledger.iroha.android.gpu.CudaAcceleratorsTests --tests org.hyperledger.iroha.android.gpu.CudaAcceleratorsKotlinFacadeTests` (fails here because the host only provides Java 8 while the Android Gradle plugin requires Java 11+)
+  - `javac` direct fallback validation could not run because `javac` is not installed on this host
+
+## 2026-03-27 Follow-up: `ivm` CUDA now caches PTX modules per device and exposes BN254 batch helpers
+- Extended the `ivm` CUDA cleanup in
+  `crates/ivm/src/{cuda.rs,gpu_manager.rs}`
+  and
+  `crates/ivm/benches/bench_bn254_cuda.rs`
+  so repeated helper calls stop reloading PTX modules and BN254 field arithmetic
+  can amortize launch/copy overhead across batches.
+- The shipped behavior in this slice:
+  - each `GpuContext` now keeps a small per-device cache of loaded PTX
+    `Module` handles, so helper entry points such as AES, SHA-256, Poseidon,
+    Ed25519, BN254, and the vector kernels reuse the same loaded module instead
+    of calling `Module::from_ptx(...)` on every dispatch;
+  - `crates/ivm/src/cuda.rs` now exposes
+    `bn254_{add,sub,mul}_batch_cuda(...)`, backed by the existing
+    count-aware CUDA kernels, while keeping the single-element helpers and
+    deterministic scalar/SIMD fallbacks intact; and
+  - the BN254 Criterion bench now includes 1024-element batch add/mul groups so
+    live CUDA hosts can measure the new amortized path directly.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --lib cached_module_reuses_loaded_handle_for_same_key -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib public_bn254_helpers_match_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib public_bn254_batch_helpers_match_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib public_poseidon_helpers_match_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo bench -p ivm --bench bench_bn254_cuda --features cuda --no-run` (pass)
+
+## 2026-03-27 Follow-up: `ivm` CUDA Merkle roots now avoid the leaf-digest host round-trip
+- Extended the SHA-256 CUDA cleanup in
+  `crates/ivm/src/{cuda.rs,byte_merkle_tree.rs}`
+  and
+  `crates/ivm/cuda/sha256_leaves.cu`
+  so the accelerated byte-tree root path keeps more of the Merkle work on the
+  device.
+- The shipped behavior in this slice:
+  - the CUDA `sha256_leaves` kernel now emits 32-byte big-endian digests
+    directly instead of writing SHA-256 state words that then had to be
+    converted on the host;
+  - `sha256_leaves_cuda(...)` now copies digest bytes back directly, removing
+    the extra word-to-byte post-processing step from the public helper; and
+  - `ByteMerkleTree::root_from_bytes_accel(...)` now uses a new internal CUDA
+    helper that hashes padded leaves and reduces the Merkle tree on-device
+    before copying back only the final root digest.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --lib public_sha256_leaves_matches_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib public_sha256_pairs_reduce_matches_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib root_from_bytes_accel_matches_canonical -- --nocapture --test-threads=1` (pass)
+
+## 2026-03-27 Follow-up: `ivm` CUDA self-tests now follow task-scoped routing and SHA-256 pair reduction stays on-device across tree levels
+- Extended the CUDA cleanup in
+  `crates/ivm/src/cuda.rs`
+  so the remaining raw startup/self-test launches stop implicitly favoring GPU 0
+  and the SHA-256 Merkle pair-reduction helper stops round-tripping every tree
+  level through host memory.
+- The shipped behavior in this slice:
+  - the Ed25519, SHA-256, Keccak, AES batch, and AES fused-round CUDA
+    self-tests now install deterministic task scopes before calling
+    `GpuManager::with_gpu_for_task(0, ...)`, so the same per-workload GPU
+    routing policy applies to startup probes as well as the public helper
+    surface;
+  - the SHA-256 pair-reduction helper and its self-test now upload the digest
+    set once, ping-pong between two device buffers for all Merkle levels, and
+    copy back only the final 32-byte root; and
+  - the public API remains unchanged while the device-resident Merkle reduction
+    path removes the most obvious per-level allocation/copy churn still left in
+    the CUDA byte-tree helper.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --lib public_sha256_pairs_reduce_matches_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib sha256_merkle_selftest_covers_cuda_kernels -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib ed25519_selftest_covers_signature_kernel -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+
+## 2026-03-27 Follow-up: internal `ivm` CUDA launch helpers now self-route and SHA-256 pair reduction reuses host buffers
+- Extended the CUDA routing cleanup in
+  `crates/ivm/src/cuda.rs`
+  beyond the public helper wrappers into the internal launch helpers used by
+  self-tests and shared kernels.
+- The shipped behavior in this slice:
+  - internal CUDA launch helpers for BN254, vector ops, and Poseidon now derive
+    their own deterministic task IDs before calling `GpuManager::with_gpu_for_task(...)`,
+    so helper routing no longer depends on whether an outer caller already
+    installed a task scope;
+  - the SHA-256 pair-reduction helper and its live self-test now reuse host-side
+    ping-pong buffers across Merkle levels instead of allocating a fresh `Vec`
+    for every level; and
+  - the helper-internal routing changes remain invisible to the public API while
+    making the multi-GPU selection story consistent between public helpers and
+    internal self-test probes.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --lib task_scope_overrides_default_task_zero_only -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --lib public_poseidon_helpers_match_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib public_sha256_pairs_reduce_matches_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+
+## 2026-03-27 Follow-up: FASTPQ CUDA async guards now reuse pooled native staging safely
+- Extended the FASTPQ follow-up in
+  `crates/fastpq_prover/{cuda/fastpq_cuda.cu,src/fastpq_cuda.rs,src/gpu.rs}`
+  so the CUDA planner-facing async entry points stop returning immediately-ready
+  guards after doing all of the work synchronously, while also avoiding the
+  shared-workspace race that showed up when multiple filtered CUDA parity tests
+  executed in the same binary.
+- The shipped behavior in this slice:
+  - `fft_columns_async(...)` and `ifft_columns_async(...)` on the CUDA backend
+    now flatten the columns, submit native CUDA work through explicit pending
+    handles, and restore the in-place column buffers when
+    `ColumnDispatch::wait()` is called;
+  - `lde_columns_async(...)` now does the same for the CUDA LDE path and still
+    only materializes the evaluated columns when `LdeDispatch::wait()` is
+    called;
+  - the Rust CUDA wrapper surface now exposes explicit submit/wait primitives
+    for FFT, IFFT, and LDE, backed by the native `fastpq_pending_wait_cuda(...)`
+    completion path instead of background worker threads;
+  - overlapping native FFT/IFFT/LDE submissions now borrow reusable
+    stream-plus-buffer bundles from a per-device async pool, so callers no
+    longer rely on a Rust-side dispatch-lane mutex while also avoiding a fresh
+    `cudaMalloc` / `cudaHostAlloc` / `cudaStreamCreate` cycle on every submit;
+    and
+  - the focused concurrent FFT/LDE CUDA regressions now prove the two canonical
+    FASTPQ parameter sets can overlap safely through the direct GPU path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --lib gpu::tests -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu concurrent_cuda_ffts_match_cpu_output_across_parameter_sets -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu concurrent_cuda_ldes_match_cpu_output_across_parameter_sets -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu gpu_fft_matches_cpu_output -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu gpu_lde_matches_cpu_output -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --no-run` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu poseidon_gpu_repeated_dispatches_match_cpu_when_backend_available -- --nocapture` (pass)
+
+## 2026-03-27 Follow-up: FASTPQ CUDA bench bundles now carry IFFT plus explicit transfer sizing
+- Extended the FASTPQ CUDA follow-up in
+  `crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs`,
+  `crates/fastpq_prover/src/trace.rs`,
+  `scripts/fastpq/wrap_benchmark.py`,
+  and
+  `scripts/fastpq/tests/test_wrap_benchmark.py`
+  after validating that the pooled pinned-staging async path remains the stable
+  native ownership model for FFT/IFFT/LDE.
+- The shipped behavior in this slice:
+  - the shipped async CUDA transform path keeps the pooled pinned-staging model
+    as its validated fast path; an experimental direct caller-buffer
+    registration shortcut was not retained because it destabilized the latency
+    LDE parity cases and the concurrent CUDA LDE regression while the pooled
+    staging path remained green;
+  - `fastpq_cuda_bench` now records `fft`, `ifft`, `lde`, and
+    `poseidon_hash_columns`; the new Poseidon CPU baseline uses
+    `hash_columns_cpu_batch_inputs(...)` in `trace.rs` so the scalar side hashes
+    the same deterministic domain + coefficient inputs that the CUDA path packs
+    into `PoseidonColumnBatch`;
+  - each operation now carries explicit
+    `input_len`/`output_len` plus `input_bytes`/`output_bytes` and
+    `estimated_gpu_transfer_bytes` fields so captured bundles can distinguish
+    copy-dominated workloads from kernel-dominated ones;
+  - `scripts/fastpq/wrap_benchmark.py` now preserves those same sizing fields in
+    the wrapped/signed bundle instead of dropping them during summarization; and
+  - focused bench-target tests now pin the new shape/transfer accounting and
+    the explicit `ifft` entry ordering so later evidence refreshes do not
+    silently regress the CUDA bundle format.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu concurrent_cuda_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu gpu_lde_matches_cpu_output -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --bin fastpq_cuda_bench -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --bin fastpq_cuda_bench -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu poseidon_cpu_batch_inputs_match_scalar_reference -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --no-run` (pass)
+  - `python3 -c "from scripts.fastpq.tests.test_wrap_benchmark import test_summarize_operations_preserves_shape_and_transfer_fields, test_summarize_operations_keeps_legacy_entries_compatible; test_summarize_operations_preserves_shape_and_transfer_fields(); test_summarize_operations_keeps_legacy_entries_compatible(); print('ok')"` (pass)
+  - `python3 -m pytest scripts/fastpq/tests/test_wrap_benchmark.py` could not run here because the host is missing the `pytest` module
+
+## 2026-03-27 Follow-up: `fastpq_cuda_bench` now supports single-operation captures
+- Extended the FASTPQ CUDA bench follow-up in
+  `crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs`
+  so lab hosts can isolate one operation at a time without editing the harness
+  or paying for the full bundle on every rerun.
+- The shipped behavior in this slice:
+  - the raw CUDA bench now accepts `--operation <fft|ifft|lde|poseidon_hash_columns|all>`
+    plus the short Poseidon aliases `poseidon` and `poseidon-hash`, defaulting
+    to the existing full-bundle `all` behavior;
+  - `collect_operations(...)` now honors that filter directly, so focused FFT,
+    IFFT, LDE, or Poseidon reruns only emit the selected operation while the
+    default wrapped/signed bundle path still records the full set; and
+  - focused unit coverage now pins both the parser aliases and the single-op
+    collection behavior in plain and `fastpq-gpu` bench builds.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p fastpq_prover --bin fastpq_cuda_bench -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --features fastpq-gpu --bin fastpq_cuda_bench -- --nocapture` (pass)
+
+## 2026-03-27 Follow-up: CUDA helper routing is task-scoped, FASTPQ FFT/IFFT launch geometry is less conservative, and Norito CUDA helpers are more explicit
+- Extended the CUDA follow-up work in
+  `crates/ivm/src/{cuda.rs,gpu_manager.rs}`,
+  `crates/ivm/docs/gpu_offloading.md`,
+  `crates/fastpq_prover/cuda/fastpq_cuda.cu`,
+  `crates/norito/accelerators/jsonstage1_cuda/src/lib.rs`,
+  `crates/gpuzstd_cuda/src/lib.rs`,
+  `crates/norito/src/core/gpu_zstd.rs`,
+  and
+  `docs/source/config/acceleration.md`.
+- The shipped behavior in this slice:
+  - `ivm` CUDA helper entry points now derive stable task IDs from workload shape
+    and install them as an ambient GPU-task scope, so helper launches stop
+    collapsing onto GPU 0 on multi-GPU hosts while preserving the existing
+    public API surface;
+  - the CUDA bitonic-sort helper no longer synchronizes after every stage
+    launch on the same stream, and single-block AES round helpers now reuse the
+    existing batch kernels for `count = 1` instead of launching the dedicated
+    `<<<1,1>>>` single-round kernels on the hot path;
+  - FASTPQ CUDA FFT/IFFT still keep one thread responsible for each column for
+    deterministic execution order, but the host launch geometry now uses
+    128-thread blocks with explicit `column_count` bounds instead of
+    `block_dim(1)`, which removes the most obvious occupancy bottleneck without
+    changing outputs;
+  - the `jsonstage1_cuda` tape builder now writes offsets directly into the
+    caller-provided output buffer after a count pass, avoiding the previous
+    temporary offsets allocation/copy while keeping the exact structural tape
+    format; and
+  - `gpuzstd_cuda` now reports `gpu_unavailable` for compression until real
+    CUDA kernels land, while `norito::core::gpu_zstd` short-circuits on that
+    return code and continues to use the deterministic decode/shared-frame path
+    so self-tests can distinguish unavailable kernels from actual parity
+    failures.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda --lib -- --nocapture --test-threads=1`
+    (fails in pre-existing non-CUDA areas:
+    `host::tests::expect_tlv_enforces_pointer_policy`,
+    `memory::tests::{grow_heap_rejects_overflow,reset_from_template_restores_runtime_regions}`,
+    several `mock_wsv::*` permission/null-decode/governance tests; the new CUDA
+    routing/helper regressions in this slice remained green)
+  - `cargo test -p ivm --features cuda --lib task_scope_overrides_default_task_zero_only -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p ivm --features cuda --lib public_aes_batch_matches_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p ivm --features cuda --lib public_bitonic_sort_pairs_match_scalar_when_cuda_available -- --nocapture --test-threads=1` (pass; skips cleanly without a live CUDA device)
+  - `cargo test -p jsonstage1_cuda -- --nocapture` (pass)
+  - `cargo test -p gpuzstd_cuda -- --nocapture` (pass)
+  - `cargo test -p norito --features gpu-compression self_test -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --no-run` (pass)
+
 ## 2026-03-27 Follow-up: Metal Merkle helper stubs now match the no-feature byte-tree callers
 - Extended the `ivm` accelerator fallback review in
   `crates/ivm/src/vector.rs`
