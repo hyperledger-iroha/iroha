@@ -18585,6 +18585,15 @@ impl Torii {
 
             #[cfg(feature = "app_api")]
             let group = group
+                .route("/v1/contracts/deploy", post(handler_post_contract_deploy))
+                .route(
+                    "/v1/contracts/instance",
+                    post(handler_post_contract_instance),
+                )
+                .route(
+                    "/v1/contracts/instance/activate",
+                    post(handler_post_contract_instance_activate),
+                )
                 .route("/v1/contracts/call", post(handler_post_contract_call))
                 .route(
                     "/v1/contracts/call/multisig/propose",
@@ -27455,6 +27464,69 @@ pub(crate) mod tests_runtime_handlers {
                 .map(str::len),
             Some(64)
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn contracts_deploy_route_is_mounted_in_api_router() {
+        use axum::{
+            body::Body,
+            extract::ConnectInfo,
+            http::{Method, Request, StatusCode},
+        };
+        use tower::ServiceExt as _;
+
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let torii = Torii::new_with_handle(
+            ChainId::from("contracts-router-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            routing::MaybeTelemetry::disabled(),
+        );
+
+        let mut request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/contracts/deploy")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{"))
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+
+        let response = torii
+            .api_router_for_tests()
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

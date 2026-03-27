@@ -2,6 +2,33 @@
 
 Last updated: 2026-03-27
 
+Latest sync (2026-03-27 Torii contract deploy route repair):
+`crates/iroha_torii/src/lib.rs`
+now closes the concrete contract-route drift behind the failing
+`deploy_and_get_contract_manifest_via_torii` integration test.
+
+- the contract/VK route group now mounts the three app-facing contract
+  mutation endpoints that already had handlers and OpenAPI/MCP references:
+  `POST /v1/contracts/deploy`,
+  `POST /v1/contracts/instance`, and
+  `POST /v1/contracts/instance/activate`;
+- a focused router regression now drives `/v1/contracts/deploy` through
+  `api_router_for_tests()` with `ConnectInfo` injected, so this failure mode
+  is pinned at the router assembly layer rather than only at the handler unit
+  layer; and
+- the original 4-peer integration test now passes end-to-end, confirming the
+  route repair in the live Torii + consensus harness.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_torii --lib contracts_deploy_route_is_mounted_in_api_router -- --nocapture`
+- `cargo test -p integration_tests --test contracts deploy_and_get_contract_manifest_via_torii -- --nocapture`
+
+Open work for this contract-route slice now remains:
+- no confirmed open work remains for the `/v1/contracts/*` Torii route
+  mounting covered by this regression; broader app-API route drift checks can
+  continue independently.
+
 Latest sync (2026-03-27 genesis bootstrap alignment for offline-allowance validation):
 `crates/iroha_test_network/src/config.rs`
 now closes the direct-test bootstrap mismatch that was still failing after the

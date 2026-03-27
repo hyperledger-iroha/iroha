@@ -2,6 +2,31 @@
 
 Last updated: 2026-03-27
 
+## 2026-03-27 Follow-up: Torii contract deploy routes are mounted again
+- Updated
+  `crates/iroha_torii/src/lib.rs`
+  so the app-facing contract deploy and activation endpoints are registered in
+  the live Torii router again.
+- The shipped behavior in this slice:
+  - `add_contracts_and_vk_routes(...)` now mounts
+    `POST /v1/contracts/deploy`,
+    `POST /v1/contracts/instance`, and
+    `POST /v1/contracts/instance/activate` alongside the existing contract
+    code/call/state endpoints, instead of leaving those handlers implemented
+    but unreachable through HTTP;
+  - the focused router regression now exercises
+    `/v1/contracts/deploy` through `api_router_for_tests()` with injected
+    `ConnectInfo`, pinning the exact route-registration boundary that had
+    drifted out of sync with the handler surface; and
+  - the previously failing integration test
+    `deploy_and_get_contract_manifest_via_torii` now reaches the deploy flow,
+    commits the registration transaction, and fetches the manifest back via
+    Torii instead of failing immediately on `404 Not Found`.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib contracts_deploy_route_is_mounted_in_api_router -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test contracts deploy_and_get_contract_manifest_via_torii -- --nocapture` (pass)
+
 ## 2026-03-27 Follow-up: direct genesis offline-allowance validation now uses the real bootstrap baseline
 - Updated
   `crates/iroha_test_network/src/config.rs`
