@@ -23743,6 +23743,31 @@ pub(crate) mod tests_runtime_handlers {
         hash
     }
 
+    pub(crate) fn record_latest_committed_header_for_test(
+        app: &SharedAppState,
+        height: u64,
+        creation_time_ms: u64,
+    ) {
+        let keypair = KeyPair::random();
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero height"),
+            None,
+            None,
+            None,
+            creation_time_ms,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let block = SignedBlock::presigned(signature, header, Vec::new());
+        let hash = store_block(app, block);
+        let mut block_hashes = app.state.block_hashes.block();
+        block_hashes.push_for_tests(hash);
+        block_hashes.commit_for_tests();
+    }
+
     #[test]
     fn pipeline_status_merge_prefers_higher_rank() {
         let now = Instant::now();
@@ -28168,7 +28193,7 @@ mod tests {
         tests_runtime_handlers::{
             app_auth_test_guard, mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
             mk_app_state_for_tests_with_options, mk_app_state_for_tests_with_world, negotiated,
-            signed_app_headers,
+            record_latest_committed_header_for_test, signed_app_headers,
         },
     };
     use iroha_core::smartcontracts::Execute;
@@ -28910,13 +28935,10 @@ mod tests {
             alias: "banking@sbp.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let response = handler_alias_resolve(
-            State(app),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("unsigned request should succeed")
-        .into_response();
+        let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("unsigned request should succeed")
+            .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
     }
@@ -29117,13 +29139,10 @@ mod tests {
         };
         let body = norito::json::to_vec(&request).expect("encode request");
 
-        let response = handler_alias_resolve(
-            State(app),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
+        let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
@@ -29149,13 +29168,10 @@ mod tests {
             alias: "banking@sbp.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let response = handler_alias_resolve(
-            State(app),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("public alias resolve should succeed")
-        .into_response();
+        let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("public alias resolve should succeed")
+            .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
     }
@@ -29182,13 +29198,10 @@ mod tests {
         };
         let body = norito::json::to_vec(&request).expect("encode request");
 
-        let response = handler_alias_resolve(
-            State(app),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
+        let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())
@@ -30272,11 +30285,7 @@ mod tests {
         );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
-        let mut block = app.state.block(header);
-        let tx = block.transaction();
-        tx.apply();
-        block.commit().expect("commit observation block");
+        record_latest_committed_header_for_test(&app, 2, after_grace);
 
         let response = handler_asset_alias_resolve(
             State(app),
@@ -30319,11 +30328,7 @@ mod tests {
         );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
-        let mut block = app.state.block(header);
-        let tx = block.transaction();
-        tx.apply();
-        block.commit().expect("commit observation block");
+        record_latest_committed_header_for_test(&app, 2, after_grace);
 
         let response = handler_asset_definition_get(
             State(app),
@@ -30376,11 +30381,7 @@ mod tests {
         );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
-        let mut block = app.state.block(header);
-        let tx = block.transaction();
-        tx.apply();
-        block.commit().expect("commit observation block");
+        record_latest_committed_header_for_test(&app, 2, after_grace);
 
         let error = parse_asset_definition_id(app.as_ref(), alias.as_ref())
             .expect_err("expired alias must stop resolving");
@@ -32074,13 +32075,10 @@ mod tests {
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
 
-        let response = handler_alias_resolve_index(
-            State(app),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
+        let response = handler_alias_resolve_index(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())
@@ -32103,13 +32101,10 @@ mod tests {
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
 
-        let response = handler_alias_resolve_index(
-            State(app),
-            axum::body::Bytes::from(body),
-        )
-        .await
-        .expect("handler should succeed")
-        .into_response();
+        let response = handler_alias_resolve_index(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
