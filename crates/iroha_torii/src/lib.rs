@@ -16513,31 +16513,10 @@ fn require_signed_alias_request(
     }
 }
 
-fn ensure_alias_resolve_permission(
-    app: &SharedAppState,
-    authority: &AccountId,
-    alias: &iroha_data_model::account::rekey::AccountLabel,
-) -> Result<(), Error> {
-    let world = app.state.world_view();
-    if iroha_core::alias::authority_can_resolve_account_alias(&world, authority, alias) {
-        return Ok(());
-    }
-
-    Err(Error::Query(
-        iroha_data_model::ValidationFail::NotPermitted(
-            "missing account-alias resolve permission".to_owned(),
-        ),
-    ))
-}
-
 async fn handler_alias_resolve(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let request: routing::AliasResolveRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -16552,11 +16531,6 @@ async fn handler_alias_resolve(
         )));
     }
 
-    let nexus = app.state.nexus_snapshot();
-    let (_, alias_label) =
-        parse_account_alias_label_with_catalog(&request.alias, &nexus.dataspace_catalog)?;
-    ensure_alias_resolve_permission(&app, &authority, &alias_label)?;
-
     if let Some((alias, account_id)) = resolve_alias_on_chain(&app, &request.alias)? {
         let account_id_string = account_id.to_string();
         return alias_resolve_ok(&alias, &account_id_string, None, "on_chain");
@@ -16567,12 +16541,8 @@ async fn handler_alias_resolve(
 
 async fn handler_alias_resolve_index(
     State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let request: routing::AliasResolveIndexRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -16580,10 +16550,6 @@ async fn handler_alias_resolve_index(
             ))
         })?;
     if let Some((alias, account_id)) = resolve_alias_index_on_chain(&app, request.index)? {
-        let nexus = app.state.nexus_snapshot();
-        let (_, alias_label) =
-            parse_account_alias_label_with_catalog(&alias, &nexus.dataspace_catalog)?;
-        ensure_alias_resolve_permission(&app, &authority, &alias_label)?;
         let account_id_string = account_id.to_string();
         return alias_resolve_index_ok(request.index, &alias, &account_id_string, "on_chain");
     }
@@ -28838,33 +28804,41 @@ mod tests {
             .expect("commit should persist alias resolve permission");
     }
 
-    fn signed_alias_headers(
-        account: &AccountId,
-        key_pair: &KeyPair,
-        uri: &axum::http::Uri,
-        body: &[u8],
-    ) -> HeaderMap {
-        signed_app_headers(account, key_pair, &axum::http::Method::POST, uri, body)
-    }
-
     #[tokio::test]
-    async fn alias_resolve_requires_signed_request() {
+    async fn alias_resolve_accepts_unsigned_request() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let alias_label = AccountLabel::new(
+            "sbp".parse().expect("domain id"),
+            "banking".parse().expect("label"),
+        );
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let account = Account::new(
+            authority
+                .clone()
+                .to_account_id("sbp".parse().expect("domain id")),
+        )
+        .with_label(Some(alias_label))
+        .build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with(
+            [domain],
+            [authority_account, account],
+            [],
+        ));
         let request = routing::AliasResolveRequestDto {
             alias: "banking@sbp.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_alias_resolve(
-            State(mk_app_state_for_tests()),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve".parse().expect("uri"),
-            HeaderMap::new(),
+            State(app),
             axum::body::Bytes::from(body),
         )
         .await
-        .expect_err("unsigned request must fail")
+        .expect("unsigned request should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[cfg(feature = "app_api")]
@@ -29053,29 +29027,18 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_returns_not_found_for_unknown_alias() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
-        let world = World::with([], [authority_account], []);
-        let alias =
-            AccountLabel::domainless("missing".parse().expect("label"), DataSpaceId::GLOBAL);
-        let app = mk_app_state_for_tests_with_world(world);
-        grant_alias_resolve_permissions(&app, &authority, &alias);
+        let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveRequestDto {
-            alias: alias
+            alias: AccountLabel::domainless("missing".parse().expect("label"), DataSpaceId::GLOBAL)
                 .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
                 .expect("alias literal"),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
 
         let response = handler_alias_resolve(
             State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -29086,10 +29049,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_resolve_rejects_missing_permission() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+    async fn alias_resolve_allows_unsigned_request_without_permission() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let domain_id: DomainId = "sbp".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
@@ -29108,33 +29069,26 @@ mod tests {
             alias: "banking@sbp.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
         let response = handler_alias_resolve(
             State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
             axum::body::Bytes::from(body),
         )
         .await
-        .expect_err("missing permission must fail")
+        .expect("public alias resolve should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
     async fn alias_resolve_scans_account_labels_when_alias_index_is_missing() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let alias = "banking@sbp.universal";
         let alias_label = iroha_data_model::account::rekey::AccountLabel::new(
             "sbp".parse::<DomainId>().expect("domain id"),
             "banking".parse::<Name>().expect("label"),
         );
         let domain_id: DomainId = "sbp".parse().expect("domain id");
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let account_id = authority.clone().to_account_id(domain_id);
@@ -29143,26 +29097,13 @@ mod tests {
             .build(&authority);
         let world = World::with([domain], [authority_account, account], []);
         let app = mk_app_state_for_tests_with_world(world);
-        grant_alias_resolve_permissions(
-            &app,
-            &authority,
-            &AccountLabel::new(
-                "sbp".parse::<DomainId>().expect("domain id"),
-                "banking".parse::<Name>().expect("label"),
-            ),
-        );
         let request = routing::AliasResolveRequestDto {
             alias: alias.to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
 
         let response = handler_alias_resolve(
             State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -31922,21 +31863,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_resolve_index_requires_signed_request() {
+    async fn alias_resolve_index_accepts_unsigned_request() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let alias_label = AccountLabel::new(
+            "sbp".parse().expect("domain id"),
+            "banking".parse().expect("label"),
+        );
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let account = Account::new(
+            authority
+                .clone()
+                .to_account_id("sbp".parse().expect("domain id")),
+        )
+        .with_label(Some(alias_label))
+        .build(&authority);
         let body = norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 0 })
             .expect("encode request");
         let response = handler_alias_resolve_index(
-            State(mk_app_state_for_tests()),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve_index".parse().expect("uri"),
-            HeaderMap::new(),
+            State(mk_app_state_for_tests_with_world(World::with(
+                [domain],
+                [authority_account, account],
+                [],
+            ))),
             axum::body::Bytes::from(body),
         )
         .await
-        .expect_err("unsigned request must fail")
+        .expect("unsigned request should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
@@ -32016,9 +31972,7 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_on_chain_alias_record() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let alias_label = AccountLabel::new(
             "sbp".parse().expect("domain id"),
             "banking".parse().expect("label"),
@@ -32037,17 +31991,11 @@ mod tests {
             [authority_account, account],
             [],
         ));
-        grant_alias_resolve_permissions(&app, &authority, &alias_label);
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve_index".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
 
         let response = handler_alias_resolve_index(
             State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -32069,24 +32017,14 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_index_returns_not_found_when_index_is_missing() {
-        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
-        let key_pair = KeyPair::random();
-        let authority = AccountId::new(key_pair.public_key().clone());
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
-        let alias =
-            AccountLabel::domainless("banking".parse().expect("label"), DataSpaceId::GLOBAL);
-        grant_alias_resolve_permissions(&app, &authority, &alias);
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let uri: axum::http::Uri = "/v1/aliases/resolve_index".parse().expect("uri");
-        let headers = signed_alias_headers(&authority, &key_pair, &uri, &body);
 
         let response = handler_alias_resolve_index(
             State(app),
-            axum::http::Method::POST,
-            uri,
-            headers,
             axum::body::Bytes::from(body),
         )
         .await
