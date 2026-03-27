@@ -18940,9 +18940,9 @@ const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "<deleted-offline-allowances>";
+const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "/v1/offline/allowances";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "<deleted-offline-allowances-query>";
+const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "/v1/offline/allowances/query";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_CERTIFICATES_ISSUE: &str = "<deleted-offline-certificates-issue>";
 #[cfg(feature = "app_api")]
@@ -33815,7 +33815,7 @@ pub struct ListFilterParams {
     pub sort: Option<String>,
 }
 
-/// GET parameters for `<deleted-offline-allowances>`.
+/// GET parameters for `/v1/offline/allowances`.
 ///
 /// Extends [`ListFilterParams`] with roadmap-required verdict/expiry filters while keeping the
 /// compact query string layout.
@@ -33823,7 +33823,7 @@ pub struct ListFilterParams {
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
-struct OfflineAllowanceListParams {
+pub(crate) struct OfflineAllowanceListParams {
     /// Optional JSON-encoded filter expression.
     pub filter: Option<String>,
     /// Optional limit for pagination.
@@ -44726,7 +44726,7 @@ fn offline_summary_item_to_json(item: &OfflineCounterSummaryListItem) -> Value {
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-async fn handle_v1_offline_allowances(
+pub async fn handle_v1_offline_allowances(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineAllowanceListParams>,
     telemetry: MaybeTelemetry,
@@ -44903,7 +44903,7 @@ pub async fn handle_v1_offline_revocations(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-async fn handle_v1_offline_allowances_query(
+pub async fn handle_v1_offline_allowances_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,

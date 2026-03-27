@@ -4807,6 +4807,78 @@ async fn handler_offline_lineage_revoke(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_offline_allowances_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(p): AxQuery<crate::routing::OfflineAllowanceListParams>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return routing::handle_v1_offline_allowances(
+            app.state.clone(),
+            AxQuery(p),
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/offline/allowances",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_v1_offline_allowances(app.state.clone(), AxQuery(p), app.telemetry.clone())
+        .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_allowances_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+        crate::filter::QueryEnvelope,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return routing::handle_v1_offline_allowances_query(
+            app.state.clone(),
+            crate::utils::extractors::NoritoJson(env),
+            app.telemetry.clone(),
+        )
+        .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/offline/allowances/query",
+        enforce,
+    )
+    .await?;
+
+    routing::handle_v1_offline_allowances_query(
+        app.state.clone(),
+        crate::utils::extractors::NoritoJson(env),
+        app.telemetry.clone(),
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_offline_transfers_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -18890,6 +18962,14 @@ impl Torii {
                 .route(
                     "/v1/offline/cash/readiness",
                     get(handler_offline_cash_readiness),
+                )
+                .route(
+                    "/v1/offline/allowances",
+                    get(handler_offline_allowances_list),
+                )
+                .route(
+                    "/v1/offline/allowances/query",
+                    post(handler_offline_allowances_query),
                 )
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))
                 .route(

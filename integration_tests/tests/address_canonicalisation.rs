@@ -16,7 +16,7 @@ use integration_tests::sandbox::{
     self, start_network_async_or_skip as sandbox_start_network_async_or_skip,
 };
 use iroha::data_model::{
-    isi::{SetKeyValue, offline::RegisterOfflineAllowance, repo::RepoIsi},
+    isi::{SetKeyValue, offline::RegisterOfflineAllowance, register::RegisterBox, repo::RepoIsi},
     kaigi::{
         KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
         kaigi_relay_feedback_key, kaigi_relay_metadata_key,
@@ -367,17 +367,26 @@ fn with_offline_allowance_genesis(
     mut builder: NetworkBuilder,
     certificate: &OfflineWalletCertificate,
 ) -> NetworkBuilder {
-    let genesis_domain = iroha_genesis::GENESIS_DOMAIN_ID.clone();
     let wonderland_domain: DomainId = "wonderland"
         .parse()
         .expect("default wonderland domain should parse");
+    let garden_domain: DomainId = "garden_of_live_flowers"
+        .parse()
+        .expect("default garden_of_live_flowers domain should parse");
+    let aid_domain: DomainId = "aid".parse().expect("default aid domain should parse");
+    let preseeded_domains = BTreeSet::from([
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+        wonderland_domain.clone(),
+        garden_domain,
+        aid_domain,
+    ]);
 
     // Seed every domain touched by the fixture so genesis mint/register steps can resolve
     // asset-definition scopes even when they use non-wonderland domains.
     let mut required_domains = BTreeSet::new();
     required_domains.insert(certificate.allowance.asset.definition().domain().clone());
     for domain in required_domains {
-        if domain != genesis_domain && domain != wonderland_domain {
+        if !preseeded_domains.contains(&domain) {
             builder = builder.with_genesis_instruction(Register::domain(Domain::new(domain)));
         }
     }
@@ -398,8 +407,10 @@ fn with_offline_allowance_genesis(
 
     let asset_definition_id = certificate.allowance.asset.definition().clone();
     let scale = certificate.allowance.amount.scale();
+    // Asset definition registrations require an explicit human-facing name.
     let asset_definition =
-        AssetDefinition::new(asset_definition_id, NumericSpec::fractional(scale));
+        AssetDefinition::new(asset_definition_id.clone(), NumericSpec::fractional(scale))
+            .with_name(asset_definition_id.name().to_string());
     builder = builder.with_genesis_instruction(Register::asset_definition(asset_definition));
     builder = builder.with_genesis_instruction(SetKeyValue::asset_definition(
         certificate.allowance.asset.definition().clone(),
@@ -412,6 +423,63 @@ fn with_offline_allowance_genesis(
         certificate.allowance.amount.clone(),
         certificate.allowance.asset.clone(),
     ))
+}
+
+#[test]
+fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition() -> Result<()> {
+    init_instruction_registry();
+    let certificate = load_offline_certificate_fixture()?;
+    let asset_definition_id = certificate.allowance.asset.definition().clone();
+    let asset_domain = asset_definition_id.domain().clone();
+    let network = with_offline_allowance_genesis(NetworkBuilder::new(), &certificate).build();
+    let genesis = network.genesis();
+
+    let authority = SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    let mut domain_registrations = 0usize;
+    let mut definition_names = Vec::new();
+
+    for transaction in genesis.0.transactions_vec() {
+        let instructions = match transaction.instructions() {
+            Executable::Instructions(instructions) => instructions.iter(),
+            Executable::Ivm(_) | Executable::IvmProved(_) => continue,
+        };
+        for instruction in instructions {
+            if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
+                match register {
+                    RegisterBox::Domain(register) => {
+                        let domain = register.object().clone().build(&authority);
+                        if domain.id == asset_domain {
+                            domain_registrations += 1;
+                        }
+                    }
+                    RegisterBox::AssetDefinition(register) => {
+                        let definition = register.object().clone().build(&authority);
+                        if definition.id == asset_definition_id {
+                            definition_names.push(definition.name);
+                        }
+                    }
+                    RegisterBox::Peer(_)
+                    | RegisterBox::Account(_)
+                    | RegisterBox::Nft(_)
+                    | RegisterBox::Role(_)
+                    | RegisterBox::Trigger(_) => {}
+                }
+            }
+        }
+    }
+
+    assert_eq!(
+        domain_registrations, 1,
+        "offline allowance helper should register the fixture domain exactly once across genesis instructions"
+    );
+    assert!(
+        definition_names
+            .iter()
+            .any(|name| name == asset_definition_id.name().as_ref()),
+        "offline allowance helper should seed the fixture asset definition with a human-facing name"
+    );
+
+    Ok(())
 }
 
 fn parse_offline_certificate_fixture(

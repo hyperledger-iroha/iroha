@@ -2448,6 +2448,27 @@ mod imp {
         }
 
         #[test]
+        fn public_bitonic_sort_pairs_match_scalar_when_cuda_available() {
+            if !ensure_cuda_selftest() {
+                eprintln!("CUDA unavailable; skipping public bitonic-sort parity regression");
+                return;
+            }
+
+            let mut hi = [5u64, 3, 5, 3, 3];
+            let mut lo = [7u64, 9, 1, 2, 1];
+            let mut expected: Vec<(u64, u64)> =
+                hi.iter().copied().zip(lo.iter().copied()).collect();
+            expected.sort_unstable();
+
+            assert_eq!(bitonic_sort_pairs(&mut hi, &mut lo), Some(()));
+            assert_eq!(
+                hi.into_iter().zip(lo).collect::<Vec<_>>(),
+                expected,
+                "bitonic_sort_pairs should match scalar lexicographic ordering",
+            );
+        }
+
+        #[test]
         fn public_vector_helpers_match_scalar_when_cuda_available() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping public vector parity regression");
@@ -2923,6 +2944,10 @@ mod imp {
 pub use imp::*;
 
 #[cfg(feature = "cuda")]
+/// Sort `(hi, lo)` key pairs lexicographically with the CUDA bitonic kernel.
+///
+/// Returns `None` when CUDA is unavailable, disabled, or the input slices have
+/// different lengths.
 #[allow(dead_code)]
 pub fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
     imp::bitonic_sort_pairs(hi, lo)
@@ -2948,6 +2973,9 @@ pub fn cuda_last_error_message() -> Option<String> {
 pub fn reset_cuda_backend_for_tests() {}
 
 #[cfg(not(feature = "cuda"))]
+/// Sort `(hi, lo)` key pairs lexicographically with the CUDA bitonic kernel.
+///
+/// Returns `None` when the crate is built without CUDA support.
 pub fn bitonic_sort_pairs(_hi: &mut [u64], _lo: &mut [u64]) -> Option<()> {
     None
 }
