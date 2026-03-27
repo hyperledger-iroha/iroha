@@ -2111,6 +2111,7 @@ impl IVM {
             .find(|entry| relative_pc >= entry.pc_start && relative_pc < entry.pc_end)?;
         Some(VmSourceLocation {
             function: Some(entry.function_name.clone()),
+            path: entry.source.source_path.clone(),
             line: Some(entry.source.line),
             column: Some(entry.source.column),
         })
@@ -6062,7 +6063,11 @@ seiyaku Demo {
   }
 }
 "#;
-        let compiler = crate::KotodamaCompiler::new();
+        let compiler =
+            crate::KotodamaCompiler::new_with_options(crate::kotodama::compiler::CompilerOptions {
+                debug_source_name: Some("contracts/runtime_trap.ko".to_owned()),
+                ..crate::kotodama::compiler::CompilerOptions::default()
+            });
         let (program, _manifest) = compiler
             .compile_source_with_manifest(source)
             .expect("compile kotodama source");
@@ -6080,6 +6085,12 @@ seiyaku Demo {
                 .and_then(|source| source.line)
                 .is_some(),
             "compiled programs should carry function-level source locations"
+        );
+        assert_eq!(
+            diag.source
+                .as_ref()
+                .and_then(|source| source.path.as_deref()),
+            Some("contracts/runtime_trap.ko")
         );
     }
 

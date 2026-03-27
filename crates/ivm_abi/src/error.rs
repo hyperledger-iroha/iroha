@@ -55,6 +55,7 @@ pub enum VmTrapKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VmSourceLocation {
     pub function: Option<String>,
+    pub path: Option<String>,
     pub line: Option<u32>,
     pub column: Option<u32>,
 }

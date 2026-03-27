@@ -114,6 +114,7 @@ pub(crate) enum PlanUpdate {
     RegisterTrigger(TriggerId),
     RegisterCallTrigger(TriggerId),
     TrackRepeatableTrigger(TriggerId),
+    TrackAssetInstance(AssetId),
     MintTriggerRepetitions { trigger_id: TriggerId, amount: u32 },
     BurnTriggerRepetitions { trigger_id: TriggerId, amount: u32 },
     ReleaseTriggerRepetitionsReservation { trigger_id: TriggerId, amount: u32 },
@@ -136,6 +137,9 @@ impl PlanUpdate {
             }
             PlanUpdate::TrackRepeatableTrigger(trigger_id) if succeeded => {
                 state.track_repeatable_trigger(trigger_id.clone());
+            }
+            PlanUpdate::TrackAssetInstance(asset_id) if succeeded => {
+                state.asset_instances.insert(asset_id.clone());
             }
             PlanUpdate::BurnTriggerRepetitions { trigger_id, amount } if succeeded => {
                 state.release_trigger_repetitions_reservation(trigger_id, *amount);
@@ -1204,9 +1208,8 @@ impl ChaosState {
         let beneficiary = self.random_user(rng)?.clone();
         let amount: Numeric = rng.random_range(1_u32..=100_u32).into();
         let asset_id = AssetId::new(self.asset_numeric.clone(), beneficiary.id.clone());
-        self.asset_instances.insert(asset_id.clone());
         Ok(TransactionPlan {
-            state_updates: Vec::new(),
+            state_updates: vec![PlanUpdate::TrackAssetInstance(asset_id.clone())],
             label: "mint_asset",
             instructions: vec![InstructionBox::from(Mint::asset_numeric(amount, asset_id))],
             signer: self.treasury.clone(),
@@ -1219,18 +1222,19 @@ impl ChaosState {
         let amount: Numeric = rng.random_range(1_u32..=50_u32).into();
         let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
         let receiver_asset = AssetId::new(self.asset_numeric.clone(), receiver.id.clone());
-        self.asset_instances.insert(treasury_asset.clone());
-        self.asset_instances.insert(receiver_asset);
         let instructions = vec![
             InstructionBox::from(Mint::asset_numeric(amount.clone(), treasury_asset.clone())),
             InstructionBox::from(Transfer::asset_numeric(
-                treasury_asset,
+                treasury_asset.clone(),
                 amount,
                 receiver.id.clone(),
             )),
         ];
         Ok(TransactionPlan {
-            state_updates: Vec::new(),
+            state_updates: vec![
+                PlanUpdate::TrackAssetInstance(treasury_asset.clone()),
+                PlanUpdate::TrackAssetInstance(receiver_asset.clone()),
+            ],
             label: "transfer_asset",
             instructions,
             signer: self.treasury.clone(),
@@ -1241,7 +1245,6 @@ impl ChaosState {
     fn plan_burn_asset(&mut self, rng: &mut StdRng) -> TransactionPlan {
         let amount: Numeric = rng.random_range(1_u32..=20_u32).into();
         let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
-        self.asset_instances.insert(treasury_asset.clone());
         let instructions = vec![
             InstructionBox::from(Mint::asset_numeric(amount.clone(), treasury_asset.clone())),
             InstructionBox::from(Burn::asset_numeric(amount, treasury_asset)),
@@ -2213,6 +2216,7 @@ impl ChaosState {
             metadata: Metadata::default(),
         }));
         let mut expect_success = self.nexus_staking_expect_success();
+        let mut state_updates = Vec::new();
         if expect_success
             && self
                 .public_lane_validators
@@ -2222,8 +2226,8 @@ impl ChaosState {
             expect_success = false;
         }
         if expect_success {
-            self.asset_instances.insert(treasury_asset);
-            self.asset_instances.insert(stake_asset);
+            state_updates.push(PlanUpdate::TrackAssetInstance(treasury_asset));
+            state_updates.push(PlanUpdate::TrackAssetInstance(stake_asset));
             self.public_lane_validators
                 .entry(lane)
                 .or_default()
@@ -2237,7 +2241,7 @@ impl ChaosState {
         }
 
         Ok(TransactionPlan {
-            state_updates: Vec::new(),
+            state_updates,
             label: "register_public_lane_validator",
             instructions,
             signer: self.treasury.clone(),
@@ -2287,14 +2291,15 @@ impl ChaosState {
             metadata: Metadata::default(),
         }));
         let expect_success = self.nexus_staking_expect_success();
+        let mut state_updates = Vec::new();
         if expect_success {
-            self.asset_instances.insert(treasury_asset);
-            self.asset_instances.insert(staker_asset);
+            state_updates.push(PlanUpdate::TrackAssetInstance(treasury_asset));
+            state_updates.push(PlanUpdate::TrackAssetInstance(staker_asset));
             self.add_public_lane_stake_share(lane, &validator.id, &staker.id, amount_value);
         }
 
         Ok(TransactionPlan {
-            state_updates: Vec::new(),
+            state_updates,
             label: "bond_public_lane_stake",
             instructions,
             signer: self.treasury.clone(),
@@ -2454,9 +2459,9 @@ impl ChaosState {
         let (reward_asset_def, reward_sink) = self.fee_asset_and_sink();
         let reward_asset = AssetId::new(reward_asset_def, reward_sink);
         let expect_success = self.nexus_staking_expect_success();
-        if expect_success {
-            self.asset_instances.insert(reward_asset.clone());
-        }
+        let state_updates = expect_success
+            .then(|| vec![PlanUpdate::TrackAssetInstance(reward_asset.clone())])
+            .unwrap_or_default();
         let reward: Numeric = rng.random_range(5_u32..=50_u32).into();
         let share = PublicLaneRewardShare {
             account: validator.id.clone(),
@@ -2466,7 +2471,7 @@ impl ChaosState {
         let epoch = self.bump_staking();
         let mint = InstructionBox::from(Mint::asset_numeric(reward.clone(), reward_asset.clone()));
         Ok(TransactionPlan {
-            state_updates: Vec::new(),
+            state_updates,
             label: "record_public_lane_rewards",
             instructions: vec![
                 mint,
@@ -2495,8 +2500,6 @@ impl ChaosState {
         let payment_amount: Numeric = rng.random_range(1_u32..=25_u32).into();
         let delivery_asset = AssetId::new(self.asset_numeric.clone(), seller.id.clone());
         let payment_asset = AssetId::new(self.asset_numeric.clone(), buyer.id.clone());
-        self.asset_instances.insert(delivery_asset.clone());
-        self.asset_instances.insert(payment_asset.clone());
 
         let delivery_mint = InstructionBox::from(Mint::asset_numeric(
             delivery_amount.clone(),
@@ -2527,7 +2530,10 @@ impl ChaosState {
         ));
 
         Ok(TransactionPlan {
-            state_updates: Vec::new(),
+            state_updates: vec![
+                PlanUpdate::TrackAssetInstance(delivery_asset.clone()),
+                PlanUpdate::TrackAssetInstance(payment_asset.clone()),
+            ],
             label: "dvp_settlement",
             instructions: vec![delivery_mint, payment_mint, InstructionBox::from(dvp)],
             signer: self.treasury.clone(),
@@ -2934,6 +2940,21 @@ mod tests {
 
     use super::*;
     use crate::config::{NexusProfile, WorkloadProfile};
+
+    fn minted_asset_destination(plan: &TransactionPlan) -> AssetId {
+        plan.instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<MintBox>()
+                    .and_then(|mint| match mint {
+                        MintBox::Asset(asset) => Some(asset.destination.clone()),
+                        _ => None,
+                    })
+            })
+            .expect("plan should include an asset mint destination")
+    }
 
     #[test]
     fn json_pair_builds_object() {
@@ -3811,6 +3832,35 @@ mod tests {
         assert!(amount > 0, "mint amount should be positive");
     }
 
+    #[test]
+    fn failed_asset_plan_does_not_poison_asset_metadata_target() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(223);
+
+        let stale_plan = state.plan_mint_asset(&mut rng).expect("mint asset plan");
+        let stale_asset = minted_asset_destination(&stale_plan);
+        assert!(
+            !state.asset_instances.contains(&stale_asset),
+            "planning alone must not track unconfirmed asset instances"
+        );
+
+        let metadata_plan = state
+            .plan_set_asset_metadata(&mut rng)
+            .expect("asset metadata plan");
+        let metadata_asset = minted_asset_destination(&metadata_plan);
+        let treasury_asset = AssetId::new(state.asset_numeric.clone(), state.treasury.id.clone());
+
+        assert_eq!(
+            metadata_asset, treasury_asset,
+            "asset metadata should fall back to the known genesis asset after a failed mint"
+        );
+        assert_ne!(
+            metadata_asset, stale_asset,
+            "asset metadata should not target an asset that never committed"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn workload_record_result_applies_updates_on_success() {
         let PreparedChaos {
@@ -3844,6 +3894,46 @@ mod tests {
                 guard.registered_triggers.len(),
                 1,
                 "successful submissions should apply trigger updates"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn workload_record_result_tracks_assets_only_on_success() {
+        let PreparedChaos {
+            state,
+            genesis: _,
+            recipes,
+        } = prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let engine = WorkloadEngine::new(state, recipes);
+        engine.set_recipe_override(Some(RecipeKind::MintAsset));
+        let mut rng = StdRng::seed_from_u64(224);
+        let plan = engine.next_plan(&mut rng).await.expect("mint plan");
+        let asset_id = minted_asset_destination(&plan);
+
+        {
+            let guard = engine.state.lock().await;
+            assert!(
+                !guard.asset_instances.contains(&asset_id),
+                "plans should not pre-track minted assets before confirmation"
+            );
+        }
+
+        engine.record_result(&plan, false).await;
+        {
+            let guard = engine.state.lock().await;
+            assert!(
+                !guard.asset_instances.contains(&asset_id),
+                "failed submissions should not leave stale asset tracking behind"
+            );
+        }
+
+        engine.record_result(&plan, true).await;
+        {
+            let guard = engine.state.lock().await;
+            assert!(
+                guard.asset_instances.contains(&asset_id),
+                "successful submissions should publish the asset into workload tracking"
             );
         }
     }

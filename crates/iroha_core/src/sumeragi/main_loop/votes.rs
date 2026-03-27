@@ -1545,6 +1545,26 @@ impl Actor {
         }
         let topology = super::network_topology::Topology::new(roster);
         let now = Instant::now();
+        if highest.height == self.committed_height_snapshot().saturating_add(1) {
+            let _ = if matches!(highest.phase, crate::sumeragi::consensus::Phase::Commit) {
+                self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnCommitQcObserved {
+                        block_hash: highest.subject_block_hash,
+                        view: highest.view,
+                    },
+                )
+            } else {
+                self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnVoteObserved {
+                        block_hash: highest.subject_block_hash,
+                        view: highest.view,
+                        voter: None,
+                    },
+                )
+            };
+        }
         if self.handle_frontier_body_gap_with_topology(
             highest.subject_block_hash,
             highest.height,

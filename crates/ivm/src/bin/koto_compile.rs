@@ -9,7 +9,10 @@
 //!   koto_compile <input.ko> [--out <output.to>] [--manifest-out <manifest.json>] [--abi <u8>] [--vl <u8>]
 //!                 [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector]
 
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Component, Path, PathBuf},
+};
 
 use ivm::kotodama::compiler::{AccessHintDiagnostics, CompileReport};
 use ivm::{KotodamaCompiler, ProgramMetadata, kotodama};
@@ -91,6 +94,14 @@ fn serialize_source_map(report: &CompileReport) -> Value {
                     json_entry("function_name", Value::from(entry.function_name.clone())),
                     json_entry("pc_start", Value::from(entry.pc_start)),
                     json_entry("pc_end", Value::from(entry.pc_end)),
+                    json_entry(
+                        "source_path",
+                        entry
+                            .source
+                            .source_path
+                            .clone()
+                            .map_or(Value::Null, Value::from),
+                    ),
                     json_entry("line", Value::from(entry.source.line as u64)),
                     json_entry("column", Value::from(entry.source.column as u64)),
                 ])
@@ -114,6 +125,14 @@ fn serialize_budget_report(report: &CompileReport) -> Value {
                     json_entry("frame_bytes", Value::from(entry.frame_bytes as u64)),
                     json_entry("jump_span_words", Value::from(entry.jump_span_words as u64)),
                     json_entry("jump_range_risk", Value::from(entry.jump_range_risk)),
+                    json_entry(
+                        "source_path",
+                        entry
+                            .source
+                            .as_ref()
+                            .and_then(|source| source.source_path.clone())
+                            .map_or(Value::Null, Value::from),
+                    ),
                     json_entry(
                         "line",
                         entry
@@ -142,6 +161,31 @@ fn write_report_output(path: &str, value: &Value) -> Result<(), String> {
         fs::write(path, &rendered).map_err(|e| format!("failed to write {path}: {e}"))?;
     }
     Ok(())
+}
+
+fn normalize_debug_source_name(input: &str) -> Option<String> {
+    let path = Path::new(input);
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    let mut cleaned = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !cleaned.pop() {
+                    cleaned.push(component.as_os_str());
+                }
+            }
+            other => cleaned.push(other.as_os_str()),
+        }
+    }
+    let rendered = if cleaned.as_os_str().is_empty() {
+        path.to_path_buf()
+    } else {
+        cleaned
+    };
+    Some(rendered.display().to_string())
 }
 
 fn print_access_hint_diagnostics(diag: &AccessHintDiagnostics, format: DiagnosticFormat) {
@@ -403,6 +447,7 @@ fn main() {
     opts.force_zk = force_zk;
     opts.force_vector = force_vector;
     opts.emit_debug = !strip_debug;
+    opts.debug_source_name = normalize_debug_source_name(&input_path);
 
     let source = match std::fs::read_to_string(&input_path) {
         Ok(s) => s,

@@ -52,7 +52,11 @@ fn format_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> String {
     if let Some(source) = diag.source.as_ref()
         && let (Some(line), Some(column)) = (source.line, source.column)
     {
-        let _ = write!(&mut message, " src={line}:{column}");
+        if let Some(path) = source.path.as_deref() {
+            let _ = write!(&mut message, " src={path}:{line}:{column}");
+        } else {
+            let _ = write!(&mut message, " src={line}:{column}");
+        }
     }
     if let Some(opcode) = diag.context.opcode {
         let _ = write!(&mut message, " opcode=0x{opcode:02x}");

@@ -1,6 +1,208 @@
 # Status
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
+
+## 2026-03-27 Izanami workload asset tracking no longer publishes unconfirmed asset IDs
+- Closed the workload-side stale-asset poisoning path in
+  `crates/izanami/src/instructions.rs` that was driving repeated
+  `Failed to find asset` rejections in the stable NPoS run:
+  - asset-instance bookkeeping now goes through `PlanUpdate::TrackAssetInstance`
+    and is applied only after a successful submission result;
+  - `plan_mint_asset`, `plan_transfer_asset`, and the other asset-producing
+    workload planners no longer mutate `state.asset_instances` eagerly while
+    the transaction is still pending or may still fail; and
+  - failed or unconfirmed mint/transfer plans therefore cannot poison later
+    asset-metadata recipes into targeting nonexistent asset IDs.
+- Added focused regressions in
+  `crates/izanami/src/instructions.rs`:
+  - `failed_asset_plan_does_not_poison_asset_metadata_target`
+  - `workload_record_result_tracks_assets_only_on_success`
+- Validation:
+  - `rustfmt --edition 2024 crates/izanami/src/instructions.rs`
+  - `cargo test -p izanami failed_asset_plan_does_not_poison_asset_metadata_target -- --nocapture`
+  - `cargo test -p izanami workload_record_result_tracks_assets_only_on_success -- --nocapture`
+  - `cargo test -p izanami instructions::tests::staking_recipes_track_validator_registry -- --nocapture`
+  - `cargo test -p izanami instructions::tests::bond_public_stake_tracks_share_and_uses_stake_asset -- --nocapture`
+  - `cargo test -p izanami instructions::tests::asset_metadata_set_and_remove_trackers -- --nocapture`
+  - `cargo test -p izanami instructions::tests::workload_record_result_applies_updates_on_success -- --nocapture`
+- Not yet rerun on this exact cut:
+  - full permissioned preserved-peer stable soak
+  - full NPoS preserved-peer stable soak
+
+## 2026-03-27 Full preserved-peer stable soaks on the timeout-owner / exact-body retry cut are liveness-clean, but both modes still fail the stable latency gate
+- Rebuilt `iroha3d` and `izanami` on the current tree and reran the full 4-peer
+  preserved-peer stable envelopes:
+  - build:
+    `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  - permissioned log:
+    `/tmp/izanami_permissioned_ownerhandoff_20260327T113630Z.log`
+    with preserved peers under
+    `/tmp/iroha-soak-permissioned-ownerhandoff_20260327T113630Z/irohad_test_network_TMTkYs`
+  - NPoS log:
+    `/tmp/izanami_npos_ownerhandoff_20260327T121650Z.log`
+    with preserved peers under
+    `/tmp/iroha-soak-npos-ownerhandoff_20260327T121650Z/irohad_test_network_ZBEe65`
+- Permissioned no longer reproduces the consensus liveness stall:
+  - reached target height with
+    `quorum_min_height=2004 strict_min_height=2004`
+  - target metrics:
+    `interval_p50_ms=1016`, `interval_p95_ms=1668`
+  - final summary:
+    `successes=11196`, `failures=9`
+  - failed only because Izanami enforces
+    `quorum p95 block interval <= 1000ms`
+- NPoS also no longer reproduces aligned no-progress:
+  - reached target height with
+    `quorum_min_height=2001 strict_min_height=2001`
+  - target metrics:
+    `interval_p50_ms=1112`, `interval_p95_ms=2001`
+  - final summary:
+    `successes=10414`, `failures=1382`
+  - likewise failed only the same p95 latency gate
+- Preserved-peer liveness signals on this cut:
+  - `no strict block height progress=0` in both runs
+  - `requested block-sync range pull from committed anchor=0` in both runs
+  - `FetchBlockBody=0` and `BlockBodyResponse=0` in both runs
+  - NPoS preserved-peer logs had
+    `no proposal observed for view before changing view=0` and no current-frontier
+    `missing_qc`/range-pull signatures
+  - permissioned had one transient same-height miss at `height=1583 view=0`
+    (`view change triggered ... cause="missing_qc"` plus
+    `no proposal observed for view before changing view` once), but the cluster
+    recovered immediately and still reached target height
+- Remaining non-liveness issues on this cut:
+  - permissioned still shows light workload backpressure
+    (`plan submission failed err=7`,
+    `transaction queued for too long=3`,
+    `haven't got tx confirmation within 20s=4`)
+  - NPoS is dominated by workload noise, with
+    `plan submission failed err=1382`, all from the existing
+    `mint_trigger_repetitions` missing-asset path
+  - both modes remain over the stable latency threshold even though consensus
+    stays live
+
+## 2026-03-27 Current-frontier timeout ownership and exact-body fetch lane repaired on the focused liveness cut
+- Closed the current-frontier ownership gap in
+  `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop/qc.rs`, and
+  `crates/iroha_core/src/sumeragi/main_loop/votes.rs`:
+  - quorum-timeout for `committed + 1` now treats same-height prepare/commit
+    vote or QC evidence as authoritative frontier ownership even when the local
+    pending block has zero votes or a different hash;
+  - same-height missing-payload vote/QC paths now bootstrap the `FrontierSlot`
+    before routing through exact-body repair, instead of depending on a
+    pre-existing slot; and
+  - exact-body retry / lag-window / deep-catchup decisions now key off
+    `exact_fetch_armed && body_missing` rather than the narrow `AwaitBody`
+    phase label, so same-height QC/vote evidence no longer disables
+    `FetchBlockBody`.
+- Adjusted `note_frontier_vote_placeholder(...)` so current-frontier vote-only
+  evidence reports success once the slot owner becomes active, preventing
+  callers from falling back into generic missing-block handling after slot
+  bootstrap.
+- Refreshed the frontier timing tests to mutate the slot timer fields
+  (`timers.observed_at`, `timers.last_fetch_at`) alongside the compatibility
+  shadow fields, so ingress-grace and retry-window regressions exercise the
+  real state machine state.
+- Added/updated focused regressions in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - `zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_other_hash`
+  - `frontier_vote_placeholder_skips_generic_missing_block_request`
+  - `qc_missing_block_defer_contiguous_frontier_stays_on_exact_body_owner`
+  - `frontier_body_repair_fetches_leader_before_voter_fallback`
+  - `frontier_slot_quorum_timeout_rotates_same_height_candidate_without_deep_catchup`
+  - `frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait`
+  - `frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry`
+  - `frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull`
+  - `seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_vote_evidence`
+- Validation on this cut:
+  - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/reschedule.rs crates/iroha_core/src/sumeragi/main_loop/votes.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `cargo test -p iroha_core --lib zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_other_hash -- --nocapture`
+  - `cargo test -p iroha_core --lib seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_vote_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_vote_placeholder_skips_generic_missing_block_request -- --nocapture`
+  - `cargo test -p iroha_core --lib qc_missing_block_defer_contiguous_frontier_stays_on_exact_body_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib defer_qc_if_block_missing_with_commit_quorum_hint_seeds_contiguous_frontier_owner_create_only -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_body_repair_fetches_leader_before_voter_fallback -- --nocapture`
+  - `cargo test -p iroha_core --lib request_missing_block_for_pending_rbc_holds_initial_frontier_fetch_within_ingress_grace -- --nocapture`
+  - `cargo test -p iroha_core --lib retry_missing_block_requests_keeps_far_ahead_future_entries_passive_while_exact_frontier_owner_active -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_slot_quorum_timeout_rotates_same_height_candidate_without_deep_catchup -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull -- --nocapture`
+  - `git diff --check -- crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/qc.rs crates/iroha_core/src/sumeragi/main_loop/reschedule.rs crates/iroha_core/src/sumeragi/main_loop/votes.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs status.md roadmap.md`
+- Not yet rerun on this exact cut:
+  - full permissioned preserved-peer stable soak
+  - full NPoS preserved-peer stable soak
+
+## 2026-03-26 Full preserved-peer stable soaks on the post-root-cause fix cut still fail liveness, but the failure shape changed
+- Rebuilt `iroha3d` and `izanami` on the current tree and reran the full 4-peer preserved-peer stable envelopes:
+  - build:
+    `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  - permissioned log:
+    `/tmp/izanami_permissioned_rootcausefix_20260326T193813Z.log`
+    with preserved peers under
+    `/tmp/iroha-soak-permissioned-rootcausefix_20260326T193813Z/irohad_test_network_d2xvSO`
+  - NPoS log:
+    `/tmp/izanami_npos_rootcausefix_20260326T193813Z.log`
+    with preserved peers under
+    `/tmp/iroha-soak-npos-rootcausefix_20260326T193813Z/irohad_test_network_xeioxt`
+- Permissioned still fails liveness:
+  - aborted with
+    `no strict block height progress for 600s (strict min height 88, quorum min height 88, target 2000, tolerated_failures 0)`
+  - final summary:
+    `successes=2548`, `failures=291`
+- NPoS also fails liveness on this cut:
+  - aborted with
+    `no strict block height progress for 600s (strict min height 8, quorum min height 8, target 2000, tolerated_failures 0)`
+  - final summary:
+    `successes=2417`, `failures=288`
+- The important behavior change versus the previous cut:
+  - `requested block-sync range pull from committed anchor=0` in both preserved-peer runs, so the old current-frontier `DeepCatchup`/`frontier_stall_reset` dead end no longer reproduced;
+  - `FetchBlockBody=0` and `BlockBodyResponse=0` still remained zero in both runs;
+  - both runs still logged `routed contiguous missing-parent recovery through exact frontier body owner` five times on the lagging peer; and
+  - both clusters then stalled in aligned same-height `missing_qc` rotation with `lagging_peers=0`.
+- The new preserved-peer failure signature is same-height ownership not being handed to the frontier slot on quorum-timeout:
+  - permissioned:
+    `commit quorum missing past timeout` at `height=89 view=0`, then repeated `view change triggered ... cause="missing_qc"` while `handoff_frontier_quorum_timeout_owner=false` and `frontier_recovery_advance=None`
+  - NPoS:
+    the same pattern at `height=9 view=0`, again with `handoff_frontier_quorum_timeout_owner=false`
+  - in both cases the lagging peer also logged `quorum of votes observed but block payload missing; deferring QC aggregation` or the stake-equivalent form, followed by `received QC for unknown block; caching without updating locks/highest`
+- Conclusion on this cut:
+  - the previous root cause fix worked narrowly: same-height `AwaitCommitQc` no longer falls into committed-chain range pulls;
+  - the system still is not liveness-clean, because the `missing_qc` timeout path continues to rotate views and let pacemaker repropose instead of handing current-frontier ownership to the slot when the commit QC exists but the payload is missing locally.
+
+## 2026-03-26 Current-frontier liveness root cause follow-up: same-height quorum-loss no longer escalates the slot into deep catch-up
+- Closed the control-flow dead end in `crates/iroha_core/src/sumeragi/main_loop.rs` where the current frontier could still transition from `AwaitCommitQc` into `DeepCatchup` once the lag window elapsed. That path was forcing `committed + 1` into committed-chain range pulls (`frontier_stall_reset`) even when the cluster was still in a live same-height quorum-loss/view-rotation case.
+- The current behavior on this follow-up cut:
+  - `FrontierSlotEvent::OnQuorumTimeout` no longer promotes `AwaitCommitQc` into `DeepCatchup`;
+  - `FrontierSlotEvent::OnLagWindowExpired` now only enters `DeepCatchup` for `AwaitBody`, keeping deep catch-up reserved for exact-body failure;
+  - `frontier_slot_lag_window_expired(...)` now only fires for exact-body wait, so external range-pull suppression paths stop reclassifying same-height vote/QC stalls as catch-up failures; and
+  - same-height quorum-loss stays under slot-owned rebroadcast/view rotation instead of reopening `frontier_stall_reset` range-pull recovery for `committed + 1`.
+- Added/updated focused regressions in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - `frontier_slot_quorum_timeout_rotates_same_height_candidate_without_deep_catchup`
+  - `frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait`
+  - `frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull`
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `cargo test -p iroha_core --lib frontier_slot_quorum_timeout_rotates_same_height_candidate_without_deep_catchup -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull -- --nocapture`
+  - `git diff --check -- crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+- Not yet rerun on this exact cut:
+  - full permissioned preserved-peer stable soak
+  - full NPoS preserved-peer stable soak
+
+## 2026-03-26 Current-frontier liveness root cause fix: the slot lag window now ages from last progress instead of first observation
+- Closed the stale-timer bug in `crates/iroha_core/src/sumeragi/main_loop.rs` that was pushing live same-height slots into `DeepCatchup` too early: `FrontierSlot::lag_started_at()` now falls back to `last_progress_at` instead of the original `observed_at`, so vote/body/QC progress refreshes the lag window before `AwaitCommitQc` or `AwaitVotes` can be classified as stalled.
+- Added a focused regression in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`:
+  - `frontier_slot_quorum_timeout_uses_last_progress_for_lag_window_expiry`
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `cargo test -p iroha_core --lib frontier_slot_quorum_timeout_uses_last_progress_for_lag_window_expiry -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry -- --nocapture`
+  - `git diff --check -- crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs`
 
 ## 2026-03-26 Current-frontier ownership follow-up: same-height quorum-timeout and missing-payload wrappers now seed the slot owner instead of bailing early, and pacemaker/proposal-seen suppression is covered by focused regressions
 - Closed a control-flow bug in `crates/iroha_core/src/sumeragi/main_loop.rs` where `seed_frontier_recovery_for_quorum_timeout(...)` and `seed_frontier_recovery_for_missing_payload(...)` treated `height == committed + 1` as if it implied an existing `FrontierSlot`; when the slot was absent, those wrappers returned early instead of instantiating the slot from same-height vote/QC/local-block evidence.
@@ -328,6 +530,175 @@ Last updated: 2026-03-26
   - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
   - full permissioned stable preserved-peer soak
   - full NPoS stable preserved-peer soak
+
+## 2026-03-26 Follow-up: `iroha_core` test-helper transaction lifetimes compile again
+- Updated
+  `crates/iroha_core/src/state.rs`
+  so the test/API `WorldTransaction` helper block now carries the explicit
+  `<'block, 'world>` impl lifetimes required by its `StorageTransaction`
+  return types.
+- The shipped behavior in this slice:
+  - the `smart_contract_state_mut_for_testing`,
+    `account_aliases_mut_for_testing`, and
+    `account_rekey_records_mut_for_testing` helpers no longer fail with
+    `error[E0261]` when `iroha_core` is compiled with the `iroha-core-tests`
+    feature; and
+  - the helper methods still expose the same mutable test scaffolding over the
+    underlying world transaction storage.
+- Validation:
+  - `cargo check -p iroha_core --message-format short` (pass)
+  - `cargo check -p iroha_core --features iroha-core-tests --message-format short` (pass)
+  - `cargo fmt --all` (pass)
+
+## 2026-03-26 Follow-up: FASTPQ Stage 2 regression fixtures now match the current canonical prover output again
+- Refreshed
+  `crates/fastpq_prover/tests/fixtures/stage2_balanced_1k.bin`
+  and
+  `crates/fastpq_prover/tests/fixtures/stage2_balanced_5k.bin`
+  so the Stage 2 backend regression fixtures match the current canonical CPU
+  prover output again.
+- The shipped behavior in this slice:
+  - `stage2_artifact_balanced_1k_matches_fixture` and
+    `stage2_artifact_balanced_5k_matches_fixture` are green again against the
+    refreshed fixtures;
+  - `golden_stage2_proof_matches_fixture` now reads the same refreshed 1k
+    artifact and passes again; and
+  - the focused `realistic_flows` coverage still verifies regenerated proofs,
+    confirming this was fixture drift rather than a focused proof-verification
+    regression.
+- Validation:
+  - `cargo test -p fastpq_prover --test realistic_flows -- --nocapture` (pass)
+  - `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test proof_fixture golden_stage2_proof_matches_fixture -- --nocapture` (pass)
+
+## 2026-03-26 Follow-up: Iroha core and Izanami pre-existing warning noise is gone
+- Updated
+  `crates/iroha_core/src/state.rs`
+  and
+  `crates/izanami/src/main.rs`
+  to remove the remaining pre-existing warnings seen in targeted `iroha_core`
+  and `izanami` validation runs.
+- The shipped behavior in this slice:
+  - the test-only `WorldTransaction` helper impl in `iroha_core` now uses
+    anonymous lifetimes instead of single-use named lifetimes, removing the
+    `single_use_lifetimes` warning from `state.rs`; and
+  - the `izanami` bin target now re-exports the library `faults` module
+    instead of recompiling a private copy, so the dead-code warnings for
+    `FaultScenarioKind` variants and `apply_fault_scenario` no longer appear in
+    bin/test builds.
+- Validation:
+  - `cargo check -p iroha_core -p izanami --message-format short` (pass)
+  - `cargo test -p izanami --message-format short` (pass; expected debug logs remain in some tests, but the old warnings are gone)
+
+## 2026-03-26 Follow-up: Mochi core and Izanami fixture regressions are green again
+- Updated
+  `mochi/mochi-core/src/compose.rs`,
+  `mochi/fixtures/composer/{draft_multisig_propose,multisig_instructions}.json`,
+  `mochi/mochi-core/tests/fixtures/composer_drafts/{implicit_receive_transfer,multisig_propose}.json`,
+  `mochi/mochi-core/tests/fixtures/{canonical_block_wire,canonical_pipeline_event_message}.bin`,
+  and
+  `crates/izanami/src/smart_contracts.rs`
+  so the remaining red fixture tests match the current canonical asset/account
+  literal rules, Torii wire encoding, and bundled IVM artifact versions.
+- The shipped behavior in this slice:
+  - composer roundtrip tests and shared JSON fixtures now use canonical
+    balance-bucket asset ids (`<definition>#<account>`) and scoped-account
+    registration input where required by the current parser;
+  - Torii canonical block/pipeline fixture binaries were regenerated from the
+    in-tree ignored fixture writers so the stream/canonical tests match the
+    live wire format again; and
+  - Izanami now loads the checked-in `v1_1` IVM artifacts instead of expecting
+    missing historical fixture names.
+- Validation:
+  - `cargo test -p mochi-core drafts_json_roundtrip_covers_all_variants -- --nocapture` (pass)
+  - `cargo test -p mochi-core draft_fixtures_parse_to_expected_variants -- --nocapture` (pass)
+  - `cargo test -p mochi-core composer_draft_fixtures_roundtrip -- --nocapture` (pass)
+  - `cargo test -p mochi-core regenerate_ -- --ignored --nocapture` (pass)
+  - `cargo test -p mochi-core --message-format short` (pass)
+  - `cargo test -p izanami deploy_ivm_trigger_is_not_repeatable -- --nocapture` (pass)
+  - `cargo test -p izanami --message-format short` (pass)
+
+## 2026-03-26 Follow-up: MOCHI now opens on an account-first dashboard with first-run setup, bootstrap file generation, and a Chaos Lab
+- Extended
+  `mochi/mochi-core/src/{bootstrap.rs,dashboard.rs,chaos.rs,lib.rs,supervisor.rs}`,
+  `mochi/mochi-ui-egui/src/{main.rs,dashboard_view.rs,composer_scenarios.rs,wizard.rs,chaos_view.rs}`,
+  `crates/izanami/src/{lib.rs,faults.rs}`,
+  and
+  `mochi/README.md`
+  so the Mochi desktop shell feels closer to a friendly Ganache-style local
+  sandbox instead of a node-first operator console.
+- The shipped behavior in this slice:
+  - Mochi now defaults to a `Dashboard` home view with prefunded signer cards,
+    explorer-backed balances, recent blocks, and one-click actions for common
+    local-dev loops like minting, transfer, multisig, block viewing, env copy,
+    bootstrap file generation, and chain reset;
+  - clean startup now opens a blocking first-run wizard that chooses topology,
+    workspace, and Nexus defaults before launching the sandbox and landing on
+    the dashboard;
+  - Mochi can now write local bootstrap artifacts directly into the selected
+    workspace: `.env.local`,
+    `.mochi/generated/typescript/connect.ts`,
+    `.mochi/generated/rust/connect.rs`, and
+    `.mochi/generated/kotlin/MochiConnect.kt`;
+  - the composer now exposes a scenario-first lane (`Fund account`,
+    `Create teammate`, `Test multisig`, `Test implicit receive`,
+    `Publish manifest`) without removing the existing advanced/raw builder; and
+  - the new `Chaos Lab` tab reuses extracted Izanami fault helpers to run peer
+    bounce, latency, partition, resource-pressure, bad-actor, and wipe/rejoin
+    drills against the current supervised Mochi network.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p mochi-core -p mochi-ui-egui -p izanami --message-format short` (pass; unrelated pre-existing warnings remain in `iroha_core`, and `izanami`'s binary target still warns that some fault variants/helpers are not exercised from the CLI)
+  - `cargo test -p mochi-ui-egui --message-format short` (pass)
+  - `cargo test -p mochi-core bootstrap::tests:: -- --nocapture` (pass)
+  - `cargo test -p mochi-core dashboard::tests::fetch_dashboard_snapshot_aggregates_signers_assets_and_blocks -- --nocapture` (pass)
+  - `cargo test -p izanami --message-format short` (still fails in pre-existing binary-side tests that expect missing IVM fixture artifacts: `instructions::tests::deploy_ivm_trigger_is_not_repeatable`, `smart_contracts::tests::ivm_artifact_loads`, `smart_contracts::tests::ivm_trigger_program_metadata_parses`)
+  - `cargo test -p mochi-core --message-format short` (still fails in pre-existing compose/Torii fixture tests unrelated to this slice: `compose::tests::draft_fixtures_parse_to_expected_variants`, `compose::tests::drafts_json_roundtrip_covers_all_variants`, `torii::tests::block_canonical_wire_matches_fixture`, `torii::tests::block_stream_decodes_block_events`, `torii::tests::block_stream_end_to_end_decodes_canonical_block`, `torii::tests::event_stream_decodes_pipeline_events`)
+
+## 2026-03-26 Follow-up: Kagami now has a task-first CLI surface, scriptable wizard flags, and generated next-step guidance
+- Extended
+  `crates/iroha_kagami/src/main.rs`,
+  `crates/iroha_kagami/src/localnet.rs`,
+  `crates/iroha_kagami/src/localnet_tui.rs`,
+  `crates/iroha_kagami/src/swarm.rs`,
+  `crates/iroha_kagami/src/wizard.rs`,
+  `crates/iroha_kagami/src/codec.rs`,
+  `crates/iroha_kagami/README.md`,
+  `crates/iroha_kagami/CommandLineHelp.md`,
+  `crates/iroha_kagami/docs/{codec,kura,swarm}.md`,
+  `crates/iroha_kagami/samples/codec/{README.md,account.{json,bin},domain.{json,bin}}`,
+  `defaults/docker-compose*.yml`,
+  and
+  `docs/source/{norito_streaming*,sumeragi*}.md`
+  so Kagami is organized around user tasks instead of a flat expert-only
+  toolbox.
+- The shipped behavior in this slice:
+  - the top-level CLI is now `wizard`, `localnet-wizard`, `localnet`,
+    `docker`, `keys`, `genesis`, `verify`, and `advanced`, with the narrower
+    `codec`, `kura`, `schema`, `client-configs`, and markdown-help tooling
+    moved under `advanced`;
+  - top-level help now includes concrete task examples, and the checked-in
+    `CommandLineHelp.md` snapshot is generated from the live clap surface and
+    verified in tests so the README/help links cannot silently drift again;
+  - `wizard --non-interactive` now accepts the previously prompt-only host,
+    port, relay-mode, and relay-hub fields, and both `wizard` and `localnet`
+    now print labeled summaries plus generated per-output `README.md` guidance
+    with exact next commands instead of terse one-line success text;
+  - generic `localnet` and the localnet TUI now default to permissioned
+    consensus unless a profile/perf preset requires NPoS, while Docker/localnet
+    output now surfaces the effective consensus mode, generated artifact paths,
+    and Torii/bootstrap commands directly; and
+  - Kagami docs/examples were rewritten around the new `docker`, `keys`, and
+    `advanced ...` command names, while the codec fixture samples were refreshed
+    to the current canonical JSON/Binary forms so the codec regression suite
+    matches the live schema.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo run -p iroha_kagami -- advanced markdown-help > crates/iroha_kagami/CommandLineHelp.md` (pass; unrelated pre-existing `iroha_core` lifetime warnings remain)
+  - `CARGO_TARGET_DIR=/tmp/codex-target-iroha-kagami cargo test -p iroha_kagami --test codec regenerate_codec_samples -- --ignored --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/codex-target-iroha-kagami cargo test -p iroha_kagami` (pass; unrelated pre-existing `iroha_core` lifetime warnings remain)
+
 ## 2026-03-26 Follow-up: MOCHI now leans into a warmer Ganache-like desktop feel and faster local-app setup
 - Extended
   `mochi/mochi-ui-egui/src/main.rs`
@@ -12022,5 +12393,80 @@ Last updated: 2026-03-26
   - `cargo check -p ivm --bin koto_compile --bin koto_lint`
   - `cargo check -p iroha_core --lib`
   - `cargo check -p iroha_torii --lib`
+  - `cargo test -p ivm runtime_trap_populates_last_diagnostic --lib`
+  - `cargo test -p ivm --test metadata parse_accepts_contract_debug_section`
+
+## 2026-03-26 Kotodama / IVM Developer Experience Debugger and Safe Map Reads
+- Added a local contract view debugger to `crates/iroha_cli/src/contracts.rs`:
+  - new `contracts debug-view` subcommand for offline execution of `view` entrypoints from compiled `.to` bytecode
+  - emits a structured JSON report with resolved entrypoint metadata, gas/stack budget snapshot, syscall trace, decoded return value or trap diagnostic, and optional source snippets via `--source-file`
+  - supports optional JSON/file fixtures for account snapshots and durable state snapshots so contract views can be reproduced without a live node
+- Added `CoreHost::set_durable_state_snapshot(...)` in `crates/iroha_core/src/smartcontracts/ivm/host.rs` so offline tooling can inject a read-only durable-state baseline directly.
+- Added `IVM::cycle_count()` in `crates/ivm/src/ivm.rs` so debugger/reporting surfaces can expose final cycle usage without reaching into private fields.
+- Added safe map-read ergonomics in `crates/kotodama_lang/src/{semantic.rs,ir.rs}`:
+  - new pure builtin `get_or(map, key, default)` with deterministic read-only lowering for both durable and ephemeral maps
+  - `std::map::get_or` now canonicalizes to the same builtin
+  - `view fn` now rejects `get_or_insert_default(...)` explicitly because it mutates backing state
+- Added focused regressions:
+  - `crates/iroha_cli/src/contracts.rs::debug_view_executes_local_view_and_decodes_result`
+  - `crates/kotodama_lang/src/semantic.rs::view_entrypoints_reject_get_or_insert_default`
+  - `crates/kotodama_lang/src/semantic.rs::view_entrypoints_accept_get_or`
+  - `crates/kotodama_lang/src/ir.rs::lower_get_or_on_state_map_reads_without_writing`
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_cli debug_view_executes_local_view_and_decodes_result`
+  - `cargo test -p kotodama_lang view_entrypoints_reject_get_or_insert_default --lib`
+  - `cargo test -p kotodama_lang lower_get_or_on_state_map_reads_without_writing --lib`
+  - `cargo test -p kotodama_lang view_entrypoints_accept_get_or --lib`
+  - `cargo check -p iroha_cli`
+  - `cargo check -p iroha_core --lib`
+  - `cargo check -p ivm --lib`
+
+## 2026-03-26 Kotodama Singleton Struct State Lowering
+- Closed the remaining tracked devex follow-up for singleton struct-backed durable state in `crates/kotodama_lang/src/ir.rs`:
+  - whole-struct state reads now reconstruct tuple-backed struct values from flattened durable child paths
+  - whole-struct state writes now decompose tuple-backed struct values back into child `StateSet` operations
+  - root `state StructName foo;` identifiers now behave symmetrically with direct field reads instead of only supporting `foo.bar`-style access
+- Updated the AST/docs-facing state declaration comment in `crates/kotodama_lang/src/ast.rs` so it no longer describes durable lowering as pending work.
+- Added focused regressions:
+  - `crates/kotodama_lang/src/ir.rs::lower_state_struct_ident_reconstructs_tuple_from_host`
+  - `crates/kotodama_lang/src/ir.rs::lower_state_struct_assignment_persists_child_fields`
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang lower_state_struct_ident_reconstructs_tuple_from_host --lib`
+  - `cargo test -p kotodama_lang lower_state_struct_assignment_persists_child_fields --lib`
+  - `cargo check -p kotodama_lang`
+
+## 2026-03-27 Kotodama Debug Source Paths, Static View Purity, and Offline Public Calls
+- Extended the compiler / metadata / runtime diagnostic path so logical source paths survive from `koto_compile` into VM traps:
+  - `crates/kotodama_lang/src/compiler.rs` now threads `CompilerOptions::debug_source_name` into the emitted `DBG1` source-map and budget-report entries
+  - `crates/ivm/src/bin/koto_compile.rs` now derives a normalized logical source path from the input file and emits `source_path` fields in JSON source-map and budget reports
+  - `crates/ivm/src/ivm.rs`, `crates/iroha_core/src/smartcontracts/ivm.rs`, and `crates/iroha_torii/src/routing.rs` now carry / format / expose `source_path` in structured VM diagnostics
+- Finished the CLI debugger surface in `crates/iroha_cli/src/contracts.rs`:
+  - `contracts debug-view` now auto-loads source snippets from embedded `source_path` when available, with `--source-file` remaining an explicit override
+  - new `contracts debug-call` subcommand executes `public` entrypoints offline and returns decoded return values, queued instruction JSON, durable-state overlay JSON, syscall trace, and structured VM diagnostics
+- Strengthened semantic `view fn` enforcement in `crates/kotodama_lang/src/semantic.rs`:
+  - direct `view fn` durable-state writes and state-map mutations are rejected statically
+  - transitive helper analysis now rejects reachable instruction emission and durable-state mutation before runtime
+  - effect scanning now accounts for `MapSet` map/key/value expressions instead of only the assigned value
+- Added focused regressions:
+  - `crates/iroha_cli/src/contracts.rs::debug_view_uses_embedded_source_path_for_snippets`
+  - `crates/iroha_cli/src/contracts.rs::debug_view_source_file_override_beats_embedded_path`
+  - `crates/iroha_cli/src/contracts.rs::debug_call_executes_public_entrypoint_and_reports_side_effects`
+  - `crates/iroha_cli/src/contracts.rs::debug_call_rejects_view_entrypoints`
+  - `crates/kotodama_lang/src/semantic.rs::view_entrypoints_reject_direct_durable_state_assignment`
+  - `crates/kotodama_lang/src/semantic.rs::view_entrypoints_reject_state_map_mutation`
+  - `crates/kotodama_lang/src/semantic.rs::view_entrypoints_reject_transitive_durable_state_mutation`
+  - `crates/kotodama_lang/src/semantic.rs::view_entrypoints_reject_transitive_instruction_emission`
+  - `crates/ivm/tests/metadata.rs::parse_accepts_contract_debug_section`
+  - `crates/ivm/src/ivm.rs::runtime_trap_populates_last_diagnostic`
+- Validation:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_cli`
+  - `cargo check -p ivm --bin koto_compile --bin koto_lint`
+  - `cargo check -p iroha_core --lib`
+  - `cargo check -p iroha_torii --lib`
+  - `cargo test -p iroha_cli debug_`
+  - `cargo test -p kotodama_lang view_entrypoints_reject_ --lib`
   - `cargo test -p ivm runtime_trap_populates_last_diagnostic --lib`
   - `cargo test -p ivm --test metadata parse_accepts_contract_debug_section`

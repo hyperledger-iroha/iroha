@@ -10411,8 +10411,8 @@ async fn frontier_vote_placeholder_skips_generic_missing_block_request() {
         "vote-only frontier placeholder must stay passive"
     );
     assert!(
-        !slot.exact_fetch_armed,
-        "vote-only frontier placeholder must not arm exact body repair"
+        slot.exact_fetch_armed,
+        "vote-only frontier placeholder should arm exact body repair for committed + 1"
     );
     assert!(
         actor.pending.missing_block_requests.is_empty(),
@@ -10609,9 +10609,11 @@ async fn frontier_body_repair_fetches_leader_before_voter_fallback() {
     {
         let grace = actor.authoritative_body_ingress_fetch_grace();
         let slot = actor.frontier_slot.as_mut().expect("frontier slot");
-        slot.observed_at = Instant::now()
+        let observed_at = Instant::now()
             .checked_sub(grace.saturating_add(Duration::from_millis(1)))
             .unwrap_or_else(Instant::now);
+        slot.timers.observed_at = observed_at;
+        slot.observed_at = observed_at;
     }
 
     assert!(
@@ -10641,7 +10643,9 @@ async fn frontier_body_repair_fetches_leader_before_voter_fallback() {
             .filter(|peer| *peer != &leader_peer)
             .cloned()
             .collect::<BTreeSet<_>>();
-        slot.last_fetch_at = Some(Instant::now() - slot.retry_window - Duration::from_millis(1));
+        let last_fetch_at = Some(Instant::now() - slot.retry_window - Duration::from_millis(1));
+        slot.timers.last_fetch_at = last_fetch_at;
+        slot.last_fetch_at = last_fetch_at;
         expected
     };
 
@@ -23111,9 +23115,11 @@ async fn request_missing_block_for_pending_rbc_holds_initial_frontier_fetch_with
         .frontier_slot
         .as_mut()
         .expect("frontier slot retained");
-    slot.observed_at = Instant::now()
+    let observed_at = Instant::now()
         .checked_sub(grace.saturating_add(Duration::from_millis(1)))
         .unwrap_or_else(Instant::now);
+    slot.timers.observed_at = observed_at;
+    slot.observed_at = observed_at;
     let _ = take_background_log(&background_log);
 
     actor.request_missing_block_for_pending_rbc(key, "test_ingress_grace", None);
@@ -23904,9 +23910,11 @@ async fn qc_missing_block_defer_contiguous_frontier_stays_on_exact_body_owner() 
             .frontier_slot
             .as_mut()
             .expect("frontier slot retained");
-        slot.observed_at = Instant::now()
+        let observed_at = Instant::now()
             .checked_sub(grace.saturating_add(Duration::from_millis(1)))
             .unwrap_or_else(Instant::now);
+        slot.timers.observed_at = observed_at;
+        slot.observed_at = observed_at;
     }
 
     let _ = take_background_log(&background_log);
@@ -38603,8 +38611,8 @@ async fn frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull() {
 
     assert_eq!(
         advance,
-        super::FrontierRecoveryAdvance::CatchUp,
-        "quorum-timeout recovery should still arm bounded rotation for the live frontier slot"
+        super::FrontierRecoveryAdvance::None,
+        "the first live-slot quorum timeout should consume the deterministic rebroadcast window without emitting range-pull recovery"
     );
     assert!(
         actor.frontier_slot.as_ref().is_some_and(|slot| {
@@ -38624,6 +38632,13 @@ async fn frontier_recovery_quorum_timeout_keeps_live_slot_without_range_pull() {
     assert!(
         actor.range_pull_escalation_cooldowns.is_empty(),
         "quorum-timeout recovery must not emit block-sync reanchor traffic for committed + 1"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| { slot.repair_state.quorum_timeout_rebroadcasted }),
+        "the live slot should remember that it consumed the first rebroadcast window"
     );
 }
 
@@ -53298,9 +53313,11 @@ async fn retry_missing_block_requests_keeps_far_ahead_future_entries_passive_whi
             .frontier_slot
             .as_mut()
             .expect("frontier slot must be present after QC deferral");
-        slot.observed_at = now
+        let observed_at = now
             .checked_sub(grace.saturating_add(Duration::from_millis(1)))
             .unwrap_or(now);
+        slot.timers.observed_at = observed_at;
+        slot.observed_at = observed_at;
     }
 
     let stale = now.checked_sub(Duration::from_secs(30)).unwrap_or(now);
@@ -55892,6 +55909,200 @@ async fn frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_ret
     assert!(
         !retry_actions.fetch_block_body,
         "exact body retry loop must stop once the exact frontier slot enters deep catch-up"
+    );
+
+    harness.shutdown.send();
+}
+
+#[test]
+fn frontier_slot_quorum_timeout_rotates_same_height_candidate_without_deep_catchup() {
+    let observed_at = Instant::now();
+    let mut slot = super::FrontierSlot::new(
+        7,
+        0,
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC2; Hash::LENGTH])),
+        observed_at,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        false,
+        true,
+        None,
+        None,
+    );
+    let progress_at = observed_at
+        .checked_add(Duration::from_secs(1))
+        .unwrap_or(observed_at);
+    let early_timeout_at = progress_at
+        .checked_add(Duration::from_millis(50))
+        .unwrap_or(progress_at);
+    let expired_timeout_at = progress_at
+        .checked_add(Duration::from_millis(150))
+        .unwrap_or(progress_at);
+    let lag_window = Duration::from_millis(100);
+
+    let vote_actions = slot.step(
+        progress_at,
+        super::FrontierSlotEvent::OnVoteObserved {
+            block_hash: slot.block_hash,
+            view: slot.view,
+            voter: None,
+        },
+        lag_window,
+    );
+    assert_eq!(
+        vote_actions.enter_deep_catchup, None,
+        "same-height vote progress should not immediately drive the slot into deep catch-up"
+    );
+    assert!(
+        matches!(slot.phase, super::FrontierSlotPhase::AwaitCommitQc),
+        "vote progress should move the slot into commit-QC wait"
+    );
+
+    let early_timeout_actions = slot.step(
+        early_timeout_at,
+        super::FrontierSlotEvent::OnQuorumTimeout {
+            cause: super::ViewChangeCause::QuorumTimeout,
+            requested_view: slot.view,
+        },
+        lag_window,
+    );
+    assert_eq!(
+        early_timeout_actions.enter_deep_catchup, None,
+        "body-present same-height commit-QC wait should stay out of deep catch-up"
+    );
+    assert_eq!(
+        early_timeout_actions.request_view_change, None,
+        "the first quorum timeout should consume the deterministic rebroadcast window"
+    );
+    assert!(
+        matches!(slot.mode, super::FrontierSlotMode::Normal),
+        "the slot must stay in normal same-height recovery while the refreshed lag window is still open"
+    );
+
+    let lag_expired_actions = slot.step(
+        expired_timeout_at,
+        super::FrontierSlotEvent::OnLagWindowExpired {
+            reason: "frontier_stall_reset",
+        },
+        lag_window,
+    );
+    assert_eq!(
+        lag_expired_actions.enter_deep_catchup, None,
+        "body-present same-height commit-QC wait must not be reclassified into deep catch-up by the lag timer"
+    );
+    assert!(
+        matches!(slot.mode, super::FrontierSlotMode::Normal),
+        "same-height commit-QC wait must stay in normal mode after lag expiry"
+    );
+
+    let expired_timeout_actions = slot.step(
+        expired_timeout_at,
+        super::FrontierSlotEvent::OnQuorumTimeout {
+            cause: super::ViewChangeCause::QuorumTimeout,
+            requested_view: slot.view,
+        },
+        lag_window,
+    );
+    assert_eq!(
+        expired_timeout_actions.enter_deep_catchup, None,
+        "same-height quorum timeout should stay in slot-owned view rotation, not deep catch-up"
+    );
+    assert_eq!(
+        expired_timeout_actions.request_view_change,
+        Some((7, 1, super::ViewChangeCause::QuorumTimeout)),
+        "the second deterministic quorum timeout should advance the slot view while preserving the candidate"
+    );
+    assert_eq!(
+        slot.active_view, 1,
+        "quorum-timeout rotation should advance the active view for the same authoritative slot"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_lag_window_expiry_only_applies_to_exact_body_wait() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let now = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC3; Hash::LENGTH]));
+
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        false,
+        true,
+        None,
+        None,
+    ));
+    let progress_at = now.checked_add(Duration::from_secs(1)).unwrap_or(now);
+    let expired_at = progress_at
+        .checked_add(
+            actor
+                .frontier_slot_lag_window()
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(progress_at);
+    let lag_window = actor.frontier_slot_lag_window();
+
+    let vote_actions = actor.apply_frontier_slot_event(
+        progress_at,
+        super::FrontierSlotEvent::OnVoteObserved {
+            block_hash,
+            view,
+            voter: None,
+        },
+    );
+    assert_eq!(vote_actions.enter_deep_catchup, None);
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| { matches!(slot.phase, super::FrontierSlotPhase::AwaitCommitQc) }),
+        "test setup must move the slot into commit-QC wait"
+    );
+    assert!(
+        !actor.frontier_slot_lag_window_expired(height, expired_at),
+        "external lag-expiry emitters must stay off while the slot is waiting for same-height commit QC with the body already present"
+    );
+
+    let timeout_actions = actor.apply_frontier_slot_event(
+        expired_at,
+        super::FrontierSlotEvent::OnQuorumTimeout {
+            cause: super::ViewChangeCause::QuorumTimeout,
+            requested_view: view,
+        },
+    );
+    assert_eq!(
+        timeout_actions.enter_deep_catchup, None,
+        "body-present commit-QC timeout must not move the current frontier into deep catch-up"
+    );
+    assert_eq!(
+        timeout_actions.request_view_change, None,
+        "the first quorum-timeout event should consume the deterministic rebroadcast window"
+    );
+
+    let rotate_actions = actor.apply_frontier_slot_event(
+        expired_at.checked_add(lag_window).unwrap_or(expired_at),
+        super::FrontierSlotEvent::OnQuorumTimeout {
+            cause: super::ViewChangeCause::QuorumTimeout,
+            requested_view: view,
+        },
+    );
+    assert_eq!(
+        rotate_actions.request_view_change,
+        Some((height, 1, super::ViewChangeCause::QuorumTimeout)),
+        "after the rebroadcast window, the same slot should rotate views instead of entering deep catch-up"
     );
 
     harness.shutdown.send();
@@ -92054,6 +92265,113 @@ async fn zero_vote_quorum_timeout_keeps_pending_when_local_precommit_was_emitted
     assert_eq!(
         snapshot.view_change_causes.missing_qc_total, 0,
         "local precommit evidence should not hand the frontier to MissingQc fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_other_hash() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let committed_view = 0u64;
+    let local_view = committed_view.saturating_add(1);
+    let committed_block = sample_block(height, committed_view, parent);
+    let committed_hash = committed_block.hash();
+    let local_block = sample_block(height, local_view, parent);
+    let local_hash = local_block.hash();
+    assert_ne!(
+        local_hash, committed_hash,
+        "test setup requires a stale local pending candidate and authoritative same-height QC for different hashes"
+    );
+
+    let local_payload_hash = Hash::new(super::proposals::block_payload_bytes(&local_block));
+    let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let now = Instant::now();
+    let stalled_at = now
+        .checked_sub(quorum_timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let mut pending = PendingBlock::new(local_block, local_payload_hash, height, local_view);
+    pending.inserted_at = stalled_at;
+    pending.touch_progress(stalled_at);
+    actor.pending.pending_blocks.insert(local_hash, pending);
+    actor.note_proposal_seen(height, local_view, local_payload_hash);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let epoch = actor.epoch_for_height(height);
+    let signers: BTreeSet<ValidatorIndex> = (0..topology.as_ref().len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let commit_qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        committed_hash,
+        height,
+        committed_view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.qc_cache.insert(
+        (Phase::Commit, committed_hash, height, committed_view, epoch),
+        commit_qc,
+    );
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks_with_now(now, None),
+        "same-height commit QC for another hash should hand ownership to the frontier slot instead of rotating or retransmitting the stale local pending block"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&local_hash),
+        "slot-owned handoff should not drop the stale local pending block during the timeout handoff"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&local_hash)
+        .expect("local pending retained");
+    assert_eq!(
+        pending_after.last_quorum_reschedule, None,
+        "slot-owned handoff should not mark the stale local pending block as retransmitted"
+    );
+    let slot = actor.frontier_slot.as_ref().expect("frontier slot seeded");
+    assert_eq!(slot.height, height);
+    assert_eq!(slot.view, committed_view);
+    assert_eq!(slot.block_hash, committed_hash);
+    assert_eq!(
+        slot.repair_state.last_reason,
+        Some("quorum_timeout"),
+        "same-height QC handoff should preserve the timeout cause on the authoritative slot owner"
+    );
+    assert!(
+        matches!(slot.phase, super::FrontierSlotPhase::AwaitCommitQc),
+        "commit-QC evidence should seed the slot directly into same-height commit-QC wait"
+    );
+    assert!(
+        actor.frontier_recovery.is_none(),
+        "current-frontier timeout handoff should stay inside the slot owner, not the legacy frontier recovery controller"
+    );
+    assert!(
+        actor.slot_has_proposal_evidence(height, local_view.saturating_add(1)),
+        "same-height QC-owned slot should suppress later local reproposals even after the local pending view advanced"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "same-height QC handoff must not arm a direct timeout-based local view jump"
+    );
+    let snapshot = super::status::snapshot();
+    assert_eq!(
+        snapshot.view_change_causes.missing_qc_total, 0,
+        "same-height QC handoff must not trigger MissingQc fallback"
     );
 
     harness.shutdown.send();

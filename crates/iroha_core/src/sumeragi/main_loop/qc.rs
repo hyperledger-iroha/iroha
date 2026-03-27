@@ -3284,6 +3284,21 @@ impl Actor {
             let contiguous_frontier = height == self.committed_height_snapshot().saturating_add(1)
                 && height == self.active_consensus_round_height();
             if contiguous_frontier {
+                let _ = if matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
+                    self.handle_frontier_slot_event(
+                        now,
+                        super::FrontierSlotEvent::OnCommitQcObserved { block_hash, view },
+                    )
+                } else {
+                    self.handle_frontier_slot_event(
+                        now,
+                        super::FrontierSlotEvent::OnVoteObserved {
+                            block_hash,
+                            view,
+                            voter: None,
+                        },
+                    )
+                };
                 let exact_owner_routed = self.handle_frontier_body_gap_with_topology(
                     block_hash,
                     height,
@@ -4918,6 +4933,24 @@ impl Actor {
                 "received QC for unknown block; caching without updating locks/highest"
             );
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
+            let _ = if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnCommitQcObserved {
+                        block_hash: qc.subject_block_hash,
+                        view: qc.view,
+                    },
+                )
+            } else {
+                self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnVoteObserved {
+                        block_hash: qc.subject_block_hash,
+                        view: qc.view,
+                        voter: None,
+                    },
+                )
+            };
             if self.handle_frontier_body_gap_with_topology(
                 qc.subject_block_hash,
                 qc.height,

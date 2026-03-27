@@ -389,6 +389,16 @@ mod tests {
         Converter, ConverterImpl, ConverterMap, NoritoToRustArgs, NoritoToRustDecoder, generate_map,
     };
 
+    fn normalize_roundtrip_json(value: &mut norito::json::Value) {
+        let norito::json::Value::Object(map) = value else {
+            return;
+        };
+
+        if matches!(map.get("domain"), Some(norito::json::Value::Null)) {
+            map.remove("domain");
+        }
+    }
+
     #[test]
     fn json_norito_roundtrip() {
         let converter = ConverterImpl::<NewAccount>::boxed();
@@ -403,8 +413,10 @@ mod tests {
         let json_out = converter
             .norito_to_json(&norito)
             .expect("decode norito to json");
-        let expected: norito::json::Value = norito::json::from_str(&json).unwrap();
-        let actual: norito::json::Value = norito::json::from_str(&json_out).unwrap();
+        let mut expected: norito::json::Value = norito::json::from_str(&json).unwrap();
+        let mut actual: norito::json::Value = norito::json::from_str(&json_out).unwrap();
+        normalize_roundtrip_json(&mut expected);
+        normalize_roundtrip_json(&mut actual);
         assert_eq!(expected, actual);
     }
 

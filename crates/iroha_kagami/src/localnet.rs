@@ -308,6 +308,13 @@ impl std::fmt::Display for BuildLineArg {
     }
 }
 
+pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str {
+    match mode {
+        SumeragiConsensusMode::Permissioned => "permissioned",
+        SumeragiConsensusMode::Npos => "npos",
+    }
+}
+
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const LOCALNET_CHAIN_ID_ENV: &str = "IROHA_LOCALNET_CHAIN_ID";
 const GENESIS_SEED: &[u8; 7] = b"genesis";
@@ -480,7 +487,8 @@ pub struct Args {
     #[arg(long, short)]
     seed: Option<String>,
     /// Select the build line (`iroha2` or `iroha3`) for DA/RBC defaults.
-    /// Defaults to `iroha3`, so leaving `--consensus-mode` unset yields `npos`.
+    /// Defaults to `iroha3`; consensus still defaults to `permissioned` unless a profile or
+    /// perf preset requires `npos`.
     #[arg(long, value_enum, value_name = "LINE", default_value_t = BuildLineArg::Iroha3)]
     build_line: BuildLineArg,
     /// Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS).
@@ -525,9 +533,8 @@ pub struct Args {
     #[arg(long, value_name = "COUNT")]
     redundant_send_r: Option<u8>,
     /// Consensus mode to emit in genesis/configs.
-    /// Defaults to `npos` on Iroha3 and `permissioned` on Iroha2.
-    /// Localnet defaults to `--build-line iroha3`, so leaving this unset yields `npos`
-    /// unless you set `--build-line iroha2` or `--consensus-mode permissioned`.
+    /// Defaults to `permissioned` for generic localnets.
+    /// Sora profile localnets and perf profiles require `npos`.
     /// Sora profile localnets require `npos` because the global merge ledger is NPoS.
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
@@ -539,24 +546,26 @@ pub struct Args {
     mode_activation_height: Option<u64>,
 }
 
+fn resolve_requested_consensus_mode(
+    explicit_mode: Option<ConsensusModeArg>,
+    perf_profile: Option<LocalnetPerfProfile>,
+) -> SumeragiConsensusMode {
+    explicit_mode.map_or_else(
+        || {
+            perf_profile.map_or(SumeragiConsensusMode::Permissioned, |profile| {
+                profile.consensus_mode()
+            })
+        },
+        SumeragiConsensusMode::from,
+    )
+}
+
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let build_line = BuildLine::from(self.build_line);
         let sora_profile = self.sora_profile.map(SoraProfile::from);
         let perf_profile = self.perf_profile.map(LocalnetPerfProfile::from);
-        let consensus_mode = self.consensus_mode.map_or_else(
-            || {
-                if let Some(perf_profile) = perf_profile {
-                    return perf_profile.consensus_mode();
-                }
-                if build_line.is_iroha3() {
-                    SumeragiConsensusMode::Npos
-                } else {
-                    SumeragiConsensusMode::Permissioned
-                }
-            },
-            SumeragiConsensusMode::from,
-        );
+        let consensus_mode = resolve_requested_consensus_mode(self.consensus_mode, perf_profile);
         let opts = LocalnetOptions {
             build_line,
             sora_profile,
@@ -960,13 +969,44 @@ fn generate_localnet_with_line<T: Write>(
 
     tui::status("Writing client config");
     write_client_config(&out_dir, opts.base_api_port, &hosts.public, &chain_id)?;
+    let primary_torii_url = hosts.public.torii_url(opts.base_api_port);
+    let client_config_path = out_dir.join("client.toml");
+    let start_path = out_dir.join("start.sh");
+    let stop_path = out_dir.join("stop.sh");
+    write_localnet_readme(
+        &out_dir,
+        &chain_id,
+        build_line,
+        opts.consensus_mode,
+        opts.peers.get(),
+        &primary_torii_url,
+        &genesis_json_path,
+        &genesis_signed_path,
+        &client_config_path,
+        &start_path,
+        &stop_path,
+    )?;
     tui::success("Localnet ready");
 
+    writeln!(writer, "out_dir: {}", out_dir.display())?;
+    writeln!(writer, "chain_id: {}", chain_id)?;
+    writeln!(writer, "build_line: {}", build_line.as_str())?;
     writeln!(
         writer,
-        "Localnet generated in {} (start with start.sh, stop with stop.sh)",
-        out_dir.display()
+        "consensus_mode: {}",
+        consensus_mode_label(opts.consensus_mode)
     )?;
+    writeln!(writer, "peers: {}", opts.peers.get())?;
+    writeln!(writer, "torii_url: {}", primary_torii_url)?;
+    writeln!(writer, "genesis_json: {}", genesis_json_path.display())?;
+    writeln!(writer, "genesis_signed: {}", genesis_signed_path.display())?;
+    writeln!(writer, "client_config: {}", client_config_path.display())?;
+    writeln!(writer, "start_script: {}", start_path.display())?;
+    writeln!(writer, "stop_script: {}", stop_path.display())?;
+    writeln!(writer, "guide: {}", out_dir.join("README.md").display())?;
+    writeln!(writer, "next_start: cd {} && ./start.sh", out_dir.display())?;
+    writeln!(writer, "next_health: curl -sf {}health", primary_torii_url)?;
+    writeln!(writer, "next_stop: cd {} && ./stop.sh", out_dir.display())?;
     Ok(())
 }
 
@@ -2332,6 +2372,63 @@ fn write_client_config(
 
     fs::write(&path, rendered)
         .wrap_err_with(|| format!("failed to write client config to {}", path.display()))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_localnet_readme(
+    out_dir: &Path,
+    chain_id: &str,
+    build_line: BuildLine,
+    consensus_mode: SumeragiConsensusMode,
+    peers: u16,
+    torii_url: &str,
+    genesis_json_path: &Path,
+    genesis_signed_path: &Path,
+    client_config_path: &Path,
+    start_path: &Path,
+    stop_path: &Path,
+) -> Result<()> {
+    let readme_path = out_dir.join("README.md");
+    let rendered = format!(
+        concat!(
+            "# Kagami Localnet\n\n",
+            "- Chain ID: `{chain_id}`\n",
+            "- Build line: `{build_line}`\n",
+            "- Consensus mode: `{consensus_mode}`\n",
+            "- Peer count: `{peers}`\n",
+            "- Primary Torii URL: `{torii_url}`\n",
+            "- Genesis JSON: `{genesis_json}`\n",
+            "- Signed genesis: `{genesis_signed}`\n",
+            "- Client config: `{client_config}`\n\n",
+            "- Start script: `{start_script}`\n",
+            "- Stop script: `{stop_script}`\n\n",
+            "## Next steps\n\n",
+            "```bash\n",
+            "cd {out_dir}\n",
+            "./start.sh\n",
+            "curl -sf {torii_url}health\n",
+            "./stop.sh\n",
+            "```\n",
+            "Logs are written to `peerN.log` files next to the generated configs.\n",
+        ),
+        chain_id = chain_id,
+        build_line = build_line.as_str(),
+        consensus_mode = consensus_mode_label(consensus_mode),
+        peers = peers,
+        torii_url = torii_url,
+        genesis_json = genesis_json_path.display(),
+        genesis_signed = genesis_signed_path.display(),
+        client_config = client_config_path.display(),
+        start_script = start_path.display(),
+        stop_script = stop_path.display(),
+        out_dir = out_dir.display(),
+    );
+    fs::write(&readme_path, rendered).wrap_err_with(|| {
+        format!(
+            "failed to write localnet guide to {}",
+            readme_path.display()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -4898,5 +4995,18 @@ mod tests {
             .join("rans_seed0.toml");
         let bytes = fs::read(seed_path).expect("read rANS seed table");
         assert_eq!(bytes, RANS_SEED0_TABLE);
+    }
+
+    #[test]
+    fn localnet_defaults_to_permissioned_without_profile_or_perf_preset() {
+        let mode = resolve_requested_consensus_mode(None, None);
+        assert_eq!(mode, SumeragiConsensusMode::Permissioned);
+    }
+
+    #[test]
+    fn localnet_perf_profile_keeps_matching_consensus_mode() {
+        let mode =
+            resolve_requested_consensus_mode(None, Some(LocalnetPerfProfile::Throughput10kNpos));
+        assert_eq!(mode, SumeragiConsensusMode::Npos);
     }
 }

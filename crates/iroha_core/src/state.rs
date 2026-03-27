@@ -365,6 +365,8 @@ macro_rules! build_world_block {
             asset_definitions: $state.asset_definitions.$method(),
             asset_definition_aliases: $state.asset_definition_aliases.$method(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.$method(),
+            contract_aliases: $state.contract_aliases.$method(),
+            contract_alias_bindings: $state.contract_alias_bindings.$method(),
             domain_asset_definitions: $state.domain_asset_definitions.$method(),
             asset_definition_holders: $state.asset_definition_holders.$method(),
             asset_definition_assets: $state.asset_definition_assets.$method(),
@@ -546,6 +548,8 @@ macro_rules! build_world_transaction {
             asset_definitions: $state.asset_definitions.transaction(),
             asset_definition_aliases: $state.asset_definition_aliases.transaction(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.transaction(),
+            contract_aliases: $state.contract_aliases.transaction(),
+            contract_alias_bindings: $state.contract_alias_bindings.transaction(),
             domain_asset_definitions: $state.domain_asset_definitions.transaction(),
             asset_definition_holders: $state.asset_definition_holders.transaction(),
             asset_definition_assets: $state.asset_definition_assets.transaction(),
@@ -1434,6 +1438,11 @@ pub struct World {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         Storage<AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    #[norito(skip)]
+    pub(crate) contract_aliases: Storage<ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings: Storage<ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     #[norito(skip)]
     pub(crate) domain_asset_definitions: Storage<DomainId, BTreeSet<AssetDefinitionId>>,
@@ -1841,6 +1850,11 @@ pub struct WorldBlock<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageBlock<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    pub(crate) contract_aliases: StorageBlock<'world, ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings:
+        StorageBlock<'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions:
         StorageBlock<'world, DomainId, BTreeSet<AssetDefinitionId>>,
@@ -2390,6 +2404,12 @@ pub struct WorldTransaction<'block, 'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    pub(crate) contract_aliases:
+        StorageTransaction<'block, 'world, ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings:
+        StorageTransaction<'block, 'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions:
         StorageTransaction<'block, 'world, DomainId, BTreeSet<AssetDefinitionId>>,
@@ -3026,6 +3046,80 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
         expired
     }
+
+    /// Bind or update a contract alias record and keep both alias indexes consistent.
+    ///
+    /// # Errors
+    /// Returns an error when the requested alias is already bound to a different contract.
+    pub fn bind_contract_alias(
+        &mut self,
+        contract_address: &ContractAddress,
+        alias: ContractAlias,
+        lease_expiry_ms: Option<u64>,
+        grace_until_ms: Option<u64>,
+        bound_at_ms: u64,
+    ) -> Result<(), Error> {
+        if let Some(existing_contract) = self.contract_aliases.get(&alias).cloned()
+            && existing_contract != *contract_address
+        {
+            return Err(Error::InvariantViolation(
+                format!("contract alias `{alias}` is already bound").into(),
+            ));
+        }
+
+        if let Some(existing_binding) = self
+            .contract_alias_bindings
+            .get(contract_address)
+            .cloned()
+            && existing_binding.alias != alias
+        {
+            self.contract_aliases.remove(existing_binding.alias.clone());
+        }
+
+        self.contract_aliases
+            .insert(alias.clone(), contract_address.clone());
+        self.contract_alias_bindings.insert(
+            contract_address.clone(),
+            ContractAliasBindingRecord {
+                alias,
+                lease_expiry_ms,
+                grace_until_ms,
+                bound_at_ms,
+            },
+        );
+        Ok(())
+    }
+
+    /// Remove the alias binding for a contract and keep indexes consistent.
+    pub fn clear_contract_alias(&mut self, contract_address: &ContractAddress) {
+        if let Some(existing) = self.contract_alias_bindings.remove(contract_address.clone()) {
+            self.contract_aliases.remove(existing.alias);
+        }
+    }
+
+    /// Remove contract aliases whose grace window has elapsed.
+    ///
+    /// Returns canonical contract addresses that were unbound.
+    pub fn sweep_expired_contract_aliases(
+        &mut self,
+        now_ms: u64,
+    ) -> Vec<ContractAddress> {
+        let expired: Vec<ContractAddress> = self
+            .contract_alias_bindings
+            .iter()
+            .filter_map(|(contract_address, binding)| {
+                binding
+                    .is_grace_expired_at(now_ms)
+                    .then_some(contract_address.clone())
+            })
+            .collect();
+
+        for contract_address in &expired {
+            self.clear_contract_alias(contract_address);
+        }
+
+        expired
+    }
 }
 
 /// Consistent point in time view of the [`World`]
@@ -3066,6 +3160,11 @@ pub struct WorldView<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageView<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    pub(crate) contract_aliases: StorageView<'world, ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings:
+        StorageView<'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions: StorageView<'world, DomainId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
@@ -4953,6 +5052,68 @@ impl AssetDefinitionAliasBindingRecord {
                 AssetDefinitionAliasLeaseStatus::LeasedGrace
             }
             Some(_) => AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup,
+        }
+    }
+
+    /// Return `true` when the alias should be unbound at `now_ms`.
+    #[must_use]
+    pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
+        self.grace_until_ms
+            .is_some_and(|grace_until| now_ms > grace_until)
+    }
+}
+
+/// Public status of a contract alias lease at a specific observation time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContractAliasLeaseStatus {
+    /// Alias has no expiry and resolves permanently until explicitly cleared.
+    Permanent,
+    /// Alias lease has not reached its expiry timestamp yet.
+    LeasedActive,
+    /// Alias lease expired, but the alias still resolves during the grace window.
+    LeasedGrace,
+    /// Alias lease and grace both elapsed, but the sweep has not removed the binding yet.
+    ExpiredPendingCleanup,
+}
+
+/// On-chain alias lease metadata for a contract address.
+#[derive(
+    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+)]
+pub struct ContractAliasBindingRecord {
+    /// Bound alias literal (`<name>::<domain>.<dataspace>` or `<name>::<dataspace>`).
+    pub alias: ContractAlias,
+    /// Lease expiry timestamp (unix ms). `None` means non-expiring binding.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub lease_expiry_ms: Option<u64>,
+    /// End of the grace period (unix ms). Alias is removed once `now_ms > grace_until_ms`.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub grace_until_ms: Option<u64>,
+    /// Timestamp when the binding was recorded.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub bound_at_ms: u64,
+}
+
+impl ContractAliasBindingRecord {
+    /// Classify the binding at `now_ms`.
+    #[must_use]
+    pub fn status_at(&self, now_ms: u64) -> ContractAliasLeaseStatus {
+        match self.lease_expiry_ms {
+            None => ContractAliasLeaseStatus::Permanent,
+            Some(lease_expiry_ms) if now_ms < lease_expiry_ms => {
+                ContractAliasLeaseStatus::LeasedActive
+            }
+            Some(_)
+                if self
+                    .grace_until_ms
+                    .is_some_and(|grace_until| now_ms <= grace_until) =>
+            {
+                ContractAliasLeaseStatus::LeasedGrace
+            }
+            Some(_) => ContractAliasLeaseStatus::ExpiredPendingCleanup,
         }
     }
 
@@ -10432,6 +10593,8 @@ impl World {
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings: Storage::default(),
+            contract_aliases: Storage::default(),
+            contract_alias_bindings: Storage::default(),
             domain_asset_definitions: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
@@ -10488,6 +10651,9 @@ impl World {
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
+        world
+            .rebuild_contract_alias_indexes()
+            .expect("duplicate contract alias in world constructor");
         world.rebuild_asset_definition_indexes();
         world
             .rebuild_opaque_uaid_index()
@@ -10829,6 +10995,28 @@ impl World {
         Ok(())
     }
 
+    fn rebuild_contract_alias_indexes(&mut self) -> Result<(), String> {
+        let mut by_alias = BTreeMap::new();
+        let mut by_contract = BTreeMap::<ContractAddress, ContractAliasBindingRecord>::new();
+
+        for (contract_address, binding) in self.contract_alias_bindings.view().iter() {
+            if let Some(existing) = by_alias.get(&binding.alias)
+                && existing != contract_address
+            {
+                return Err(format!(
+                    "Contract alias `{}` already bound to contract {existing}",
+                    binding.alias
+                ));
+            }
+            by_alias.insert(binding.alias.clone(), contract_address.clone());
+            by_contract.insert(contract_address.clone(), binding.clone());
+        }
+
+        self.contract_aliases = by_alias.into_iter().collect();
+        self.contract_alias_bindings = by_contract.into_iter().collect();
+        Ok(())
+    }
+
     fn rebuild_asset_definition_indexes(&mut self) {
         let mut domain_definitions = BTreeMap::<DomainId, BTreeSet<AssetDefinitionId>>::new();
         for definition_id in self.asset_definitions.view().iter().map(|(id, _)| id) {
@@ -11047,6 +11235,8 @@ impl World {
             asset_definitions: self.asset_definitions.view(),
             asset_definition_aliases: self.asset_definition_aliases.view(),
             asset_definition_alias_bindings: self.asset_definition_alias_bindings.view(),
+            contract_aliases: self.contract_aliases.view(),
+            contract_alias_bindings: self.contract_alias_bindings.view(),
             domain_asset_definitions: self.domain_asset_definitions.view(),
             asset_definition_holders: self.asset_definition_holders.view(),
             asset_definition_assets: self.asset_definition_assets.view(),
@@ -11291,6 +11481,13 @@ pub trait WorldReadOnly {
     fn asset_definition_alias_bindings(
         &self,
     ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord>;
+    /// Alias index mapping `<name>::<domain>.<dataspace>` or `<name>::<dataspace>` to canonical
+    /// contract addresses.
+    fn contract_aliases(&self) -> &impl StorageReadOnly<ContractAlias, ContractAddress>;
+    /// Alias lease metadata keyed by canonical contract address.
+    fn contract_alias_bindings(
+        &self,
+    ) -> &impl StorageReadOnly<ContractAddress, ContractAliasBindingRecord>;
     /// Asset-definition ids grouped by domain.
     fn domain_asset_definitions(
         &self,
@@ -11839,6 +12036,33 @@ pub trait WorldReadOnly {
             }
             Some(_) => None,
             None => Some(definition_id),
+        }
+    }
+
+    /// Resolve a contract alias to a canonical contract address using the world-state alias index.
+    #[inline]
+    fn contract_address_by_alias(&self, alias: &ContractAlias) -> Option<ContractAddress> {
+        self.contract_aliases().get(alias).cloned()
+    }
+
+    /// Resolve a contract alias to a canonical contract address at a specific observation time.
+    ///
+    /// Expired aliases stop resolving once their grace window has elapsed, even if the sweep has
+    /// not removed the stale binding yet.
+    #[inline]
+    fn contract_address_by_alias_at(
+        &self,
+        alias: &ContractAlias,
+        now_ms: u64,
+    ) -> Option<ContractAddress> {
+        let contract_address = self.contract_aliases().get(alias)?.clone();
+        let binding = self.contract_alias_bindings().get(&contract_address);
+        match binding {
+            Some(binding) if binding.alias == *alias && !binding.is_grace_expired_at(now_ms) => {
+                Some(contract_address)
+            }
+            Some(_) => None,
+            None => Some(contract_address),
         }
     }
 

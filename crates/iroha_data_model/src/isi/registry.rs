@@ -3,9 +3,9 @@ use crate::isi::governance;
 use crate::{
     isi::{
         InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys, domain_link,
-        endorsement, identifier, kaigi, nexus, offline, oracle, ram_lfe, repo, runtime_upgrade,
-        rwa, settlement, smart_contract_code, social, soracloud, sorafs, space_directory,
-        transparent::{
+        contract_alias, endorsement, identifier, kaigi, nexus, offline, oracle, ram_lfe, repo,
+        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, sorafs,
+        space_directory, transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
         },
@@ -169,6 +169,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<domain_link::LinkAccountDomain>,
     InstructionRegistry::register::<domain_link::BindAccountAlias>,
     InstructionRegistry::register::<domain_link::SetAccountLabel>,
+    InstructionRegistry::register::<contract_alias::SetContractAlias>,
     InstructionRegistry::register::<domain_link::UnlinkAccountDomain>,
     InstructionRegistry::register::<ram_lfe::RegisterRamLfeProgramPolicy>,
     InstructionRegistry::register::<ram_lfe::ActivateRamLfeProgramPolicy>,
@@ -485,6 +486,9 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
         registry.register_with_id::<identifier::RevokeIdentifier>("identity::RevokeIdentifier");
     registry = registry.register_with_id::<asset_alias::SetAssetDefinitionAlias>(
         asset_alias::SetAssetDefinitionAlias::WIRE_ID,
+    );
+    registry = registry.register_with_id::<contract_alias::SetContractAlias>(
+        contract_alias::SetContractAlias::WIRE_ID,
     );
     registry = registry.register_with_id::<nexus::SetLaneRelayEmergencyValidators>(
         "nexus::SetLaneRelayEmergencyValidators",

@@ -681,6 +681,11 @@ impl From<crate::isi::domain_link::SetAccountLabel> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::contract_alias::SetContractAlias> for InstructionBox {
+    fn from(i: crate::isi::contract_alias::SetContractAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
     fn from(i: crate::isi::domain_link::UnlinkAccountDomain) -> Self {
         InstructionBox(Box::new(i))
@@ -1663,6 +1668,8 @@ pub mod bridge;
 pub mod confidential;
 /// Content lane instructions.
 pub mod content;
+/// Contract alias binding instructions.
+pub mod contract_alias;
 /// Account subject and domain link instructions.
 pub mod domain_link;
 /// Hidden-function-backed identifier policy instructions.
@@ -1714,6 +1721,7 @@ pub mod verifying_keys;
 pub mod zk;
 
 pub use asset_alias::*;
+pub use contract_alias::*;
 pub use confidential::*;
 pub use domain_link::*;
 pub use identifier::*;
@@ -2495,6 +2503,7 @@ pub mod prelude {
         },
         consensus_keys::{DisableConsensusKey, RegisterConsensusKey, RotateConsensusKey},
         content::{PublishContentBundle, RetireContentBundle},
+        contract_alias::SetContractAlias,
         domain_link::{BindAccountAlias, LinkAccountDomain, SetAccountLabel, UnlinkAccountDomain},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,

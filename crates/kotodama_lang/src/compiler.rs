@@ -571,7 +571,7 @@ impl Default for Compiler {
 }
 
 /// Options controlling metadata emitted by the compiler.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct CompilerOptions {
     /// ABI version to encode in the program header. Controls syscall policy and pointer‑ABI.
     pub abi_version: u8,
@@ -589,6 +589,8 @@ pub struct CompilerOptions {
     pub enforce_on_chain_profile: bool,
     /// Emit additive compiler debug metadata into the artifact.
     pub emit_debug: bool,
+    /// Optional logical source path embedded into compiler debug metadata.
+    pub debug_source_name: Option<String>,
 }
 
 impl Default for CompilerOptions {
@@ -602,6 +604,7 @@ impl Default for CompilerOptions {
             dynamic_iter_cap: 2,
             enforce_on_chain_profile: true,
             emit_debug: true,
+            debug_source_name: None,
         }
     }
 }
@@ -7431,8 +7434,12 @@ impl Compiler {
             kotoba: kotoba_entries.clone(),
             entrypoints: entrypoint_descriptors.clone(),
         };
-        let compile_report =
-            build_compile_report(&function_debug_seeds, code.len(), hint_diagnostics.clone());
+        let compile_report = build_compile_report(
+            &function_debug_seeds,
+            code.len(),
+            self.opts.debug_source_name.as_deref(),
+            hint_diagnostics.clone(),
+        );
         let debug_section = if self.opts.emit_debug {
             EmbeddedContractDebugInfoV1 {
                 source_map: compile_report.source_map.clone(),
@@ -7626,6 +7633,7 @@ impl Compiler {
 fn build_compile_report(
     function_debug_seeds: &[FunctionDebugSeed],
     code_len: usize,
+    source_path: Option<&str>,
     access_hint_diagnostics: AccessHintDiagnostics,
 ) -> CompileReport {
     let mut entries = function_debug_seeds.to_vec();
@@ -7639,6 +7647,7 @@ fn build_compile_report(
             .map(|next| next.pc_start)
             .unwrap_or(code_len as u64);
         let source = EmbeddedSourceLocation {
+            source_path: source_path.map(ToOwned::to_owned),
             line: seed.location.line as u32,
             column: seed.location.column as u32,
         };

@@ -38,9 +38,37 @@ use norito::json::{self, native::Number as JsonNumber};
 
 use super::ast::*;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FunctionEffects {
+    host_side_effects: bool,
+    emits_instructions: bool,
+    mutates_durable_state: bool,
+}
+
+impl FunctionEffects {
+    fn merge_from(&mut self, other: Self) -> bool {
+        let merged = Self {
+            host_side_effects: self.host_side_effects || other.host_side_effects,
+            emits_instructions: self.emits_instructions || other.emits_instructions,
+            mutates_durable_state: self.mutates_durable_state || other.mutates_durable_state,
+        };
+        let changed = *self != merged;
+        *self = merged;
+        changed
+    }
+
+    fn requires_permission(self) -> bool {
+        self.host_side_effects || self.emits_instructions
+    }
+
+    fn forbids_view(self) -> bool {
+        self.host_side_effects || self.emits_instructions || self.mutates_durable_state
+    }
+}
+
 #[derive(Clone, Default)]
 struct FunctionSummary {
-    direct_sensitive: bool,
+    direct_effects: FunctionEffects,
     calls: IndexSet<String>,
 }
 
@@ -183,6 +211,14 @@ const SENSITIVE_SYSCALLS: &[&str] = &[
     "grant_role",
     "revoke_role",
 ];
+
+const INSTRUCTION_EMITTING_BUILTINS: &[&str] = &[
+    "sc_execute_submit_ballot",
+    "sc_execute_unshield",
+    "execute_instruction",
+];
+
+const HOST_SIDE_EFFECT_BUILTINS: &[&str] = &["subscription_bill", "subscription_record_usage"];
 
 pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     // Collect struct definitions up front and publish to thread-local env for this analysis pass.
@@ -1632,7 +1668,11 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
         }
     }
     let summary = FunctionSummary {
-        direct_sensitive: block_contains_sensitive_syscall(&body),
+        direct_effects: FunctionEffects {
+            host_side_effects: block_contains_host_side_effects(&body),
+            emits_instructions: block_contains_instruction_emission(&body),
+            mutates_durable_state: block_mutates_durable_state(&body),
+        },
         calls: collect_called_functions(&body),
     };
     FUNCTION_SUMMARY.with(|map| {
@@ -3119,10 +3159,83 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         }),
                     }
                 }
+                // get_or(Map<int,int>, int) -> int
+                // Deterministic lowering returns the existing value or the supplied default without mutating the map.
+                "get_or" => {
+                    let original_len = arg_typed.len();
+                    if original_len != 2 && original_len != 3 {
+                        return Err(SemanticError {
+                            message: "get_or expects (Map<K,V>, K[, V])".into(),
+                        });
+                    }
+                    let mut call_args = arg_typed;
+                    let map_ty = resolve_struct_type(&call_args[0].ty);
+                    let (map_key_ty, map_value_ty) = match map_ty {
+                        Type::Map(k, v) => (*k, *v),
+                        other => {
+                            return Err(SemanticError {
+                                message: format!(
+                                    "get_or expects Map<K,V> as first arg, got {}",
+                                    type_name(&other)
+                                ),
+                            });
+                        }
+                    };
+                    let resolved_key_ty = resolve_struct_type(&map_key_ty);
+                    let resolved_value_ty = resolve_struct_type(&map_value_ty);
+                    ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
+                    ensure_in_memory_map_word_types(&call_args[0])?;
+
+                    if original_len == 2 {
+                        match resolve_struct_type(&resolved_value_ty) {
+                            Type::Int => {
+                                call_args.push(TypedExpr {
+                                    expr: ExprKind::Number(0),
+                                    ty: Type::Int,
+                                });
+                            }
+                            other => {
+                                if is_pointer_type(&other) {
+                                    return Err(SemanticError {
+                                        message: format!(
+                                            "get_or requires an explicit default for pointer-valued maps (value type {})",
+                                            type_name(&other)
+                                        ),
+                                    });
+                                }
+                                return Err(SemanticError {
+                                    message: format!(
+                                        "get_or auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
+                                        type_name(&other)
+                                    ),
+                                });
+                            }
+                        }
+                    } else {
+                        ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: call_args,
+                        },
+                        ty: resolved_value_ty,
+                    })
+                }
                 // get_or_insert_default(Map<int,int>, int) -> int
                 // Deterministic lowering: durable path uses STATE_GET/SET with Norito-encoded 0 when missing;
                 // ephemeral path compares and inserts 0 on mismatch.
                 "get_or_insert_default" => {
+                    let in_view = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+                        mods.borrow()
+                            .as_ref()
+                            .is_some_and(|modifiers| modifiers.kind == FunctionKind::View)
+                    });
+                    if in_view {
+                        return Err(SemanticError {
+                            message: "view entrypoints cannot use mutating map helper `get_or_insert_default`; use `get_or` instead".into(),
+                        });
+                    }
                     let original_len = arg_typed.len();
                     if original_len != 2 && original_len != 3 {
                         return Err(SemanticError {
@@ -5114,6 +5227,9 @@ fn normalize_namespaced(name: &str) -> String {
     if name == "std::map::has" {
         return String::from("has");
     }
+    if name == "std::map::get_or" {
+        return String::from("get_or");
+    }
     if name == "std::map::get_or_insert_default" {
         return String::from("get_or_insert_default");
     }
@@ -5347,11 +5463,22 @@ fn block_mutates_map(block: &TypedBlock, map_name: &str) -> bool {
     block.statements.iter().any(|s| stmt_mutates(s, map_name))
 }
 
-fn block_contains_sensitive_syscall(block: &TypedBlock) -> bool {
+fn block_contains_host_side_effects(block: &TypedBlock) -> bool {
     block
         .statements
         .iter()
-        .any(statement_contains_sensitive_syscall)
+        .any(statement_contains_host_side_effects)
+}
+
+fn block_contains_instruction_emission(block: &TypedBlock) -> bool {
+    block
+        .statements
+        .iter()
+        .any(statement_contains_instruction_emission)
+}
+
+fn block_mutates_durable_state(block: &TypedBlock) -> bool {
+    block.statements.iter().any(statement_mutates_durable_state)
 }
 
 fn is_state_identifier(name: &str) -> bool {
@@ -5649,75 +5776,137 @@ fn is_user_defined_function(name: &str) -> bool {
     FUNCTION_RETURNS.with(|env| env.borrow().contains_key(name))
 }
 
-fn enforce_permission_requirements(items: &[TypedItem]) -> Result<(), SemanticError> {
-    let summaries = FUNCTION_SUMMARY.with(|map| map.borrow().clone());
-    let mut requires_permission: HashMap<String, bool> = HashMap::new();
+fn compute_transitive_effects(
+    summaries: &HashMap<String, FunctionSummary>,
+) -> HashMap<String, FunctionEffects> {
+    let mut effects = summaries
+        .iter()
+        .map(|(name, summary)| (name.clone(), summary.direct_effects))
+        .collect::<HashMap<_, _>>();
     let mut changed = true;
     while changed {
         changed = false;
-        for (name, summary) in summaries.iter() {
-            let mut required = summary.direct_sensitive;
-            if !required {
-                required = summary
-                    .calls
-                    .iter()
-                    .any(|callee| *requires_permission.get(callee).unwrap_or(&false));
+        for (name, summary) in summaries {
+            let mut aggregate = summary.direct_effects;
+            for callee in &summary.calls {
+                if let Some(callee_effects) = effects.get(callee).copied() {
+                    aggregate.merge_from(callee_effects);
+                }
             }
-            if requires_permission.get(name).copied().unwrap_or(false) != required {
-                requires_permission.insert(name.clone(), required);
-                changed = true;
-            }
+            let slot = effects.entry(name.clone()).or_default();
+            changed |= slot.merge_from(aggregate);
         }
     }
+    effects
+}
+
+fn describe_view_violation(effect: FunctionEffects) -> &'static str {
+    if effect.mutates_durable_state {
+        "durable state mutation"
+    } else if effect.emits_instructions {
+        "instruction emission"
+    } else {
+        "host side effects"
+    }
+}
+
+fn find_first_view_violation(
+    root: &str,
+    summaries: &HashMap<String, FunctionSummary>,
+    effects: &HashMap<String, FunctionEffects>,
+) -> Option<(String, &'static str)> {
+    let mut visited = HashSet::new();
+    let mut stack = vec![root.to_owned()];
+    while let Some(name) = stack.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let summary = summaries.get(&name)?;
+        if summary.direct_effects.forbids_view() {
+            return Some((name, describe_view_violation(summary.direct_effects)));
+        }
+        let mut callees = summary
+            .calls
+            .iter()
+            .filter(|callee| {
+                effects
+                    .get(*callee)
+                    .copied()
+                    .is_some_and(FunctionEffects::forbids_view)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        callees.reverse();
+        stack.extend(callees);
+    }
+    None
+}
+
+fn enforce_permission_requirements(items: &[TypedItem]) -> Result<(), SemanticError> {
+    let summaries = FUNCTION_SUMMARY.with(|map| map.borrow().clone());
+    let effects = compute_transitive_effects(&summaries);
     for func in items.iter().map(|item| match item {
         TypedItem::Function(func) => func,
     }) {
-        let needs_permission = requires_permission
+        if func.modifiers.kind == FunctionKind::View
+            && let Some((offender, effect_kind)) =
+                find_first_view_violation(&func.name, &summaries, &effects)
+        {
+            let message = if offender == func.name {
+                format!("view function `{}` cannot perform {effect_kind}", func.name)
+            } else {
+                format!(
+                    "view function `{}` cannot call `{offender}` because `{offender}` performs {effect_kind}",
+                    func.name
+                )
+            };
+            return Err(SemanticError { message });
+        }
+
+        let needs_permission = effects
             .get(&func.name)
             .copied()
-            .unwrap_or(false);
-        if needs_permission && func.modifiers.visibility == FunctionVisibility::Public {
-            if func.modifiers.kind == FunctionKind::View {
-                return Err(SemanticError {
-                    message: format!(
-                        "view function `{}` cannot call privileged operations",
-                        func.name
-                    ),
-                });
-            }
-            if func.modifiers.permission.is_none() {
-                return Err(SemanticError {
-                    message: format!(
-                        "public function `{}` calls privileged operations but is missing `permission(...)`",
-                        func.name
-                    ),
-                });
-            }
+            .unwrap_or_default()
+            .requires_permission();
+        if needs_permission
+            && func.modifiers.visibility == FunctionVisibility::Public
+            && func.modifiers.permission.is_none()
+        {
+            return Err(SemanticError {
+                message: format!(
+                    "public function `{}` calls privileged operations but is missing `permission(...)`",
+                    func.name
+                ),
+            });
         }
     }
     Ok(())
 }
 
-fn statement_contains_sensitive_syscall(stmt: &TypedStatement) -> bool {
+fn statement_contains_host_side_effects(stmt: &TypedStatement) -> bool {
     match stmt {
         TypedStatement::Expr(expr)
         | TypedStatement::Return(Some(expr))
-        | TypedStatement::Let { value: expr, .. }
-        | TypedStatement::MapSet { value: expr, .. } => expr_contains_sensitive_syscall(expr),
+        | TypedStatement::Let { value: expr, .. } => expr_contains_host_side_effects(expr),
+        TypedStatement::MapSet { map, key, value } => {
+            expr_contains_host_side_effects(map)
+                || expr_contains_host_side_effects(key)
+                || expr_contains_host_side_effects(value)
+        }
         TypedStatement::If {
             cond,
             then_branch,
             else_branch,
         } => {
-            expr_contains_sensitive_syscall(cond)
-                || block_contains_sensitive_syscall(then_branch)
+            expr_contains_host_side_effects(cond)
+                || block_contains_host_side_effects(then_branch)
                 || else_branch
                     .as_ref()
-                    .map(block_contains_sensitive_syscall)
+                    .map(block_contains_host_side_effects)
                     .unwrap_or(false)
         }
         TypedStatement::While { cond, body } => {
-            expr_contains_sensitive_syscall(cond) || block_contains_sensitive_syscall(body)
+            expr_contains_host_side_effects(cond) || block_contains_host_side_effects(body)
         }
         TypedStatement::For {
             init,
@@ -5727,49 +5916,228 @@ fn statement_contains_sensitive_syscall(stmt: &TypedStatement) -> bool {
             ..
         } => {
             init.as_deref()
-                .map(statement_contains_sensitive_syscall)
+                .map(statement_contains_host_side_effects)
                 .unwrap_or(false)
                 || cond
                     .as_ref()
-                    .map(expr_contains_sensitive_syscall)
+                    .map(expr_contains_host_side_effects)
                     .unwrap_or(false)
                 || step
                     .as_deref()
-                    .map(statement_contains_sensitive_syscall)
+                    .map(statement_contains_host_side_effects)
                     .unwrap_or(false)
-                || block_contains_sensitive_syscall(body)
+                || block_contains_host_side_effects(body)
         }
         TypedStatement::ForEachMap { map, body, .. } => {
-            expr_contains_sensitive_syscall(map) || block_contains_sensitive_syscall(body)
+            expr_contains_host_side_effects(map) || block_contains_host_side_effects(body)
         }
         TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
     }
 }
 
-fn expr_contains_sensitive_syscall(expr: &TypedExpr) -> bool {
+fn statement_contains_instruction_emission(stmt: &TypedStatement) -> bool {
+    match stmt {
+        TypedStatement::Expr(expr)
+        | TypedStatement::Return(Some(expr))
+        | TypedStatement::Let { value: expr, .. } => expr_contains_instruction_emission(expr),
+        TypedStatement::MapSet { map, key, value } => {
+            expr_contains_instruction_emission(map)
+                || expr_contains_instruction_emission(key)
+                || expr_contains_instruction_emission(value)
+        }
+        TypedStatement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            expr_contains_instruction_emission(cond)
+                || block_contains_instruction_emission(then_branch)
+                || else_branch
+                    .as_ref()
+                    .map(block_contains_instruction_emission)
+                    .unwrap_or(false)
+        }
+        TypedStatement::While { cond, body } => {
+            expr_contains_instruction_emission(cond) || block_contains_instruction_emission(body)
+        }
+        TypedStatement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            init.as_deref()
+                .map(statement_contains_instruction_emission)
+                .unwrap_or(false)
+                || cond
+                    .as_ref()
+                    .map(expr_contains_instruction_emission)
+                    .unwrap_or(false)
+                || step
+                    .as_deref()
+                    .map(statement_contains_instruction_emission)
+                    .unwrap_or(false)
+                || block_contains_instruction_emission(body)
+        }
+        TypedStatement::ForEachMap { map, body, .. } => {
+            expr_contains_instruction_emission(map) || block_contains_instruction_emission(body)
+        }
+        TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
+    }
+}
+
+fn statement_mutates_durable_state(stmt: &TypedStatement) -> bool {
+    match stmt {
+        TypedStatement::Let { name, value } => {
+            is_state_identifier(name) || expr_mutates_durable_state(value)
+        }
+        TypedStatement::Expr(expr) | TypedStatement::Return(Some(expr)) => {
+            expr_mutates_durable_state(expr)
+        }
+        TypedStatement::MapSet { map, key, value } => {
+            typed_map_expr_is_state(map)
+                || expr_mutates_durable_state(map)
+                || expr_mutates_durable_state(key)
+                || expr_mutates_durable_state(value)
+        }
+        TypedStatement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            expr_mutates_durable_state(cond)
+                || block_mutates_durable_state(then_branch)
+                || else_branch
+                    .as_ref()
+                    .map(block_mutates_durable_state)
+                    .unwrap_or(false)
+        }
+        TypedStatement::While { cond, body } => {
+            expr_mutates_durable_state(cond) || block_mutates_durable_state(body)
+        }
+        TypedStatement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            init.as_deref()
+                .map(statement_mutates_durable_state)
+                .unwrap_or(false)
+                || cond
+                    .as_ref()
+                    .map(expr_mutates_durable_state)
+                    .unwrap_or(false)
+                || step
+                    .as_deref()
+                    .map(statement_mutates_durable_state)
+                    .unwrap_or(false)
+                || block_mutates_durable_state(body)
+        }
+        TypedStatement::ForEachMap { map, body, .. } => {
+            expr_mutates_durable_state(map) || block_mutates_durable_state(body)
+        }
+        TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
+    }
+}
+
+fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
     match &expr.expr {
         ExprKind::Call { name, args } => {
             SENSITIVE_SYSCALLS.contains(&name.as_str())
-                || args.iter().any(expr_contains_sensitive_syscall)
+                || HOST_SIDE_EFFECT_BUILTINS.contains(&name.as_str())
+                || args.iter().any(expr_contains_host_side_effects)
         }
         ExprKind::Binary { left, right, .. } => {
-            expr_contains_sensitive_syscall(left) || expr_contains_sensitive_syscall(right)
+            expr_contains_host_side_effects(left) || expr_contains_host_side_effects(right)
         }
-        ExprKind::Unary { expr, .. } => expr_contains_sensitive_syscall(expr),
-        ExprKind::NumericCast { expr } => expr_contains_sensitive_syscall(expr),
+        ExprKind::Unary { expr, .. } => expr_contains_host_side_effects(expr),
+        ExprKind::NumericCast { expr } => expr_contains_host_side_effects(expr),
         ExprKind::Conditional {
             cond,
             then_expr,
             else_expr,
         } => {
-            expr_contains_sensitive_syscall(cond)
-                || expr_contains_sensitive_syscall(then_expr)
-                || expr_contains_sensitive_syscall(else_expr)
+            expr_contains_host_side_effects(cond)
+                || expr_contains_host_side_effects(then_expr)
+                || expr_contains_host_side_effects(else_expr)
         }
-        ExprKind::Tuple(items) => items.iter().any(expr_contains_sensitive_syscall),
-        ExprKind::Member { object, .. } => expr_contains_sensitive_syscall(object),
+        ExprKind::Tuple(items) => items.iter().any(expr_contains_host_side_effects),
+        ExprKind::Member { object, .. } => expr_contains_host_side_effects(object),
         ExprKind::Index { target, index } => {
-            expr_contains_sensitive_syscall(target) || expr_contains_sensitive_syscall(index)
+            expr_contains_host_side_effects(target) || expr_contains_host_side_effects(index)
+        }
+        ExprKind::Number(_)
+        | ExprKind::Decimal(_)
+        | ExprKind::Bool(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_) => false,
+    }
+}
+
+fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
+    match &expr.expr {
+        ExprKind::Call { name, args } => {
+            INSTRUCTION_EMITTING_BUILTINS.contains(&name.as_str())
+                || args.iter().any(expr_contains_instruction_emission)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            expr_contains_instruction_emission(left) || expr_contains_instruction_emission(right)
+        }
+        ExprKind::Unary { expr, .. } => expr_contains_instruction_emission(expr),
+        ExprKind::NumericCast { expr } => expr_contains_instruction_emission(expr),
+        ExprKind::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_instruction_emission(cond)
+                || expr_contains_instruction_emission(then_expr)
+                || expr_contains_instruction_emission(else_expr)
+        }
+        ExprKind::Tuple(items) => items.iter().any(expr_contains_instruction_emission),
+        ExprKind::Member { object, .. } => expr_contains_instruction_emission(object),
+        ExprKind::Index { target, index } => {
+            expr_contains_instruction_emission(target) || expr_contains_instruction_emission(index)
+        }
+        ExprKind::Number(_)
+        | ExprKind::Decimal(_)
+        | ExprKind::Bool(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_) => false,
+    }
+}
+
+fn expr_mutates_durable_state(expr: &TypedExpr) -> bool {
+    match &expr.expr {
+        ExprKind::Call { name, args } => {
+            matches!(name.as_str(), "state_set" | "state_del")
+                || (name == "get_or_insert_default"
+                    && args.first().is_some_and(typed_map_expr_is_state))
+                || args.iter().any(expr_mutates_durable_state)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            expr_mutates_durable_state(left) || expr_mutates_durable_state(right)
+        }
+        ExprKind::Unary { expr, .. } => expr_mutates_durable_state(expr),
+        ExprKind::NumericCast { expr } => expr_mutates_durable_state(expr),
+        ExprKind::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_mutates_durable_state(cond)
+                || expr_mutates_durable_state(then_expr)
+                || expr_mutates_durable_state(else_expr)
+        }
+        ExprKind::Tuple(items) => items.iter().any(expr_mutates_durable_state),
+        ExprKind::Member { object, .. } => expr_mutates_durable_state(object),
+        ExprKind::Index { target, index } => {
+            expr_mutates_durable_state(target) || expr_mutates_durable_state(index)
         }
         ExprKind::Number(_)
         | ExprKind::Decimal(_)
@@ -6391,6 +6759,93 @@ mod tests {
         assert!(
             err.message
                 .contains("cannot use legacy payload builtin `json_get_int`"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_get_or_insert_default() {
+        let program = parse(
+            "seiyaku Demo { view fn f() -> int { let balances: Map<int, int> = Map::new(); return get_or_insert_default(balances, 7, 9); } }",
+        )
+        .expect("parse get_or_insert_default");
+        let err = analyze(&program).expect_err("view get_or_insert_default should fail");
+        assert!(
+            err.message.contains(
+                "view entrypoints cannot use mutating map helper `get_or_insert_default`"
+            ),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_accept_get_or() {
+        let program = parse(
+            "seiyaku Demo { view fn f() -> int { let balances: Map<int, int> = Map::new(); return get_or(balances, 7, 9); } }",
+        )
+        .expect("parse get_or");
+        analyze(&program).expect("view get_or should type-check");
+    }
+
+    #[test]
+    fn view_entrypoints_reject_direct_durable_state_assignment() {
+        let program = parse(
+            "seiyaku Demo { state int counter; view fn f() -> int { counter = 1; return counter; } }",
+        )
+        .expect("parse direct durable state assignment");
+        let err = analyze(&program).expect_err("view durable state assignment should fail");
+        assert!(
+            err.message
+                .contains("view function `f` cannot perform durable state mutation"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_state_map_mutation() {
+        let program = parse(
+            "seiyaku Demo { state balances: Map<int, int>; view fn f() -> int { balances[7] = 9; return 1; } }",
+        )
+        .expect("parse state map mutation");
+        let err = analyze(&program).expect_err("view state map mutation should fail");
+        assert!(
+            err.message
+                .contains("view function `f` cannot perform durable state mutation"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_transitive_durable_state_mutation() {
+        let program = parse(
+            "seiyaku Demo { state int counter; fn helper() { counter = counter + 1; } view fn f() -> int { helper(); return counter; } }",
+        )
+        .expect("parse transitive durable state mutation");
+        let err = analyze(&program).expect_err("view transitive durable mutation should fail");
+        assert!(
+            err.message.contains(
+                "view function `f` cannot call `helper` because `helper` performs durable state mutation"
+            ),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_transitive_instruction_emission() {
+        let program = parse(
+            "seiyaku Demo { fn helper() { execute_instruction(norito_bytes(\"IB0\")); } view fn f() -> int { helper(); return 1; } }",
+        )
+        .expect("parse transitive instruction emission");
+        let err = analyze(&program).expect_err("view transitive instruction emission should fail");
+        assert!(
+            err.message.contains(
+                "view function `f` cannot call `helper` because `helper` performs instruction emission"
+            ),
             "unexpected error message: {}",
             err.message
         );

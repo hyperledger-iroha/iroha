@@ -59,9 +59,8 @@ pub enum Item {
     Function(Function),
     /// User-defined product type with named fields.
     Struct(StructDef),
-    /// Contract-level durable state declaration. For now, the compiler lowers
-    /// these to ephemeral allocations per run; durable host-backed storage is
-    /// pending and tracked in the roadmap/docs.
+    /// Contract-level durable state declaration lowered to host-backed state
+    /// paths, including flattened singleton struct/tuple children.
     State(StateDecl),
     /// Contract-level trigger declaration (manifest-only metadata).
     Trigger(TriggerDecl),

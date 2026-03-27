@@ -3434,7 +3434,7 @@ impl FrontierSlot {
     fn lag_started_at(&self) -> Instant {
         self.timers
             .lag_window_started_at
-            .unwrap_or(self.timers.observed_at)
+            .unwrap_or(self.timers.last_progress_at)
     }
 
     fn body_missing(&self) -> bool {
@@ -3715,7 +3715,6 @@ impl FrontierSlot {
             }
             FrontierSlotEvent::OnFetchRetryDue => {
                 if matches!(self.mode, FrontierSlotMode::Normal)
-                    && matches!(self.phase, FrontierSlotPhase::AwaitBody)
                     && self.candidate.exact_fetch_armed
                     && self.body_missing()
                 {
@@ -3742,10 +3741,7 @@ impl FrontierSlot {
                 } else if matches!(self.mode, FrontierSlotMode::DeepCatchup) {
                     actions.enter_deep_catchup = self.repair_state.deep_catchup_reason;
                 } else {
-                    if lag_expired && matches!(self.phase, FrontierSlotPhase::AwaitCommitQc) {
-                        self.mark_deep_catchup(now, "frontier_stall_reset");
-                        actions.enter_deep_catchup = Some("frontier_stall_reset");
-                    } else if self.repair_state.quorum_timeout_rebroadcasted {
+                    if self.repair_state.quorum_timeout_rebroadcasted {
                         self.active_view = self
                             .current_view_for_timeout(requested_view)
                             .saturating_add(1);
@@ -3767,12 +3763,8 @@ impl FrontierSlot {
             }
             FrontierSlotEvent::OnLagWindowExpired { reason } => {
                 if matches!(self.mode, FrontierSlotMode::Normal)
-                    && matches!(
-                        self.phase,
-                        FrontierSlotPhase::AwaitBody
-                            | FrontierSlotPhase::AwaitVotes
-                            | FrontierSlotPhase::AwaitCommitQc
-                    )
+                    && self.candidate.exact_fetch_armed
+                    && self.body_missing()
                 {
                     self.mark_deep_catchup(now, reason);
                     actions.enter_deep_catchup = Some(reason);
@@ -5685,6 +5677,25 @@ impl Actor {
                     | crate::sumeragi::consensus::Phase::Commit
             ) && qc.height == height
                 && qc.view == view
+                && qc.epoch == expected_epoch
+        })
+    }
+
+    fn height_has_vote_backed_consensus_evidence(&self, height: u64) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        self.vote_log.values().any(|vote| {
+            matches!(
+                vote.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && vote.height == height
+                && vote.epoch == expected_epoch
+        }) || self.qc_cache.values().any(|qc| {
+            matches!(
+                qc.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && qc.height == height
                 && qc.epoch == expected_epoch
         })
     }
@@ -14142,12 +14153,8 @@ impl Actor {
         self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.height == height
                 && matches!(slot.mode, FrontierSlotMode::Normal)
-                && matches!(
-                    slot.phase,
-                    FrontierSlotPhase::AwaitBody
-                        | FrontierSlotPhase::AwaitVotes
-                        | FrontierSlotPhase::AwaitCommitQc
-                )
+                && slot.candidate.exact_fetch_armed
+                && slot.body_missing()
                 && now.saturating_duration_since(slot.lag_started_at())
                     >= self.frontier_slot_lag_window()
         })
@@ -14303,7 +14310,7 @@ impl Actor {
         voter: Option<PeerId>,
         now: Instant,
     ) -> bool {
-        if !self.frontier_slot_is_exact_height(height) {
+        if height != self.committed_height_snapshot().saturating_add(1) {
             return false;
         }
         let advance = self.handle_frontier_slot_event(
@@ -14315,6 +14322,7 @@ impl Actor {
             },
         );
         !matches!(advance, FrontierRecoveryAdvance::None)
+            || self.frontier_slot_has_active_owner_state(height)
     }
 
     fn frontier_body_fetch_targets(slot: &FrontierSlot) -> Vec<PeerId> {

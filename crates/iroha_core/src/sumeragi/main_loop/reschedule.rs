@@ -1218,31 +1218,44 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        // Once quorum timeout expires with no commit evidence, this block is just zombie state:
-        // keeping and rebroadcasting it only multiplies conflicting frontier candidates.
-        let drop_pending = no_commit_evidence;
         let frontier_height = u64::try_from(state_height)
             .unwrap_or(u64::MAX)
             .saturating_add(1);
         let contiguous_frontier = height == frontier_height;
+        let same_height_vote_backed_evidence =
+            contiguous_frontier && self.height_has_vote_backed_consensus_evidence(height);
+        let mut frontier_slot_owner_active =
+            contiguous_frontier && self.frontier_slot_has_active_owner_state(height);
+        if same_height_vote_backed_evidence && !frontier_slot_owner_active {
+            let _ = self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
+            frontier_slot_owner_active =
+                contiguous_frontier && self.frontier_slot_has_active_owner_state(height);
+        }
+        let effective_has_reschedule_votes =
+            has_reschedule_votes || same_height_vote_backed_evidence || frontier_slot_owner_active;
+        // Once quorum timeout expires with no same-height evidence, this block is just zombie
+        // state: keeping and rebroadcasting it only multiplies conflicting frontier candidates.
+        let drop_pending = !effective_has_reschedule_votes;
         let authoritative_payload_present = !drop_pending
             && Self::payload_available_for_da(
                 &self.subsystems.da_rbc.rbc.sessions,
                 &self.subsystems.da_rbc.rbc.status_handle,
                 &pending,
             );
-        let rotate_authoritative_frontier_immediately =
-            contiguous_frontier && has_reschedule_votes && authoritative_payload_present;
+        let rotate_authoritative_frontier_immediately = contiguous_frontier
+            && effective_has_reschedule_votes
+            && authoritative_payload_present
+            && !frontier_slot_owner_active;
         let frontier_window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
         let vote_backed_frontier_same_height_recovery_active = contiguous_frontier
-            && has_reschedule_votes
+            && effective_has_reschedule_votes
             && !drop_pending
             && !rotate_authoritative_frontier_immediately
             && self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
         let vote_backed_frontier_window_owned = contiguous_frontier
-            && has_reschedule_votes
+            && effective_has_reschedule_votes
             && !drop_pending
             && !rotate_authoritative_frontier_immediately
             && self.frontier_recovery_owns_height_window_with_window(
@@ -1293,11 +1306,11 @@ impl Actor {
         }
         let rotate_zero_vote_frontier_immediately = contiguous_frontier && drop_pending;
         let handoff_frontier_quorum_timeout_owner = contiguous_frontier
-            && has_reschedule_votes
+            && effective_has_reschedule_votes
             && !drop_pending
             && !rotate_authoritative_frontier_immediately;
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
-            if !has_reschedule_votes || drop_pending {
+            if !effective_has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
                 // already retried with availability evidence and need to unblock proposal assembly.
                 let txs: Vec<SignedTransaction> = pending.block.transactions_vec().clone();
@@ -1526,6 +1539,9 @@ impl Actor {
             rebroadcasted_block = rebroadcast.block,
             rebroadcasted_block_sync = rebroadcast.block_sync,
             drop_pending,
+            same_height_vote_backed_evidence,
+            frontier_slot_owner_active,
+            effective_has_reschedule_votes,
             handoff_frontier_quorum_timeout_owner,
             frontier_recovery_advance = ?frontier_recovery_advance,
             precommit_votes = precommit_vote_count,

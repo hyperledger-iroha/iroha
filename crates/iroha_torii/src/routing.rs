@@ -7617,6 +7617,7 @@ fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnos
             .source
             .as_ref()
             .and_then(|source| source.function.clone()),
+        source_path: diag.source.as_ref().and_then(|source| source.path.clone()),
         line: diag.source.as_ref().and_then(|source| source.line),
         column: diag.source.as_ref().and_then(|source| source.column),
         gas_limit: diag.budget.gas_limit,
@@ -12736,6 +12737,8 @@ pub struct ContractViewVmDiagnosticDto {
     pub pc: u64,
     #[norito(default)]
     pub function: Option<String>,
+    #[norito(default)]
+    pub source_path: Option<String>,
     #[norito(default)]
     pub line: Option<u32>,
     #[norito(default)]

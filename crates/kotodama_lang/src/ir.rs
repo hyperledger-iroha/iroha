@@ -1194,7 +1194,7 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             let t = lower_expr(ctx, value, vars);
             vars.insert(name.clone(), t);
             if ctx.state_name_literals.contains_key(name) {
-                emit_scalar_state_set(ctx, name, &value.ty, t);
+                emit_state_set(ctx, name, &value.ty, t);
             }
         }
         TypedStatement::Expr(e) => {
@@ -2855,6 +2855,119 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.start_block(end_bb);
                     result
                 }
+                "get_or" => {
+                    // Like get_or_default(map, key, default) but never mutates the backing map.
+                    let mexpr = &args[0];
+                    let kexpr = &args[1];
+                    let dexpr = &args[2];
+                    let key_tmp = lower_expr(ctx, kexpr, vars);
+                    // Durable path
+                    if let Some(bn) = state_map_base_name(mexpr)
+                        && let Some(spec) = ctx.state_map_configs.get(&bn)
+                        && let (Some(key_codec), Some(value_codec)) = (
+                            key_codec_for_type(&spec.key),
+                            value_codec_for_type(&spec.value),
+                        )
+                    {
+                        let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                        let t_blob = ctx.new_temp();
+                        ctx.current_instr(Instr::StateGet {
+                            dest: t_blob,
+                            path: t_path,
+                        });
+                        let zero = ctx.new_temp();
+                        ctx.current_instr(Instr::Const {
+                            dest: zero,
+                            value: 0,
+                        });
+                        let result = ctx.new_temp();
+                        let cond = ctx.new_temp();
+                        ctx.current_instr(Instr::Binary {
+                            dest: cond,
+                            op: BinaryOp::Ne,
+                            left: t_blob,
+                            right: zero,
+                        });
+                        let then_bb = ctx.new_label();
+                        let else_bb = ctx.new_label();
+                        let end_bb = ctx.new_label();
+                        ctx.finish_current(Terminator::Branch {
+                            cond,
+                            then_bb,
+                            else_bb,
+                        });
+                        // Then: decode existing value and return it
+                        ctx.start_block(then_bb);
+                        let existing = decode_value_from_norito(ctx, t_blob, &value_codec);
+                        ctx.current_instr(Instr::Binary {
+                            dest: result,
+                            op: BinaryOp::Add,
+                            left: existing,
+                            right: zero,
+                        });
+                        ctx.finish_current(Terminator::Jump(end_bb));
+                        // Else: return default without persisting it
+                        ctx.start_block(else_bb);
+                        let def = lower_expr(ctx, dexpr, vars);
+                        ctx.current_instr(Instr::Binary {
+                            dest: result,
+                            op: BinaryOp::Add,
+                            left: def,
+                            right: zero,
+                        });
+                        ctx.finish_current(Terminator::Jump(end_bb));
+                        // End and return result
+                        ctx.start_block(end_bb);
+                        return result;
+                    }
+                    // Ephemeral path: compare and return default if mismatch.
+                    let m = lower_expr(ctx, mexpr, vars);
+                    let sk = ctx.new_temp();
+                    let sv = ctx.new_temp();
+                    ctx.current_instr(Instr::MapLoadPair {
+                        dest_key: sk,
+                        dest_val: sv,
+                        map: m,
+                        offset: 0,
+                    });
+                    let zero = ctx.new_temp();
+                    ctx.current_instr(Instr::Const {
+                        dest: zero,
+                        value: 0,
+                    });
+                    let result = ctx.new_temp();
+                    let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
+                    let then_bb = ctx.new_label();
+                    let else_bb = ctx.new_label();
+                    let end_bb = ctx.new_label();
+                    ctx.finish_current(Terminator::Branch {
+                        cond,
+                        then_bb,
+                        else_bb,
+                    });
+                    // Then: return existing value
+                    ctx.start_block(then_bb);
+                    ctx.current_instr(Instr::Binary {
+                        dest: result,
+                        op: BinaryOp::Add,
+                        left: sv,
+                        right: zero,
+                    });
+                    ctx.finish_current(Terminator::Jump(end_bb));
+                    // Else: return default without inserting it
+                    ctx.start_block(else_bb);
+                    let def = lower_expr(ctx, dexpr, vars);
+                    ctx.current_instr(Instr::Binary {
+                        dest: result,
+                        op: BinaryOp::Add,
+                        left: def,
+                        right: zero,
+                    });
+                    ctx.finish_current(Terminator::Jump(end_bb));
+                    // End and return the selected result
+                    ctx.start_block(end_bb);
+                    result
+                }
                 "get_or_insert_default" => {
                     // Like get_or_default(map, key, default) but inserts the default deterministically when missing.
                     let mexpr = &args[0];
@@ -3805,6 +3918,26 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
 fn lower_state_field(ctx: &mut LowerCtx, literal: &str, ty: &Type) -> Option<Temp> {
     let resolved = semantic::resolve_struct_type(ty);
     match resolved {
+        Type::Struct { fields, .. } => {
+            let mut items = Vec::with_capacity(fields.len());
+            for (field_name, field_ty) in &fields {
+                let child_literal = format!("{literal}_{field_name}");
+                items.push(lower_state_field(ctx, &child_literal, field_ty)?);
+            }
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest, items });
+            Some(dest)
+        }
+        Type::Tuple(items_ty) => {
+            let mut items = Vec::with_capacity(items_ty.len());
+            for (idx, item_ty) in items_ty.iter().enumerate() {
+                let child_literal = format!("{literal}_{idx}");
+                items.push(lower_state_field(ctx, &child_literal, item_ty)?);
+            }
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack { dest, items });
+            Some(dest)
+        }
         Type::Int => {
             let blob = state_get_blob(ctx, literal);
             let dest = ctx.new_temp();
@@ -4067,6 +4200,36 @@ fn emit_scalar_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp)
         value: encoded,
     });
     ctx.loaded_state_fields.insert(name.to_string());
+}
+
+fn emit_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => {
+            for (idx, (_field_name, field_ty)) in fields.iter().enumerate() {
+                let child = format!("{name}#{idx}");
+                let child_value = ctx.new_temp();
+                ctx.current_instr(Instr::TupleGet {
+                    dest: child_value,
+                    tuple: value,
+                    index: idx,
+                });
+                emit_state_set(ctx, &child, field_ty, child_value);
+            }
+        }
+        Type::Tuple(items) => {
+            for (idx, item_ty) in items.iter().enumerate() {
+                let child = format!("{name}#{idx}");
+                let child_value = ctx.new_temp();
+                ctx.current_instr(Instr::TupleGet {
+                    dest: child_value,
+                    tuple: value,
+                    index: idx,
+                });
+                emit_state_set(ctx, &child, item_ty, child_value);
+            }
+        }
+        _ => emit_scalar_state_set(ctx, name, ty, value),
+    }
 }
 
 fn encode_value_to_norito(ctx: &mut LowerCtx, value: Temp, codec: &ValueCodec) -> Temp {
@@ -4621,6 +4784,140 @@ mod tests {
         assert!(
             !saw_map_get,
             "numeric-key map lookup should not use integer MapGet"
+        );
+    }
+
+    #[test]
+    fn lower_get_or_on_state_map_reads_without_writing() {
+        let src = "state balances: Map<int, int>; fn f() -> int { return get_or(balances, 1, 7); }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut state_gets = 0;
+        let mut state_sets = 0;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    Instr::StateGet { .. } => state_gets += 1,
+                    Instr::StateSet { .. } => state_sets += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            state_gets >= 1,
+            "expected get_or durable path to read state"
+        );
+        assert_eq!(state_sets, 0, "get_or must not mutate durable state");
+    }
+
+    #[test]
+    fn lower_state_struct_ident_reconstructs_tuple_from_host() {
+        let src = r#"
+            seiyaku C {
+                struct Ledger { counter: int; flag: bool; }
+                state Ledger ledger;
+
+                fn main() {
+                    let snapshot = ledger;
+                    let _ = snapshot.counter;
+                }
+            }
+        "#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
+
+        let mut saw_tuple_pack = false;
+        let mut saw_counter_path = false;
+        let mut saw_flag_path = false;
+        let mut state_gets = 0;
+
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    Instr::TuplePack { .. } => saw_tuple_pack = true,
+                    Instr::DataRef {
+                        kind: DataRefKind::Name,
+                        value,
+                        ..
+                    } if value == "ledger_counter" => saw_counter_path = true,
+                    Instr::DataRef {
+                        kind: DataRefKind::Name,
+                        value,
+                        ..
+                    } if value == "ledger_flag" => saw_flag_path = true,
+                    Instr::StateGet { .. } => state_gets += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(
+            saw_tuple_pack,
+            "expected TuplePack when reconstructing struct state"
+        );
+        assert!(saw_counter_path, "missing durable read for ledger.counter");
+        assert!(saw_flag_path, "missing durable read for ledger.flag");
+        assert!(
+            state_gets >= 2,
+            "expected durable reads for all struct fields"
+        );
+    }
+
+    #[test]
+    fn lower_state_struct_assignment_persists_child_fields() {
+        let src = r#"
+            seiyaku C {
+                struct Ledger { counter: int; flag: bool; }
+                state Ledger ledger;
+
+                fn main() {
+                    ledger = Ledger(7, true);
+                }
+            }
+        "#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let main_fn = ir.functions.iter().find(|f| f.name == "main").unwrap();
+
+        let mut saw_counter_path = false;
+        let mut saw_flag_path = false;
+        let mut state_sets = 0;
+        let mut tuple_gets = 0;
+
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                match instr {
+                    Instr::DataRef {
+                        kind: DataRefKind::Name,
+                        value,
+                        ..
+                    } if value == "ledger_counter" => saw_counter_path = true,
+                    Instr::DataRef {
+                        kind: DataRefKind::Name,
+                        value,
+                        ..
+                    } if value == "ledger_flag" => saw_flag_path = true,
+                    Instr::StateSet { .. } => state_sets += 1,
+                    Instr::TupleGet { .. } => tuple_gets += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(saw_counter_path, "missing durable write for ledger.counter");
+        assert!(saw_flag_path, "missing durable write for ledger.flag");
+        assert!(
+            state_sets >= 2,
+            "expected child StateSet instructions for struct assignment"
+        );
+        assert!(
+            tuple_gets >= 2,
+            "expected tuple extraction when flattening struct assignment"
         );
     }
 

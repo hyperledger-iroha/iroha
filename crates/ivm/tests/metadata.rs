@@ -74,7 +74,11 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             function_name: "main".to_owned(),
             pc_start: 0,
             pc_end: 4,
-            source: ivm::EmbeddedSourceLocation { line: 2, column: 3 },
+            source: ivm::EmbeddedSourceLocation {
+                source_path: Some("contracts/demo.ko".to_owned()),
+                line: 2,
+                column: 3,
+            },
         }],
         budget_report: vec![ivm::EmbeddedFunctionBudgetReportV1 {
             function_name: "main".to_owned(),
@@ -85,7 +89,11 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             frame_bytes: 16,
             jump_span_words: 1,
             jump_range_risk: false,
-            source: Some(ivm::EmbeddedSourceLocation { line: 2, column: 3 }),
+            source: Some(ivm::EmbeddedSourceLocation {
+                source_path: Some("contracts/demo.ko".to_owned()),
+                line: 2,
+                column: 3,
+            }),
         }],
     };
     let mut bytes = meta.encode();
@@ -193,9 +201,20 @@ fn parse_accepts_contract_debug_section() {
     let debug = parsed.contract_debug.expect("DBG1 section must decode");
     assert_eq!(debug.source_map.len(), 1);
     assert_eq!(debug.source_map[0].function_name, "main");
+    assert_eq!(
+        debug.source_map[0].source.source_path.as_deref(),
+        Some("contracts/demo.ko")
+    );
     assert_eq!(debug.source_map[0].source.line, 2);
     assert_eq!(debug.budget_report.len(), 1);
     assert_eq!(debug.budget_report[0].frame_bytes, 16);
+    assert_eq!(
+        debug.budget_report[0]
+            .source
+            .as_ref()
+            .and_then(|source| source.source_path.as_deref()),
+        Some("contracts/demo.ko")
+    );
 }
 
 #[test]

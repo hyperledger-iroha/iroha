@@ -87,6 +87,8 @@ pub struct EmbeddedContractInterfaceV1 {
 /// Source location emitted for function-level compiler debug metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct EmbeddedSourceLocation {
+    #[norito(default)]
+    pub source_path: Option<String>,
     pub line: u32,
     pub column: u32,
 }
