@@ -1721,8 +1721,8 @@ pub mod verifying_keys;
 pub mod zk;
 
 pub use asset_alias::*;
-pub use contract_alias::*;
 pub use confidential::*;
+pub use contract_alias::*;
 pub use domain_link::*;
 pub use identifier::*;
 pub use kaigi::*;

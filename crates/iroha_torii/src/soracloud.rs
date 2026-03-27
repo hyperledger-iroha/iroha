@@ -5626,11 +5626,17 @@ fn verified_soracloud_request_identity(
 ) -> Result<(AccountId, PublicKey, Vec<PublicKey>), SoracloudError> {
     let account = headers
         .get(VERIFIED_ACCOUNT_HEADER)
-        .and_then(|value| value.to_str().ok())
         .ok_or_else(|| {
             SoracloudError::unauthorized(
                 "signed request headers are required for Soracloud mutation endpoints",
             )
+        })
+        .and_then(|value| {
+            std::str::from_utf8(value.as_bytes()).map_err(|_| {
+                SoracloudError::internal(
+                    "failed to decode verified Soracloud account header".to_owned(),
+                )
+            })
         })
         .and_then(|literal| {
             AccountId::parse_encoded(literal.trim())
@@ -13389,7 +13395,8 @@ mod tests {
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             VERIFIED_ACCOUNT_HEADER,
-            account.to_string().parse().expect("valid account header"),
+            axum::http::HeaderValue::from_bytes(account.to_string().as_bytes())
+                .expect("valid utf-8 account header"),
         );
         headers.insert(
             VERIFIED_SIGNER_HEADER,

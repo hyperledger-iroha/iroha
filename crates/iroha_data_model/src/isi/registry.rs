@@ -2,10 +2,11 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys, domain_link,
-        contract_alias, endorsement, identifier, kaigi, nexus, offline, oracle, ram_lfe, repo,
-        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, sorafs,
-        space_directory, transparent::{
+        InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys,
+        contract_alias, domain_link, endorsement, identifier, kaigi, nexus, offline, oracle,
+        ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud,
+        sorafs, space_directory,
+        transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
         },

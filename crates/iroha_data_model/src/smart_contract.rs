@@ -299,7 +299,10 @@ fn normalize_contract_alias_segment(
     if value.is_empty() {
         return Err(ParseError::new("contract alias segments must not be empty"));
     }
-    if matches!(segment, "contract alias domain" | "contract alias dataspace") && value.contains('.')
+    if matches!(
+        segment,
+        "contract alias domain" | "contract alias dataspace"
+    ) && value.contains('.')
     {
         return Err(ParseError::new(match segment {
             "contract alias domain" => "contract alias domain segment must not contain `.`",
@@ -345,10 +348,10 @@ impl FromStr for ContractAlias {
             .transpose()?;
         let dataspace =
             normalize_contract_alias_segment(segments.dataspace, "contract alias dataspace")?;
-        let canonical = domain
-            .map_or_else(|| format!("{name}::{dataspace}"), |domain| {
-                format!("{name}::{domain}.{dataspace}")
-            });
+        let canonical = domain.map_or_else(
+            || format!("{name}::{dataspace}"),
+            |domain| format!("{name}::{domain}.{dataspace}"),
+        );
         Ok(Self(ConstString::from(&*canonical)))
     }
 }

@@ -2405,8 +2405,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_definition_alias_bindings:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
     /// Index mapping contract alias literals to canonical contract addresses.
-    pub(crate) contract_aliases:
-        StorageTransaction<'block, 'world, ContractAlias, ContractAddress>,
+    pub(crate) contract_aliases: StorageTransaction<'block, 'world, ContractAlias, ContractAddress>,
     /// Alias lease metadata keyed by canonical contract address.
     pub(crate) contract_alias_bindings:
         StorageTransaction<'block, 'world, ContractAddress, ContractAliasBindingRecord>,
@@ -3067,10 +3066,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             ));
         }
 
-        if let Some(existing_binding) = self
-            .contract_alias_bindings
-            .get(contract_address)
-            .cloned()
+        if let Some(existing_binding) = self.contract_alias_bindings.get(contract_address).cloned()
             && existing_binding.alias != alias
         {
             self.contract_aliases.remove(existing_binding.alias.clone());
@@ -3092,7 +3088,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
     /// Remove the alias binding for a contract and keep indexes consistent.
     pub fn clear_contract_alias(&mut self, contract_address: &ContractAddress) {
-        if let Some(existing) = self.contract_alias_bindings.remove(contract_address.clone()) {
+        if let Some(existing) = self
+            .contract_alias_bindings
+            .remove(contract_address.clone())
+        {
             self.contract_aliases.remove(existing.alias);
         }
     }
@@ -3100,10 +3099,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     /// Remove contract aliases whose grace window has elapsed.
     ///
     /// Returns canonical contract addresses that were unbound.
-    pub fn sweep_expired_contract_aliases(
-        &mut self,
-        now_ms: u64,
-    ) -> Vec<ContractAddress> {
+    pub fn sweep_expired_contract_aliases(&mut self, now_ms: u64) -> Vec<ContractAddress> {
         let expired: Vec<ContractAddress> = self
             .contract_alias_bindings
             .iter()
@@ -21910,7 +21906,8 @@ impl<'state> StateBlock<'state> {
             let removed_asset_aliases = maintenance_tx
                 .world
                 .sweep_expired_asset_definition_aliases(now_ms);
-            let removed_contract_aliases = maintenance_tx.world.sweep_expired_contract_aliases(now_ms);
+            let removed_contract_aliases =
+                maintenance_tx.world.sweep_expired_contract_aliases(now_ms);
             if !removed_asset_aliases.is_empty() || !removed_contract_aliases.is_empty() {
                 iroha_logger::info!(
                     removed_asset_aliases = removed_asset_aliases.len(),

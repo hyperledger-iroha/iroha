@@ -33,7 +33,7 @@ use iroha::{
         Encode,
         account::AccountId,
         asset::AssetDefinitionId,
-        isi::InstructionBox,
+        isi::{InstructionBox, decode_instruction_from_pair},
         metadata::Metadata,
         name::Name,
         prelude::ExposedPrivateKey,
@@ -63,7 +63,8 @@ use iroha::{
             encode_agent_message_send_provenance_payload,
             encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
             encode_agent_wallet_approve_provenance_payload,
-            encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
+            encode_agent_wallet_spend_provenance_payload,
+            encode_bundle_with_materials_provenance_payload,
             encode_delete_service_config_provenance_payload,
             encode_delete_service_secret_provenance_payload,
             encode_hf_shared_lease_join_provenance_payload,
@@ -104,7 +105,6 @@ use iroha_crypto::{
 };
 use iroha_primitives::json::Json;
 use norito::{
-    decode_from_bytes,
     json::{self, JsonDeserialize, JsonSerialize},
     to_bytes,
 };
@@ -600,6 +600,7 @@ impl DeployArgs {
             container,
             service,
         };
+        let service_name = bundle.service.service_name.to_string();
         bundle.validate_for_admission()?;
         let initial_service_configs =
             load_initial_service_configs(self.initial_configs.as_deref())?;
@@ -625,7 +626,21 @@ impl DeployArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_status(
+            torii_url,
+            Some(&service_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_service_mutation_output(
+            payload,
+            &status_payload,
+            &service_name,
+            match mode {
+                MutationMode::Deploy => "Deploy",
+                MutationMode::Upgrade => "Upgrade",
+            },
+        )
     }
 }
 
@@ -669,6 +684,7 @@ impl UpgradeArgs {
             container,
             service,
         };
+        let service_name = bundle.service.service_name.to_string();
         bundle.validate_for_admission()?;
         let initial_service_configs =
             load_initial_service_configs(self.initial_configs.as_deref())?;
@@ -694,7 +710,21 @@ impl UpgradeArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_status(
+            torii_url,
+            Some(&service_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_service_mutation_output(
+            payload,
+            &status_payload,
+            &service_name,
+            match mode {
+                MutationMode::Deploy => "Deploy",
+                MutationMode::Upgrade => "Upgrade",
+            },
+        )
     }
 }
 
@@ -1009,7 +1039,13 @@ impl RollbackArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_status(
+            torii_url,
+            Some(&self.service_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_service_mutation_output(payload, &status_payload, &self.service_name, "Rollback")
     }
 }
 
@@ -1061,7 +1097,13 @@ impl RolloutArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_status(
+            torii_url,
+            Some(&self.service_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_service_mutation_output(payload, &status_payload, &self.service_name, "Rollout")
     }
 }
 
@@ -1098,6 +1140,7 @@ impl AgentDeployArgs {
         }
         let manifest: AgentApartmentManifestV1 = load_json(&self.manifest)?;
         manifest.validate()?;
+        let apartment_name = manifest.apartment_name.to_string();
 
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_deploy_request(
@@ -1114,7 +1157,13 @@ impl AgentDeployArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_agent_status(
+            torii_url,
+            Some(&apartment_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_agent_mutation_output(payload, &status_payload, &apartment_name, "Deploy")
     }
 }
 
@@ -1158,7 +1207,13 @@ impl AgentLeaseRenewArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_agent_status(
+            torii_url,
+            Some(&self.apartment_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_agent_mutation_output(payload, &status_payload, &self.apartment_name, "LeaseRenew")
     }
 }
 
@@ -1194,7 +1249,13 @@ impl AgentRestartArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_agent_status(
+            torii_url,
+            Some(&self.apartment_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_agent_mutation_output(payload, &status_payload, &self.apartment_name, "Restart")
     }
 }
 
@@ -1272,7 +1333,13 @@ impl AgentWalletSpendArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_agent_status(
+            torii_url,
+            Some(&self.apartment_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_wallet_spend_output(payload, &status_payload, &self.apartment_name)
     }
 }
 
@@ -1312,7 +1379,18 @@ impl AgentWalletApproveArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_agent_status(
+            torii_url,
+            Some(&self.apartment_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_agent_mutation_output(
+            payload,
+            &status_payload,
+            &self.apartment_name,
+            "WalletSpendApproved",
+        )
     }
 }
 
@@ -1356,7 +1434,18 @@ impl AgentPolicyRevokeArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_agent_status(
+            torii_url,
+            Some(&self.apartment_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_agent_mutation_output(
+            payload,
+            &status_payload,
+            &self.apartment_name,
+            "PolicyRevoked",
+        )
     }
 }
 
@@ -1404,7 +1493,19 @@ impl AgentMessageSendArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, mailbox_status_payload) = fetch_torii_soracloud_agent_mailbox_status(
+            torii_url,
+            &self.to_apartment,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_message_send_output(
+            payload,
+            &mailbox_status_payload,
+            &self.from_apartment,
+            &self.channel,
+            &self.payload,
+        )
     }
 }
 
@@ -1444,7 +1545,13 @@ impl AgentMessageAckArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, mailbox_status_payload) = fetch_torii_soracloud_agent_mailbox_status(
+            torii_url,
+            &self.apartment_name,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_message_ack_output(payload, &mailbox_status_payload, &self.message_id)
     }
 }
 
@@ -1518,7 +1625,18 @@ impl AgentArtifactAllowArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_payload) = fetch_torii_soracloud_agent_status(
+            torii_url,
+            Some(&self.apartment_name),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_agent_mutation_output(
+            payload,
+            &status_payload,
+            &self.apartment_name,
+            "ArtifactAllowed",
+        )
     }
 }
 
@@ -2747,7 +2865,18 @@ impl HfDeployArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let account_id = authority.to_string();
+        let (_, status_payload) = fetch_torii_soracloud_hf_status(
+            torii_url,
+            &self.repo_id,
+            self.revision.as_deref(),
+            self.storage_class.to_storage_class(),
+            self.lease_term_ms,
+            Some(account_id.as_str()),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_hf_mutation_output(payload, &status_payload)
     }
 }
 
@@ -2849,7 +2978,18 @@ impl HfLeaseLeaveArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let account_id = authority.to_string();
+        let (_, status_payload) = fetch_torii_soracloud_hf_status(
+            torii_url,
+            &self.repo_id,
+            self.revision.as_deref(),
+            self.storage_class.to_storage_class(),
+            self.lease_term_ms,
+            Some(account_id.as_str()),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_hf_mutation_output(payload, &status_payload)
     }
 }
 
@@ -2917,7 +3057,18 @@ impl HfLeaseRenewArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let account_id = authority.to_string();
+        let (_, status_payload) = fetch_torii_soracloud_hf_status(
+            torii_url,
+            &self.repo_id,
+            self.revision.as_deref(),
+            self.storage_class.to_storage_class(),
+            self.lease_term_ms,
+            Some(account_id.as_str()),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        build_hf_mutation_output(payload, &status_payload)
     }
 }
 
@@ -4873,7 +5024,8 @@ fn sign_generated_hf_service_provenance(
     bundle: &SoraDeploymentBundleV1,
     key_pair: &KeyPair,
 ) -> Result<ManifestProvenance> {
-    let payload = encode_bundle_provenance_payload(bundle)
+    let payload =
+        encode_bundle_with_materials_provenance_payload(bundle, &BTreeMap::new(), &BTreeMap::new())
         .wrap_err("failed to encode generated HF service bundle for signing")?;
     Ok(ManifestProvenance {
         signer: key_pair.public_key().clone(),
@@ -6574,13 +6726,17 @@ fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<Instruc
         .ok_or_else(|| eyre!("Soracloud mutation draft response is missing `tx_instructions`"))?;
     let mut decoded = Vec::with_capacity(instructions.len());
     for entry in instructions {
+        let wire_id = entry
+            .get("wire_id")
+            .and_then(json::Value::as_str)
+            .ok_or_else(|| eyre!("Soracloud tx instruction is missing `wire_id`"))?;
         let payload_hex = entry
             .get("payload_hex")
             .and_then(json::Value::as_str)
             .ok_or_else(|| eyre!("Soracloud tx instruction is missing `payload_hex`"))?;
         let payload_bytes = hex::decode(payload_hex)
             .wrap_err("failed to decode Soracloud tx instruction hex payload")?;
-        let instruction: InstructionBox = decode_from_bytes(&payload_bytes)
+        let instruction = decode_instruction_from_pair(wire_id, &payload_bytes)
             .map_err(|error| eyre!("failed to decode Soracloud instruction skeleton: {error}"))?;
         decoded.push(instruction);
     }
@@ -6693,6 +6849,258 @@ where
         );
     }
     Ok((endpoint.to_string(), payload))
+}
+
+fn action_value(label: &str) -> json::Value {
+    norito::json!({ "action": label })
+}
+
+fn merge_submission_metadata(
+    target: &mut json::Value,
+    mutation_payload: &json::Value,
+) -> Result<()> {
+    let Some(root) = target.as_object_mut() else {
+        return Err(eyre!("expected JSON object when merging Soracloud submission metadata"));
+    };
+    if let Some(value) = extract_json_field(mutation_payload, "submitted_tx_hash")? {
+        root.insert("submitted_tx_hash".to_owned(), value);
+    }
+    if let Some(value) = extract_json_field(mutation_payload, "submission_mode")? {
+        root.insert("submission_mode".to_owned(), value);
+    }
+    Ok(())
+}
+
+fn control_plane_service_from_status<'a>(
+    payload: &'a json::Value,
+    service_name: &str,
+) -> Result<&'a json::Value> {
+    payload
+        .get("control_plane")
+        .and_then(json::Value::as_object)
+        .and_then(|control_plane| control_plane.get("services"))
+        .and_then(json::Value::as_array)
+        .and_then(|services| {
+            services.iter().find(|service| {
+                service
+                    .get("service_name")
+                    .and_then(json::Value::as_str)
+                    .is_some_and(|name| name == service_name)
+            })
+        })
+        .ok_or_else(|| {
+            eyre!(
+                "service `{service_name}` not found in authoritative Soracloud control-plane status"
+            )
+        })
+}
+
+fn agent_apartment_from_status<'a>(
+    payload: &'a json::Value,
+    apartment_name: &str,
+) -> Result<&'a json::Value> {
+    payload
+        .get("apartments")
+        .and_then(json::Value::as_array)
+        .and_then(|apartments| {
+            apartments.iter().find(|apartment| {
+                apartment
+                    .get("apartment_name")
+                    .and_then(json::Value::as_str)
+                    .is_some_and(|name| name == apartment_name)
+            })
+        })
+        .ok_or_else(|| {
+            eyre!("apartment `{apartment_name}` not found in authoritative Soracloud agent status")
+        })
+}
+
+fn mailbox_message_from_status<'a>(
+    payload: &'a json::Value,
+    from_apartment: &str,
+    channel: &str,
+    message_payload: &str,
+) -> Result<&'a json::Value> {
+    payload
+        .get("messages")
+        .and_then(json::Value::as_array)
+        .and_then(|messages| {
+            messages.iter().find(|message| {
+                message
+                    .get("from_apartment")
+                    .and_then(json::Value::as_str)
+                    .is_some_and(|value| value == from_apartment)
+                    && message
+                        .get("channel")
+                        .and_then(json::Value::as_str)
+                        .is_some_and(|value| value == channel)
+                    && message
+                        .get("payload")
+                        .and_then(json::Value::as_str)
+                        .is_some_and(|value| value == message_payload)
+            })
+        })
+        .ok_or_else(|| {
+            eyre!(
+                "mailbox message from `{from_apartment}` on channel `{channel}` was not found in authoritative status"
+            )
+        })
+}
+
+fn build_service_mutation_output(
+    mutation_payload: json::Value,
+    status_payload: &json::Value,
+    service_name: &str,
+    action_label: &str,
+) -> Result<json::Value> {
+    let mut output = control_plane_service_from_status(status_payload, service_name)?.clone();
+    let service = output
+        .as_object()
+        .ok_or_else(|| eyre!("service snapshot must be a JSON object"))?
+        .clone();
+    let Some(root) = output.as_object_mut() else {
+        return Err(eyre!("service snapshot must be a JSON object"));
+    };
+    root.insert("action".to_owned(), action_value(action_label));
+    if let Some(rollout) = service
+        .get("active_rollout")
+        .or_else(|| service.get("last_rollout"))
+        .and_then(json::Value::as_object)
+    {
+        if let Some(value) = rollout.get("rollout_handle").cloned() {
+            root.insert("rollout_handle".to_owned(), value);
+        }
+        if let Some(value) = rollout.get("stage").cloned() {
+            root.insert("rollout_stage".to_owned(), value.clone());
+            root.insert("stage".to_owned(), value);
+        }
+        if let Some(value) = rollout.get("traffic_percent").cloned() {
+            root.insert("traffic_percent".to_owned(), value);
+        }
+    }
+    merge_submission_metadata(&mut output, &mutation_payload)?;
+    Ok(output)
+}
+
+fn build_agent_mutation_output(
+    mutation_payload: json::Value,
+    status_payload: &json::Value,
+    apartment_name: &str,
+    action_label: &str,
+) -> Result<json::Value> {
+    let mut output = agent_apartment_from_status(status_payload, apartment_name)?.clone();
+    let apartment = output
+        .as_object()
+        .ok_or_else(|| eyre!("agent apartment snapshot must be a JSON object"))?
+        .clone();
+    let Some(root) = output.as_object_mut() else {
+        return Err(eyre!("agent apartment snapshot must be a JSON object"));
+    };
+    root.insert("action".to_owned(), action_value(action_label));
+    if let Some(value) = apartment.get("pending_wallet_request_count").cloned() {
+        root.insert("pending_request_count".to_owned(), value);
+    }
+    if let Some(value) = apartment.get("autonomy_budget_remaining_units").cloned() {
+        root.insert("budget_remaining_units".to_owned(), value);
+    }
+    if let Some(value) = apartment.get("artifact_allowlist_count").cloned() {
+        root.insert("allowlist_count".to_owned(), value);
+    }
+    if let Some(value) = apartment.get("autonomy_run_count").cloned() {
+        root.insert("run_count".to_owned(), value);
+    }
+    merge_submission_metadata(&mut output, &mutation_payload)?;
+    Ok(output)
+}
+
+fn build_hf_mutation_output(
+    mutation_payload: json::Value,
+    status_payload: &json::Value,
+) -> Result<json::Value> {
+    let mut output = status_payload.clone();
+    let latest_action = status_payload
+        .get("latest_audit_event")
+        .and_then(json::Value::as_object)
+        .and_then(|event| event.get("action"))
+        .cloned();
+    let Some(root) = output.as_object_mut() else {
+        return Err(eyre!("hf shared-lease status must be a JSON object"));
+    };
+    if let Some(value) = latest_action {
+        root.insert("action".to_owned(), value);
+    }
+    merge_submission_metadata(&mut output, &mutation_payload)?;
+    Ok(output)
+}
+
+fn build_wallet_spend_output(
+    mutation_payload: json::Value,
+    status_payload: &json::Value,
+    apartment_name: &str,
+) -> Result<json::Value> {
+    let mut output = build_agent_mutation_output(
+        mutation_payload,
+        status_payload,
+        apartment_name,
+        "WalletSpendRequested",
+    )?;
+    let last_active_sequence = output
+        .get("last_active_sequence")
+        .and_then(json::Value::as_u64)
+        .ok_or_else(|| eyre!("agent status is missing `last_active_sequence`"))?;
+    let Some(root) = output.as_object_mut() else {
+        return Err(eyre!("wallet spend output must be a JSON object"));
+    };
+    root.insert(
+        "request_id".to_owned(),
+        json::Value::String(format!("{apartment_name}:wallet:{last_active_sequence}")),
+    );
+    Ok(output)
+}
+
+fn build_message_send_output(
+    mutation_payload: json::Value,
+    mailbox_status_payload: &json::Value,
+    from_apartment: &str,
+    channel: &str,
+    message_payload: &str,
+) -> Result<json::Value> {
+    let mut output = mailbox_status_payload.clone();
+    let message_id = mailbox_message_from_status(
+        mailbox_status_payload,
+        from_apartment,
+        channel,
+        message_payload,
+    )?
+    .get("message_id")
+    .and_then(json::Value::as_str)
+    .ok_or_else(|| eyre!("mailbox status entry is missing `message_id`"))?
+    .to_owned();
+    let Some(root) = output.as_object_mut() else {
+        return Err(eyre!("mailbox status must be a JSON object"));
+    };
+    root.insert("action".to_owned(), action_value("MessageEnqueued"));
+    root.insert("message_id".to_owned(), json::Value::String(message_id));
+    merge_submission_metadata(&mut output, &mutation_payload)?;
+    Ok(output)
+}
+
+fn build_message_ack_output(
+    mutation_payload: json::Value,
+    mailbox_status_payload: &json::Value,
+    message_id: &str,
+) -> Result<json::Value> {
+    let mut output = mailbox_status_payload.clone();
+    let Some(root) = output.as_object_mut() else {
+        return Err(eyre!("mailbox status must be a JSON object"));
+    };
+    root.insert("action".to_owned(), action_value("MessageAcknowledged"));
+    root.insert(
+        "message_id".to_owned(),
+        json::Value::String(message_id.to_owned()),
+    );
+    merge_submission_metadata(&mut output, &mutation_payload)?;
+    Ok(output)
 }
 
 fn compute_uploaded_model_chunk_manifest_root(chunks: &[SoraUploadedModelChunkV1]) -> Result<Hash> {
@@ -11928,6 +12336,38 @@ mod tests {
         }
     }
 
+    #[test]
+    fn decode_soracloud_tx_instructions_accepts_framed_payloads() {
+        use iroha::data_model::{
+            domain::Domain,
+            isi::{Instruction, Register, frame_instruction_payload},
+        };
+
+        let instruction = InstructionBox::from(Register::domain(Domain::new(
+            "wonderland".parse().expect("domain id"),
+        )));
+        let wire_id = Instruction::id(&*instruction);
+        let payload = Instruction::dyn_encode(&*instruction);
+        let framed =
+            frame_instruction_payload(wire_id, &payload).expect("frame soracloud instruction");
+        let response = json::from_str(&format!(
+            r#"{{"tx_instructions":[{{"wire_id":"{wire_id}","payload_hex":"{}"}}]}}"#,
+            hex::encode(framed)
+        ))
+        .expect("build draft response");
+
+        let decoded =
+            decode_soracloud_tx_instructions(&response).expect("decode framed instructions");
+        let decoded_instruction = decoded.first().expect("single instruction");
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(Instruction::id(&**decoded_instruction), wire_id);
+        assert_eq!(
+            norito::to_bytes(decoded_instruction).expect("encode decoded"),
+            norito::to_bytes(&instruction).expect("encode expected"),
+        );
+    }
+
     fn write_sample_uploaded_model_source(dir: &Path) {
         fs::create_dir_all(dir).expect("create uploaded-model source dir");
         fs::write(
@@ -12393,15 +12833,19 @@ mod tests {
                     .as_ref()
                     .expect("generated service provenance")
                     .signer,
-                &encode_bundle_provenance_payload(&build_soracloud_hf_generated_service_bundle(
-                    "hf_lease_a".parse().expect("service name"),
-                    &hf_source_hash("openai/gpt-oss", "main")
-                        .expect("source id")
-                        .to_string(),
-                    "openai/gpt-oss",
-                    "main",
-                    "gpt-oss",
-                ))
+                &encode_bundle_with_materials_provenance_payload(
+                    &build_soracloud_hf_generated_service_bundle(
+                        "hf_lease_a".parse().expect("service name"),
+                        &hf_source_hash("openai/gpt-oss", "main")
+                            .expect("source id")
+                            .to_string(),
+                        "openai/gpt-oss",
+                        "main",
+                        "gpt-oss",
+                    ),
+                    &BTreeMap::new(),
+                    &BTreeMap::new(),
+                )
                 .expect("generated bundle payload"),
             )
             .expect("generated service provenance should verify");
@@ -12898,7 +13342,8 @@ mod tests {
             container,
             service,
         };
-        let encoded = encode_bundle_provenance_payload(&bundle).expect("encode signature payload");
+        let encoded = iroha_data_model::soracloud::encode_bundle_provenance_payload(&bundle)
+            .expect("encode signature payload");
         let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
         assert_eq!(encoded, expected);
     }

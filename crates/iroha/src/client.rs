@@ -8631,7 +8631,10 @@ impl Client {
             );
         }
         if let Some(contract_alias) = contract_alias {
-            body.insert("contract_alias".into(), norito::json::to_value(contract_alias)?);
+            body.insert(
+                "contract_alias".into(),
+                norito::json::to_value(contract_alias)?,
+            );
         }
         if let Some(entrypoint) = entrypoint {
             body.insert("entrypoint".into(), entrypoint.into());
@@ -8682,7 +8685,10 @@ impl Client {
             );
         }
         if let Some(contract_alias) = contract_alias {
-            body.insert("contract_alias".into(), norito::json::to_value(contract_alias)?);
+            body.insert(
+                "contract_alias".into(),
+                norito::json::to_value(contract_alias)?,
+            );
         }
         if let Some(entrypoint) = entrypoint {
             body.insert("entrypoint".into(), entrypoint.into());

@@ -2191,7 +2191,7 @@ async fn enforce_soracloud_signed_mutation_request(
         Err(error) => return Ok(error.into_response()),
     };
 
-    if let Ok(value) = HeaderValue::from_str(&verified.account.to_string()) {
+    if let Ok(value) = HeaderValue::from_bytes(verified.account.to_string().as_bytes()) {
         parts.headers.insert(
             HeaderName::from_static(soracloud::VERIFIED_ACCOUNT_HEADER),
             value,
@@ -32388,11 +32388,18 @@ mod tests {
         use tower::ServiceExt as _;
 
         async fn probe(headers: HeaderMap, body: Bytes) -> axum::response::Response {
-            let verified = headers.contains_key(axum::http::HeaderName::from_static(
-                soracloud::VERIFIED_SIGNER_HEADER,
-            ));
+            let verified_account = headers
+                .get(axum::http::HeaderName::from_static(
+                    soracloud::VERIFIED_ACCOUNT_HEADER,
+                ))
+                .and_then(|value| std::str::from_utf8(value.as_bytes()).ok());
+            let verified_signer = headers
+                .get(axum::http::HeaderName::from_static(
+                    soracloud::VERIFIED_SIGNER_HEADER,
+                ))
+                .and_then(|value| value.to_str().ok());
             axum::response::Response::builder()
-                .status(if verified {
+                .status(if verified_account.is_some() && verified_signer.is_some() {
                     StatusCode::OK
                 } else {
                     StatusCode::INTERNAL_SERVER_ERROR

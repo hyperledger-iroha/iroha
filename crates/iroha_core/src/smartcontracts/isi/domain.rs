@@ -139,7 +139,9 @@ pub mod isi {
         label: &AccountLabel,
         catalog: &DataSpaceCatalog,
     ) -> bool {
-        let Some(dataspace_alias) = catalog.by_id(label.dataspace).map(|entry| entry.alias.as_str())
+        let Some(dataspace_alias) = catalog
+            .by_id(label.dataspace)
+            .map(|entry| entry.alias.as_str())
         else {
             return false;
         };
@@ -189,7 +191,8 @@ pub mod isi {
                 err.to_string().into(),
             ))
         })?;
-        let Some(record) = crate::sns::record_by_selector(state_transaction.world(), &selector) else {
+        let Some(record) = crate::sns::record_by_selector(state_transaction.world(), &selector)
+        else {
             return Ok(());
         };
         let status =
@@ -2422,7 +2425,10 @@ pub mod isi {
             if state_transaction
                 .world
                 .contract_instances()
-                .get(&(contract_dataspace.alias.clone(), contract_address.to_string()))
+                .get(&(
+                    contract_dataspace.alias.clone(),
+                    contract_address.to_string(),
+                ))
                 .is_none()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -2472,7 +2478,9 @@ pub mod isi {
                     bound_at_ms,
                 )?;
             } else {
-                state_transaction.world.clear_contract_alias(&contract_address);
+                state_transaction
+                    .world
+                    .clear_contract_alias(&contract_address);
             }
 
             Ok(())
@@ -7282,8 +7290,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let contract_address =
             ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
-        let label =
-            AccountLabel::domainless("router".parse().expect("label"), DataSpaceId::GLOBAL);
+        let label = AccountLabel::domainless("router".parse().expect("label"), DataSpaceId::GLOBAL);
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
@@ -7302,7 +7309,8 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("account alias collision must fail");
         assert!(
-            err.to_string().contains("collides with an active account alias"),
+            err.to_string()
+                .contains("collides with an active account alias"),
             "unexpected error: {err}"
         );
     }
@@ -7313,8 +7321,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let contract_address =
             ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
-        let label =
-            AccountLabel::domainless("router".parse().expect("label"), DataSpaceId::GLOBAL);
+        let label = AccountLabel::domainless("router".parse().expect("label"), DataSpaceId::GLOBAL);
         let account = Account {
             id: authority.clone(),
             metadata: Metadata::default(),
@@ -7357,7 +7364,8 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect_err("contract alias collision must fail");
         assert!(
-            err.to_string().contains("collides with an active contract alias"),
+            err.to_string()
+                .contains("collides with an active contract alias"),
             "unexpected error: {err}"
         );
     }

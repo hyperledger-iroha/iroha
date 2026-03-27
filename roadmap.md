@@ -10556,3 +10556,6 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 ## Asset Alias Lease Follow-up
 1. Completed: translated docs and SDK-facing API references now describe the current `alias_binding` response payload, the persisted lease statuses (`permanent`, `leased_active`, `leased_grace`, `expired_pending_cleanup`), the chain-time-based alias cutoff, and the post-grace `expired_pending_cleanup` readback semantics.
 2. No dedicated alias-binding lookup/list endpoint is planned for now; asset-definition get/list/query and alias-resolution surfaces already expose `alias_binding`, and list/query now support `alias_binding.*` filter/sort selectors. Revisit only if operators need standalone lease inventory without fetching definitions.
+
+## 2026-03-27 Soracloud Live Torii Regression Follow-up
+1. No new roadmap items were opened by the March 27 Soracloud regression sweep; the UTF-8 account-header, canonical asset-definition, and NPoS fee-bootstrap fixes closed the reported `integration_tests/tests/iroha_cli.rs` failures, so the remaining roadmap stays unchanged.

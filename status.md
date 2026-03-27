@@ -12841,3 +12841,22 @@ Last updated: 2026-03-27
   - `cargo test -p kotodama_lang view_entrypoints_reject_ --lib`
   - `cargo test -p ivm runtime_trap_populates_last_diagnostic --lib`
   - `cargo test -p ivm --test metadata parse_accepts_contract_debug_section`
+
+## 2026-03-27 Soracloud Live Torii Regression Sweep
+- Closed the 2026-03-27 Soracloud `iroha_cli` live-Torii failures across the CLI, Torii ingress, test-network bootstrap, and Soracloud fixtures:
+  - `crates/iroha_torii/src/{lib.rs,soracloud.rs}` now preserve UTF-8/I105 account identifiers in the verified Soracloud headers instead of forcing ASCII-only header parsing
+  - `crates/iroha_cli/src/soracloud.rs` now decodes framed Soracloud draft instructions by `wire_id`, signs generated HF service provenance with the same bundle+materials payload Torii verifies, and enriches mutation replies from authoritative status snapshots
+  - `crates/iroha_test_network/src/lib.rs` now seeds the default Nexus fee asset in NPoS genesis for validators and runtime signers so live HF/Soracloud mutations can pay fees before any runtime minting
+  - `crates/iroha_core/src/smartcontracts/isi/soracloud.rs` now canonicalizes agent wallet asset-definition literals through the world-state alias resolver before spend-limit matching and wallet accounting
+  - `fixtures/soracloud/agent_apartment_manifest_v1.json` now uses canonical domainless asset-definition ids for spend limits instead of the stale `name#domain` examples
+  - `integration_tests/tests/iroha_cli.rs` now treats the HF lease asset as a canonical domainless asset-definition id already present in genesis, verifies bootstrap balances directly, and keeps the CLI binary reuse logic explicit when `IROHA_TEST_SKIP_BUILD` is enabled
+- Added focused regression coverage:
+  - `crates/iroha_test_network/src/lib.rs::tests::npos_bootstrap_seeds_default_fee_asset_for_runtime_signers`
+  - `crates/iroha_cli/src/soracloud.rs::tests::decode_soracloud_tx_instructions_accepts_framed_payloads`
+  - `integration_tests/tests/iroha_cli.rs::{should_reuse_existing_cli_binary_for_tests_defaults_to_false,should_reuse_existing_cli_binary_for_tests_accepts_truthy_values}`
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_test_network npos_bootstrap_seeds_default_fee_asset_for_runtime_signers -- --nocapture`
+  - `cargo test -p iroha_cli signed_hf_deploy_request_uses_verifiable_signature -- --nocapture`
+  - `cargo test -p integration_tests --test iroha_cli soracloud_ -- --nocapture`
+  - attempted `cargo test -p iroha_core agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state -- --nocapture`, but that test currently fails earlier on an unrelated SNS domain-name lease precondition for `wonderland`
