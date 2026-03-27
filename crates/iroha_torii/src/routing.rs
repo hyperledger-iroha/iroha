@@ -5750,14 +5750,12 @@ mod multisig_guard_tests {
     }
 }
 
-#[iroha_futures::telemetry_future]
-async fn handle_transaction_inner(
+pub(crate) fn accept_transaction_for_ingress(
     chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
     state: Arc<CoreState>,
     tx: SignedTransaction,
-    _telemetry: &MaybeTelemetry,
-) -> Result<RoutingDecision> {
+    telemetry: &MaybeTelemetry,
+) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
     let (max_clock_drift, tx_limits, state_view) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -5773,7 +5771,7 @@ async fn handle_transaction_inner(
             "rejecting transaction directly signed by multisig account"
         );
         #[cfg(feature = "telemetry")]
-        _telemetry.with_metrics(|tel| {
+        telemetry.with_metrics(|tel| {
             tel.inc_torii_multisig_direct_sign_reject();
             let signature_count = tx.signature_count() as u64;
             let signature_limit = tx_limits.max_signatures().get();
@@ -5796,18 +5794,18 @@ async fn handle_transaction_inner(
         iroha_data_model::account::AccountController::Multisig(_) => "multisig",
     };
     let crypto_cfg = state.crypto();
-    let accepted_tx = match AcceptedTransaction::accept(
+    match iroha_core::tx::AcceptedTransaction::accept(
         tx,
         &chain_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
     ) {
-        Ok(tx) => tx,
+        Ok(tx) => Ok(tx),
         Err(err) => {
             iroha_logger::warn!(?err, "transaction rejected during admission");
             #[cfg(feature = "telemetry")]
-            _telemetry.with_metrics(|tel| {
+            telemetry.with_metrics(|tel| {
                 if let AcceptTransactionFail::TransactionLimit(limit) = &err {
                     if limit.reason.starts_with(SIGNATURE_LIMIT_REASON_PREFIX) {
                         tel.inc_torii_signature_limit_reject(
@@ -5821,14 +5819,16 @@ async fn handle_transaction_inner(
                     tel.inc_torii_nts_unhealthy_reject();
                 }
             });
-            return Err(Error::AcceptTransaction(err));
+            Err(Error::AcceptTransaction(err))
         }
-    };
-    iroha_logger::debug!(
-        tx = %accepted_tx.as_ref().hash(),
-        "transaction accepted by Torii; enqueuing"
-    );
+    }
+}
 
+pub(crate) fn push_accepted_transaction_for_ingress(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
+) -> Result<RoutingDecision> {
     queue
         .push_with_lane_with_state(accepted_tx, state.as_ref())
         .map_err(|queue::Failure { tx, err }| {
@@ -5851,6 +5851,22 @@ async fn handle_transaction_inner(
                 "transaction enqueued successfully"
             );
         })
+}
+
+#[iroha_futures::telemetry_future]
+async fn handle_transaction_inner(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    tx: SignedTransaction,
+    _telemetry: &MaybeTelemetry,
+) -> Result<RoutingDecision> {
+    let accepted_tx = accept_transaction_for_ingress(chain_id, state.clone(), tx, _telemetry)?;
+    iroha_logger::debug!(
+        tx = %accepted_tx.as_ref().hash(),
+        "transaction accepted by Torii; enqueuing"
+    );
+    push_accepted_transaction_for_ingress(queue, state, accepted_tx)
 }
 
 pub async fn handle_transaction(
@@ -6411,7 +6427,7 @@ pub struct ContractStateQuery {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct ContractStateEntry {
     pub path: String,
     pub found: bool,
@@ -6426,7 +6442,7 @@ pub struct ContractStateEntry {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct ContractStateResponse {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -6466,13 +6482,15 @@ fn register_contract_state_schema(
     name: String,
     ty: ivm::EmbeddedStateType,
 ) {
-    match registry.get_mut(&name) {
-        Some(slot @ Some(existing)) if *existing == ty => {}
-        Some(slot) => *slot = None,
-        None => {
-            registry.insert(name, Some(ty));
+    if let Some(slot) = registry.get_mut(&name) {
+        if slot.as_ref().is_some_and(|existing| *existing == ty) {
+            return;
         }
+        *slot = None;
+        return;
     }
+
+    registry.insert(name, Some(ty));
 }
 
 #[cfg(feature = "app_api")]
@@ -7213,13 +7231,15 @@ mod contract_state_tests {
         })
         .expect("decode map entry");
 
-        assert_eq!(
-            decoded,
-            norito::json::json!({
-                "status": "1",
-                "approval_alias_fqn": base64::engine::general_purpose::STANDARD.encode("banking@sbp"),
-            })
+        let mut expected = norito::json::Map::new();
+        expected.insert("status".into(), norito::json::Value::from("1".to_owned()));
+        expected.insert(
+            "approval_alias_fqn".into(),
+            norito::json::Value::from(
+                base64::engine::general_purpose::STANDARD.encode("banking@sbp"),
+            ),
         );
+        assert_eq!(decoded, norito::json::Value::Object(expected));
     }
 }
 
@@ -20813,7 +20833,12 @@ const CONTEXT_NEXUS_PUBLIC_LANE_REWARDS: &str = ENDPOINT_NEXUS_PUBLIC_LANE_REWAR
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Debug,
+    Default,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
 )]
 pub struct PublicLaneValidatorsQueryParams {
     #[norito(default)]
@@ -20822,7 +20847,12 @@ pub struct PublicLaneValidatorsQueryParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Debug,
+    Default,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
 )]
 pub struct PublicLaneStakeQueryParams {
     #[norito(default)]
@@ -20831,7 +20861,12 @@ pub struct PublicLaneStakeQueryParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Debug,
+    Default,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
 )]
 pub struct PublicLaneRewardsQueryParams {
     #[norito(default)]
@@ -20845,7 +20880,12 @@ pub struct PublicLaneRewardsQueryParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Debug,
+    Default,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
 )]
 pub struct NexusDataspacesAccountSummaryQueryParams {
     #[norito(default)]
@@ -35582,7 +35622,12 @@ fn parse_offline_platform_policy(s: &str) -> Option<AndroidIntegrityPolicy> {
 /// Common GET list params: optional JSON filter + pagination.
 #[cfg(feature = "app_api")]
 #[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
 )]
 pub struct ListFilterParams {
     /// Optional JSON-encoded FilterExpr for compact GET filters.
@@ -36157,7 +36202,12 @@ struct OfflineStateResponse {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
 )]
 pub struct AccountAssetsGetParams {
     /// Optional limit for pagination.
@@ -36173,7 +36223,12 @@ pub struct AccountAssetsGetParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
 )]
 pub struct AccountTransactionsGetParams {
     /// Optional limit for pagination.
@@ -36187,7 +36242,12 @@ pub struct AccountTransactionsGetParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
 )]
 pub struct AssetHolderGetParams {
     /// Optional limit for pagination.

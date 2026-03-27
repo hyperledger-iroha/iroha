@@ -4735,6 +4735,7 @@ impl Iroha {
         );
         let torii = torii.with_rbc_store_dir(rbc_store_dir.clone());
         let torii = torii.with_p2p(network.clone());
+        let torii = torii.with_local_peer_id(config.common.peer.id.clone());
         let torii_run = torii.start(supervisor.shutdown_signal());
         let shutdown_on_failure = supervisor.shutdown_signal();
         supervisor.monitor(Child::new(

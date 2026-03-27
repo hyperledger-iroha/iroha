@@ -2,6 +2,47 @@
 
 Last updated: 2026-03-27
 
+Latest sync (2026-03-27 Nexus cross-dataspace Torii ingress proxying):
+`crates/iroha_core/src/{lib.rs,queue.rs,queue/router.rs,torii_proxy.rs}`
+and
+`crates/iroha_torii/src/{lib.rs,routing.rs}`
+and
+`integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+now cover the first authoritative-forwarding slice for Nexus ingress routing.
+
+- Torii now has versioned P2P proxy envelopes for signed transactions and
+  signed queries, local-peer attribution for ingress routing decisions, and a
+  control-plane subscriber that can dispatch Torii proxy requests/responses
+  alongside the existing Soracloud proxy traffic;
+- `POST /transaction` now resolves the Nexus lane/dataspace at ingress and
+  forwards to an authoritative peer when the local node is outside the target
+  lane, while preserving route headers plus `x-iroha-routed-by`;
+- signed `POST /query` requests now resolve the same authority-based routing
+  policy and proxy to an authoritative peer when the ingress node is not
+  authoritative, and the cross-dataspace localnet regression now submits/query
+  checks through Nexus-lane peers instead of leader-targeting the destination
+  dataspace directly; and
+- the focused verification path is unblocked from an unrelated macOS cfg issue
+  in `fastpq_prover`, but targeted `iroha_torii` compilation is still blocked
+  by existing `routing.rs`/`ivm` baseline errors outside this slice.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_core resolve_query_routing_decision --lib --message-format short`
+
+Open work for this Nexus ingress-routing slice now remains:
+- extend the same proxy path beyond signed `POST /query` into the remaining
+  dataspace-aware Torii convenience reads that still answer from local state
+  only;
+- implement the planned fan-out/merge behavior for multi-dataspace reads where
+  a single authoritative dataspace cannot be inferred deterministically from
+  the request authority/selectors;
+- add focused Torii unit coverage for proxy request/response handling once the
+  existing baseline `crates/iroha_torii/src/routing.rs` compile failures are
+  repaired upstream; and
+- rerun the targeted Torii and `integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+  verification once those pre-existing Torii compile blockers are cleared.
+
 Latest sync (2026-03-27 FASTPQ BN254 CUDA bench/report wiring):
 `crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs`
 now carries the low-level BN254 CUDA helper work into the raw bench evidence

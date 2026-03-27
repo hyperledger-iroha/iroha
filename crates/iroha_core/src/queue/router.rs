@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_data_model::{
+    account::AccountId,
     isi::{
         BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox,
@@ -138,6 +139,38 @@ pub fn evaluate_policy_with_catalog(
     resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
 }
 
+fn evaluate_query_policy_with_view(
+    policy: &LaneRoutingPolicy,
+    authority: &AccountId,
+    state_view: Option<&StateView<'_>>,
+) -> RoutingDecision {
+    let matched_rule = policy
+        .rules
+        .iter()
+        .find(|rule| query_rule_matches(rule, authority, state_view));
+    let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
+    let dataspace_id = matched_rule
+        .and_then(|rule| rule.dataspace)
+        .unwrap_or(policy.default_dataspace);
+    RoutingDecision::new(lane_id, dataspace_id)
+}
+
+/// Resolve the configured routing policy for a signed query authority.
+///
+/// Query routing intentionally ignores transaction-instruction matchers because
+/// queries do not carry ISI batches. Rules without an instruction matcher still
+/// participate, including account-scoped rules and explicit catch-all rules.
+pub fn resolve_query_routing_decision(
+    policy: &LaneRoutingPolicy,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+    authority: &AccountId,
+    state_view: Option<&StateView<'_>>,
+) -> Result<RoutingDecision, RoutingResolveError> {
+    let decision = evaluate_query_policy_with_view(policy, authority, state_view);
+    resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
+}
+
 /// Resolve a policy decision against lane/dataspace catalogs without fallback.
 ///
 /// This function intentionally rejects unresolved or ambiguous combinations
@@ -198,6 +231,20 @@ fn rule_matches(
     }
 
     true
+}
+
+fn query_rule_matches(
+    rule: &LaneRoutingRule,
+    authority: &AccountId,
+    state_view: Option<&StateView<'_>>,
+) -> bool {
+    if rule.matcher.instruction.is_some() {
+        return false;
+    }
+
+    rule.matcher.account.as_deref().map_or(true, |account| {
+        account_matches(account, authority, state_view)
+    })
 }
 
 fn account_matches(
@@ -1458,5 +1505,103 @@ mod tests {
         let bank_decision = router.route_with_view(&bank_tx, &state.view());
         assert_eq!(uae_decision.lane_id, LaneId::new(2));
         assert_eq!(bank_decision.lane_id, LaneId::new(1));
+    }
+
+    #[test]
+    fn resolve_query_routing_decision_matches_authority_rule() {
+        let (alice_id, _) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(0),
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(2),
+                dataspace: Some(DataSpaceId::new(2)),
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::new(0), DataSpaceId::GLOBAL),
+            (LaneId::new(2), DataSpaceId::new(2)),
+        ]);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_owned(),
+                ..Default::default()
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "ds2".to_owned(),
+                ..Default::default()
+            },
+        ])
+        .expect("dataspace catalog");
+
+        let decision = resolve_query_routing_decision(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &alice_id,
+            None,
+        )
+        .expect("query route must resolve");
+
+        assert_eq!(
+            decision,
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
+        );
+    }
+
+    #[test]
+    fn resolve_query_routing_decision_ignores_instruction_matchers() {
+        let (alice_id, _) = gen_account_in("wonderland");
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::new(0),
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(DataSpaceId::new(1)),
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: Some("mint".to_owned()),
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::new(0), DataSpaceId::GLOBAL),
+            (LaneId::new(1), DataSpaceId::new(1)),
+        ]);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_owned(),
+                ..Default::default()
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(1),
+                alias: "ds1".to_owned(),
+                ..Default::default()
+            },
+        ])
+        .expect("dataspace catalog");
+
+        let decision = resolve_query_routing_decision(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &alice_id,
+            None,
+        )
+        .expect("query route must resolve");
+
+        assert_eq!(
+            decision,
+            RoutingDecision::new(LaneId::new(0), DataSpaceId::GLOBAL)
+        );
     }
 }

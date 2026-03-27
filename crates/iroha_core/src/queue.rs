@@ -57,7 +57,8 @@ use norito::core::NoritoSerialize;
 use parking_lot::RwLock;
 pub use router::{
     ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingResolveError, SingleLaneRouter,
-    evaluate_policy, evaluate_policy_with_catalog, resolve_routing_decision,
+    evaluate_policy, evaluate_policy_with_catalog, resolve_query_routing_decision,
+    resolve_routing_decision,
 };
 use thiserror::Error;
 use tokio::{
@@ -1457,6 +1458,19 @@ impl Queue {
     /// This path prefers no-state routing and only falls back to a short-lived
     /// snapshot when the active router requires dynamic world data.
     pub(crate) fn route_for_gossip_with_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state: &State,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        let decision = self.router.read().try_route_with_state(tx, state)?;
+        self.resolve_queue_routing_decision(decision)
+    }
+
+    /// Resolve routing for an admitted transaction against the current state.
+    ///
+    /// This is used by Torii ingress proxying to compute the authoritative lane
+    /// before deciding whether the request can be executed locally.
+    pub fn route_with_state(
         &self,
         tx: &AcceptedTransaction<'_>,
         state: &State,
