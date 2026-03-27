@@ -2,6 +2,49 @@
 
 Last updated: 2026-03-27
 
+## 2026-03-27 Follow-up: direct genesis offline-allowance validation now uses the real bootstrap baseline
+- Updated
+  `crates/iroha_test_network/src/config.rs`
+  so the focused `genesis_executes_offline_allowance_instruction` unit builds
+  the same bootstrap pre-state that the production genesis pre-execution path
+  expects.
+- The shipped behavior in this slice:
+  - the direct validation test now materializes the pre-existing `genesis`
+    domain and genesis account instead of validating against an impossible
+    empty-domain baseline;
+  - the controller account used by the offline allowance fixture is built
+    through the normal account builder path rather than as a manually assembled
+    struct; and
+  - the test seeds SNS genesis alias bootstrap state before calling
+    `ValidBlock::validate_keep_voting_block(...)`, matching
+    `populate_genesis_results(...)` and clearing the stale bootstrap rejection.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_test_network genesis_executes_offline_allowance_instruction -- --nocapture` (pass)
+
+## 2026-03-27 Follow-up: offline allowance Torii routes and genesis helper are aligned again
+- Updated
+  `integration_tests/tests/address_canonicalisation.rs`,
+  `crates/iroha_torii/src/{lib.rs,routing.rs}`
+  so the offline-allowance I105 coverage exercises a valid genesis fixture and
+  live Torii routes again.
+- The shipped behavior in this slice:
+  - the offline-allowance genesis helper now gives the seeded asset definition
+    an explicit human-facing name and avoids re-registering built-in testnet
+    domains such as `aid`, so the fixture no longer poisons genesis with
+    duplicate/invalid registration errors;
+  - a focused non-network regression now pins that helper behavior directly by
+    checking the built genesis block for exactly one fixture-domain registration
+    and a non-empty asset-definition name; and
+  - Torii now mounts `GET /v1/offline/allowances` and
+    `POST /v1/offline/allowances/query` again, with the shared endpoint
+    constants restored from placeholder `"<deleted-...>"` values to the public
+    paths already documented in OpenAPI.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition --test address_canonicalisation -- --nocapture` (pass)
+  - `cargo test -p integration_tests offline_allowances_ --test address_canonicalisation -- --nocapture` (pass)
+
 ## 2026-03-27 Follow-up: Metal Merkle helper stubs now match the no-feature byte-tree callers
 - Extended the `ivm` accelerator fallback review in
   `crates/ivm/src/vector.rs`

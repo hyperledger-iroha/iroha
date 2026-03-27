@@ -2,6 +2,53 @@
 
 Last updated: 2026-03-27
 
+Latest sync (2026-03-27 genesis bootstrap alignment for offline-allowance validation):
+`crates/iroha_test_network/src/config.rs`
+now closes the direct-test bootstrap mismatch that was still failing after the
+offline-allowance route/helper repair.
+
+- the focused `genesis_executes_offline_allowance_instruction` unit now starts
+  from a real genesis baseline with the `genesis` domain/account materialized
+  instead of an impossible empty-domain world;
+- it also seeds SNS genesis alias bootstrap state before direct block
+  validation, matching the production `populate_genesis_results(...)` path; and
+- the offline allowance fixture controller account is now built through the
+  standard account builder path so escrow/bootstrap lookups see the same shape
+  of account state as the runtime.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_test_network genesis_executes_offline_allowance_instruction -- --nocapture`
+
+Latest sync (2026-03-27 offline allowance Torii route + genesis-helper repair):
+`integration_tests/tests/address_canonicalisation.rs`
+and
+`crates/iroha_torii/src/{lib.rs,routing.rs}`
+now close the next concrete offline-allowance regression in the app-facing I105
+coverage.
+
+- the offline-allowance genesis helper now seeds a valid named asset
+  definition and no longer duplicates built-in testnet domains like `aid`,
+  which clears the genesis `ContainsErrors` failure that was blocking the
+  allowance endpoint tests;
+- a focused helper regression now inspects the built genesis block directly so
+  this helper cannot silently drift back to duplicate-domain or nameless-asset
+  registrations; and
+- Torii now mounts `GET /v1/offline/allowances` plus
+  `POST /v1/offline/allowances/query` again, and the shared endpoint constants
+  match those public paths instead of placeholder deleted-endpoint markers.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition --test address_canonicalisation -- --nocapture`
+- `cargo test -p integration_tests offline_allowances_ --test address_canonicalisation -- --nocapture`
+
+Open work for this offline-allowance slice now remains:
+- decide whether the rest of the placeholder `"<deleted-offline-...>"` Torii
+  endpoint constants and unmounted allowance/certificate surfaces should be
+  restored or pruned so OpenAPI, handlers, and route registration stay in one
+  coherent state.
+
 Latest sync (2026-03-27 Metal Merkle helper fallback alignment):
 `crates/ivm/src/vector.rs`
 now closes the next concrete Metal/no-feature API mismatch in the ongoing

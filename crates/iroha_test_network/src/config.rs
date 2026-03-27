@@ -1461,28 +1461,16 @@ mod tests {
         let block = genesis(vec![vec![instruction]], topology.clone(), vec![entry]);
 
         let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-        let genesis_account_entry = Account {
-            id: genesis_account.clone(),
-            metadata: Metadata::default(),
-            label: None,
-            uaid: None,
-            opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
-        };
-        let controller_account_entry = Account {
-            id: controller.clone(),
-            metadata: Metadata::default(),
-            label: None,
-            uaid: None,
-            opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
-        };
-        let asset_domain = asset_definition_id.domain().clone();
-        let controller_domain = asset_domain.clone();
-        let mut domains = vec![Domain::new(asset_domain.clone()).build(&genesis_account)];
-        if controller_domain != asset_domain {
-            domains.push(Domain::new(controller_domain).build(&genesis_account));
-        }
+        let genesis_domain_id = iroha_genesis::GENESIS_DOMAIN_ID.clone();
+        let genesis_account_entry = Account::new(
+            genesis_account
+                .clone()
+                .to_account_id(genesis_domain_id.clone()),
+        )
+        .build(&genesis_account);
+        let controller_account_entry =
+            Account::new_domainless(controller.clone()).build(&controller);
+        let domains = vec![Domain::new(genesis_domain_id).build(&genesis_account)];
         let mut asset_definition =
             AssetDefinition::new(asset_definition_id, NumericSpec::fractional(asset_scale))
                 .with_name("Offline Allowance Asset".to_owned())
@@ -1497,13 +1485,16 @@ mod tests {
             iroha_data_model::asset::Asset::new(controller_asset_id, controller_asset_amount);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let world = World::with_assets(
+        let mut world = World::with_assets(
             domains,
             vec![genesis_account_entry, controller_account_entry],
             vec![asset_definition],
             vec![controller_asset_entry],
             [],
         );
+        // Mirror the production pre-exec bootstrap so direct validation sees the same
+        // genesis alias state as `populate_genesis_results`.
+        iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0);
         let state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
         let chain = block
             .0
