@@ -49,6 +49,18 @@ public final class CudaAcceleratorsKotlin {
     return cloneOrNull(CudaAccelerators.bn254Mul(a, b));
   }
 
+  public static long[] bn254AddBatchOrNull(final long[][] lhs, final long[][] rhs) {
+    return cloneOrNull(CudaAccelerators.bn254AddBatch(lhs, rhs));
+  }
+
+  public static long[] bn254SubBatchOrNull(final long[][] lhs, final long[][] rhs) {
+    return cloneOrNull(CudaAccelerators.bn254SubBatch(lhs, rhs));
+  }
+
+  public static long[] bn254MulBatchOrNull(final long[][] lhs, final long[][] rhs) {
+    return cloneOrNull(CudaAccelerators.bn254MulBatch(lhs, rhs));
+  }
+
   private static long[] cloneOrNull(final Optional<long[]> maybe) {
     final long[] value = maybe.orElse(null);
     if (value == null) {

@@ -14,6 +14,7 @@ public final class CudaAcceleratorsTests {
     testFlags();
     testPoseidon6Validation();
     testPoseidonBatchValidation();
+    testBn254BatchValidation();
     testOptionalResults();
   }
 
@@ -54,6 +55,24 @@ public final class CudaAcceleratorsTests {
     assert poseidon6Raised : "Poseidon6 batch should enforce 6-element inner arrays";
   }
 
+  private void testBn254BatchValidation() {
+    boolean lengthMismatchRaised = false;
+    try {
+      CudaAccelerators.bn254AddBatch(new long[][] {{1, 0, 0, 0}}, new long[][] {});
+    } catch (IllegalArgumentException ex) {
+      lengthMismatchRaised = true;
+    }
+    assert lengthMismatchRaised : "BN254 batch helpers should enforce matching batch lengths";
+
+    boolean limbMismatchRaised = false;
+    try {
+      CudaAccelerators.bn254MulBatch(new long[][] {{1, 2, 3}}, new long[][] {{4, 5, 6}});
+    } catch (IllegalArgumentException ex) {
+      limbMismatchRaised = true;
+    }
+    assert limbMismatchRaised : "BN254 batch helpers should enforce 4-limb inputs";
+  }
+
   private void testOptionalResults() {
     Optional<Long> poseidon2 = CudaAccelerators.poseidon2(1L, 2L);
     assert poseidon2.isEmpty() : "Poseidon2 should return an empty optional by default";
@@ -78,5 +97,23 @@ public final class CudaAcceleratorsTests {
     Optional<long[]> mul =
         CudaAccelerators.bn254Mul(new long[] {3, 0, 0, 0}, new long[] {7, 0, 0, 0});
     assert mul.isEmpty() : "bn254Mul should return an empty optional by default";
+
+    Optional<long[]> addBatch =
+        CudaAccelerators.bn254AddBatch(
+            new long[][] {{1, 0, 0, 0}, {2, 0, 0, 0}},
+            new long[][] {{3, 0, 0, 0}, {4, 0, 0, 0}});
+    assert addBatch.isEmpty() : "bn254AddBatch should return an empty optional by default";
+
+    Optional<long[]> subBatch =
+        CudaAccelerators.bn254SubBatch(
+            new long[][] {{5, 0, 0, 0}, {8, 0, 0, 0}},
+            new long[][] {{1, 0, 0, 0}, {3, 0, 0, 0}});
+    assert subBatch.isEmpty() : "bn254SubBatch should return an empty optional by default";
+
+    Optional<long[]> mulBatch =
+        CudaAccelerators.bn254MulBatch(
+            new long[][] {{3, 0, 0, 0}, {7, 0, 0, 0}},
+            new long[][] {{7, 0, 0, 0}, {3, 0, 0, 0}});
+    assert mulBatch.isEmpty() : "bn254MulBatch should return an empty optional by default";
   }
 }

@@ -521,6 +521,9 @@ fn try_gpu_encode(compress: CompressFn, payload: &[u8], level: i32) -> Option<Ve
                 &mut out_len,
             )
         };
+        if rc == RC_GPU_UNAVAILABLE {
+            return None;
+        }
         if rc == 0 {
             if out_len == 0 || out_len > out.len() {
                 return None;
@@ -807,6 +810,16 @@ mod self_test {
         0
     }
 
+    unsafe extern "C" fn compress_unavailable_immediate(
+        _src: *const u8,
+        _src_len: usize,
+        _level: i32,
+        _dst: *mut u8,
+        _dst_len: *mut usize,
+    ) -> i32 {
+        RC_GPU_UNAVAILABLE
+    }
+
     unsafe extern "C" fn decompress_invalid_len_success(
         _src: *const u8,
         _src_len: usize,
@@ -832,6 +845,12 @@ mod self_test {
     fn try_gpu_encode_rejects_invalid_success_length() {
         let payload = b"encode helper length check";
         assert!(try_gpu_encode(compress_invalid_len_success, payload, 1).is_none());
+    }
+
+    #[test]
+    fn try_gpu_encode_stops_on_gpu_unavailable() {
+        let payload = b"gpu unavailable";
+        assert!(try_gpu_encode(compress_unavailable_immediate, payload, 1).is_none());
     }
 
     #[test]

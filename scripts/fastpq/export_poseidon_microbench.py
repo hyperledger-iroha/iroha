@@ -49,6 +49,70 @@ def iso_timestamp(epoch_seconds: int | None) -> str | None:
     )
 
 
+def format_operation_filter(
+    benchmarks: dict[str, Any] | None,
+    report: dict[str, Any] | None,
+    bundle: dict[str, Any],
+) -> str | None:
+    for source in (benchmarks, report, bundle):
+        if not isinstance(source, dict):
+            continue
+        raw = source.get("operation_filter")
+        if isinstance(raw, str) and raw.strip():
+            return raw
+    for source in (benchmarks, report, bundle):
+        if not isinstance(source, dict):
+            continue
+        operations = source.get("operations")
+        if not isinstance(operations, list):
+            continue
+        names = sorted(
+            {
+                entry.get("operation")
+                for entry in operations
+                if isinstance(entry, dict) and isinstance(entry.get("operation"), str)
+            }
+        )
+        if len(names) == 1:
+            return names[0]
+        if names:
+            return "all"
+    return None
+
+
+def build_payload(bundle_path: Path, bundle: dict[str, Any], summary: dict[str, Any]) -> dict[str, Any]:
+    metadata = bundle.get("metadata") or {}
+    labels = metadata.get("labels")
+    if not isinstance(labels, dict):
+        labels = None
+    benchmarks = bundle.get("benchmarks") or {}
+    report = bundle.get("report") or {}
+    raw_gpu_backend = bundle.get("gpu_backend")
+    raw_execution_mode = bundle.get("execution_mode")
+    raw_timestamp = iso_timestamp(bundle.get("unix_epoch_secs"))
+    return {
+        "bundle": str(bundle_path),
+        "generated_at": metadata.get("generated_at"),
+        "host": metadata.get("host") or (labels or {}).get("host"),
+        "labels": labels,
+        "execution_mode": (
+            benchmarks.get("execution_mode")
+            or report.get("execution_mode")
+            or raw_execution_mode
+        ),
+        "gpu_backend": (
+            benchmarks.get("gpu_backend")
+            or report.get("gpu_backend")
+            or raw_gpu_backend
+        ),
+        "capture_timestamp": metadata.get("generated_at") or raw_timestamp,
+        "operation_filter": format_operation_filter(benchmarks, report, bundle),
+        "column_count": benchmarks.get("column_count") or report.get("column_count"),
+        "source_command": metadata.get("command"),
+        "poseidon_microbench": summary,
+    }
+
+
 def main() -> None:
     args = parse_args()
     bundle = json.loads(args.bundle.read_text())
@@ -70,28 +134,7 @@ def main() -> None:
             "(checked {})".format(source)
         )
     metadata = bundle.get("metadata") or {}
-    report = bundle.get("report") or {}
-    raw_gpu_backend = bundle.get("gpu_backend")
-    raw_execution_mode = bundle.get("execution_mode")
-    raw_timestamp = iso_timestamp(bundle.get("unix_epoch_secs"))
-    payload = {
-        "bundle": str(args.bundle),
-        "generated_at": metadata.get("generated_at"),
-        "host": metadata.get("host") or metadata.get("labels", {}).get("host"),
-        "labels": metadata.get("labels"),
-        "execution_mode": (
-            (benchmarks or {}).get("execution_mode")
-            or report.get("execution_mode")
-            or raw_execution_mode
-        ),
-        "gpu_backend": (
-            (benchmarks or {}).get("gpu_backend")
-            or report.get("gpu_backend")
-            or raw_gpu_backend
-        ),
-        "capture_timestamp": metadata.get("generated_at") or raw_timestamp,
-        "poseidon_microbench": summary,
-    }
+    payload = build_payload(args.bundle, bundle, summary)
     output_path = args.output or default_output_path(args.bundle, metadata)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, indent=2) + "\n")

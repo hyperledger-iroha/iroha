@@ -9,12 +9,13 @@
 //! The public API is intentionally narrow and uses Norito-friendly types so
 //! callers can persist artifacts without pulling in Serde.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(unexpected_cfgs)]
 
 mod backend;
 mod batch;
+mod bn254;
 mod cyclotomic;
 mod digest;
 mod error;
@@ -52,7 +53,9 @@ pub use backend::{
 pub use batch::{OperationKind, PublicInputs, StateTransition, TransitionBatch};
 pub use digest::trace_commitment;
 pub use error::{Error, Result};
-pub use fastpq_cuda::{CudaBackendError, fastpq_fft, fastpq_ifft, fastpq_lde};
+pub use fastpq_cuda::{
+    CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde, fastpq_fft, fastpq_ifft, fastpq_lde,
+};
 pub use fft::Planner;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 pub use metal::{

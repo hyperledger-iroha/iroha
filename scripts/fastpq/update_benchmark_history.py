@@ -23,6 +23,7 @@ class BenchmarkRow:
     execution_mode: str
     gpu_backend: str
     gpu_available: str
+    operation_filter: str
     device_class: str
     gpu_model: str
     lde: str
@@ -99,6 +100,7 @@ def collect_benchmark_rows(artifacts_dir: Path) -> list[BenchmarkRow]:
                 if not isinstance(op_name, str):
                     continue
                 operations[op_name] = entry
+        operation_filter = format_operation_filter(bench, operations)
         lde_row = operations.get("lde")
         poseidon_row = operations.get("poseidon_hash_columns")
         lde = format_operation(lde_row)
@@ -110,6 +112,7 @@ def collect_benchmark_rows(artifacts_dir: Path) -> list[BenchmarkRow]:
                 execution_mode=execution_mode,
                 gpu_backend=gpu_backend,
                 gpu_available=gpu_available_str,
+                operation_filter=operation_filter,
                 device_class=device_class,
                 gpu_model=gpu_model,
                 lde=lde,
@@ -117,6 +120,17 @@ def collect_benchmark_rows(artifacts_dir: Path) -> list[BenchmarkRow]:
             )
         )
     return rows
+
+
+def format_operation_filter(bench: dict[str, Any], operations: dict[str, dict[str, Any]]) -> str:
+    operation_filter = bench.get("operation_filter")
+    if isinstance(operation_filter, str) and operation_filter.strip():
+        return operation_filter
+    if len(operations) == 1:
+        return next(iter(operations))
+    if operations:
+        return "all"
+    return "—"
 
 
 def format_operation(operation: dict[str, Any] | None) -> str:
@@ -135,39 +149,48 @@ def poseidon_table(manifest_path: Path) -> str:
     entries = manifest.get("entries") or []
     if not isinstance(entries, list) or not entries:
         return "_Poseidon manifest is empty; export microbench captures before regenerating history._"
-    header = "| Summary | Bundle | Timestamp | Default ms | Scalar ms | Speedup |\n"
-    header += "|---------|--------|-----------|------------|-----------|---------|\n"
+    header = "| Summary | Bundle | Timestamp | Filter | Columns | Default ms | Scalar ms | Speedup |\n"
+    header += "|---------|--------|-----------|--------|---------|------------|-----------|---------|\n"
     rows = []
     for entry in entries:
+        operation_filter = entry.get("operation_filter")
+        if not isinstance(operation_filter, str) or not operation_filter.strip():
+            operation_filter = "all"
+        column_count = entry.get("column_count")
+        if isinstance(column_count, int):
+            column_count_str = str(column_count)
+        else:
+            column_count_str = "—"
         default_ms = fmt_ms(entry.get("default_mean_ms"))
         scalar_ms = fmt_ms(entry.get("scalar_mean_ms"))
         speedup = fmt_speedup(entry.get("speedup_vs_scalar"))
         rows.append(
             f"| `{entry.get('file')}` | `{entry.get('bundle')}` | "
-            f"{entry.get('capture_timestamp')} | {default_ms} | {scalar_ms} | {speedup} |"
+            f"{entry.get('capture_timestamp')} | {operation_filter} | {column_count_str} | "
+            f"{default_ms} | {scalar_ms} | {speedup} |"
         )
     return header + "\n".join(rows)
 
 
 def gpu_table(rows: Iterable[BenchmarkRow]) -> str:
     header = (
-        "| Bundle | Backend | Mode | GPU backend | GPU available | Device class | GPU | "
+        "| Bundle | Backend | Mode | GPU backend | GPU available | Filter | Device class | GPU | "
         "LDE ms (CPU/GPU/SU) | Poseidon ms (CPU/GPU/SU) |\n"
     )
     header += (
-        "|-------|---------|------|-------------|---------------|--------------|-----|"
+        "|-------|---------|------|-------------|---------------|--------|--------------|-----|"
         "----------------------|---------------------------|\n"
     )
     body = []
     for row in rows:
         body.append(
             f"| `{row.bundle.name}` | {row.backend} | {row.execution_mode} | {row.gpu_backend} | "
-            f"{row.gpu_available} | {row.device_class} | {row.gpu_model} | {row.lde} | {row.poseidon} |"
+            f"{row.gpu_available} | {row.operation_filter} | {row.device_class} | {row.gpu_model} | {row.lde} | {row.poseidon} |"
         )
     return (
         header + "\n".join(body)
         if body
-        else header + "| _No wrapped benchmarks found_ |  |  |  |  |  |  |  |  |"
+        else header + "| _No wrapped benchmarks found_ |  |  |  |  |  |  |  |  |  |"
     )
 
 
@@ -270,7 +293,9 @@ def render_document(
         `benchmarks/poseidon/manifest.json` aggregates the default-vs-scalar Poseidon
         microbench runs exported from each Metal bundle. The table below is refreshed by
         the generator script, so CI and governance reviews can diff historical speedups
-        without unpacking the wrapped FASTPQ reports.
+        without unpacking the wrapped FASTPQ reports. `Filter`/`Columns` come from the
+        standalone export metadata and fall back to `all` / `—` for older captures that
+        predate the focused-capture bookkeeping.
 
         """
     )
@@ -297,10 +322,21 @@ def render_document(
         """
     )
     gpu_section = gpu_table(rows)
+    gpu_note = textwrap.dedent(
+        """\
+        > Columns: `Backend` is derived from the bundle name; `Mode`/`GPU backend`/`GPU available`
+        > come from the wrapped `benchmarks` block to expose CPU fallbacks or missing GPU discovery.
+        > `Filter` records the selected operation filter (`all` for full bundles, otherwise the
+        > focused stage name), falling back to the lone operation name for older single-op captures.
+        > SU = speedup ratio (CPU/GPU).
+
+        """
+    )
     document = (
         intro
         + gpu_section
         + "\n\n"
+        + gpu_note
         + poseidon_intro
         + poseidon_section
         + "\n\n"
