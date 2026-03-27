@@ -1533,6 +1533,87 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(request.encryptedInputHex, expected)
     }
 
+    func testIdentifierBfvEnvelopeBuilderMatchesLiveJsVector() throws {
+        let fixtureURL = URL(fileURLWithPath: "/tmp/js_email_identifier_request.json")
+        let fixtureData = try Data(contentsOf: fixtureURL)
+        let fixture = try JSONSerialization.jsonObject(with: fixtureData) as? [String: Any]
+        let expected = try XCTUnwrap(fixture?["encryptedInput"] as? String)
+
+        let policy = ToriiIdentifierPolicySummary(
+            policyId: "email#retail",
+            owner: try canonicalOwnerLiteral(),
+            active: true,
+            normalization: .emailAddress,
+            resolverPublicKey: "ed01208FC2E4882B20ABCCBFADB4E44268206E187AEB235A51252F159B3B24D5BB6661",
+            backend: "bfv-programmed-sha3-256-v1",
+            inputEncryption: "bfv-v1",
+            inputEncryptionPublicParameters: nil,
+            inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters(
+                parameters: ToriiIdentifierBfvParameters(
+                    polynomialDegree: 64,
+                    plaintextModulus: 256,
+                    ciphertextModulus: 4_503_599_627_370_496,
+                    decompositionBaseLog: 12
+                ),
+                publicKey: ToriiIdentifierBfvPublicKey(
+                    b: [
+                        121937970585568, 2077422026028227, 500805327165639, 2424373013208231,
+                        1243826623687677, 3764723070138803, 2777853678689092, 4148792190743456,
+                        832919354056448, 1078220173904611, 1449102004009053, 2553195729187374,
+                        4121823210086138, 1314721746498746, 2081320919861598, 1293550100235769,
+                        752052855416432, 2560964795529688, 4373758947250140, 302739621553461,
+                        2576363806012840, 3992909986948675, 468471023959674, 403186621067672,
+                        2412531771816291, 1151008441392236, 4235659218269462, 3632712073230975,
+                        1570131697783046, 2686064869757573, 868982827285377, 4024361324590714,
+                        2720840185948756, 4035919674038070, 1768439826701200, 1795998257831299,
+                        3146057215641308, 4427306182373160, 431902047897329, 4103953196264316,
+                        252052014793937, 4481957945412857, 313876785458221, 502488979381506,
+                        2254533341218653, 378630418191746, 3949757926731121, 3205345961759607,
+                        4403697458699262, 1051260385144426, 3165025408388444, 2971268616428220,
+                        1438933110049424, 221886932655998, 760759893336199, 2366379419062310,
+                        3808463564396841, 3404172544660443, 3109880358158474, 977074504388190,
+                        3693464878032463, 4157741571468524, 4422156359690334, 3136084645017157
+                    ],
+                    a: [
+                        1757685446086860, 3389246144977851, 568120110213016, 3749195222357958,
+                        505425731783661, 1653917459200990, 3991392281498110, 2498385903989296,
+                        2202458345522039, 665774489520137, 3431324343332235, 2757156726851470,
+                        3945284631206095, 4260357308916675, 3556193440561259, 528988422073873,
+                        3556053776248327, 231714661150035, 4000422747863537, 4440124990980577,
+                        1151102360936999, 1203423089979213, 3714754289019569, 365230193721200,
+                        4121105395019879, 906275922098612, 2167568203585419, 902141125979404,
+                        1847406449459084, 1974477488630907, 3986975207909980, 2303086024281801,
+                        1799110714207632, 1984353349506261, 3868774043831877, 3439432886790299,
+                        2603619075693252, 2329149836785785, 3805700285192206, 4000022950860341,
+                        2467812426805913, 491688654005352, 3108228703212131, 3552150340822500,
+                        3495862320984036, 2457966307381587, 654204939969134, 3247840319357347,
+                        1494057235954141, 4259088215794420, 3588894761760921, 2147790385334894,
+                        2062768833373357, 3953764458945290, 1442228637461419, 3551539910829634,
+                        3571737697974589, 3660975499942543, 1729481054172766, 4367395767819851,
+                        43579440603412, 3935477944038421, 4132857811135436, 903532232777036
+                    ]
+                ),
+                maxInputBytes: 63
+            ),
+            ramFheProfile: nil,
+            note: nil
+        )
+        let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
+        let actual = try policy.encryptInput("ios.ubl.live@example.com", seedHex: seedHex)
+
+        if actual != expected {
+            let mismatchIndex = {
+                var index = 0
+                for (lhs, rhs) in zip(actual, expected) {
+                    if lhs != rhs { return index }
+                    index += 1
+                }
+                return min(actual.count, expected.count)
+            }()
+            XCTFail("mismatch at offset \(mismatchIndex) actual=\(actual.dropFirst(mismatchIndex).prefix(64)) expected=\(expected.dropFirst(mismatchIndex).prefix(64))")
+        }
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitTransactionAsync() async throws {
         StubURLProtocol.handler = { request in

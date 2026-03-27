@@ -1,6 +1,27 @@
 # Status
 
-Last updated: 2026-03-26
+Last updated: 2026-03-27
+
+## 2026-03-27 Follow-up: Metal Merkle helper stubs now match the no-feature byte-tree callers
+- Extended the `ivm` accelerator fallback review in
+  `crates/ivm/src/vector.rs`
+  so the Metal SHA-256 Merkle helper surface matches the existing
+  `metal_available()` / `metal_sha256_compress(...)` fallback pattern again.
+- The shipped behavior in this slice:
+  - non-`metal` builds on macOS now still export
+    `metal_sha256_leaves(...)` and `metal_sha256_pairs_reduce(...)` as
+    fail-closed stubs returning `None`, instead of leaving
+    `byte_merkle_tree.rs` with missing symbols when it compiles the macOS
+    acceleration branches;
+  - `ByteMerkleTree`’s Metal call sites therefore typecheck cleanly again and
+    continue to fall back to the canonical CPU/CUDA paths when Metal is not
+    compiled in; and
+  - a focused non-Metal unit test now pins that fallback API shape so future
+    helper additions do not drift out of sync with the no-feature build.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --no-run` (pass)
+  - `cargo test -p ivm metal_sha256_merkle_helpers_return_none_without_metal_feature -- --nocapture` (pass)
 
 ## 2026-03-26 Follow-up: IVM architecture spec now matches the shipped CUDA helper surface
 - Refreshed
