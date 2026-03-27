@@ -1926,8 +1926,9 @@ pub mod query {
 
         use iroha_data_model::account::NewAccount;
         use iroha_data_model::asset::{
-            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, AssetIssuerUsagePolicyV1,
-            AssetSubjectBindingV1, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
+            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            AssetIssuerUsagePolicyV1, AssetSubjectBindingV1, AssetTransferControlStoreV1,
+            AssetTransferControlWindow, AssetTransferLimit, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
         };
         use iroha_data_model::nexus::{
@@ -1950,6 +1951,81 @@ pub mod query {
 
         fn build_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> Account {
             Account::new(account_id.clone().to_account_id(domain_id.clone())).build(account_id)
+        }
+
+        fn build_numeric_asset_definition(
+            asset_definition_id: &AssetDefinitionId,
+            owner: &AccountId,
+        ) -> AssetDefinition {
+            let __asset_definition_id = asset_definition_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+                .build(owner)
+        }
+
+        fn build_asset_transfer_control_test_state(
+            source_balance: u32,
+        ) -> (State, AssetDefinitionId, AssetId) {
+            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
+            let asset_definition_id: AssetDefinitionId =
+                iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "rose".parse().unwrap(),
+                );
+            let asset_definition = build_numeric_asset_definition(&asset_definition_id, &ALICE_ID);
+            let source_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+            let source_asset = Asset::new(
+                source_asset_id.clone(),
+                Numeric::new(i128::from(source_balance), 0),
+            );
+
+            let world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_definition],
+                [source_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+
+            (state, asset_definition_id, source_asset_id)
+        }
+
+        fn asset_balance_or_zero(
+            state_transaction: &crate::state::StateTransaction<'_, '_>,
+            asset_id: &AssetId,
+        ) -> Numeric {
+            state_transaction
+                .world
+                .assets
+                .get(asset_id)
+                .map(|asset| asset.as_ref().clone())
+                .unwrap_or_else(Numeric::zero)
+        }
+
+        fn load_asset_transfer_control_store(
+            state_transaction: &crate::state::StateTransaction<'_, '_>,
+            account_id: &AccountId,
+        ) -> AssetTransferControlStoreV1 {
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("metadata key");
+            let account = state_transaction
+                .world
+                .account(account_id)
+                .expect("controlled account exists");
+            let raw = account
+                .metadata()
+                .get(&metadata_key)
+                .cloned()
+                .expect("asset transfer control metadata stored");
+            raw.try_into_any_norito::<AssetTransferControlStoreV1>()
+                .expect("stored control metadata decodes")
         }
 
         #[test]
@@ -2251,6 +2327,199 @@ pub mod query {
 
             assert!(stx.world.assets.get(&alice_asset_id).is_none());
             assert!(stx.world.asset_metadata.get(&alice_asset_id).is_none());
+        }
+
+        #[test]
+        fn asset_transfer_controls_require_asset_owner_authority() {
+            let (state, asset_definition_id, _) = build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            let err = SetAssetTransferFreeze::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                true,
+                Some("operator freeze".to_owned()),
+            )
+            .execute(&BOB_ID, &mut stx)
+            .expect_err("non-owner must be rejected");
+            assert!(
+                err.to_string().contains("owner is"),
+                "unexpected error: {err}"
+            );
+
+            let metadata_key: Name = ASSET_TRANSFER_CONTROL_METADATA_KEY
+                .parse()
+                .expect("metadata key");
+            let account = stx
+                .world
+                .account(&ALICE_ID)
+                .expect("controlled account exists");
+            assert!(
+                account.metadata().get(&metadata_key).is_none(),
+                "rejected control instruction must not persist metadata"
+            );
+        }
+
+        #[test]
+        fn transfer_rejects_when_outbound_asset_is_frozen() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            SetAssetTransferFreeze::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                true,
+                Some("compliance hold".to_owned()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("freeze succeeds");
+
+            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("frozen outbound transfer must be rejected");
+            assert!(
+                err.to_string().contains("frozen"),
+                "unexpected error: {err}"
+            );
+
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Numeric::new(10, 0)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Numeric::zero()
+            );
+
+            let store = load_asset_transfer_control_store(&stx, &ALICE_ID);
+            let record = store
+                .find(&asset_definition_id)
+                .expect("frozen record stored");
+            assert!(record.outgoing_frozen);
+            assert!(!record.blacklisted);
+            assert!(record.usages.is_empty());
+        }
+
+        #[test]
+        fn transfer_rejects_when_account_is_blacklisted_for_asset() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            SetAssetTransferBlacklist::new(ALICE_ID.clone(), asset_definition_id.clone(), true)
+                .execute(&ALICE_ID, &mut stx)
+                .expect("blacklist succeeds");
+
+            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("blacklisted outbound transfer must be rejected");
+            assert!(
+                err.to_string().contains("blacklisted"),
+                "unexpected error: {err}"
+            );
+
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Numeric::new(10, 0)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Numeric::zero()
+            );
+
+            let store = load_asset_transfer_control_store(&stx, &ALICE_ID);
+            let record = store
+                .find(&asset_definition_id)
+                .expect("blacklist record stored");
+            assert!(record.blacklisted);
+            assert!(!record.outgoing_frozen);
+            assert!(record.usages.is_empty());
+        }
+
+        #[test]
+        fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
+            let (state, asset_definition_id, source_asset_id) =
+                build_asset_transfer_control_test_state(10);
+
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 86_400_000, 0);
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            SetAssetTransferControl::new(
+                ALICE_ID.clone(),
+                asset_definition_id.clone(),
+                vec![AssetTransferLimit {
+                    window: AssetTransferControlWindow::Day,
+                    cap_amount: Some(Numeric::new(5, 0)),
+                }],
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .expect("limit update succeeds");
+
+            Transfer::asset_numeric(source_asset_id.clone(), 5_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("exact-cap transfer must succeed");
+
+            let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Numeric::new(5, 0)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Numeric::new(5, 0)
+            );
+
+            let store_after_success = load_asset_transfer_control_store(&stx, &ALICE_ID);
+            let record_after_success = store_after_success
+                .find(&asset_definition_id)
+                .expect("limit record stored after successful transfer");
+            assert_eq!(record_after_success.limits.len(), 1);
+            assert_eq!(record_after_success.usages.len(), 1);
+            let usage = &record_after_success.usages[0];
+            assert_eq!(usage.window, AssetTransferControlWindow::Day);
+            assert_eq!(usage.bucket_start_ms, 86_400_000);
+            assert_eq!(usage.spent_amount, Numeric::new(5, 0));
+
+            let err = Transfer::asset_numeric(source_asset_id.clone(), 1_u32, BOB_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("over-cap transfer must be rejected");
+            assert!(
+                err.to_string().contains("cap exceeded"),
+                "unexpected error: {err}"
+            );
+
+            assert_eq!(
+                asset_balance_or_zero(&stx, &source_asset_id),
+                Numeric::new(5, 0)
+            );
+            assert_eq!(
+                asset_balance_or_zero(&stx, &destination_asset_id),
+                Numeric::new(5, 0)
+            );
+
+            let store_after_rejection = load_asset_transfer_control_store(&stx, &ALICE_ID);
+            let record_after_rejection = store_after_rejection
+                .find(&asset_definition_id)
+                .expect("limit record retained after rejected transfer");
+            assert_eq!(record_after_rejection.usages.len(), 1);
+            assert_eq!(
+                record_after_rejection.usages[0].spent_amount,
+                Numeric::new(5, 0)
+            );
+            assert_eq!(record_after_rejection.usages[0].bucket_start_ms, 86_400_000);
         }
 
         #[test]

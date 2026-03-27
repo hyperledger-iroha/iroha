@@ -1982,10 +1982,9 @@ pub mod query {
             state_block.commit().unwrap();
 
             let view = state.view();
-            let aliases =
-                FindAliasesByAccountId::new(account_id, Some("sbp".to_owned()), None)
-                    .execute(&view)
-                    .unwrap();
+            let aliases = FindAliasesByAccountId::new(account_id, Some("sbp".to_owned()), None)
+                .execute(&view)
+                .unwrap();
             assert_eq!(aliases.len(), 1);
             assert_eq!(aliases[0].alias, "merchant@sbp");
             assert_eq!(aliases[0].dataspace, "sbp");
