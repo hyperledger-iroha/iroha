@@ -44,7 +44,7 @@ use futures::{TryStreamExt, stream::TryStream};
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
-    data_model::{account::ScopedAccountId, prelude::*, transaction::IvmBytecode},
+    data_model::{prelude::*, transaction::IvmBytecode},
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, KeyPair};
@@ -1696,7 +1696,7 @@ mod account {
                 Register(args) => {
                     let account_id = parse_register_account_id(&args.id)?;
                     let instruction =
-                        iroha::data_model::isi::Register::account(Account::new_domainless(
+                        iroha::data_model::isi::Register::account(Account::new(
                             account_id,
                         ));
                     context
@@ -7393,6 +7393,7 @@ mod tests {
     use futures::stream;
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
+        account::ScopedAccountId,
         ChainId, Level,
         events::{
             EventFilterBox, data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter,

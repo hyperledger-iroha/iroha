@@ -1938,11 +1938,9 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &root_label);
-            Register::account(
-                Account::new_domainless(account_id.clone()).with_label(Some(root_label)),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+            Register::account(Account::new(account_id.clone()).with_label(Some(root_label)))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
 
             stx.apply();
             state_block.commit().unwrap();

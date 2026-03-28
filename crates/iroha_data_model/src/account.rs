@@ -847,13 +847,6 @@ impl Account {
         <Self as Registered>::With::from_scoped_id(id)
     }
 
-    /// Construct a registration builder for a domainless account.
-    #[inline]
-    #[must_use]
-    pub fn new_domainless(id: AccountId) -> <Self as Registered>::With {
-        Self::new(id)
-    }
-
     /// Return a reference to the account signatory, panicking if the controller is not single-key.
     #[inline]
     #[must_use]
@@ -936,12 +929,6 @@ impl NewAccount {
     #[must_use]
     pub fn new_in_domain(id: AccountId, domain: DomainId) -> Self {
         Self::new(id).with_linked_domain(domain)
-    }
-
-    /// Create a registration builder for a domainless account.
-    #[must_use]
-    pub fn new_domainless(id: AccountId) -> Self {
-        Self::new(id)
     }
 
     /// Borrow the linked domains targeted by this registration.
@@ -1615,10 +1602,10 @@ mod tests {
         let key_pair = KeyPair::random();
         let account_id = AccountId::new(key_pair.public_key().clone());
 
-        let account = Account::new_domainless(account_id.clone()).build(&account_id);
+        let account = Account::new(account_id.clone()).build(&account_id);
         assert!(account.linked_domains.is_empty());
 
-        let new_account = NewAccount::new_domainless(account_id.clone());
+        let new_account = NewAccount::new(account_id.clone());
         assert!(new_account.linked_domains().is_empty());
         assert_eq!(new_account.domain(), None);
         assert_eq!(new_account.scoped_id(), None);
@@ -1632,7 +1619,7 @@ mod tests {
         let wonderland: DomainId = "wonderland".parse().expect("domain id");
         let acme: DomainId = "acme".parse().expect("domain id");
 
-        let new_account = NewAccount::new_domainless(account_id.clone())
+        let new_account = NewAccount::new(account_id.clone())
             .with_linked_domains(BTreeSet::from([wonderland.clone(), acme.clone()]));
         let account = new_account.clone().build(&account_id);
 
@@ -1754,7 +1741,7 @@ mod json_tests {
         let _guard = guard_chain_discriminant();
         let keypair = KeyPair::random();
         let id = AccountId::new(keypair.public_key().clone());
-        let new_account = NewAccount::new_domainless(id.clone());
+        let new_account = NewAccount::new(id.clone());
 
         let json = norito::json::to_json(&new_account).expect("serialize new account");
         let decoded: NewAccount = norito::json::from_json(&json).expect("deserialize new account");

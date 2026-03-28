@@ -4,6 +4,11 @@ Taira is the Sora Nexus public testnet. This directory
 contains a minimum-viable NPoS bootstrap bundle so operators can bring a usable
 network online quickly.
 
+## Network identity
+
+- Public chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
+- Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
+
 ## Included artifacts
 
 - `config.toml`: baseline validator config for peer 1.
@@ -58,6 +63,14 @@ The Polkaswap web app repo updates
 `yarn taira:publish`. After publishing, redeploy the Taira validator/Torii
 nodes from the patched `../iroha` checkout so the live network picks up the new
 binding and static-site handlers.
+
+Taira's public edge also needs to accept the storage payload upload that
+precedes root serving. The current SoraFS storage pin API sends the full staged
+site in one JSON request (`payload_b64`), so the nginx host serving
+`taira.sora.org` must keep `client_max_body_size 64m;` from
+`taira-explorer.nginx.conf`. Without that, `yarn taira:publish` fails at
+`POST /v1/sorafs/storage/pin` with `413 Payload Too Large` before Torii sees
+the request.
 
 ### Codex / MCP rollout
 
@@ -154,15 +167,25 @@ From `../iroha2-block-explorer-web`:
    `../iroha/configs/soranexus/taira/taira-explorer.nginx.conf` on the edge host
    (for both domains on one machine), e.g.:
    - `sudo cp ../iroha/configs/soranexus/taira/taira-explorer.nginx.conf /etc/nginx/conf.d/taira.conf`
+   - on the shared macOS/Homebrew host, install the same template as
+     `/opt/homebrew/etc/nginx/servers/taira.sora.org.conf` instead, then point
+     the upstream at the locally served Torii port (currently `127.0.0.1:29080`
+     on that machine rather than the template's `127.0.0.1:18080`)
    - if your Torii endpoint is not `127.0.0.1:18080`, update the `upstream taira_torii_upstream`
      target to the live validator endpoint before reload.
    - keep the dedicated `location = /v1/mcp` blocks intact; they make the
      Codex/Torii MCP path explicit on both public hostnames and keep future
      route changes from accidentally hiding the MCP endpoint behind the generic
      `/` or `/v1/` proxy rules.
+   - keep `client_max_body_size 64m;` intact on both TLS server blocks; the
+     Polkaswap SoraFS publish path currently uploads about `24 MiB+` of JSON to
+     `/v1/sorafs/storage/pin`.
    - keep the dedicated `location = /v1/connect/ws` blocks intact; they forward
      the required websocket `Upgrade` / `Connection: upgrade` headers for
      Iroha Connect on `taira.sora.org`.
+   - do not fold `/v1/connect/ws` into the generic `location /` or
+     `location ^~ /v1/` proxy rules; it must stay an exact-match websocket
+     location with `proxy_http_version 1.1`.
    - ensure both `taira.sora.org` and `taira-explorer.sora.org` resolve to the
      shared edge host from `dns_records.json` before relying on this nginx
      configuration.
@@ -172,10 +195,12 @@ From `../iroha2-block-explorer-web`:
      reuse it for both server blocks.
 5. Validate and reload nginx:
    - `sudo nginx -t && sudo systemctl reload nginx`
+   - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
 6. Run the MCP rollout smoke from any host that can see the validator loopback
    and the public endpoint:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh`
-7. Verify that SNI now serves the correct cert for each host:
+7. Verify that SNI now serves the correct cert for each host and that both MCP
+   and Connect still work through the public edge:
    - `curl -vI https://taira.sora.org`
    - `curl -vI https://taira-explorer.sora.org`
    - `echo | openssl s_client -connect taira-explorer.sora.org:443 -servername taira-explorer.sora.org 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName`
@@ -183,8 +208,16 @@ From `../iroha2-block-explorer-web`:
      `curl -sS https://taira.sora.org/v1/mcp | jq .`
    - verify curated `iroha.*` exposure:
      `curl -sS https://taira.sora.org/v1/mcp -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq .`
-   - verify Connect websocket upgrades on the public Torii host:
-     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: <token_protocol>' 'https://taira.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+   - create a Connect session through the proxy and ask explicitly for JSON:
+     `curl -sS -X POST https://taira.sora.org/v1/connect/session -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`
+   - verify Connect websocket upgrades on both public hostnames with the
+     returned `sid` and app token:
+     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira-explorer.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+   - if those websocket probes now return a Torii-generated app error
+     (`400/401/...`) instead of a proxy-layer `404` / missing-upgrade failure,
+     the reverse-proxy websocket hop is working and any remaining error is in
+     Connect session or token handling rather than nginx.
 
 The Explorer runtime config targets `https://taira.sora.org`, so both UI reads
 and `/v1/*` proxy traffic follow the Taira Torii endpoint.

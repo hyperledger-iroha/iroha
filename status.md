@@ -36,6 +36,75 @@ Last updated: 2026-03-28
   - unrelated warnings remain in `iroha_core`, but there is no remaining build
     or test failure in the `izanami` repeatable-trigger repin slice.
 
+## 2026-03-28 Follow-up: Taira deploy docs now cover the real nginx rollout path
+- Expanded the Taira deployment docs so future rollouts do not have to recover
+  the websocket proxy fix from terminal history:
+  - `configs/soranexus/taira/README.md` now documents both the generic Linux
+    edge-host install path and the shared macOS/Homebrew nginx path used on
+    this machine, including the current local Torii upstream port and the
+    reload command difference;
+  - `defaults/kagami/iroha3-taira/README.md` now states explicitly that
+    `/v1/connect/ws` must remain its own exact-match nginx location ahead of
+    generic `/` and `/v1/` proxy blocks; and
+  - `docs/connect_config.md` now includes a reusable reverse-proxy smoke test
+    flow for `POST /v1/connect/session` plus websocket upgrade verification.
+- Verified the documented local deploy path on this machine:
+  - patched `/opt/homebrew/etc/nginx/servers/taira.sora.org.conf` with the
+    dedicated websocket locations for both public hostnames;
+  - `nginx -t` (pass);
+  - `nginx -s reload` (pass);
+  - `curl -sk -X POST https://taira.sora.org/v1/connect/session -H 'content-type: application/json' -H 'accept: application/json' --data '{"sid":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"}'`
+    returned a valid Connect session payload; and
+  - websocket probes on both `taira.sora.org` and `taira-explorer.sora.org`
+    reached Torii and failed only at Connect token parsing, which confirms the
+    reverse-proxy websocket hop is now functioning.
+
+## 2026-03-28 Follow-up: Torii peer-monitor configuration fetch now authenticates operator-only `/configuration`
+- Fixed the live Taira peer-monitor warning path in `iroha_torii` instead of
+  masking the log noise:
+  - `crates/iroha_torii/src/operator_signatures.rs` now exposes a production
+    `signed_request_headers(...)` helper that builds the same
+    `x-iroha-operator-*` authorization headers as the existing test flow;
+  - `crates/iroha_torii/src/telemetry/peers/{mod.rs,monitor.rs}` now thread an
+    optional operator signer into the peer monitor and sign `GET
+    /configuration` when the node has one available; and
+  - `crates/iroha_torii/src/lib.rs` now gives the telemetry service the live
+    daemon signer so the runtime path can authenticate against operator-only
+    config endpoints.
+- Also hardened `/configuration` payload decoding for mixed-version peers:
+  - the peer monitor now treats operator-auth `401/403` JSON payloads as an
+    intentional "config unavailable without operator credentials" case instead
+    of warning noisily; and
+  - legacy config decoding now falls back whenever current `ConfigGetDTO`
+    parsing fails, not only when the first missing field happens to be
+    `public_key`.
+- Added focused regression coverage for both pieces:
+  - `signed_request_headers_authorize_successfully`
+  - `decode_peer_config_payload_accepts_legacy_without_public_key`
+  - `operator_access_error_payload_is_detected`
+  - `non_operator_error_payload_is_not_treated_as_configless_fallback`
+- Rebuilt `irohad`/`kagami`, re-signed the served
+  `dist/taira-localnet/genesis.signed.nrt` with the current Kagami binary so
+  the updated daemon could boot from the existing live genesis again, and
+  restarted the detached `taira-localnet` screen session.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib --no-run` (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib telemetry::peers::monitor::tests::decode_peer_config_payload_accepts_legacy_without_public_key -- --nocapture`
+    (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib telemetry::peers::monitor::tests::operator_access_error_payload_is_detected -- --nocapture`
+    (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib telemetry::peers::monitor::tests::non_operator_error_payload_is_not_treated_as_configless_fallback -- --nocapture`
+    (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib operator_signatures::tests::signed_request_headers_authorize_successfully -- --nocapture`
+    (pass)
+  - `cargo build -p irohad --release` (pass)
+  - `cargo build -p iroha_kagami --bin kagami --release` (pass)
+  - `rg -n "2026-03-28T12:.*peer_monitor|2026-03-28T12:.*failed to fetch configuration|2026-03-28T12:.*failed to decode /configuration|2026-03-28T12:.*operator_signature_missing" dist/taira-localnet/peer{0,1,2,3}.log`
+    returned no matches after the restarted peers came up at `2026-03-28T12:03`
+  - `curl -s http://127.0.0.1:29080/status` (healthy: `peers=3`,
+    `blocks=9`, `txs_approved=10`)
+
 ## 2026-03-28 Taira deploy bundle now forces MCP-enabled rollout
 - Reconciled the Taira public deployment artifacts so `taira.sora.org` is no
   longer documented as bypassing the shared nginx edge host:
@@ -581,7 +650,7 @@ Last updated: 2026-03-28
   - account aliases are a separate SNS/account-label layer, so both
     `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` resolve
     to the same canonical `AccountId`;
-  - `Account::new_domainless(...)` is the correct registration path for
+  - `Account::new(...)` is the correct registration path for
     dataspace-root aliases; and
   - `linked_domains` is derived index state, not part of canonical identity.
 - Tightened the reverse-alias query coverage in

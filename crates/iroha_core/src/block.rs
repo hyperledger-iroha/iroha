@@ -1069,7 +1069,7 @@ mod prefetch_tests {
         );
         let world = World::with(
             [],
-            [Account::new_domainless(account_id.account().clone())
+            [Account::new(account_id.account().clone())
                 .with_label(Some(alias))
                 .build(account_id.account())],
             [],
@@ -15839,9 +15839,7 @@ mod tests {
 
         let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
             .with_instructions([
-                InstructionBox::from(Register::account(Account::new_domainless(
-                    authority.clone(),
-                ))),
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
                 InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
             ])
             .sign(keypair.private_key());

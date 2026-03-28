@@ -4372,9 +4372,7 @@ pub mod tests {
 
         let tx = TransactionBuilder::new(chain.clone(), authority.clone())
             .with_instructions([
-                InstructionBox::from(Register::account(Account::new_domainless(
-                    authority.clone(),
-                ))),
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
                 InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
             ])
             .sign(keypair.private_key());
@@ -4400,7 +4398,7 @@ pub mod tests {
     fn existing_authority_self_register_is_idempotent() {
         let chain: ChainId = "existing-authority-self-register".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let existing = Account::new_domainless(authority.clone()).build(&authority);
+        let existing = Account::new(authority.clone()).build(&authority);
         let world = World::with([], [existing], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -4408,9 +4406,7 @@ pub mod tests {
 
         let tx = TransactionBuilder::new(chain.clone(), authority.clone())
             .with_instructions([
-                InstructionBox::from(Register::account(Account::new_domainless(
-                    authority.clone(),
-                ))),
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
                 InstructionBox::from(Log::new(Level::INFO, "self-register-again".into())),
             ])
             .sign(keypair.private_key());

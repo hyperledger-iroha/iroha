@@ -51,9 +51,7 @@ impl VisitExecute for MultisigRegister {
                     .with_metadata(metadata),
             )
         } else {
-            Register::account(
-                Account::new_domainless(multisig_account_id.clone()).with_metadata(metadata),
-            )
+            Register::account(Account::new(multisig_account_id.clone()).with_metadata(metadata))
         };
         let original_authority = executor.context().authority.clone();
         let register_result = {
@@ -171,7 +169,7 @@ fn ensure_signatory_account_exists<V: Execute + Visit + ?Sized>(
             Account::new_in_domain(signatory.clone(), home_domain).with_metadata(metadata),
         )
     } else {
-        Register::account(Account::new_domainless(signatory.clone()).with_metadata(metadata))
+        Register::account(Account::new(signatory.clone()).with_metadata(metadata))
     };
     executor.visit_register_account(&register_account);
     if executor.verdict().is_err() {

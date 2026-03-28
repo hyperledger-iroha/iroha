@@ -549,7 +549,7 @@ gas = "G_sc_depth"
 [[syscall]]
 number = "0xA4"
 args = "-"
-ret = "ptr (ScopedAccountId in INPUT)"
+ret = "ptr (AccountId in INPUT)"
 gas = "G_get_auth"
 
 [[syscall]]
@@ -566,8 +566,8 @@ gas = "G_sub_usage"
 
 [[syscall]]
 number = "0xA7"
-args = "r10=&Name(label), r11=&DomainId(domain)"
-ret = "ptr (&ScopedAccountId in INPUT)"
+args = "r10=&Blob(alias literal)"
+ret = "ptr (&AccountId in INPUT)"
 gas = "G_alias_resolve"
 
 [[syscall]]

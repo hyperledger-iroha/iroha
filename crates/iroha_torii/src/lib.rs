@@ -23799,6 +23799,7 @@ impl Torii {
         let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
             collect_peer_urls(&self.online_peers, &self.peer_telemetry_urls),
             self.peer_geo.clone(),
+            Some(self.da_receipt_signer.clone()),
         );
 
         let zk_ivm_prove_jobs = Arc::new(DashMap::new());
@@ -25954,6 +25955,7 @@ pub(crate) mod tests_runtime_handlers {
         let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
             Vec::new(),
             telemetry::peers::GeoLookupConfig::disabled(),
+            None,
         );
 
         let content_config_snapshot = state.content_snapshot();
@@ -32525,7 +32527,7 @@ mod tests {
             "sbp".parse().expect("domain id"),
             "banking".parse().expect("label"),
         );
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
             .with_label(Some(alias_label))
@@ -32734,7 +32736,7 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_returns_not_found_for_unknown_alias() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveRequestDto {
             alias: AccountLabel::domainless("missing".parse().expect("label"), DataSpaceId::GLOBAL)
@@ -32754,7 +32756,7 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_allows_unsigned_request_without_permission() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let domain_id: DomainId = "sbp".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new_in_domain(authority.clone(), domain_id)
@@ -32787,7 +32789,7 @@ mod tests {
             "sbp".parse().expect("domain id"),
             "banking".parse().expect("label"),
         );
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
             .with_label(Some(primary_label))
@@ -32866,7 +32868,7 @@ mod tests {
             "sbp".parse().expect("domain id"),
             "banking".parse().expect("label"),
         );
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
             .with_label(Some(primary_label))
@@ -32902,7 +32904,7 @@ mod tests {
     #[tokio::test]
     async fn alias_lookup_by_account_returns_not_found_for_unknown_account() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let missing = AccountId::new(KeyPair::random().public_key().clone());
         let request = routing::AliasLookupByAccountRequestDto {
@@ -32929,7 +32931,7 @@ mod tests {
         let domain_id: DomainId = "sbp".parse().expect("domain id");
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let account_id = authority.clone().to_account_id(domain_id);
         let account = Account::new(account_id.clone())
             .with_label(Some(alias_label))
@@ -32962,7 +32964,7 @@ mod tests {
     #[tokio::test]
     async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::ContractAliasResolveRequestDto {
             contract_alias: "router::universal".to_string(),
@@ -32983,7 +32985,7 @@ mod tests {
     #[tokio::test]
     async fn contract_alias_resolve_returns_bound_contract() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             iroha_data_model::account::address::chain_discriminant(),
@@ -35759,7 +35761,7 @@ mod tests {
             "sbp".parse().expect("domain id"),
             "banking".parse().expect("label"),
         );
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
             .with_label(Some(alias_label))
@@ -35857,7 +35859,7 @@ mod tests {
             "sbp".parse().expect("domain id"),
             "banking".parse().expect("label"),
         );
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
             .with_label(Some(alias_label.clone()))
@@ -35891,7 +35893,7 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_index_returns_not_found_when_index_is_missing() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveIndexRequestDto { index: 0 };
         let body = norito::json::to_vec(&request).expect("encode request");

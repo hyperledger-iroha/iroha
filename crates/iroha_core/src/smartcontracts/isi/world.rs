@@ -16944,7 +16944,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            Register::account(Account::new_domainless(ALICE_ID.clone()))
+            Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed authority");
 
@@ -16988,7 +16988,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            Register::account(Account::new_domainless(ALICE_ID.clone()))
+            Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed authority");
 

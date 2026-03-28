@@ -321,12 +321,12 @@ impl Run for DeriveAddressArgs {
         .wrap_err("failed to derive contract address")?;
 
         context.print_data(&norito::json!({
-            "authority": authority,
-            "dataspace": self.dataspace,
-            "dataspace_id": dataspace_id.as_u64(),
-            "deploy_nonce": self.deploy_nonce,
-            "chain_discriminant": self.chain_discriminant,
-            "contract_address": contract_address,
+            "authority": (authority),
+            "dataspace": (self.dataspace),
+            "dataspace_id": (dataspace_id.as_u64()),
+            "deploy_nonce": (self.deploy_nonce),
+            "chain_discriminant": (self.chain_discriminant),
+            "contract_address": (contract_address),
         }))?;
         Ok(())
     }
@@ -890,7 +890,7 @@ fn resolve_contract_call_private_key<C: RunContext>(
 }
 
 fn self_register_authority_instruction(authority: &AccountId) -> InstructionBox {
-    Register::account(Account::new_domainless(authority.clone())).into()
+    Register::account(Account::new(authority.clone())).into()
 }
 
 fn deploy_activate_instructions(

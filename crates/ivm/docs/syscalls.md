@@ -232,8 +232,8 @@ JSON envelope support for EXECUTE_INSTRUCTION
 - 0xA1 EXECUTE_QUERY — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr` — Gas: G_scq
 - 0xA2 CREATE_NFTS_FOR_ALL_USERS — Args: none → `u64=count` — Gas: G_create_nfts_all
 - 0xA3 SET_SMARTCONTRACT_EXECUTION_DEPTH — Args: `r10=depth:u64` → `u64=prev` — Gas: G_sc_depth
-- 0xA4 GET_AUTHORITY — Args: none → `ptr` (ScopedAccountId in INPUT, `r10` points to it) — Gas: G_get_auth
-- 0xA7 RESOLVE_ACCOUNT_ALIAS — Args: `r10=&Name(label), r11=&DomainId(domain)` → `ptr` (ScopedAccountId in INPUT, `r10` points to it) — Gas: G_alias_resolve
+- 0xA4 GET_AUTHORITY — Args: none → `ptr` (AccountId in INPUT, `r10` points to it) — Gas: G_get_auth
+- 0xA7 RESOLVE_ACCOUNT_ALIAS — Args: `r10=&Blob(alias literal)` → `ptr` (AccountId in INPUT, `r10` points to it) — Gas: G_alias_resolve
 
 AXT host flow
 - 0xB0 AXT_BEGIN — Args: `r10=&AxtDescriptor`. Resets any in‑progress envelope and records the descriptor; hosts derive the canonical binding used by capability handles from this descriptor.
@@ -419,10 +419,10 @@ but they must not change the host ABI.
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | u64=count | asset:gas/G_create_nfts_all@ivm.core/v2 |
 | 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | r10=depth:u64 | u64=prev | asset:gas/G_sc_depth@ivm.core/v2 |
-| 0xA4 | GET_AUTHORITY | - | ptr (ScopedAccountId in INPUT) | asset:gas/G_get_auth@ivm.core/v2 |
+| 0xA4 | GET_AUTHORITY | - | ptr (AccountId in INPUT) | asset:gas/G_get_auth@ivm.core/v2 |
 | 0xA5 | SUBSCRIPTION_BILL | - | u64=0 | asset:gas/G_sub_bill@ivm.core/v2 |
 | 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
-| 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Name(label), r11=&DomainId(domain) | ptr (&ScopedAccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
+| 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | - |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | - |
 | 0xB2 | AXT_COMMIT | - | u64=0 | - |

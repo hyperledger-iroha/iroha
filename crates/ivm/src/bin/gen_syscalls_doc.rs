@@ -168,8 +168,12 @@ fn main() {
                 ret = "ptr (r10)".into();
                 gas = "G_get_pub".into();
             } else if up.contains("GET_AUTHORITY") || n == 0xA4 {
-                ret = "ptr (ScopedAccountId in INPUT)".into();
+                ret = "ptr (AccountId in INPUT)".into();
                 gas = "G_get_auth".into();
+            } else if up.contains("RESOLVE_ACCOUNT_ALIAS") || n == 0xA7 {
+                args = "r10=&Blob(alias literal)".into();
+                ret = "ptr (&AccountId in INPUT)".into();
+                gas = "G_alias_resolve".into();
             } else if up.contains("INPUT_PUBLISH_TLV") || n == 0xE0 {
                 args = "r10=&Blob(TLV)".into();
                 ret = "ptr (r10)".into();

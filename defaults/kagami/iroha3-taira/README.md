@@ -24,6 +24,9 @@ Operational note:
 - If this Torii node is exposed through nginx or another reverse proxy, keep
   `/v1/connect/ws` on `proxy_http_version 1.1` and forward websocket
   `Upgrade` plus `Connection: upgrade` headers end-to-end.
+- Keep `/v1/connect/ws` as its own exact-match websocket location ahead of any
+  generic `location /` or `location ^~ /v1/` proxy blocks so future deploys do
+  not accidentally downgrade Connect back to a plain HTTP hop.
 - For the public Taira deployment, prefer the checked-in validator/edge bundle
   under `configs/soranexus/taira/`, including `taira-irohad.service`,
   `taira-explorer.nginx.conf`, and `check_mcp_rollout.sh`, so the public

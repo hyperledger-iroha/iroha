@@ -220,6 +220,38 @@ fn append_npos_bootstrap(
     Ok(builder)
 }
 
+fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre::Error> {
+    let source = TomlSource::from_file(config_path).map_err(|err| {
+        eyre!(
+            "failed to read peer config at {}: {err}",
+            config_path.display()
+        )
+    })?;
+    actual::Root::from_toml_source(source).map_err(|err| {
+        eyre!(
+            "failed to parse peer config at {}: {err}",
+            config_path.display()
+        )
+    })
+}
+
+fn should_auto_bootstrap_npos_validators(
+    config_path: Option<&Path>,
+) -> Result<bool, color_eyre::eyre::Error> {
+    let Some(config_path) = config_path else {
+        return Ok(true);
+    };
+
+    let config = load_peer_config(config_path)?;
+    Ok(matches!(
+        config
+            .nexus
+            .staking
+            .validator_mode(LaneId::SINGLE, &config.nexus.lane_catalog),
+        actual::LaneValidatorMode::StakeElected
+    ))
+}
+
 impl<T: Write> RunArgs<T> for Args {
     #[allow(clippy::too_many_lines)]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
@@ -289,6 +321,7 @@ impl<T: Write> RunArgs<T> for Args {
         };
         let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
             || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+        let auto_bootstrap_npos = should_auto_bootstrap_npos_validators(self.config.as_deref())?;
         let topology_peers = if uses_npos {
             topology_override
                 .clone()
@@ -296,8 +329,10 @@ impl<T: Write> RunArgs<T> for Args {
         } else {
             Vec::new()
         };
-        let needs_npos_bootstrap =
-            uses_npos && !manifest_has_npos_bootstrap(&genesis) && !topology_peers.is_empty();
+        let needs_npos_bootstrap = uses_npos
+            && auto_bootstrap_npos
+            && !manifest_has_npos_bootstrap(&genesis)
+            && !topology_peers.is_empty();
         let mut bootstrap_registrations = if needs_npos_bootstrap {
             BootstrapRegistrations::from_manifest(&genesis)
         } else {
@@ -483,18 +518,7 @@ fn resolve_da_proof_policies(
         return Ok(None);
     };
 
-    let source = TomlSource::from_file(config_path).map_err(|err| {
-        eyre!(
-            "failed to read peer config at {}: {err}",
-            config_path.display()
-        )
-    })?;
-    let config = actual::Root::from_toml_source(source).map_err(|err| {
-        eyre!(
-            "failed to parse peer config for DA proof policies at {}: {err}",
-            config_path.display()
-        )
-    })?;
+    let config = load_peer_config(config_path)?;
 
     Ok(Some(iroha_core::da::proof_policy_bundle(
         &config.nexus.lane_config,
@@ -960,6 +984,72 @@ mod tests {
         assert_eq!(
             validators, expected,
             "expected NPoS bootstrap to register topology validators"
+        );
+    }
+
+    fn nexus_profile_with_validator_modes(public_mode: &str, restricted_mode: &str) -> PathBuf {
+        let mut config =
+            fs::read_to_string(nexus_profile_config_path()).expect("read nexus profile config");
+        config.push_str(&format!(
+            "\n[nexus.staking]\npublic_validator_mode = \"{public_mode}\"\nrestricted_validator_mode = \"{restricted_mode}\"\n"
+        ));
+        let mut temp = tempfile::Builder::new()
+            .prefix("kagami-nexus-profile-")
+            .suffix(".toml")
+            .tempfile()
+            .expect("create temp config");
+        write!(temp, "{config}").expect("write temp config");
+        let (_file, path) = temp.keep().expect("persist temp config");
+        path
+    }
+
+    #[test]
+    fn sign_skips_npos_validator_bootstrap_for_admin_managed_lane() {
+        let peer = PeerId::new(
+            CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
+        let args = Args {
+            genesis_file: npos_genesis_file(),
+            out_file: None,
+            topology: Some(topology_json),
+            peer_pops: vec![format!("{}=00", peer.public_key())],
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: Some(nexus_profile_with_validator_modes(
+                "admin_managed",
+                "admin_managed",
+            )),
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let block = decode_framed_signed_block(&bytes).expect("decode signed block");
+
+        let mut validators = std::collections::BTreeSet::new();
+        for tx in block.external_transactions() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instr in instructions {
+                    if let Some(register) =
+                        instr.as_any().downcast_ref::<RegisterPublicLaneValidator>()
+                    {
+                        validators.insert(register.validator.clone());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            validators.is_empty(),
+            "admin-managed lane configs must not auto-inject NPoS validator bootstrap"
         );
     }
 

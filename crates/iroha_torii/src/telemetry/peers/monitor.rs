@@ -10,7 +10,7 @@ use std::{
 use eyre::{Report, eyre};
 use http::StatusCode;
 use iroha_config::client_api::ConfigGetDTO;
-use iroha_crypto::PublicKey;
+use iroha_crypto::{KeyPair, PublicKey};
 use iroha_logger::prelude::*;
 use iroha_telemetry::metrics::Status;
 use norito::json::{self, Value};
@@ -24,6 +24,7 @@ use tracing::{Instrument, info_span};
 use url::Url;
 
 use super::{GeoLocation, GeoLookupConfig, PeerConfigSnapshot, ToriiUrl};
+use crate::operator_signatures;
 
 const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
 #[cfg(test)]
@@ -67,6 +68,7 @@ pub enum Update {
 pub fn run(
     torii_url: ToriiUrl,
     geo_config: GeoLookupConfig,
+    operator_signer: Option<KeyPair>,
 ) -> (mpsc::Receiver<Update>, impl Future<Output = ()> + Sized) {
     let (tx, rx) = mpsc::channel(128);
     let url = Arc::new(torii_url);
@@ -142,7 +144,7 @@ pub fn run(
                     let url = Arc::clone(&monitor_span_url);
                     async move {
                         loop {
-                            let cfg = get_config_with_retry(&url).await;
+                            let cfg = get_config_with_retry(&url, operator_signer.as_ref()).await;
                             iroha_logger::debug!(?cfg, "peer connected");
                             let _ = tx.send(Update::Connected(Box::new(cfg))).await;
 
@@ -420,11 +422,6 @@ fn construct_geo_query(
     Ok(url)
 }
 
-fn is_missing_public_key_error(err: &norito::json::Error) -> bool {
-    let message = err.to_string();
-    message.contains("missing public_key") || message.contains("missing field `public_key`")
-}
-
 fn value_to_u32(value: &Value) -> Option<u32> {
     value.as_u64().and_then(|raw| u32::try_from(raw).ok())
 }
@@ -474,28 +471,71 @@ fn decode_legacy_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSna
 fn decode_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> {
     match json::from_slice::<ConfigGetDTO>(bytes) {
         Ok(config) => Ok(PeerConfigSnapshot::from(&config)),
-        Err(err) if is_missing_public_key_error(&err) => {
+        Err(err) => {
             let legacy = decode_legacy_peer_config_payload(bytes).map_err(|fallback_err| {
                 eyre!(
                     "failed to decode /configuration payload: {err}; legacy fallback failed: {fallback_err}"
                 )
             })?;
-            iroha_logger::debug!(
-                "decoded /configuration payload without public_key using legacy fallback"
-            );
+            iroha_logger::debug!("decoded /configuration payload using legacy fallback");
             Ok(legacy)
         }
-        Err(err) => Err(eyre!("failed to decode /configuration payload: {err}")),
     }
 }
 
-async fn get_config_with_retry(torii_url: &ToriiUrl) -> PeerConfigSnapshot {
+fn decode_operator_access_error(bytes: &[u8]) -> Option<String> {
+    let value: Value = json::from_slice(bytes).ok()?;
+    let payload = value.as_object()?;
+    let code = payload.get("code")?.as_str()?;
+    if code.starts_with("operator_") {
+        return Some(code.to_owned());
+    }
+    None
+}
+
+async fn get_config_with_retry(
+    torii_url: &ToriiUrl,
+    operator_signer: Option<&KeyPair>,
+) -> PeerConfigSnapshot {
     let client = Client::new();
-    let url = torii_url.0.join("/configuration").expect("valid url");
+    let url = torii_url
+        .0
+        .join(iroha_torii_shared::uri::CONFIGURATION)
+        .expect("valid url");
+    let config_uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION
+        .parse()
+        .expect("static configuration URI");
 
     let do_request = || async {
-        let response = client.get(url.clone()).send().await?;
+        let mut request = client.get(url.clone());
+        if let Some(key_pair) = operator_signer {
+            let headers = operator_signatures::signed_request_headers(
+                key_pair,
+                &crate::Method::GET,
+                &config_uri,
+                &[],
+            );
+            request = request.headers(headers);
+        }
+        let response = request.send().await?;
+        let status = response.status();
         let bytes = response.bytes().await?;
+        if status == StatusCode::NOT_FOUND {
+            iroha_logger::debug!(
+                %status,
+                "peer does not expose /configuration; continuing without config snapshot"
+            );
+            return Ok::<_, Report>(PeerConfigSnapshot::default());
+        }
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            && decode_operator_access_error(&bytes).is_some()
+        {
+            iroha_logger::debug!(
+                %status,
+                "peer /configuration requires operator access; continuing without config snapshot"
+            );
+            return Ok::<_, Report>(PeerConfigSnapshot::default());
+        }
         let config = decode_peer_config_payload(&bytes)?;
         Ok::<_, Report>(config)
     };
@@ -1024,6 +1064,24 @@ mod tests {
             message.contains("missing queue object"),
             "unexpected error: {message}"
         );
+    }
+
+    #[test]
+    fn operator_access_error_payload_is_detected() {
+        let payload = br#"{
+            "code":"operator_signature_missing",
+            "message":"missing required operator signature header"
+        }"#;
+        assert_eq!(
+            decode_operator_access_error(payload).as_deref(),
+            Some("operator_signature_missing")
+        );
+    }
+
+    #[test]
+    fn non_operator_error_payload_is_not_treated_as_configless_fallback() {
+        let payload = br#"{"code":"some_other_error","message":"boom"}"#;
+        assert!(decode_operator_access_error(payload).is_none());
     }
 
     #[test]

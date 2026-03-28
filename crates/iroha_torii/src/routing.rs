@@ -7465,7 +7465,7 @@ pub async fn handle_post_contract_instance_activate(
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(
             [
-                dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
+                dm::InstructionBox::from(dm::Register::account(dm::Account::new(
                     authority.clone(),
                 ))),
                 Box::new(isi).into_instruction_box(),
@@ -7520,9 +7520,7 @@ pub async fn handle_post_contract_instance(
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
 
     let instructions = [
-        dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
-            authority.clone(),
-        ))),
+        dm::InstructionBox::from(dm::Register::account(dm::Account::new(authority.clone()))),
         dm::InstructionBox::from(smart_contract_code::RegisterSmartContractCode {
             manifest: prepared.manifest.clone(),
         }),
@@ -16021,7 +16019,7 @@ pub async fn handle_post_contract_deploy(
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(
             [
-                dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
+                dm::InstructionBox::from(dm::Register::account(dm::Account::new(
                     authority.clone(),
                 ))),
                 dm::InstructionBox::from(isi_code),
@@ -39796,6 +39794,13 @@ fn ensure_onboarding_signer_can_manage_alias(
     ))
 }
 
+#[cfg(feature = "app_api")]
+fn alias_domain_to_domain_id(
+    domain: account::rekey::AccountAliasDomain,
+) -> iroha_data_model::domain::DomainId {
+    iroha_data_model::domain::DomainId::new(Name::from(domain))
+}
+
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard(
@@ -39886,9 +39891,9 @@ pub async fn handle_v1_accounts_onboard(
 
     let register_builder = match alias_label.domain.clone() {
         Some(domain) => {
-            dm::Account::new_in_domain(account_id.clone(), dm::DomainId::new(domain.into()))
+            dm::Account::new_in_domain(account_id.clone(), alias_domain_to_domain_id(domain))
         }
-        None => dm::Account::new_domainless(account_id.clone()),
+        None => dm::Account::new(account_id.clone()),
     };
     let register = Register::account(
         register_builder
@@ -40265,10 +40270,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
     let register = MultisigRegister::with_account(
         multisig_account.clone(),
-        alias_label
-            .domain
-            .clone()
-            .map(|domain| dm::DomainId::new(domain.into())),
+        alias_label.domain.clone().map(alias_domain_to_domain_id),
         spec,
     );
     let bind_alias = SetPrimaryAccountAlias {
