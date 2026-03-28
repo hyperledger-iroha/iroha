@@ -2,6 +2,124 @@
 
 Last updated: 2026-03-28
 
+## 2026-03-28 Follow-up: Taira Sorafs upload path no longer fails at nginx body-size limits
+- Investigated the static-site publish blocker reported by the Sorafs deploy
+  wrapper and confirmed the proxy-layer issue on this machine: the active
+  Homebrew nginx vhost and the checked-in Taira edge template were both still
+  missing `client_max_body_size`, so large `POST /v1/sorafs/storage/pin`
+  uploads could be rejected before reaching Torii.
+- Fixed both configs:
+  - `configs/soranexus/taira/taira-explorer.nginx.conf` now sets
+    `client_max_body_size 64m;` in both TLS server blocks
+    (`taira.sora.org` and `taira-explorer.sora.org`);
+  - the active local vhost at
+    `/opt/homebrew/etc/nginx/servers/taira.sora.org.conf` was patched the same
+    way and reloaded with `nginx -t && nginx -s reload`.
+- Verification:
+  - `nginx -t` (pass)
+  - `POST https://taira.sora.org/v1/sorafs/storage/pin` with a 2 MiB request
+    body now returns `415 unsupported Content-Type ...`, not `413`
+  - `POST https://taira-explorer.sora.org/v1/sorafs/storage/pin` with the same
+    2 MiB request also returns `415`, which confirms both public TLS vhosts now
+    pass larger bodies through to Torii
+  - `GET https://taira.sora.org/status` still returns `200` after reload
+- The Sorafs publish itself was not rerun from this shell because
+  `SORAFS_AUTHORITY` / `SORAFS_PRIVATE_KEY` are not present in the environment.
+  `GET https://taira.sora.org/` therefore still returns `404`, which is
+  expected until the site is republished and the serving nodes pick up the
+  updated `configs/soranexus/taira/sorafs_sites.json` binding.
+
+## 2026-03-28 Follow-up: Taira MCP endpoint restored on the live localnet
+- Investigated the public `https://taira.sora.org/v1/mcp` `404` and confirmed
+  it was not an nginx routing issue on this machine:
+  both the public host and the loopback Torii endpoint at
+  `http://127.0.0.1:29080/v1/mcp` returned `404`, while the active nginx vhost
+  already had dedicated `/v1/mcp` proxy locations.
+- Root cause: the served localnet peer configs under `dist/taira-localnet/`
+  were still missing the shipped `[torii.mcp]` block entirely, so the node
+  booted without registering the native MCP route even though the binary
+  already contained the MCP handlers.
+- Fixed the generator gap in `crates/iroha_kagami/src/localnet.rs` so
+  Sora-profile localnets now emit:
+  - `torii.mcp.enabled = true`
+  - `torii.mcp.profile = "writer"`
+  - `torii.mcp.expose_operator_routes = false`
+  - `torii.mcp.allow_tool_prefixes = ["iroha."]`
+- Added focused coverage:
+  `generated_sora_profile_peer_config_includes_mcp_writer_profile`
+- Applied the same MCP block to the currently served
+  `dist/taira-localnet/peer{0,1,2,3}.toml`, restarted the detached
+  `taira-localnet` screen session, and reran the rollout smoke against the real
+  local port on this machine.
+- Validation:
+  - `cargo test -p iroha_kagami --no-run` (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --local-url http://127.0.0.1:29080/v1/mcp`
+    (pass)
+  - `GET https://taira.sora.org/v1/mcp` now returns MCP capabilities instead of
+    `404`
+  - `POST https://taira.sora.org/v1/mcp` with `tools/list` now returns the
+    curated `iroha.*` tool registry
+
+## 2026-03-28 Follow-up: Taira faucet funding overlay restored after the fresh-genesis reset
+- Investigated the live faucet 400s after the Taira reset and confirmed they
+  were not PoW, anchor-age, or account-format failures:
+  `dist/taira-localnet/peer0.log` logged
+  `reason="faucet is out of funds"` for the failing requests.
+- Root cause: the regenerated `dist/taira-localnet/genesis.json` kept the live
+  `[torii.faucet]` config but dropped the extra genesis mint that had been
+  funding the faucet authority. After the reset, the authority only held
+  `10000` of the faucet asset while the faucet was configured to transfer
+  `25000` per claim.
+- Restored the live overlay by appending the missing mint back into
+  `dist/taira-localnet/genesis.json`, re-signing
+  `dist/taira-localnet/genesis.signed.nrt` with the deterministic localnet
+  genesis key (`kagami genesis sign ... --seed taira-localgenesis`), rotating
+  chain state to `dist/taira-localnet/storage.prev-20260328-193247`, and
+  restarting the detached `taira-localnet` screen session.
+- Validation:
+  - `curl -sk https://taira.sora.org/status` after restart (healthy from fresh
+    genesis: `peers=3`, `blocks=1`, `txs_approved=10`)
+  - real solved-PoW faucet claim against an existing zero-balance account
+    returned `202` with tx hash
+    `288fa64e77b3c4cd805b70d1d3ac40ebc887d6c42ea78ee2fb0f98e7138d24c5`
+  - `curl -sk https://taira.sora.org/status` after commit (healthy:
+    `blocks=2`, `txs_approved=11`, `txs_rejected=0`)
+  - a second solved-PoW claim for the same account returned `400`, and
+    `dist/taira-localnet/peer0.log` now records the expected rejection reason:
+    `account already has a positive faucet asset balance`
+
+## 2026-03-28 Follow-up: Taira local testnet reset from fresh genesis after iroha/explorer update
+- Rebuilt the updated validator/tooling checkout at `a527605b2b28` and the
+  explorer checkout at `b60f2a5027a6`, then reset the served Taira localnet
+  from fresh genesis on this machine.
+- Fixed the `iroha_kagami` API fallout introduced by the updated data-model
+  account/domain accessors:
+  - `crates/iroha_kagami/src/localnet.rs` now registers extra accounts with
+    `Account::new_in_domain(...)` instead of the old scoped-account constructor;
+    and
+  - `crates/iroha_kagami/src/genesis/sign.rs` plus the matching localnet test
+    now use `register.object.domain()` instead of the removed field access.
+- Regenerated `dist/taira-localnet`, preserved the prior live bundle at
+  `dist/taira-localnet.prev-20260328-191010`, re-applied the live-only Taira
+  faucet authority config plus the loopback peer mesh addresses required on
+  this host, and restarted the detached `screen` session `taira-localnet`.
+- Validation:
+  - `cargo test -p iroha_kagami --no-run` (pass)
+  - `cargo build -p irohad -p iroha_kagami --bin kagami --release` (pass)
+  - `pnpm build` in `/Users/administrator/dev/iroha2-block-explorer-web`
+    (pass)
+  - `curl -sk https://taira.sora.org/status` (healthy after reset:
+    `peers=3`, `blocks=1`, `txs_approved=9`, `txs_rejected=0`)
+  - `curl -sk https://taira.sora.org/v1/accounts/faucet/puzzle` (HTTP 200)
+  - `curl -sk -X POST https://taira.sora.org/v1/connect/session ...` with a
+    fresh SID (pass; valid Connect session payload returned)
+  - `curl -skI https://taira-explorer.sora.org/` (HTTP 200; rebuilt bundle now
+    live)
+  - `curl -sk https://taira-explorer.sora.org/config.json` (still points at
+    `https://taira.sora.org`)
+  - `rg -n "2026-03-28T19:(1[5-9]|[2-9][0-9]).*(failed to fetch configuration|failed to decode /configuration|Connection refused|operator_signature_missing)" dist/taira-localnet/peer{0,1,2,3}.log`
+    returned no matches after the fixed restart
+
 ## 2026-03-28 Follow-up: Taira deploy docs now cover the real nginx rollout path
 - Expanded the Taira deployment docs so future rollouts do not have to recover
   the websocket proxy fix from terminal history:

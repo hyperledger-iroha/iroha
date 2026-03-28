@@ -806,6 +806,7 @@ fn generate_localnet_with_line<T: Write>(
     tui::status("Generating genesis manifest");
     let da_rbc_enabled = build_line.is_iroha3();
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode, opts.next_consensus_mode);
+    let mcp_enabled = opts.sora_profile.is_some();
     let perf_spec = opts.perf_profile.map(LocalnetPerfProfile::spec);
     let queue_capacity = if perf_spec.is_some() {
         LOCALNET_PERF_QUEUE_CAPACITY
@@ -942,6 +943,7 @@ fn generate_localnet_with_line<T: Write>(
             &chain_id,
             (&hosts.bind, &hosts.public),
             opts.consensus_mode,
+            mcp_enabled,
             nexus_enabled,
             npos_bootstrap,
             dataspace_fault_tolerance,
@@ -1181,6 +1183,7 @@ fn render_peer_config(
     chain_id: &str,
     hosts: (&CanonicalHost, &CanonicalHost),
     consensus_mode: SumeragiConsensusMode,
+    mcp_enabled: bool,
     nexus_enabled: bool,
     npos_bootstrap: bool,
     dataspace_fault_tolerance: Option<u32>,
@@ -1676,6 +1679,17 @@ fn render_peer_config(
         "api_high_load_tx_threshold".into(),
         Value::Integer(i64::try_from(queue_capacity).expect("queue capacity fits i64")),
     );
+    if mcp_enabled {
+        let mut mcp = Table::new();
+        mcp.insert("enabled".into(), Value::Boolean(true));
+        mcp.insert("profile".into(), Value::String("writer".into()));
+        mcp.insert("expose_operator_routes".into(), Value::Boolean(false));
+        mcp.insert(
+            "allow_tool_prefixes".into(),
+            Value::Array(vec![Value::String("iroha.".into())]),
+        );
+        torii.insert("mcp".into(), Value::Table(mcp));
+    }
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
     norito_rpc.insert("enabled".into(), Value::Boolean(true));
@@ -1731,8 +1745,10 @@ fn extend_genesis(
         let domain_id: DomainId = "wonderland"
             .parse()
             .expect("default genesis must include wonderland domain");
-        let account_id = ScopedAccountId::new(domain_id, pk.clone());
-        builder = builder.append_instruction(Register::account(Account::new(account_id)));
+        builder = builder.append_instruction(Register::account(Account::new_in_domain(
+            AccountId::new(pk.clone()),
+            domain_id,
+        )));
     }
 
     for asset in assets {
@@ -2865,6 +2881,66 @@ mod tests {
             .and_then(toml::Value::as_str)
             .expect("telemetry_profile string");
         assert_eq!(telemetry_profile, LOCALNET_TELEMETRY_PROFILE);
+    }
+
+    #[test]
+    fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
+        let temp = tempfile::tempdir().expect("make temp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("kagami-taira-mcp".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let mcp = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("mcp"))
+            .and_then(toml::Value::as_table)
+            .expect("torii.mcp table");
+        assert_eq!(
+            mcp.get("enabled").and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            mcp.get("profile").and_then(toml::Value::as_str),
+            Some("writer")
+        );
+        assert_eq!(
+            mcp.get("expose_operator_routes")
+                .and_then(toml::Value::as_bool),
+            Some(false)
+        );
+        let allow_prefixes = mcp
+            .get("allow_tool_prefixes")
+            .and_then(toml::Value::as_array)
+            .expect("allow_tool_prefixes array")
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(allow_prefixes, vec!["iroha."]);
     }
 
     #[allow(clippy::too_many_lines)]
@@ -4792,7 +4868,12 @@ mod tests {
                 instruction
                     .as_any()
                     .downcast_ref::<Register<Account>>()
-                    .map(|register| (register.object.id.clone(), register.object.domain.clone()))
+                    .map(|register| {
+                        (
+                            register.object.id.clone(),
+                            register.object.domain().cloned(),
+                        )
+                    })
             })
             .filter(|(account_id, domain)| {
                 account_id == &genesis_account_id && domain.as_ref() == Some(&ivm_domain)
