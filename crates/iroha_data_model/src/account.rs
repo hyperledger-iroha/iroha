@@ -1724,7 +1724,7 @@ mod json_tests {
         let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
         let id = AccountId::new(keypair.public_key().clone());
-        let new_account = NewAccount::new(id.to_account_id(domain));
+        let new_account = NewAccount::new(id.to_account_id(domain.clone()));
 
         let json = norito::json::to_json(&new_account).expect("serialize new account");
         let decoded: NewAccount = norito::json::from_json(&json).expect("deserialize new account");

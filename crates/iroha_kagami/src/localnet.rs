@@ -4786,14 +4786,10 @@ mod tests {
         let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse().expect("ivm domain");
         let ivm_genesis_registrations = manifest
             .instructions()
-            .filter_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<Register<Account>>()
-                    .map(|register| (register.object.id.clone(), register.object.domain.clone()))
-            })
-            .filter(|(account_id, domain)| {
-                account_id == &genesis_account_id && domain.as_ref() == Some(&ivm_domain)
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<Register<Account>>())
+            .filter(|register| {
+                register.object.id == genesis_account_id
+                    && register.object.domain() == Some(&ivm_domain)
             })
             .count();
 

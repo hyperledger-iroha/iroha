@@ -2,6 +2,27 @@
 
 Last updated: 2026-03-28
 
+Latest sync (2026-03-28 `NewAccount` accessor compile follow-up):
+the immediate compile break from the account-domain cleanup is closed for the
+current `iroha_data_model` and `iroha_kagami` callers.
+
+- `crates/iroha_data_model/src/account.rs` no longer moves the test
+  `DomainId` before asserting on it;
+- `crates/iroha_kagami/src/genesis/sign.rs` and
+  `crates/iroha_kagami/src/localnet.rs` now use `NewAccount::domain()` instead
+  of the removed field access; and
+- focused validation is green again for
+  `cargo test -p iroha_data_model new_account_json_roundtrip_defaults -- --nocapture`
+  and `cargo check -p iroha_kagami --tests`.
+
+Open work from this slice:
+- continue the broader `ScopedAccountId` / domain-linked account registration
+  cleanup across CLI, Torii tests, bridge helpers, IVM, and docs so remaining
+  callers converge on the current account-domain API shape; and
+- decide whether future call sites that need to retain a caller-owned
+  `DomainId` should prefer helpers such as `NewAccount::new_in_domain(...)`
+  over materializing a temporary `ScopedAccountId`.
+
 Latest sync (2026-03-28 Taira skill/docs gap closure with live endpoint recheck):
 the repo-side gaps from the standalone Taira skill rollout are now closed, and
 the remaining blocker has narrowed back down to the public deployment.

@@ -2,6 +2,23 @@
 
 Last updated: 2026-03-28
 
+## 2026-03-28 Follow-up: `NewAccount` callers rebuilt after the domain accessor change
+- Fixed the `new_account_json_roundtrip_defaults` regression in
+  `crates/iroha_data_model/src/account.rs` by cloning the expected
+  `DomainId` before calling `AccountId::to_account_id(...)`, so the test keeps
+  ownership of the value it later asserts against.
+- Updated the stale `NewAccount` call sites in
+  `crates/iroha_kagami/src/genesis/sign.rs` and
+  `crates/iroha_kagami/src/localnet.rs` to use `register.object.domain()`
+  instead of the removed `domain` field, and simplified the localnet filter to
+  check the registration directly.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model new_account_json_roundtrip_defaults -- --nocapture`
+    (pass)
+  - `cargo check -p iroha_kagami --tests` (pass; pre-existing `iroha_core`
+    `private_interfaces` / dead-code warnings remain)
+
 ## 2026-03-28 Taira skill/docs gap-closure follow-up
 - Added a repo-root discoverability entry in `README.md` for the Codex-facing
   Taira surfaces so users can find both `plugins/iroha/` and the standalone
