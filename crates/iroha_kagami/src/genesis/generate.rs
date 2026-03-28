@@ -35,13 +35,13 @@ use crate::{
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
-    /// Optional profile: picks Iroha3 defaults for dev/testus/nexus (sets chain id, DA/RBC, collector knobs).
+    /// Optional profile: picks Iroha3 defaults for dev/taira/nexus (sets chain id, DA/RBC, collector knobs).
     #[clap(long, value_enum, value_name = "PROFILE")]
     profile: Option<GenesisProfile>,
     /// Optional explicit chain id (overrides profile default).
     #[clap(long, value_name = "CHAIN_ID")]
     chain_id: Option<ChainId>,
-    /// Optional VRF seed (hex, 32 bytes). Required for `iroha3-testus`/`iroha3-nexus`
+    /// Optional VRF seed (hex, 32 bytes). Required for `iroha3-taira`/`iroha3-nexus`
     /// when NPoS is selected; ignored for permissioned manifests.
     #[clap(long, value_name = "HEX")]
     vrf_seed_hex: Option<String>,
@@ -972,11 +972,11 @@ mod profile_cli_tests {
     }
 
     #[test]
-    fn testus_profile_requires_explicit_seed() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Testus);
+    fn taira_profile_requires_explicit_seed() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
         args.vrf_seed_hex = None;
 
-        let err = run_and_parse(args).expect_err("testus profile should require seed");
+        let err = run_and_parse(args).expect_err("taira profile should require seed");
         assert!(
             err.to_string().contains("vrf-seed-hex"),
             "unexpected error: {err}"
@@ -984,12 +984,12 @@ mod profile_cli_tests {
     }
 
     #[test]
-    fn testus_profile_applies_explicit_seed() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Testus);
+    fn taira_profile_applies_explicit_seed() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
         let seed = [0x11u8; 32];
         args.vrf_seed_hex = Some(hex::encode(seed));
 
-        let manifest = run_and_parse(args).expect("testus profile with seed should succeed");
+        let manifest = run_and_parse(args).expect("taira profile with seed should succeed");
         let params = manifest.effective_parameters();
         let npos_param_id = SumeragiNposParameters::parameter_id();
         let npos = params
@@ -1435,10 +1435,10 @@ mod tests {
         assert_eq!(dev.collectors_k, 1);
         assert_eq!(dev.collectors_redundant_send_r, 1);
 
-        let testus = profile_defaults(GenesisProfile::Iroha3Testus);
-        assert_eq!(testus.chain_id, ChainId::from("iroha3-testus"));
-        assert_eq!(testus.collectors_k, 3);
-        assert_eq!(testus.collectors_redundant_send_r, 3);
+        let taira = profile_defaults(GenesisProfile::Iroha3Taira);
+        assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
+        assert_eq!(taira.collectors_k, 3);
+        assert_eq!(taira.collectors_redundant_send_r, 3);
 
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));

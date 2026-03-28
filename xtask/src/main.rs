@@ -11601,7 +11601,7 @@ fn print_usage() {
         "    Measure PoR verification time against the Halo2 verifier budget using the provided manifest/payload (defaults to fixtures/da/reconstruct/rs_parity_v1). Fails if verification exceeds the budget."
     );
     eprintln!(
-        "  cargo xtask kagami-profiles [--profile <iroha3-dev|iroha3-testus|iroha3-nexus>] [--out <dir>] [--kagami <path>]"
+        "  cargo xtask kagami-profiles [--profile <iroha3-dev|iroha3-taira|iroha3-nexus>] [--out <dir>] [--kagami <path>]"
     );
     eprintln!(
         "    Rebuild the canned Kagami profile bundles (genesis + PoPs + snippets) under defaults/kagami for Iroha 3 smoke tests; use --kagami to point at a specific binary."

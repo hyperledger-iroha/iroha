@@ -382,8 +382,6 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        require_permission(state_transaction, authority, "CanRegisterSorafsPin")?;
-
         let Self {
             digest,
             chunker,
@@ -2354,7 +2352,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn register_pin_manifest_requires_permission() {
+    fn register_pin_manifest_allows_public_submission() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
@@ -2373,15 +2371,17 @@ mod sorafs_tests {
             successor_of: None,
         };
 
-        let error = register
+        register
             .execute(&alice(), &mut stx)
-            .expect_err("permissionless register must fail");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("CanRegisterSorafsPin")
-        ));
+            .expect("public register must succeed");
+
+        let record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored");
+        assert_eq!(record.submitted_by, alice());
+        assert_eq!(record.status, PinStatus::Pending);
     }
 
     #[test]

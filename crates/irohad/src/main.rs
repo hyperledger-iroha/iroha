@@ -1857,8 +1857,9 @@ impl NetworkRelayShared {
             | Health
             | Connect(_) => {
                 // Genesis bootstrap is handled by the dedicated bootstrapper listener.
-                // Health frames are handled elsewhere. Connect and Torii/Soracloud proxy frames
-                // go to Torii via its own subscriber tasks when those surfaces are enabled.
+                // Health frames are handled elsewhere. Connect, Soracloud proxy, and Torii
+                // proxy frames go to Torii via its own subscriber tasks when those surfaces are
+                // enabled.
             }
             TimePing(p) => {
                 iroha_core::time::handle_message(
@@ -7889,6 +7890,55 @@ mod tests {
             assert!(overrides.dispatch_trace);
             assert!(overrides.debug_enum);
             assert!(!overrides.debug_fused);
+        }
+    }
+
+    mod relay_ingress {
+        use super::*;
+        use iroha_core::torii_proxy::{
+            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
+            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
+            ToriiReadProxyRequestV1, ToriiRouteHintV1,
+        };
+        use iroha_crypto::Hash;
+        use iroha_data_model::nexus::{DataSpaceId, LaneId};
+
+        #[test]
+        fn torii_proxy_frames_are_not_low_priority() {
+            let route = ToriiRouteHintV1 {
+                lane_id: LaneId::new(0),
+                dataspace_id: DataSpaceId::new(0),
+            };
+            let request = iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(
+                ToriiProxyRequestV1 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+                    request_id: Hash::new(b"torii-proxy-request"),
+                    hop_count: 0,
+                    request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+                        endpoint: ToriiReadEndpointV1::AccountsList,
+                        expected_route: route,
+                        path_args: Vec::new(),
+                        query_string: None,
+                        body: Vec::new(),
+                        response_format: ToriiProxyResponseFormatV1::Json,
+                    }),
+                },
+            ));
+            let response = iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(
+                ToriiProxyResponseV1 {
+                    schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+                    request_id: Hash::new(b"torii-proxy-response"),
+                    response: ToriiProxyHttpResponseV1 {
+                        status_code: 200,
+                        headers: Vec::new(),
+                        body: Vec::new(),
+                    },
+                },
+            ));
+
+            assert!(!NetworkRelayShared::should_apply_low_priority_ingress(&request));
+            assert!(!NetworkRelayShared::should_apply_low_priority_ingress(&response));
         }
     }
 

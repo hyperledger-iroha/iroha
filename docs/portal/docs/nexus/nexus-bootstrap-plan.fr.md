@@ -34,10 +34,10 @@ Cette page reflete `docs/source/soranexus_bootstrap_plan.md`. Gardez les deux co
 ## Environnements reseau
 - Operer deux environnements Nexus avec des prefixes reseau distincts:
 - **Sora Nexus (mainnet)** - prefixe reseau de production `nexus`, hebergeant la gouvernance canonique et les services piggyback SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefixe reseau de staging `testus`, miroir de la configuration mainnet pour les tests d'integration et la validation pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Maintenir des fichiers genesis, des cles de gouvernance et des empreintes d'infrastructure separes pour chaque environnement. Testus sert de terrain de preuve pour tous les rollouts SoraFS/SoraNet avant promotion vers Nexus.
-- Les pipelines CI/CD doivent deployer d'abord sur Testus, executer des smoke tests automatises, et demander une promotion manuelle vers Nexus une fois les checks passes.
-- Les bundles de configuration de reference se trouvent sous `configs/soranexus/nexus/` (mainnet) et `configs/soranexus/testus/` (testnet), chacun contenant un exemple `config.toml`, `genesis.json` et des repertoires d'admission Torii.
+- **Sora Taira (testnet)** - prefixe reseau de staging `taira`, miroir de la configuration mainnet pour les tests d'integration et la validation pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- Maintenir des fichiers genesis, des cles de gouvernance et des empreintes d'infrastructure separes pour chaque environnement. Taira sert de terrain de preuve pour tous les rollouts SoraFS/SoraNet avant promotion vers Nexus.
+- Les pipelines CI/CD doivent deployer d'abord sur Taira, executer des smoke tests automatises, et demander une promotion manuelle vers Nexus une fois les checks passes.
+- Les bundles de configuration de reference se trouvent sous `configs/soranexus/nexus/` (mainnet) et `configs/soranexus/taira/` (testnet), chacun contenant un exemple `config.toml`, `genesis.json` et des repertoires d'admission Torii.
 
 ## Etape 1 - Revue de configuration
 1. Auditer la documentation existante:

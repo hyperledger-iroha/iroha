@@ -1,6 +1,6 @@
 version: "3.9"
 services:
-  iroha-iroha3-testus:
+  iroha-iroha3-taira:
     image: hyperledger/iroha:latest
     command: ["irohad", "--sora", "--config", "/config/config.toml", "--genesis", "/config/genesis.json"]
     volumes:

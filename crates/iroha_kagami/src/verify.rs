@@ -29,13 +29,13 @@ use crate::{
 /// Verify a genesis manifest against a known profile (chain id, DA/RBC, collectors, VRF seed, PoPs).
 #[derive(Debug, Parser, Clone)]
 pub struct Args {
-    /// Profile to verify against (`iroha3-dev`, `iroha3-testus`, `iroha3-nexus`).
+    /// Profile to verify against (`iroha3-dev`, `iroha3-taira`, `iroha3-nexus`).
     #[clap(long, value_enum)]
     profile: GenesisProfile,
     /// Path to the genesis manifest (JSON).
     #[clap(long, value_name = "PATH")]
     genesis: PathBuf,
-    /// Optional VRF seed (hex, 32 bytes). Required for NPoS testus/nexus manifests.
+    /// Optional VRF seed (hex, 32 bytes). Required for NPoS taira/nexus manifests.
     #[clap(long, value_name = "HEX")]
     vrf_seed_hex: Option<String>,
 }
@@ -367,24 +367,24 @@ mod tests {
     }
 
     #[test]
-    fn verify_requires_seed_for_testus_profile() {
+    fn verify_requires_seed_for_taira_profile() {
         let seed = [7u8; 32];
         let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
         let manifest = build_manifest_with_profile(
-            GenesisProfile::Iroha3Testus,
+            GenesisProfile::Iroha3Taira,
             SumeragiConsensusMode::Npos,
             seed,
             &peers,
         );
 
-        let err = verify_manifest(&manifest, GenesisProfile::Iroha3Testus, None)
+        let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, None)
             .expect_err("seed required");
         assert!(
             err.to_string().contains("vrf-seed-hex"),
             "unexpected error: {err}"
         );
 
-        let ok = verify_manifest(&manifest, GenesisProfile::Iroha3Testus, Some(seed));
+        let ok = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed));
         assert!(
             ok.is_ok(),
             "explicit seed should satisfy verification: {ok:?}"

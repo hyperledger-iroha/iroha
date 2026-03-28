@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Localnet simulation for a public-style Testus rollout with churn and fixed TPS load.
+//! Localnet simulation for a public-style Taira rollout with churn and fixed TPS load.
 
 use std::{
     any::Any,
@@ -34,8 +34,8 @@ use tempfile::TempDir;
 use tokio::time::sleep;
 use toml::{Table, Value as TomlValue};
 
-const TESTUS_VALIDATORS: u16 = 4;
-const TESTUS_TOTAL_PORT_SLOTS: u16 = TESTUS_VALIDATORS + 1;
+const TAIRA_VALIDATORS: u16 = 4;
+const TAIRA_TOTAL_PORT_SLOTS: u16 = TAIRA_VALIDATORS + 1;
 const READY_TIMEOUT: Duration = Duration::from_secs(300);
 const STATUS_POLL: Duration = Duration::from_millis(200);
 const MONITOR_PERIOD: Duration = Duration::from_secs(1);
@@ -101,44 +101,44 @@ impl SimulationConfig {
     fn from_env() -> Self {
         Self {
             duration: Duration::from_secs(env_u64(
-                "IROHA_TESTUS_SIM_DURATION_SECS",
+                "IROHA_TAIRA_SIM_DURATION_SECS",
                 DEFAULT_SIM_DURATION_SECS,
                 30,
             )),
-            tps: env_u64("IROHA_TESTUS_LOAD_TPS", DEFAULT_LOAD_TPS, 1),
+            tps: env_u64("IROHA_TAIRA_LOAD_TPS", DEFAULT_LOAD_TPS, 1),
             churn_interval: Duration::from_secs(env_u64(
-                "IROHA_TESTUS_CHURN_INTERVAL_SECS",
+                "IROHA_TAIRA_CHURN_INTERVAL_SECS",
                 DEFAULT_CHURN_INTERVAL_SECS,
                 30,
             )),
-            max_height_skew: env_u64("IROHA_TESTUS_MAX_HEIGHT_SKEW", DEFAULT_MAX_HEIGHT_SKEW, 0),
+            max_height_skew: env_u64("IROHA_TAIRA_MAX_HEIGHT_SKEW", DEFAULT_MAX_HEIGHT_SKEW, 0),
             max_height_skew_grace: Duration::from_secs(env_u64(
-                "IROHA_TESTUS_MAX_HEIGHT_SKEW_GRACE_SECS",
+                "IROHA_TAIRA_MAX_HEIGHT_SKEW_GRACE_SECS",
                 DEFAULT_MAX_HEIGHT_SKEW_GRACE_SECS,
                 0,
             )),
             max_transient_height_skew: env_u64(
-                "IROHA_TESTUS_MAX_TRANSIENT_HEIGHT_SKEW",
+                "IROHA_TAIRA_MAX_TRANSIENT_HEIGHT_SKEW",
                 DEFAULT_MAX_TRANSIENT_HEIGHT_SKEW,
                 0,
             ),
             stall_timeout: Duration::from_secs(env_u64(
-                "IROHA_TESTUS_STALL_TIMEOUT_SECS",
+                "IROHA_TAIRA_STALL_TIMEOUT_SECS",
                 DEFAULT_STALL_TIMEOUT_SECS,
                 10,
             )),
             max_view_change_rate: env_f64(
-                "IROHA_TESTUS_MAX_VIEW_CHANGE_RATE",
+                "IROHA_TAIRA_MAX_VIEW_CHANGE_RATE",
                 DEFAULT_MAX_VIEW_CHANGE_RATE,
                 0.0,
             ),
             max_lagged_cycle_ratio: env_f64(
-                "IROHA_TESTUS_MAX_LAGGED_CYCLE_RATIO",
+                "IROHA_TAIRA_MAX_LAGGED_CYCLE_RATIO",
                 DEFAULT_MAX_LAGGED_CYCLE_RATIO,
                 0.0,
             ),
             min_committed_tps_ratio: env_f64(
-                "IROHA_TESTUS_MIN_COMMITTED_TPS_RATIO",
+                "IROHA_TAIRA_MIN_COMMITTED_TPS_RATIO",
                 DEFAULT_MIN_COMMITTED_TPS_RATIO,
                 0.0,
             ),
@@ -239,7 +239,7 @@ struct JoinerPeer {
     client: Client,
 }
 
-struct TestusHarness {
+struct TairaHarness {
     out_dir: PathBuf,
     localnet: ManagedLocalnet,
     primary_client: Client,
@@ -247,9 +247,9 @@ struct TestusHarness {
     joiner: JoinerPeer,
 }
 
-impl TestusHarness {
+impl TairaHarness {
     fn summary_path(&self) -> PathBuf {
-        self.out_dir.join("testus_simulation_summary.json")
+        self.out_dir.join("taira_simulation_summary.json")
     }
 }
 
@@ -402,14 +402,14 @@ impl Drop for ManagedLocalnet {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn testus_localnet_bootstrap_validators() -> Result<()> {
+async fn taira_localnet_bootstrap_validators() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
 
-    let temp_dir = localnet_tempdir("testus-bootstrap")?;
+    let temp_dir = localnet_tempdir("taira-bootstrap")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let harness = setup_testus_harness(&out_dir, "testus-bootstrap").await?;
+        let harness = setup_taira_harness(&out_dir, "taira-bootstrap").await?;
         wait_for_cluster_convergence(
             &harness.validator_clients,
             harness.primary_client.get_status()?.blocks,
@@ -420,7 +420,7 @@ async fn testus_localnet_bootstrap_validators() -> Result<()> {
 
         let baseline = harness.primary_client.get_status()?.blocks_non_empty;
         harness.primary_client.submit::<InstructionBox>(
-            Log::new(Level::INFO, "testus bootstrap probe".to_string()).into(),
+            Log::new(Level::INFO, "taira bootstrap probe".to_string()).into(),
         )?;
         wait_for_blocks_non_empty(
             &harness.primary_client,
@@ -432,19 +432,19 @@ async fn testus_localnet_bootstrap_validators() -> Result<()> {
     }
     .await;
 
-    finalize_result(temp_dir, "testus_localnet_bootstrap_validators", result)
+    finalize_result(temp_dir, "taira_localnet_bootstrap_validators", result)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires local process orchestration"]
-async fn testus_localnet_joiner_register_unregister_behavior() -> Result<()> {
+async fn taira_localnet_joiner_register_unregister_behavior() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
 
-    let temp_dir = localnet_tempdir("testus-membership")?;
+    let temp_dir = localnet_tempdir("taira-membership")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let mut harness = setup_testus_harness(&out_dir, "testus-membership").await?;
+        let mut harness = setup_taira_harness(&out_dir, "taira-membership").await?;
         let mut joiner_warning_state = JoinerCatchupWarningState::default();
         let _ = membership_join_cycle(&mut harness, &mut joiner_warning_state).await?;
         let _ = membership_leave_cycle(&mut harness).await?;
@@ -454,46 +454,46 @@ async fn testus_localnet_joiner_register_unregister_behavior() -> Result<()> {
 
     finalize_result(
         temp_dir,
-        "testus_localnet_joiner_register_unregister_behavior",
+        "taira_localnet_joiner_register_unregister_behavior",
         result,
     )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires local process orchestration"]
-async fn testus_localnet_restart_catchup_behavior() -> Result<()> {
+async fn taira_localnet_restart_catchup_behavior() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
 
-    let temp_dir = localnet_tempdir("testus-restart")?;
+    let temp_dir = localnet_tempdir("taira-restart")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async {
-        let mut harness = setup_testus_harness(&out_dir, "testus-restart").await?;
+        let mut harness = setup_taira_harness(&out_dir, "taira-restart").await?;
         let _ = process_churn_cycle(&mut harness, 0, Duration::from_secs(PROCESS_DOWNTIME_SECS))
             .await?;
         Ok(())
     }
     .await;
 
-    finalize_result(temp_dir, "testus_localnet_restart_catchup_behavior", result)
+    finalize_result(temp_dir, "taira_localnet_restart_catchup_behavior", result)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "long-running testus simulation"]
-async fn testus_public_localnet_5tps_churn_stability() -> Result<()> {
+#[ignore = "long-running taira simulation"]
+async fn taira_public_localnet_5tps_churn_stability() -> Result<()> {
     init_instruction_registry();
     let _guard = sandbox::serial_guard();
 
     let cfg = SimulationConfig::from_env();
-    let seed = std::env::var("IROHA_TESTUS_SIM_SEED")
+    let seed = std::env::var("IROHA_TAIRA_SIM_SEED")
         .ok()
         .filter(|seed| !seed.trim().is_empty())
-        .unwrap_or_else(|| "testus-public-sim".to_owned());
-    let temp_dir = localnet_tempdir("testus-simulation")?;
+        .unwrap_or_else(|| "taira-public-sim".to_owned());
+    let temp_dir = localnet_tempdir("taira-simulation")?;
     let out_dir = temp_dir.path().join("localnet");
     let result: Result<()> = async move {
-        let mut harness = setup_testus_harness(&out_dir, &seed).await?;
-        let summary = run_testus_simulation(
+        let mut harness = setup_taira_harness(&out_dir, &seed).await?;
+        let summary = run_taira_simulation(
             &mut harness,
             cfg,
             SimulationModes {
@@ -509,13 +509,13 @@ async fn testus_public_localnet_5tps_churn_stability() -> Result<()> {
 
     finalize_result(
         temp_dir,
-        "testus_public_localnet_5tps_churn_stability",
+        "taira_public_localnet_5tps_churn_stability",
         result,
     )
 }
 
-async fn run_testus_simulation(
-    harness: &mut TestusHarness,
+async fn run_taira_simulation(
+    harness: &mut TairaHarness,
     cfg: SimulationConfig,
     modes: SimulationModes,
 ) -> Result<SimulationSummary> {
@@ -697,7 +697,7 @@ async fn run_testus_simulation(
             let mut catchup_now = now;
             while catchup_now >= next_tx && burst_submitted < MAX_TX_BURST_PER_TICK {
                 tx_attempted = tx_attempted.saturating_add(1);
-                let msg = format!("testus-load-{tx_attempted}");
+                let msg = format!("taira-load-{tx_attempted}");
                 let load_instruction: InstructionBox = Log::new(Level::INFO, msg).into();
                 if let Err(err) = submit_load_instruction_with_retry(
                     harness,
@@ -707,7 +707,7 @@ async fn run_testus_simulation(
                 .await
                 {
                     tx_submit_errors = tx_submit_errors.saturating_add(1);
-                    eprintln!("testus load submit failed after retries: {err:?}");
+                    eprintln!("taira load submit failed after retries: {err:?}");
                     next_tx = Instant::now() + tx_period;
                     break;
                 } else {
@@ -967,7 +967,7 @@ async fn run_testus_simulation(
 }
 
 async fn process_churn_cycle(
-    harness: &mut TestusHarness,
+    harness: &mut TairaHarness,
     idx: usize,
     downtime: Duration,
 ) -> Result<bool> {
@@ -1031,7 +1031,7 @@ fn validator_restart_catchup_target(baseline: u64) -> u64 {
 }
 
 async fn membership_join_cycle(
-    harness: &mut TestusHarness,
+    harness: &mut TairaHarness,
     joiner_warning_state: &mut JoinerCatchupWarningState,
 ) -> Result<MembershipCycleOutcome> {
     let mut outcome = MembershipCycleOutcome::default();
@@ -1240,7 +1240,7 @@ async fn wait_for_height_or_progress(
     }
 }
 
-async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<MembershipCycleOutcome> {
+async fn membership_leave_cycle(harness: &mut TairaHarness) -> Result<MembershipCycleOutcome> {
     let mut outcome = MembershipCycleOutcome::default();
     let should_unregister = match is_peer_present(&harness.primary_client, &harness.joiner.peer_id)
     {
@@ -1314,9 +1314,9 @@ async fn membership_leave_cycle(harness: &mut TestusHarness) -> Result<Membershi
     Ok(outcome)
 }
 
-async fn setup_testus_harness(out_dir: &Path, seed: &str) -> Result<TestusHarness> {
-    let api_ports = alloc_port_block(TESTUS_TOTAL_PORT_SLOTS)?;
-    let p2p_ports = alloc_port_block(TESTUS_TOTAL_PORT_SLOTS)?;
+async fn setup_taira_harness(out_dir: &Path, seed: &str) -> Result<TairaHarness> {
+    let api_ports = alloc_port_block(TAIRA_TOTAL_PORT_SLOTS)?;
+    let p2p_ports = alloc_port_block(TAIRA_TOTAL_PORT_SLOTS)?;
     let base_api_port = api_ports.base();
     let base_p2p_port = p2p_ports.base();
 
@@ -1324,7 +1324,7 @@ async fn setup_testus_harness(out_dir: &Path, seed: &str) -> Result<TestusHarnes
         out_dir,
         base_api_port,
         base_p2p_port,
-        TESTUS_VALIDATORS,
+        TAIRA_VALIDATORS,
         seed,
     )?;
     let irohad_bin = Program::Irohad
@@ -1333,14 +1333,14 @@ async fn setup_testus_harness(out_dir: &Path, seed: &str) -> Result<TestusHarnes
     let localnet = ManagedLocalnet::start(
         out_dir,
         &irohad_bin,
-        TESTUS_VALIDATORS,
+        TAIRA_VALIDATORS,
         (api_ports, p2p_ports),
     )?;
 
     let mut primary_client = load_localnet_client(out_dir)?;
     primary_client.transaction_status_timeout = READY_TIMEOUT;
     let validator_clients =
-        build_validator_clients(&primary_client, base_api_port, TESTUS_VALIDATORS)?;
+        build_validator_clients(&primary_client, base_api_port, TAIRA_VALIDATORS)?;
     let validator_quorum = min_presence_matches(validator_clients.len());
     wait_for_status_ready_quorum(&validator_clients, validator_quorum, READY_TIMEOUT).await?;
     if get_status_with_retry(&primary_client).is_err() {
@@ -1373,8 +1373,8 @@ async fn setup_testus_harness(out_dir: &Path, seed: &str) -> Result<TestusHarnes
         eprintln!("initial all-validator convergence lagged; continuing on quorum: {err:?}");
     }
 
-    let joiner_api_port = base_api_port + TESTUS_VALIDATORS;
-    let joiner_p2p_port = base_p2p_port + TESTUS_VALIDATORS;
+    let joiner_api_port = base_api_port + TAIRA_VALIDATORS;
+    let joiner_p2p_port = base_p2p_port + TAIRA_VALIDATORS;
     let joiner = build_joiner_peer(
         out_dir,
         &primary_client,
@@ -1383,7 +1383,7 @@ async fn setup_testus_harness(out_dir: &Path, seed: &str) -> Result<TestusHarnes
         joiner_p2p_port,
     )?;
 
-    Ok(TestusHarness {
+    Ok(TairaHarness {
         out_dir: out_dir.to_path_buf(),
         localnet,
         primary_client,
@@ -1662,7 +1662,7 @@ async fn collect_statuses_quorum_with_retry(
     }
 }
 
-fn refresh_primary_client_from_validators(harness: &mut TestusHarness) -> bool {
+fn refresh_primary_client_from_validators(harness: &mut TairaHarness) -> bool {
     if get_status_with_retry(&harness.primary_client).is_ok() {
         return true;
     }
@@ -2306,7 +2306,7 @@ async fn validator_max_height_with_retry(clients: &[Client], timeout: Duration) 
 }
 
 async fn submit_load_instruction_with_retry(
-    harness: &mut TestusHarness,
+    harness: &mut TairaHarness,
     instruction: &InstructionBox,
     timeout: Duration,
 ) -> Result<()> {
@@ -2353,7 +2353,7 @@ fn finalize_result(temp_dir: TempDir, context: &str, result: Result<()>) -> Resu
             eprintln!("sandbox restriction detected while running {context}; skipping ({reason})");
             return Ok(());
         }
-        if std::env::var_os("IROHA_TESTUS_KEEP_LOCALNET").is_some() {
+        if std::env::var_os("IROHA_TAIRA_KEEP_LOCALNET").is_some() {
             eprintln!(
                 "keeping localnet artifacts at {}",
                 temp_dir.path().display()
@@ -2362,7 +2362,7 @@ fn finalize_result(temp_dir: TempDir, context: &str, result: Result<()>) -> Resu
         }
         return Err(err);
     }
-    if std::env::var_os("IROHA_TESTUS_KEEP_LOCALNET").is_some() {
+    if std::env::var_os("IROHA_TAIRA_KEEP_LOCALNET").is_some() {
         eprintln!(
             "keeping localnet artifacts at {}",
             temp_dir.path().display()
@@ -2389,13 +2389,13 @@ fn env_f64(key: &str, default: f64, min: f64) -> f64 {
 }
 
 fn localnet_tempdir(label: &str) -> Result<TempDir> {
-    let root = repo_root().join("target").join("testus-localnet");
+    let root = repo_root().join("target").join("taira-localnet");
     fs::create_dir_all(&root)
-        .wrap_err_with(|| format!("create testus temp root {}", root.display()))?;
+        .wrap_err_with(|| format!("create taira temp root {}", root.display()))?;
     tempfile::Builder::new()
         .prefix(label)
         .tempdir_in(&root)
-        .wrap_err("create testus localnet temp dir")
+        .wrap_err("create taira localnet temp dir")
 }
 
 fn alloc_port_block(count: u16) -> Result<AllocatedPortBlock> {
@@ -2568,12 +2568,12 @@ fn simulation_config_defaults_are_valid() {
 
 #[test]
 fn env_u64_respects_minimum() {
-    assert_eq!(env_u64("IROHA_TESTUS_NO_SUCH_VAR", 10, 2), 10);
+    assert_eq!(env_u64("IROHA_TAIRA_NO_SUCH_VAR", 10, 2), 10);
 }
 
 #[test]
 fn env_f64_respects_minimum() {
-    assert_eq!(env_f64("IROHA_TESTUS_NO_SUCH_VAR_FLOAT", 0.25, 0.0), 0.25);
+    assert_eq!(env_f64("IROHA_TAIRA_NO_SUCH_VAR_FLOAT", 0.25, 0.0), 0.25);
 }
 
 #[test]

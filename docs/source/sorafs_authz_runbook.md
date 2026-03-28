@@ -4,7 +4,8 @@ This note summarises the authorization and abuse controls around SoraFS control-
 
 ## Surfaces and tokens
 
-- SoraFS instructions are gated by dedicated tokens: pin register/approve/retire/alias, capacity declare/telemetry/dispute, replication order issue/complete, pricing set, and provider credit upsert.
+- `RegisterPinManifest` is public on the universal lane. Submission relies on the standard Nexus XOR-denominated transaction fee schedule instead of a dedicated SoraFS permission token.
+- The remaining SoraFS instructions are gated by dedicated tokens: pin approve/retire/alias, capacity declare/telemetry/dispute, replication order issue/complete, pricing set, and provider credit upsert.
 - Provider→account bindings must be present before issuing replication orders or submitting capacity telemetry; use the governance config seed or the `RegisterProviderOwner`/`UnregisterProviderOwner` instructions to manage bindings.
 - Repair worker endpoints (`/v1/sorafs/audit/repair/{claim,heartbeat,complete,fail}`) require signed `RepairWorkerSignaturePayloadV1` requests from a worker account (i105 account id/signatory key) that holds `CanOperateSorafsRepair { provider_id }`. The signed payload includes `manifest_digest` and must match `manifest_digest_hex` in the request; provider owners are auto-granted this permission and may delegate it via `GrantPermission`; revoke with `RevokePermission` during rotation.
 - The SoraFS storage pin API (`/v1/sorafs/storage/pin`) enforces bearer tokens, CIDR allow-lists, and a token-bucket limit from `sorafs.storage.pin`.
@@ -49,7 +50,7 @@ per_provider_submitters = { "deadbeef..." = ["<i105-account-id>"] }
 
 ## CLI/REST quick reference
 
-- Register a pin manifest with the CLI, carrying the alias proof when required:
+- Register a pin manifest with the CLI. The manifest submitter must cover the normal Nexus transaction fee, and must still carry the alias proof when required:
   ```bash
   iroha_cli app sorafs pin register \
     --manifest /var/lib/sorafs/manifests/pin.to \

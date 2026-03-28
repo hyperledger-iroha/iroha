@@ -2,41 +2,78 @@
 
 Last updated: 2026-03-28
 
-## 2026-03-28 Fixed the visible NPoS `Failed to find asset` storm to the Nexus fee path, not trigger state
-- Root cause from the March 27 NPoS stable soak is now nailed down:
-  preserved-peer logs showed `nexus fee transfer failed` for
-  `Find(Asset(...))` on the payer account, and Izanami surfaced those
-  rejections as `plan="mint_trigger_repetitions"` / `Failed to find asset`.
-  The failure was not the repeatable-trigger FSM itself; it was missing Nexus
-  fee balances on workload signers plus ingress-only state publication for
-  account/asset updates.
-- Implemented the workload-side repair in
-  `crates/izanami/src/instructions.rs` and `crates/izanami/src/chaos.rs`:
-  - new accounts are no longer published into local workload state during plan
-    construction; they are tracked only after successful submission;
-  - `TrackAccount` and `TrackAssetInstance` now force
-    `BlockingApplied` confirmation instead of being treated as completed on
-    Torii ingress acceptance;
-  - NPoS/Nexus genesis now pre-funds the fee asset for treasury, seeded users,
-    and validator signers; and
-  - newly registered accounts now get a fee-asset mint in the same transaction
-    so they can pay subsequent Nexus fees.
-- Targeted verification completed:
-  - `rustfmt --edition 2024 crates/izanami/src/instructions.rs crates/izanami/src/chaos.rs`
-  - `cargo test -p izanami register_account_tracks_only_on_success -- --nocapture`
-  - `cargo test -p izanami register_uaid_account_tracks_mapping -- --nocapture`
-  - `cargo test -p izanami nexus_genesis_prefunds_fee_asset_for_signers -- --nocapture`
-  - `cargo test -p izanami nexus_account_registration_prefunds_fee_asset_and_tracks_on_success -- --nocapture`
-  - `cargo test -p izanami asset_and_account_state_updates_force_blocking_confirmation -- --nocapture`
-- A short `target/debug/izanami --allow-net --nexus ...` smoke was attempted,
-  but `iroha_test_network` blocked before startup on an unrelated
-  `irohad` release build failure:
-  `NetworkMessage::ToriiProxyRequest(_)` /
-  `NetworkMessage::ToriiProxyResponse(_)` not covered in
-  `crates/irohad/src/main.rs`.
-- The full preserved-peer stable NPoS soak has not been rerun on this cut yet,
-  and fresh runtime confirmation still depends on clearing that unrelated
-  `irohad` compile blocker or using an already-built matching release binary.
+## 2026-03-28 DA/precommit tail tuning stop point: Cut 0 and Cut 1 were clean, Cut 2 regressed permissioned into ingress backpressure
+- Cut 0 restored the `irohad` release build in `crates/irohad/src/main.rs` by
+  handling `ToriiProxyRequest(_)` and `ToriiProxyResponse(_)` in the same no-op
+  relay branch as the other Torii-adjacent proxy/control frames.
+- A permissioned ingress follow-up landed in `crates/iroha_torii/src/lib.rs`
+  so `authoritative_lane_peer_ids(...)` falls back to the committed
+  permissioned topology when `public_lane_validators()` is empty; that removed
+  the clean permissioned soak's `route_unavailable` failure.
+- Cut 1 then landed in `crates/izanami/src/chaos.rs` and
+  `crates/iroha_config/src/parameters/defaults.rs` with the requested
+  shared-host backlog, pipeline, NPoS timeout-floor, and DA multiplier
+  reductions.
+- Clean Cut 1 preserved-peer stable soak evidence:
+  - permissioned log:
+    `/tmp/izanami_permissioned_full_cut1_20260328T061158Z.log`
+    reached target with
+    `quorum_min_height=2003 strict_min_height=2003`,
+    `interval_p50_ms=1001`, `interval_p95_ms=1667`, and target snapshot
+    `phase_collect_da_ms=177`, `phase_collect_precommit_ms=877`;
+  - permissioned counters stayed clean:
+    `no strict block height progress=0`,
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `plan submission failed=0`,
+    `Failed to find asset=0`;
+  - NPoS log:
+    `/tmp/izanami_npos_full_cut1_20260328T064716Z.log`
+    reached target with
+    `quorum_min_height=2005 strict_min_height=2005`,
+    `interval_p50_ms=1251`, `interval_p95_ms=2001`, and target snapshot
+    `phase_collect_da_ms=271`, `phase_collect_precommit_ms=785`; and
+  - NPoS counters also stayed clean:
+    `no strict block height progress=0`,
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `plan submission failed=0`,
+    `Failed to find asset=0`.
+- Those two full Cut 1 baselines satisfied the user's Cut 2 trigger
+  (`interval_p95_ms > 1000` and `phase_collect_precommit_ms >= phase_collect_da_ms`),
+  so Cut 2 was applied:
+  - `IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS: 3 -> 2`
+  - `COLLECTORS_K: 1 -> 2`
+- Focused Cut 2 validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p izanami derive_npos_timing_uses_conservative_floors_for_shared_host_npos_soak --quiet -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p izanami shared_host_stable_soak_profile_ --quiet -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p izanami make_network_builder_ --quiet -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p iroha_core commit_quorum_timeout_tracks_block_time --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p iroha_core commit_quorum_timeout_tracks_sumeragi_parameters --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p iroha_core availability_timeout_from_quorum_scales_for_da --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- Clean Cut 2 permissioned verification on
+  `/tmp/izanami_permissioned_full_cut2_20260328T074345Z.log`
+  regressed before target height instead of improving:
+  - the last completed strict height was `1306` while the strict reference had
+    already advanced to `1312`;
+  - sampled intervals had already degraded to
+    `p50=1667`, `p95=3335`, `p99=5001`, `max=10003`; and
+  - the run became workload-invalid with
+    `plan submission failed=25`,
+    `transaction queued for too long=39`,
+    `haven't got tx confirmation within 20s=5`,
+    `strict block height is stalled with no lagging peers=21`,
+    while `Failed to find asset` stayed `0`.
+- Net result:
+  - Cut 0 and Cut 1 preserved the frontier/recovery behavior and produced clean
+    evidence that the remaining tail lives in DA/precommit collection; but
+  - Cut 2 did not satisfy the `p95 <= 1000ms` gate and introduced a worse
+    permissioned failure mode, so no frontier-slot ownership, deep-catchup,
+    quorum-timeout FSM routing, repair-path, or other recovery/FSM changes were
+    attempted beyond this point.
 
 ## 2026-03-27 Full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but the NPoS missing-asset storm is still present
 - Rebuilt `iroha3d` and `izanami` and reran the full 4-peer preserved-peer
@@ -3230,8 +3267,8 @@ Last updated: 2026-03-28
   `crates/iroha_config/src/parameters/{actual.rs,defaults.rs,user.rs}`,
   `crates/iroha_torii/src/{lib.rs,openapi.rs,routing.rs}`,
   `crates/iroha_torii/tests/accounts_faucet.rs`,
-  `configs/soranexus/testus/config.toml`,
-  and `defaults/kagami/iroha3-testus/config.toml`.
+  `configs/soranexus/taira/config.toml`,
+  and `defaults/kagami/iroha3-taira/config.toml`.
 - The shipped behavior in this slice:
   - Torii now exposes `GET /v1/accounts/faucet/puzzle`, which returns a deterministic memory-hard scrypt puzzle anchored to a recent committed block hash plus an acceptance window in blocks;
   - the effective PoW difficulty is now derived from immutable chain data for the chosen anchor height plus pending queue pressure: a base difficulty plus adaptive extra bits based on recent committed and queued faucet claim volume;
@@ -6343,16 +6380,16 @@ Last updated: 2026-03-28
   `crates/iroha_config/src/parameters/{actual.rs,user.rs}`,
   `crates/iroha_torii/src/{lib.rs,routing.rs,mcp.rs,openapi.rs}`,
   `crates/iroha_torii/tests/accounts_faucet.rs`,
-  `configs/soranexus/testus/{config.toml,genesis.json}`,
-  and `defaults/kagami/iroha3-testus/{config.toml,genesis.json}`.
+  `configs/soranexus/taira/{config.toml,genesis.json}`,
+  and `defaults/kagami/iroha3-taira/{config.toml,genesis.json}`.
 - The shipped behavior in this slice:
   - Torii now accepts optional `[torii.faucet]` config and exposes `POST /v1/accounts/faucet`, which transfers a fixed starter balance from a configured authority account to an existing account that still has zero balance for the configured faucet asset;
   - the faucet response now includes both the configured asset-definition identifier and the concrete funded `asset_id`, so downstream apps can immediately reuse the exact bucket they were credited with;
-  - the TAIRA/testus profile now seeds a dedicated faucet authority plus `xor#sora` in genesis and pre-mints a faucet reserve, while leaving non-TAIRA profiles untouched; and
+  - the TAIRA/taira profile now seeds a dedicated faucet authority plus `xor#sora` in genesis and pre-mints a faucet reserve, while leaving non-TAIRA profiles untouched; and
   - the faucet config parser now accepts on-chain asset aliases in `name#dataspace` / `name#domain.dataspace` form (for example `xor#sora`) for this profile instead of forcing operators to hand-compute the canonical asset-definition address.
 - Validation:
-  - `jq empty configs/soranexus/testus/genesis.json` (pass)
-  - `jq empty defaults/kagami/iroha3-testus/genesis.json` (pass)
+  - `jq empty configs/soranexus/taira/genesis.json` (pass)
+  - `jq empty defaults/kagami/iroha3-taira/genesis.json` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config torii_faucet_tests -- --nocapture` (pass)
 - Remaining implementation gap:
   - the focused `iroha_config` faucet parser path is green, but full `iroha_torii --features app_api` test execution is still blocked in this workspace by unrelated pre-existing `iroha_core` compile errors around missing offline/SNS symbols on the current branch.

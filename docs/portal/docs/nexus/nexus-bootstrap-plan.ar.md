@@ -34,10 +34,10 @@ description: خطة تشغيلية لتشغيل عنقود المدققين ال
 ## بيئات الشبكة
 - تشغيل بيئتين لـ Nexus مع بادئات شبكة مختلفة:
 - **Sora Nexus (mainnet)** - بادئة شبكة انتاج `nexus` تستضيف الحوكمة القانونية وخدمات SoraFS/SoraNet المتراكبة (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - بادئة شبكة staging `testus` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- الحفاظ على ملفات genesis ومفاتيح حوكمة وبصمات بنية تحتية منفصلة لكل بيئة. تعمل Testus كساحة اثبات لكل عمليات نشر SoraFS/SoraNet قبل الترقية الى Nexus.
-- يجب ان تنشر خطوط CI/CD الى Testus اولا وتنفذ smoke tests تلقائية وتطلب ترقية يدوية الى Nexus بعد نجاح الفحوصات.
-- حزم التكوين المرجعية موجودة تحت `configs/soranexus/nexus/` (mainnet) و `configs/soranexus/testus/` (testnet)، وكل منها يحتوي `config.toml` و`genesis.json` وادلة قبول Torii نموذجية.
+- **Sora Taira (testnet)** - بادئة شبكة staging `taira` تعكس تكوين mainnet لاختبارات التكامل والتحقق قبل الاصدار (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- الحفاظ على ملفات genesis ومفاتيح حوكمة وبصمات بنية تحتية منفصلة لكل بيئة. تعمل Taira كساحة اثبات لكل عمليات نشر SoraFS/SoraNet قبل الترقية الى Nexus.
+- يجب ان تنشر خطوط CI/CD الى Taira اولا وتنفذ smoke tests تلقائية وتطلب ترقية يدوية الى Nexus بعد نجاح الفحوصات.
+- حزم التكوين المرجعية موجودة تحت `configs/soranexus/nexus/` (mainnet) و `configs/soranexus/taira/` (testnet)، وكل منها يحتوي `config.toml` و`genesis.json` وادلة قبول Torii نموذجية.
 
 ## الخطوة 1 - مراجعة التكوين
 1. تدقيق التوثيق الموجود:

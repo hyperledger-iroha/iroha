@@ -347,6 +347,83 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
 }
 
 #[tokio::test]
+async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Writer;
+    cfg.torii.mcp.allow_tool_prefixes = vec!["iroha.".to_owned()];
+
+    let app = build_router(cfg);
+    let names = list_all_tool_names(&app).await;
+
+    assert!(
+        !names.is_empty(),
+        "writer+allowlist policy should expose tools"
+    );
+    assert!(
+        names.iter().all(|name| name.starts_with("iroha.")),
+        "expected only curated iroha.* tools, got {names:?}"
+    );
+    for required in [
+        "iroha.accounts.query",
+        "iroha.contracts.call_and_wait",
+        "iroha.contracts.deploy",
+        "iroha.accounts.onboard",
+        "iroha.transactions.submit_and_wait",
+    ] {
+        assert!(
+            names.iter().any(|name| name == required),
+            "expected `{required}` in visible tool list, got {names:?}"
+        );
+    }
+    assert!(
+        !names.iter().any(|name| name.starts_with("torii.")),
+        "raw torii.* tools must be hidden by the public allowlist"
+    );
+    assert!(
+        !names.iter().any(|name| name.starts_with("connect.")),
+        "connect.* tools must be hidden when the allowlist only permits iroha.*"
+    );
+}
+
+#[tokio::test]
+async fn mcp_writer_prefix_policy_rejects_hidden_raw_tool_calls() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Writer;
+    cfg.torii.mcp.allow_tool_prefixes = vec!["iroha.".to_owned()];
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "torii.get_v1_accounts"
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        call.get("error").is_some(),
+        "hidden raw tool should be rejected at the JSON-RPC layer"
+    );
+    assert_eq!(
+        call.get("error")
+            .and_then(|value| value.get("data"))
+            .and_then(|value| value.get("error_code"))
+            .and_then(Value::as_str),
+        Some("tool_not_allowed")
+    );
+}
+
+#[tokio::test]
 async fn mcp_jsonrpc_rejects_invalid_json_payload() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();

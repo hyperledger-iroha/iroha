@@ -105,7 +105,7 @@ summary: Final specification for NSC-37a/b covering ticket schema, Halo2 circuit
 - Halo2 circuit tests (prover/verify, negative cases) via `cargo test -p iroha_zkp_halo2`.
 - Integration tests (`integration_tests/tests/soranet_ticket.rs`) hitting Torii endpoints.
 - Stage rollout:
-  1. Deploy to Sora Testus (feature-flagged), monitor metrics.
+  1. Deploy to Sora Taira (feature-flagged), monitor metrics.
   2. Run chaos/latency tests; ensure no regressions.
   3. Promote verifying keys & governance config to Nexus; enable by default.
 
