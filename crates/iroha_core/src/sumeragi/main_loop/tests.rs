@@ -15461,7 +15461,13 @@ async fn commit_vote_targets_collectors_or_topology() {
     let mut expected_targets: Vec<_> = if actor.subsystems.propose.collectors_contacted.is_empty() {
         signature_topology.as_ref().to_vec()
     } else {
-        actor.subsystems.propose.collectors_contacted.iter().cloned().collect()
+        actor
+            .subsystems
+            .propose
+            .collectors_contacted
+            .iter()
+            .cloned()
+            .collect()
     };
     let local_peer_id = actor.common_config.peer.id().clone();
     expected_targets.retain(|peer| peer != &local_peer_id);
@@ -18137,7 +18143,13 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
     let mut expected_targets: Vec<_> = if actor.subsystems.propose.collectors_contacted.is_empty() {
         signature_topology.as_ref().to_vec()
     } else {
-        actor.subsystems.propose.collectors_contacted.iter().cloned().collect()
+        actor
+            .subsystems
+            .propose
+            .collectors_contacted
+            .iter()
+            .cloned()
+            .collect()
     };
     let local_peer_id = actor.common_config.peer.id().clone();
     expected_targets.retain(|peer| peer != &local_peer_id);
@@ -18298,8 +18310,13 @@ async fn rebroadcast_precommit_votes_widen_collectors_when_below_quorum() {
         Some((Hash::new([]), Hash::new([]))),
     ));
 
-    let signature_topology =
-        super::topology_for_view(&topology, height, view, actor.mode_tag(), actor.npos_prf_seed());
+    let signature_topology = super::topology_for_view(
+        &topology,
+        height,
+        view,
+        actor.mode_tag(),
+        actor.npos_prf_seed(),
+    );
     let expected_initial_contacts: BTreeSet<_> = actor
         .subsystems
         .propose
