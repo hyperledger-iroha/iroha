@@ -1,6 +1,42 @@
 # Status
 
-Last updated: 2026-03-27
+Last updated: 2026-03-28
+
+## 2026-03-28 Fixed the visible NPoS `Failed to find asset` storm to the Nexus fee path, not trigger state
+- Root cause from the March 27 NPoS stable soak is now nailed down:
+  preserved-peer logs showed `nexus fee transfer failed` for
+  `Find(Asset(...))` on the payer account, and Izanami surfaced those
+  rejections as `plan="mint_trigger_repetitions"` / `Failed to find asset`.
+  The failure was not the repeatable-trigger FSM itself; it was missing Nexus
+  fee balances on workload signers plus ingress-only state publication for
+  account/asset updates.
+- Implemented the workload-side repair in
+  `crates/izanami/src/instructions.rs` and `crates/izanami/src/chaos.rs`:
+  - new accounts are no longer published into local workload state during plan
+    construction; they are tracked only after successful submission;
+  - `TrackAccount` and `TrackAssetInstance` now force
+    `BlockingApplied` confirmation instead of being treated as completed on
+    Torii ingress acceptance;
+  - NPoS/Nexus genesis now pre-funds the fee asset for treasury, seeded users,
+    and validator signers; and
+  - newly registered accounts now get a fee-asset mint in the same transaction
+    so they can pay subsequent Nexus fees.
+- Targeted verification completed:
+  - `rustfmt --edition 2024 crates/izanami/src/instructions.rs crates/izanami/src/chaos.rs`
+  - `cargo test -p izanami register_account_tracks_only_on_success -- --nocapture`
+  - `cargo test -p izanami register_uaid_account_tracks_mapping -- --nocapture`
+  - `cargo test -p izanami nexus_genesis_prefunds_fee_asset_for_signers -- --nocapture`
+  - `cargo test -p izanami nexus_account_registration_prefunds_fee_asset_and_tracks_on_success -- --nocapture`
+  - `cargo test -p izanami asset_and_account_state_updates_force_blocking_confirmation -- --nocapture`
+- A short `target/debug/izanami --allow-net --nexus ...` smoke was attempted,
+  but `iroha_test_network` blocked before startup on an unrelated
+  `irohad` release build failure:
+  `NetworkMessage::ToriiProxyRequest(_)` /
+  `NetworkMessage::ToriiProxyResponse(_)` not covered in
+  `crates/irohad/src/main.rs`.
+- The full preserved-peer stable NPoS soak has not been rerun on this cut yet,
+  and fresh runtime confirmation still depends on clearing that unrelated
+  `irohad` compile blocker or using an already-built matching release binary.
 
 ## 2026-03-27 Full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but the NPoS missing-asset storm is still present
 - Rebuilt `iroha3d` and `izanami` and reran the full 4-peer preserved-peer

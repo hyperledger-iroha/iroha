@@ -7577,7 +7577,9 @@ pub async fn handle_post_contract_call(
                 "exactly one of contract_address or contract_alias must be provided".to_owned(),
             ));
         }
-        (Some(contract_address), None) => prepare_contract_call_by_address(&state, contract_address)?,
+        (Some(contract_address), None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
         (None, Some(contract_alias)) => {
             prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
         }
@@ -7783,7 +7785,9 @@ pub async fn handle_post_contract_view(
                 "exactly one of contract_address or contract_alias must be provided".to_owned(),
             ));
         }
-        (Some(contract_address), None) => prepare_contract_call_by_address(&state, contract_address)?,
+        (Some(contract_address), None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
         (None, Some(contract_alias)) => {
             prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
         }

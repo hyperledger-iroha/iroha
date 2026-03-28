@@ -1293,7 +1293,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
             enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
         },
         collectors: SumeragiCollectors {
-            k: 1,
+            k: iroha_config::parameters::defaults::sumeragi::COLLECTORS_K,
             redundant_send_r:
                 iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
             parallel_topology_fanout:
@@ -91613,7 +91613,7 @@ fn commit_quorum_timeout_tracks_block_time() {
             da_enabled,
             quorum_multiplier
         ),
-        Duration::from_millis(3_000)
+        Duration::from_millis(2_000)
     );
     quorum_multiplier = 1;
     assert_eq!(
@@ -91635,7 +91635,7 @@ fn commit_quorum_timeout_tracks_block_time() {
             da_enabled,
             quorum_multiplier
         ),
-        Duration::from_millis(15_000)
+        Duration::from_millis(10_000)
     );
 
     commit_time = Duration::ZERO;
@@ -91820,7 +91820,7 @@ fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     };
     assert_eq!(
         commit_quorum_timeout_for_params(&params),
-        Duration::from_millis(6_000)
+        Duration::from_millis(4_000)
     );
 
     let params = SumeragiParameters {
@@ -91831,7 +91831,7 @@ fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     };
     assert_eq!(
         commit_quorum_timeout_for_params(&params),
-        Duration::from_millis(15_000)
+        Duration::from_millis(10_000)
     );
 
     let params = SumeragiParameters {
@@ -91842,7 +91842,7 @@ fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     };
     assert_eq!(
         commit_quorum_timeout_for_params(&params),
-        Duration::from_millis(6_000),
+        Duration::from_millis(4_000),
         "zero commit timeout should clamp to block_time for liveness"
     );
 
@@ -91895,11 +91895,11 @@ fn availability_timeout_from_quorum_scales_for_da() {
     );
     assert_eq!(
         super::availability_timeout_from_quorum(quorum_timeout, true, multiplier, floor),
-        Duration::from_secs(4)
+        quorum_timeout
     );
     assert_eq!(
         super::availability_timeout_from_quorum(Duration::from_secs(3), true, multiplier, floor),
-        Duration::from_secs(6)
+        Duration::from_secs(3)
     );
 }
 

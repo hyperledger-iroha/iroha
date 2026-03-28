@@ -10,7 +10,8 @@ use std::{
     path::{Path, PathBuf},
     process,
     str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{
@@ -42,6 +43,7 @@ use iroha_data_model::{
         TaikaiStreamId, TaikaiTrackMetadata,
     },
 };
+use iroha_version::codec::EncodeVersioned;
 use ivm::kotodama::compiler::Compiler;
 use norito::{
     core::DecodeFromSlice,
@@ -50,7 +52,7 @@ use norito::{
     json::{Map, Number, Value, from_slice, to_string_pretty, to_value, to_vec},
     to_bytes,
 };
-use reqwest::{blocking::Client as HttpClient, header::CONTENT_TYPE};
+use reqwest::{StatusCode, blocking::Client as HttpClient, header::CONTENT_TYPE};
 use rust_decimal::Decimal;
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
@@ -99,6 +101,8 @@ use url::{Url, form_urlencoded::Serializer};
 
 const DEFAULT_CHUNKER_HANDLE: &str = "sorafs.sf1@1.0.0";
 const DEFAULT_IDENTITY_TOKEN_ENV: &str = "SIGSTORE_ID_TOKEN";
+const DEFAULT_MANIFEST_SUBMIT_CONFIRM_TIMEOUT_MS: u64 = 30_000;
+const DEFAULT_MANIFEST_SUBMIT_CONFIRM_POLL_MS: u64 = 1_000;
 const POR_TRIGGER_REQUEST_VERSION_V1: u8 = 1;
 const CHALLENGE_AUTH_TOKEN_VERSION_V1: u8 = 1;
 const CONTEXT_APPEAL_QUOTE: &str = "sorafs_cli appeal quote";
@@ -1752,11 +1756,11 @@ fn usage() -> String {
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest sign --manifest=PATH (--bundle-out=PATH | --signature-out=PATH) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--identity-token=JWT | --identity-token-env=VAR | --identity-token-file=PATH | --identity-token-provider=github-actions [--identity-token-audience=AUD]] [--include-token=true|false] [--issued-at=UNIX]
   sorafs_cli manifest verify-signature --manifest=PATH (--bundle=PATH | (--signature=PATH --public-key-hex=HEX)) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--expect-token-hash=HEX]
-  sorafs_cli manifest submit --manifest=PATH --torii-url=URL --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
+  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
-  sorafs_cli proof verify --manifest=PATH --car=PATH [--summary-out=PATH]
+  sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli por status --torii-url=URL [--manifest=HEX32] [--provider=HEX32] [--epoch=N] [--status=pending|verified|failed|repaired|forced] [--format=table|json]
   sorafs_cli por trigger --torii-url=URL --manifest=HEX32 --provider=HEX32 --reason=TEXT --auth-token=PATH [--samples=N] [--deadline-secs=N]
   sorafs_cli por export --torii-url=URL --out=PATH [--start-epoch=N] [--end-epoch=N]
@@ -4409,6 +4413,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let mut chunk_digest_hex_arg: Option<String> = None;
     let mut torii_url: Option<String> = None;
     let mut submitted_epoch: Option<u64> = None;
+    let mut resolve_submitted_epoch = false;
     let mut authority_str: Option<String> = None;
     let mut private_key_inline: Option<String> = None;
     let mut private_key_path: Option<PathBuf> = None;
@@ -4436,6 +4441,9 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
                     .parse()
                     .map_err(|err| format!("invalid `--submitted-epoch` value: {err}"))?;
                 submitted_epoch = Some(parsed);
+            }
+            "--resolve-submitted-epoch" => {
+                resolve_submitted_epoch = parse_bool_flag(value, "--resolve-submitted-epoch")?;
             }
             "--authority" => authority_str = Some(value.to_string()),
             "--private-key" => {
@@ -4476,9 +4484,12 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let torii_url = torii_url.ok_or_else(|| {
         "missing required `--torii-url=URL` for `sorafs_cli manifest submit`".to_string()
     })?;
-    let submitted_epoch = submitted_epoch.ok_or_else(|| {
-        "missing required `--submitted-epoch=EPOCH` for `sorafs_cli manifest submit`".to_string()
-    })?;
+    if submitted_epoch.is_some() && resolve_submitted_epoch {
+        return Err(
+            "`--submitted-epoch` and `--resolve-submitted-epoch` are mutually exclusive"
+                .to_string(),
+        );
+    }
     let authority_str = authority_str.ok_or_else(|| {
         "missing required `--authority=ACCOUNT_ID` for `sorafs_cli manifest submit`".to_string()
     })?;
@@ -4496,8 +4507,9 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
 
-    let torii_endpoint = Url::parse(&torii_url)
-        .map_err(|err| format!("invalid `--torii-url` value: {err}"))?
+    let torii_base_url = Url::parse(&torii_url)
+        .map_err(|err| format!("invalid `--torii-url` value: {err}"))?;
+    let torii_endpoint = torii_base_url
         .join("v1/sorafs/pin/register")
         .map_err(|err| format!("failed to build Torii endpoint URL: {err}"))?;
 
@@ -4566,9 +4578,25 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         None => None,
     };
 
+    let client = HttpClient::builder()
+        .build()
+        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
+    let submitted_epoch = match submitted_epoch {
+        Some(epoch) => epoch,
+        None if resolve_submitted_epoch => {
+            resolve_submitted_epoch_from_status(&client, &torii_base_url)?
+        }
+        None => {
+            return Err(
+                "missing required `--submitted-epoch=EPOCH` for `sorafs_cli manifest submit`"
+                    .to_string(),
+            );
+        }
+    };
+
     let payload = build_pin_register_payload(
         &authority,
-        private_key,
+        private_key.clone(),
         &manifest,
         chunk_digest,
         submitted_epoch,
@@ -4579,9 +4607,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let body_bytes =
         to_vec(&payload).map_err(|err| format!("failed to encode Torii payload: {err}"))?;
 
-    let client = HttpClient::builder()
-        .build()
-        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
     let response = client
         .post(torii_endpoint.as_str())
         .header(CONTENT_TYPE, "application/json")
@@ -4590,38 +4615,94 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to submit manifest to Torii: {err}"))?;
 
     let status = response.status();
+    let api_version_hint = response
+        .headers()
+        .get("x-iroha-api-version")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     let response_bytes = response
         .bytes()
         .map_err(|err| format!("failed to read Torii response: {err}"))?;
     let response_vec = response_bytes.to_vec();
-
-    if !status.is_success() {
+    let requested_endpoint = torii_endpoint.as_str().to_string();
+    let (
+        response_status,
+        response_bytes_to_write,
+        torii_response_value,
+        torii_endpoint_used,
+        submission_mode,
+        fallback_reason,
+        chain_id_hint,
+        failure_message,
+    ) = if status.is_success() {
+        (
+            status,
+            response_vec.clone(),
+            decode_response_value_or_text(&response_vec),
+            requested_endpoint.clone(),
+            "pin_register_http",
+            None,
+            None,
+            None,
+        )
+    } else if should_fallback_manifest_submit_status(status) {
+        let fallback = submit_manifest_via_transaction_endpoint(
+            &client,
+            &torii_base_url,
+            &authority,
+            &private_key,
+            &manifest,
+            chunk_digest,
+            submitted_epoch,
+            alias_inputs.as_ref(),
+            successor_digest,
+            api_version_hint.as_deref(),
+        )
+        .map_err(|err| {
+            format!(
+                "Torii pin-register endpoint returned {status}; generic /transaction fallback failed: {err}"
+            )
+        })?;
+        (
+            fallback.status,
+            fallback.response_bytes,
+            fallback.response_value,
+            fallback.endpoint,
+            "transaction_fallback",
+            Some(format!("pin register route returned {status}")),
+            Some(fallback.chain_id),
+            fallback.failure_message,
+        )
+    } else {
         let body_text = String::from_utf8_lossy(&response_vec);
         return Err(format!(
             "Torii returned {status} when submitting manifest: {body_text}"
         ));
-    }
+    };
 
     if let Some(path) = response_out {
         ensure_parent_dir(&path)?;
-        fs::write(&path, &response_vec)
+        fs::write(&path, &response_bytes_to_write)
             .map_err(|err| format!("failed to write `{}`: {err}", path.display()))?;
     }
-
-    let torii_response_value = match from_slice(&response_vec) {
-        Ok(value) => value,
-        Err(_) => Value::from(String::from_utf8_lossy(&response_vec).to_string()),
-    };
 
     let mut summary = Map::new();
     summary.insert("torii_url".into(), Value::from(torii_url));
     summary.insert(
         "torii_endpoint".into(),
-        Value::from(torii_endpoint.as_str().to_string()),
+        Value::from(torii_endpoint_used.clone()),
     );
-    summary.insert("status".into(), Value::from(status.as_u16() as u64));
+    summary.insert(
+        "torii_endpoint_requested".into(),
+        Value::from(requested_endpoint),
+    );
+    summary.insert(
+        "status".into(),
+        Value::from(response_status.as_u16() as u64),
+    );
     summary.insert("submitted_epoch".into(), Value::from(submitted_epoch));
     summary.insert("authority".into(), Value::from(authority.to_string()));
+    summary.insert("submission_mode".into(), Value::from(submission_mode));
     summary.insert(
         "manifest_path".into(),
         Value::from(manifest_path.display().to_string()),
@@ -4662,6 +4743,12 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(hex) = successor_hex.as_ref() {
         summary.insert("successor_of_hex".into(), Value::from(hex.clone()));
     }
+    if let Some(reason) = fallback_reason {
+        summary.insert("fallback_reason".into(), Value::from(reason));
+    }
+    if let Some(chain_id) = chain_id_hint {
+        summary.insert("chain_id".into(), Value::from(chain_id));
+    }
     summary.insert("torii_response".into(), torii_response_value);
 
     let rendered = to_string_pretty(&Value::Object(summary))
@@ -4671,7 +4758,554 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         ensure_parent_dir(&path)?;
         write_text(&path, rendered.as_bytes())?;
     }
+    if let Some(message) = failure_message {
+        return Err(message);
+    }
     Ok(())
+}
+
+fn should_fallback_manifest_submit_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
+    )
+}
+
+struct ManifestSubmitFallback {
+    status: StatusCode,
+    endpoint: String,
+    response_bytes: Vec<u8>,
+    response_value: Value,
+    chain_id: String,
+    failure_message: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransactionConfirmationKind {
+    Queued,
+    Approved,
+    Committed,
+    Applied,
+    Rejected,
+    Expired,
+}
+
+struct TransactionConfirmation {
+    kind: TransactionConfirmationKind,
+    block_height: Option<u64>,
+    pipeline_response: Value,
+    rejection_message: Option<String>,
+}
+
+fn submit_manifest_via_transaction_endpoint(
+    client: &HttpClient,
+    torii_base_url: &Url,
+    authority: &AccountId,
+    private_key: &PrivateKey,
+    manifest: &ManifestV1,
+    chunk_digest: [u8; 32],
+    submitted_epoch: u64,
+    alias_inputs: Option<&AliasInputs>,
+    successor_digest: Option<[u8; 32]>,
+    api_version_hint: Option<&str>,
+) -> Result<ManifestSubmitFallback, String> {
+    use iroha_data_model::{
+        ChainId,
+        prelude::{InstructionBox, TransactionBuilder},
+        sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
+    };
+
+    let chain_id = resolve_chain_id_from_sorafs_registry(client, torii_base_url)?;
+    let manifest_digest = manifest
+        .digest()
+        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
+    let chunker = chunker_handle_from_profile(&manifest.chunking);
+    let policy = convert_pin_policy(&manifest.pin_policy);
+    let alias = alias_inputs.map(|inputs| ManifestAliasBinding {
+        namespace: inputs.namespace.clone(),
+        name: inputs.name.clone(),
+        proof: inputs.proof.clone(),
+    });
+    let successor_of = successor_digest.map(ManifestDigest::new);
+    let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest {
+        digest: ManifestDigest::new(*manifest_digest.as_bytes()),
+        chunker,
+        chunk_digest_sha3_256: chunk_digest,
+        policy,
+        submitted_epoch,
+        alias,
+        successor_of,
+    };
+    let transaction = TransactionBuilder::new(ChainId::from(chain_id.clone()), authority.clone())
+        .with_instructions([InstructionBox::from(instruction)])
+        .sign(private_key);
+    let tx_hash_hex = hex_encode(transaction.hash().as_ref());
+    let tx_endpoint = torii_base_url
+        .join("transaction")
+        .map_err(|err| format!("failed to build Torii transaction endpoint URL: {err}"))?;
+    let mut request = client
+        .post(tx_endpoint.as_str())
+        .header(CONTENT_TYPE, "application/x-norito");
+    if let Some(version) = api_version_hint.map(str::trim).filter(|value| !value.is_empty()) {
+        request = request.header("x-iroha-api-version", version);
+    }
+    let response = request
+        .body(transaction.encode_versioned())
+        .send()
+        .map_err(|err| format!("failed to submit fallback transaction to Torii: {err}"))?;
+    let status = response.status();
+    let response_bytes = response
+        .bytes()
+        .map_err(|err| format!("failed to read fallback Torii response: {err}"))?
+        .to_vec();
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&response_bytes);
+        return Err(format!(
+            "Torii transaction endpoint `{}` returned {status}: {body_text}",
+            tx_endpoint
+        ));
+    }
+
+    let confirmation =
+        wait_for_transaction_confirmation(client, torii_base_url, &tx_hash_hex).map_err(|err| {
+            format!(
+                "submitted fallback transaction `{tx_hash_hex}` but failed to confirm the result: {err}"
+            )
+        })?;
+
+    let mut map = Map::new();
+    map.insert(
+        "status".into(),
+        Value::from(match confirmation.kind {
+            TransactionConfirmationKind::Queued => "QUEUED",
+            TransactionConfirmationKind::Approved => "APPROVED",
+            TransactionConfirmationKind::Committed => "COMMITTED",
+            TransactionConfirmationKind::Applied => "APPLIED",
+            TransactionConfirmationKind::Rejected => "REJECTED",
+            TransactionConfirmationKind::Expired => "EXPIRED",
+        }),
+    );
+    map.insert("transport".into(), Value::from("transaction_fallback"));
+    map.insert("tx_hash_hex".into(), Value::from(tx_hash_hex.clone()));
+    map.insert(
+        "transaction_endpoint".into(),
+        Value::from(tx_endpoint.as_str().to_string()),
+    );
+    map.insert("chain_id".into(), Value::from(chain_id.clone()));
+    map.insert(
+        "confirmation_source".into(),
+        Value::from("v1/pipeline/transactions/status"),
+    );
+    if let Some(block_height) = confirmation.block_height {
+        map.insert("block_height".into(), Value::from(block_height));
+    }
+    if let Some(message) = confirmation.rejection_message.clone() {
+        map.insert("rejection_message".into(), Value::from(message));
+    }
+    map.insert("pipeline_response".into(), confirmation.pipeline_response);
+    let response_value = Value::Object(map);
+    let response_bytes = to_string_pretty(&response_value)
+        .map_err(|err| format!("failed to render fallback response JSON: {err}"))?
+        .into_bytes();
+    let failure_message = match confirmation.kind {
+        TransactionConfirmationKind::Rejected => Some(match confirmation.rejection_message {
+            Some(message) => format!("fallback transaction `{tx_hash_hex}` was rejected: {message}"),
+            None => format!("fallback transaction `{tx_hash_hex}` was rejected"),
+        }),
+        TransactionConfirmationKind::Expired => {
+            Some(format!("fallback transaction `{tx_hash_hex}` expired before commit"))
+        }
+        _ => None,
+    };
+
+    Ok(ManifestSubmitFallback {
+        status,
+        endpoint: tx_endpoint.as_str().to_string(),
+        response_bytes,
+        response_value,
+        chain_id,
+        failure_message,
+    })
+}
+
+fn wait_for_transaction_confirmation(
+    client: &HttpClient,
+    torii_base_url: &Url,
+    tx_hash_hex: &str,
+) -> Result<TransactionConfirmation, String> {
+    let status_endpoint = torii_base_url
+        .join("v1/pipeline/transactions/status")
+        .map_err(|err| format!("failed to build transaction status endpoint URL: {err}"))?;
+    let deadline = Instant::now() + Duration::from_millis(DEFAULT_MANIFEST_SUBMIT_CONFIRM_TIMEOUT_MS);
+    let poll_interval = Duration::from_millis(DEFAULT_MANIFEST_SUBMIT_CONFIRM_POLL_MS);
+    let mut last_observed_status = "QUEUED".to_string();
+
+    loop {
+        let response = client
+            .get(status_endpoint.as_str())
+            .query(&[("hash", tx_hash_hex)])
+            .header("Accept", "application/json")
+            .send()
+            .map_err(|err| {
+                format!(
+                    "failed to query transaction status at `{}`: {err}",
+                    status_endpoint
+                )
+            })?;
+        let status = response.status();
+        let response_bytes = response
+            .bytes()
+            .map_err(|err| format!("failed to read transaction status response: {err}"))?
+            .to_vec();
+
+        match status {
+            StatusCode::OK | StatusCode::ACCEPTED => {
+                if !response_bytes.is_empty() {
+                    let value: Value = from_slice(&response_bytes).map_err(|err| {
+                        format!(
+                            "failed to decode transaction status JSON from `{}`: {err}",
+                            status_endpoint
+                        )
+                    })?;
+                    let confirmation = parse_transaction_confirmation(&value).ok_or_else(|| {
+                        format!(
+                            "transaction status payload from `{}` does not expose a status kind",
+                            status_endpoint
+                        )
+                    })?;
+                    last_observed_status = match confirmation.kind {
+                        TransactionConfirmationKind::Queued => "QUEUED".to_string(),
+                        TransactionConfirmationKind::Approved => "APPROVED".to_string(),
+                        TransactionConfirmationKind::Committed => "COMMITTED".to_string(),
+                        TransactionConfirmationKind::Applied => "APPLIED".to_string(),
+                        TransactionConfirmationKind::Rejected => "REJECTED".to_string(),
+                        TransactionConfirmationKind::Expired => "EXPIRED".to_string(),
+                    };
+                    match confirmation.kind {
+                        TransactionConfirmationKind::Queued
+                        | TransactionConfirmationKind::Approved => {}
+                        TransactionConfirmationKind::Rejected => {
+                            let explorer_rejection_message = fetch_transaction_rejection_message(
+                                client,
+                                torii_base_url,
+                                tx_hash_hex,
+                            );
+                            let detailed_rejection_message = explorer_rejection_message
+                                .clone()
+                                .filter(|message| !looks_like_generic_rejection_message(message))
+                                .or_else(|| confirmation.rejection_message.clone())
+                                .or(explorer_rejection_message);
+                            return Ok(TransactionConfirmation {
+                                rejection_message: detailed_rejection_message,
+                                ..confirmation
+                            });
+                        }
+                        TransactionConfirmationKind::Committed
+                        | TransactionConfirmationKind::Applied
+                        | TransactionConfirmationKind::Expired => return Ok(confirmation),
+                    }
+                }
+            }
+            StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => {}
+            other => {
+                return Err(format!(
+                    "transaction status endpoint `{}` returned {}: {}",
+                    status_endpoint,
+                    other,
+                    String::from_utf8_lossy(&response_bytes)
+                ));
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "transaction `{tx_hash_hex}` remained {last_observed_status} after {}ms",
+                DEFAULT_MANIFEST_SUBMIT_CONFIRM_TIMEOUT_MS
+            ));
+        }
+        thread::sleep(poll_interval);
+    }
+}
+
+fn parse_transaction_confirmation(payload: &Value) -> Option<TransactionConfirmation> {
+    let status_value = payload
+        .get("content")
+        .and_then(|content| content.get("status"))
+        .or_else(|| payload.get("status"))?;
+    let block_height = pipeline_status_block_height(payload, status_value);
+
+    match status_value {
+        Value::String(kind) => Some(TransactionConfirmation {
+            kind: parse_transaction_confirmation_kind(kind)?,
+            block_height,
+            pipeline_response: payload.clone(),
+            rejection_message: None,
+        }),
+        Value::Object(map) => {
+            let kind = map.get("kind").and_then(Value::as_str)?;
+            let rejection_message = map
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| {
+                    map.get("content")
+                        .and_then(Value::as_str)
+                        .and_then(decode_rejection_message_hint)
+                });
+            Some(TransactionConfirmation {
+                kind: parse_transaction_confirmation_kind(kind)?,
+                block_height,
+                pipeline_response: payload.clone(),
+                rejection_message,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_transaction_confirmation_kind(kind: &str) -> Option<TransactionConfirmationKind> {
+    match kind {
+        "Queued" => Some(TransactionConfirmationKind::Queued),
+        "Approved" => Some(TransactionConfirmationKind::Approved),
+        "Committed" => Some(TransactionConfirmationKind::Committed),
+        "Applied" => Some(TransactionConfirmationKind::Applied),
+        "Rejected" => Some(TransactionConfirmationKind::Rejected),
+        "Expired" => Some(TransactionConfirmationKind::Expired),
+        _ => None,
+    }
+}
+
+fn pipeline_status_block_height(payload: &Value, status_value: &Value) -> Option<u64> {
+    match status_value {
+        Value::Object(map) => map
+            .get("block_height")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                payload
+                    .get("content")
+                    .and_then(|content| content.get("block_height"))
+                    .and_then(Value::as_u64)
+            })
+            .or_else(|| payload.get("block_height").and_then(Value::as_u64)),
+        _ => payload
+            .get("content")
+            .and_then(|content| content.get("block_height"))
+            .and_then(Value::as_u64)
+            .or_else(|| payload.get("block_height").and_then(Value::as_u64)),
+    }
+}
+
+fn fetch_transaction_rejection_message(
+    client: &HttpClient,
+    torii_base_url: &Url,
+    tx_hash_hex: &str,
+) -> Option<String> {
+    let endpoint = torii_base_url
+        .join(&format!("v1/explorer/transactions/{tx_hash_hex}"))
+        .ok()?;
+    let response = client
+        .get(endpoint.as_str())
+        .header("Accept", "application/json")
+        .send()
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.bytes().ok()?;
+    let value: Value = from_slice(&body).ok()?;
+    value
+        .get("rejection_reason")
+        .and_then(|reason| reason.get("message"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn looks_like_generic_rejection_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("validation failed") || lower.contains("invalid instruction parameter")
+}
+
+fn decode_rejection_message_hint(encoded: &str) -> Option<String> {
+    let bytes = BASE64_STANDARD.decode(encoded.trim()).ok()?;
+    extract_ascii_message(&bytes)
+}
+
+fn extract_ascii_message(bytes: &[u8]) -> Option<String> {
+    let mut best = String::new();
+    let mut current = String::new();
+
+    for &byte in bytes {
+        if byte.is_ascii_graphic() || byte == b' ' {
+            current.push(byte as char);
+        } else {
+            if current.len() > best.len() {
+                best = current.clone();
+            }
+            current.clear();
+        }
+    }
+    if current.len() > best.len() {
+        best = current;
+    }
+
+    let trimmed = best.trim();
+    if trimmed.len() >= 12 {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn decode_response_value_or_text(response: &[u8]) -> Value {
+    match from_slice(response) {
+        Ok(value) => value,
+        Err(_) => Value::from(String::from_utf8_lossy(response).to_string()),
+    }
+}
+
+fn resolve_chain_id_from_sorafs_registry(
+    client: &HttpClient,
+    torii_base_url: &Url,
+) -> Result<String, String> {
+    let mut last_error: Option<String> = None;
+    for route in ["v1/sorafs/pin", "v1/sorafs/aliases"] {
+        let endpoint = torii_base_url
+            .join(route)
+            .map_err(|err| format!("failed to build Torii registry endpoint URL: {err}"))?;
+        let response = match client
+            .get(endpoint.as_str())
+            .header("Accept", "application/json")
+            .send()
+        {
+            Ok(response) => response,
+            Err(err) => {
+                last_error = Some(format!("failed to query `{}`: {err}", endpoint));
+                continue;
+            }
+        };
+        let status = response.status();
+        let response_bytes = response.bytes().map_err(|err| {
+            format!("failed to read registry response from `{}`: {err}", endpoint)
+        })?;
+        let body = response_bytes.to_vec();
+        if !status.is_success() {
+            last_error = Some(format!(
+                "registry endpoint `{}` returned {}: {}",
+                endpoint,
+                status,
+                String::from_utf8_lossy(&body)
+            ));
+            continue;
+        }
+        let value: Value = from_slice(&body)
+            .map_err(|err| format!("failed to decode registry JSON from `{}`: {err}", endpoint))?;
+        match resolve_chain_id_from_registry_value(&value) {
+            Ok(chain_id) => return Ok(chain_id),
+            Err(err) => {
+                last_error =
+                    Some(format!("failed to resolve chain id from `{}`: {err}", endpoint));
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        "failed to resolve chain id from SoraFS registry endpoints".to_string()
+    }))
+}
+
+fn resolve_chain_id_from_registry_value(value: &Value) -> Result<String, String> {
+    let chain_id = find_status_value(value, &["attestation", "chain_id"])
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "registry JSON is missing `attestation.chain_id`".to_string())?;
+    Ok(chain_id.to_string())
+}
+
+fn resolve_submitted_epoch_from_status(client: &HttpClient, torii_base_url: &Url) -> Result<u64, String> {
+    let status_endpoint = torii_base_url
+        .join("status")
+        .map_err(|err| format!("failed to build Torii status endpoint URL: {err}"))?;
+    let response = client
+        .get(status_endpoint.as_str())
+        .header("Accept", "application/json")
+        .send()
+        .map_err(|err| format!("failed to query Torii status at `{}`: {err}", status_endpoint))?;
+    let status = response.status();
+    let response_bytes = response
+        .bytes()
+        .map_err(|err| format!("failed to read Torii status response: {err}"))?;
+    let body = response_bytes.to_vec();
+
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(format!(
+            "Torii status endpoint `{}` returned {status}: {body_text}",
+            status_endpoint
+        ));
+    }
+
+    let status_value: Value = from_slice(&body)
+        .map_err(|err| format!("failed to decode Torii status JSON from `{}`: {err}", status_endpoint))?;
+
+    resolve_submitted_epoch_from_status_value(&status_value)
+        .map_err(|err| format!("failed to resolve submitted epoch from `{}`: {err}", status_endpoint))
+}
+
+fn resolve_submitted_epoch_from_status_value(status_value: &Value) -> Result<u64, String> {
+    if let Some(epoch) = find_status_epoch(status_value) {
+        return Ok(epoch);
+    }
+
+    let blocks = status_value
+        .get("blocks")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "status JSON is missing `blocks`".to_string())?;
+    let epoch_length_blocks = find_status_value(status_value, &["sumeragi", "epoch_length_blocks"])
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            status_value
+                .get("epoch_length_blocks")
+                .and_then(Value::as_u64)
+        })
+        .ok_or_else(|| "status JSON is missing `sumeragi.epoch_length_blocks`".to_string())?;
+
+    if epoch_length_blocks == 0 {
+        return Err("`sumeragi.epoch_length_blocks` must be greater than zero".to_string());
+    }
+
+    Ok(blocks.saturating_sub(1) / epoch_length_blocks)
+}
+
+fn find_status_epoch(status_value: &Value) -> Option<u64> {
+    [
+        ["sumeragi", "epoch"].as_slice(),
+        ["sumeragi", "current_epoch"].as_slice(),
+        ["sumeragi", "membership", "epoch"].as_slice(),
+        ["current_epoch"].as_slice(),
+        ["epoch"].as_slice(),
+    ]
+    .into_iter()
+    .find_map(|path| find_status_value(status_value, path).and_then(parse_status_epoch_value))
+}
+
+fn find_status_value<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in path {
+        current = current.as_object()?.get(*segment)?;
+    }
+    Some(current)
+}
+
+fn parse_status_epoch_value(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        let object = value.as_object()?;
+        object
+            .get("height")
+            .and_then(Value::as_u64)
+            .or_else(|| object.get("index").and_then(Value::as_u64))
+            .or_else(|| object.get("epoch").and_then(Value::as_u64))
+    })
 }
 
 fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
@@ -4803,6 +5437,8 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
 fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut car_path: Option<PathBuf> = None;
+    let mut chunk_plan_source: Option<JsonSource> = None;
+    let mut chunk_plan_label: Option<String> = None;
     let mut summary_out: Option<PathBuf> = None;
 
     for arg in raw_args {
@@ -4812,6 +5448,10 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
         match key {
             "--manifest" => manifest_path = Some(PathBuf::from(value)),
             "--car" => car_path = Some(PathBuf::from(value)),
+            "--chunk-plan" => {
+                chunk_plan_source = Some(JsonSource::from_arg(value)?);
+                chunk_plan_label = Some(value.to_string());
+            }
             "--summary-out" => summary_out = Some(PathBuf::from(value)),
             _ => {
                 return Err(format!(
@@ -4841,8 +5481,19 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
 
     let car_bytes = fs::read(&car_path)
         .map_err(|err| format!("failed to read CAR archive `{}`: {err}", car_path.display()))?;
-    let report = CarVerifier::verify_full_car(&manifest, &car_bytes)
-        .map_err(|err| format!("failed to verify CAR archive: {err}"))?;
+    let resolved_plan = if let Some(source) = chunk_plan_source {
+        let plan_json = source.read()?;
+        let chunker_handle = chunker_handle_from_profile(&manifest.chunking).to_handle();
+        Some(build_plan_from_specs(&plan_json, Some(&chunker_handle))?)
+    } else {
+        None
+    };
+    let report = if let Some(plan_with_handle) = resolved_plan.as_ref() {
+        CarVerifier::verify_full_car_with_plan(&manifest, &plan_with_handle.plan, &car_bytes)
+    } else {
+        CarVerifier::verify_full_car(&manifest, &car_bytes)
+    }
+    .map_err(|err| format!("failed to verify CAR archive: {err}"))?;
 
     let payload_digest_hex = hex_encode(report.chunk_store.payload_digest().as_bytes());
     let chunk_digest_sha3 = chunk_digest_sha3_from_chunks(report.chunk_store.chunks());
@@ -4863,6 +5514,15 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
         "chunk_count".into(),
         Value::from(report.chunk_store.chunks().len() as u64),
     );
+    if let Some(label) = chunk_plan_label {
+        summary.insert("chunk_plan_source".into(), Value::from(label));
+    }
+    if let Some(plan_with_handle) = resolved_plan.as_ref() {
+        summary.insert(
+            "chunk_plan_chunk_count".into(),
+            Value::from(plan_with_handle.plan.chunks.len() as u64),
+        );
+    }
     summary.insert(
         "payload_bytes".into(),
         Value::from(report.chunk_store.payload_len()),
@@ -6560,6 +7220,41 @@ mod tests {
                 .is_object(),
             "register instruction serialized as object"
         );
+    }
+
+    #[test]
+    fn resolve_chain_id_from_registry_value_reads_attestation_chain_id() {
+        let mut attestation = Map::new();
+        attestation.insert("chain_id".into(), Value::from("test-chain"));
+        let mut root = Map::new();
+        root.insert("attestation".into(), Value::Object(attestation));
+
+        assert_eq!(
+            resolve_chain_id_from_registry_value(&Value::Object(root)).expect("chain id"),
+            "test-chain"
+        );
+    }
+
+    #[test]
+    fn resolve_chain_id_from_registry_value_rejects_missing_attestation_chain_id() {
+        let err = resolve_chain_id_from_registry_value(&Value::Object(Map::new()))
+            .expect_err("missing attestation chain id should fail");
+        assert!(
+            err.contains("attestation.chain_id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_submit_status_fallback_detects_missing_route() {
+        assert!(should_fallback_manifest_submit_status(
+            StatusCode::METHOD_NOT_ALLOWED
+        ));
+        assert!(should_fallback_manifest_submit_status(StatusCode::NOT_FOUND));
+        assert!(should_fallback_manifest_submit_status(
+            StatusCode::NOT_IMPLEMENTED
+        ));
+        assert!(!should_fallback_manifest_submit_status(StatusCode::BAD_REQUEST));
     }
 
     #[test]

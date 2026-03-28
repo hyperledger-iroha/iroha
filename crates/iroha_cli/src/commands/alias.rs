@@ -632,12 +632,12 @@ mod tests {
     #[test]
     fn resolve_helper_prints_result() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
-        alias_resolve_with(&mut ctx, "alice", false, |_, _| {
+        alias_resolve_with(&mut ctx, "alice@sbp", false, |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .body(norito::json::to_vec(&norito::json!({
-                    "alias": "alice",
+                    "alias": "alice@sbp",
                     "account_id": SAMPLE_ACCOUNT_ID,
                     "source": "iso_bridge"
                 }))?)
@@ -662,14 +662,14 @@ mod tests {
     #[test]
     fn resolve_helper_handles_not_found() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
-        let err = alias_resolve_with(&mut ctx, "alice", false, |_, _| {
+        let err = alias_resolve_with(&mut ctx, "alice@sbp", false, |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Vec::new())
                 .unwrap())
         })
         .expect_err("expected error");
-        assert!(err.to_string().contains("alias `alice` not found"));
+        assert!(err.to_string().contains("alias `alice@sbp` not found"));
     }
 
     #[test]

@@ -68,7 +68,7 @@ const IZANAMI_PACING_GOVERNOR_MIN_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_PACING_GOVERNOR_MAX_FACTOR_BPS: i64 = 10_000;
 const IZANAMI_COLLECTORS_K: u16 = 4;
 const IZANAMI_REDUNDANT_SEND_R: u8 = 4;
-const IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS: u16 = 3;
+const IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS: u16 = 2;
 const IZANAMI_SHARED_HOST_SOAK_REDUNDANT_SEND_R_4_PEERS: u8 = 3;
 const IZANAMI_PACING_FACTOR_BPS: u32 = 10_000;
 // Shared-host soak profile: bias towards deterministic progress over peak throughput.
@@ -95,12 +95,12 @@ const IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 80;
 const IZANAMI_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 1;
 const IZANAMI_NPOS_TIMEOUT_DA_MIN_MS: u64 = 1;
 const IZANAMI_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 60;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 90;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 120;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 320;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS: u64 = 320;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 20;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 50;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 70;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 90;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 220;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS: u64 = 220;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 10;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
@@ -137,12 +137,12 @@ const IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS: u64 = 1_200;
 const IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS: u64 = 3_600;
 const IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR: f64 = 5.0;
 const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_FLOOR: usize = 8;
-const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 8;
+const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 4;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
-const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 180;
+const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 150;
 const IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 500;
+const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 300;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS: i64 = 2_000;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 800;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 2_000;
@@ -2469,7 +2469,9 @@ fn state_updates_require_applied_confirmation(state_updates: &[PlanUpdate]) -> b
     state_updates.iter().any(|update| {
         matches!(
             update,
-            PlanUpdate::RegisterTrigger(_)
+            PlanUpdate::TrackAccount(_)
+                | PlanUpdate::TrackAssetInstance(_)
+                | PlanUpdate::RegisterTrigger(_)
                 | PlanUpdate::RegisterCallTrigger(_)
                 | PlanUpdate::TrackRepeatableTrigger(_)
                 | PlanUpdate::MintTriggerRepetitions { .. }
@@ -4823,6 +4825,35 @@ mod tests {
             ),
             SubmissionConfirmationMode::BlockingApplied
         );
+    }
+
+    #[test]
+    fn asset_and_account_state_updates_force_blocking_confirmation() {
+        let key_pair = KeyPair::random();
+        let account = AccountRecord {
+            id: AccountId::new(key_pair.public_key().clone()),
+            key_pair,
+            uaid: None,
+        };
+        let asset = AssetId::new(
+            AssetDefinitionId::new(
+                "chaosnet".parse().expect("domain id"),
+                "chaos_coin".parse().expect("asset name"),
+            ),
+            account.id.clone(),
+        );
+        for updates in [
+            vec![PlanUpdate::TrackAccount(account)],
+            vec![PlanUpdate::TrackAssetInstance(asset)],
+        ] {
+            assert_eq!(
+                effective_submission_confirmation(
+                    SubmissionConfirmationMode::AcceptedByIngress,
+                    &updates,
+                ),
+                SubmissionConfirmationMode::BlockingApplied
+            );
+        }
     }
 
     #[test]

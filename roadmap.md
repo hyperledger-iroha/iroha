@@ -1,6 +1,40 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-27
+Last updated: 2026-03-28
+
+Latest sync (2026-03-28 NPoS missing-asset storm traced to Nexus fee funding plus ingress-only state publication):
+the visible `mint_trigger_repetitions` / `Failed to find asset` failures from
+the March 27 stable NPoS soak are now explained by the fee path:
+preserved-peer logs showed `nexus fee transfer failed` on a missing payer
+asset, while Izanami was still publishing new account/asset state on ingress
+acceptance instead of only after on-chain application.
+
+- implemented in `crates/izanami/src/instructions.rs`:
+  seed Nexus fee balances for treasury, initial users, and validator signers
+  in genesis; prefund newly registered accounts with the Nexus fee asset in the
+  same transaction; and delay account publication until success;
+- implemented in `crates/izanami/src/chaos.rs`:
+  `TrackAccount` and `TrackAssetInstance` now require
+  `BlockingApplied` confirmation, so workload state for real account/asset
+  existence no longer advances on ingress acceptance alone; and
+- targeted `izanami` regressions for delayed account tracking, fee prefunding,
+  and confirmation gating now pass.
+
+Open work from this fix:
+- rerun the full preserved-peer stable NPoS envelope on the new workload cut
+  and confirm `plan submission failed=0` / `Failed to find asset=0`;
+- rerun the matching permissioned envelope so p95 comparisons stay on the same
+  binary/config baseline;
+- clear the unrelated `irohad` release build blocker in
+  `crates/irohad/src/main.rs` (missing `ToriiProxyRequest` /
+  `ToriiProxyResponse` match arms) or reuse a known-good release binary,
+  because `iroha_test_network` currently stops there before the runtime smoke
+  can start;
+- if the missing-asset storm is gone, treat permissioned and NPoS as clean
+  latency-only signals and resume timeout/backlog tuning toward the `1000ms`
+  p95 gate; and
+- if any workload failures remain, capture the exact new rejection class from
+  preserved-peer logs before touching consensus timing again.
 
 Latest sync (2026-03-27 full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but NPoS is still contaminated by one repeated missing-asset failure):
 the rebuilt 4-peer preserved-peer stable envelopes on

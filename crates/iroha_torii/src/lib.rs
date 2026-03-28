@@ -374,28 +374,28 @@ pub use routing::handle_get_proof_tags;
 #[cfg(feature = "p2p_ws")]
 pub use routing::handle_p2p_ws;
 pub use routing::{
-    ActivateInstanceDto, ActivateInstanceResponseDto, ContractCallDto, ContractCallResponseDto,
-    ContractAliasResolveRequestDto, ContractAliasResolveResponseDto, ContractViewDto,
-    ContractViewResponseDto, DeployAndActivateInstanceDto,
-    DeployAndActivateInstanceResponseDto, DeployContractDto, DeployContractResponseDto,
-    EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
-    KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
-    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
-    MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
-    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
-    RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
-    SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
-    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs, handle_get_contract_code_bytes,
-    handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_call,
-    handle_post_contract_deploy, handle_post_contract_instance,
-    handle_post_contract_instance_activate, handle_post_contract_view,
-    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
-    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
-    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
-    handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
-    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
-    handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots, handle_v1_zk_submit_proof,
-    handle_v1_zk_verify, handle_v1_zk_vote_tally, signed_find_proof_by_id,
+    ActivateInstanceDto, ActivateInstanceResponseDto, ContractAliasResolveRequestDto,
+    ContractAliasResolveResponseDto, ContractCallDto, ContractCallResponseDto, ContractViewDto,
+    ContractViewResponseDto, DeployAndActivateInstanceDto, DeployAndActivateInstanceResponseDto,
+    DeployContractDto, DeployContractResponseDto, EvidenceListQuery, EvidenceSubmitRequestDto,
+    KaigiRelayDetailDto, KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto,
+    KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
+    MultisigCancelRequestDto, MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto,
+    PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto,
+    ProofListQuery, QueryOptions, RegisterPinManifestDto, RegisterPinManifestResponseDto,
+    SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
+    ZkRootsGetRequestDto, ZkVkRegisterDto, ZkVkUpdateDto, ZkVoteGetTallyRequestDto,
+    handle_count_proofs, handle_get_contract_code_bytes, handle_get_proof, handle_get_vk,
+    handle_list_proofs, handle_list_vk, handle_post_contract_call, handle_post_contract_deploy,
+    handle_post_contract_instance, handle_post_contract_instance_activate,
+    handle_post_contract_view, handle_post_sorafs_register_manifest,
+    handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
+    handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
+    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
+    handle_v1_new_view_json, handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
+    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots,
+    handle_v1_zk_submit_proof, handle_v1_zk_verify, handle_v1_zk_vote_tally,
+    signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -812,7 +812,10 @@ fn resolve_contract_alias_on_chain(
     let Some(contract_address) = world.contract_address_by_alias_at(&contract_alias, now_ms) else {
         return Ok(None);
     };
-    let binding = world.contract_alias_bindings().get(&contract_address).cloned();
+    let binding = world
+        .contract_alias_bindings()
+        .get(&contract_address)
+        .cloned();
     let dataspace_alias = contract_address
         .dataspace_id()
         .ok()
@@ -10299,8 +10302,7 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
         .map(|peer| peer.id().clone())
         .collect();
     let state_view = app.state.view();
-    let mut online = std::collections::BTreeSet::new();
-    let mut offline = std::collections::BTreeSet::new();
+    let mut authoritative_peer_ids = std::collections::BTreeSet::new();
     for ((lane_id, _validator_id), record) in state_view.world().public_lane_validators().iter() {
         if *lane_id != routing_decision.lane_id
             || !matches!(
@@ -10313,7 +10315,33 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
         let Some(signatory) = record.validator.try_signatory() else {
             continue;
         };
-        let peer_id = PeerId::from(signatory.clone());
+        authoritative_peer_ids.insert(PeerId::from(signatory.clone()));
+    }
+
+    // Permissioned deployments do not necessarily materialize public-lane validator records.
+    // When that registry is empty, route against the committed validator roster instead.
+    if authoritative_peer_ids.is_empty() {
+        let fallback_mode = if state_view.world().sumeragi_npos_parameters().is_some() {
+            iroha_config::parameters::actual::ConsensusMode::Npos
+        } else {
+            iroha_config::parameters::actual::ConsensusMode::Permissioned
+        };
+        if matches!(
+            iroha_core::sumeragi::effective_consensus_mode(&state_view, fallback_mode),
+            iroha_config::parameters::actual::ConsensusMode::Permissioned
+        ) {
+            let commit_topology: Vec<_> = state_view.commit_topology().iter().cloned().collect();
+            if commit_topology.is_empty() {
+                authoritative_peer_ids.extend(state_view.world().peers().iter().cloned());
+            } else {
+                authoritative_peer_ids.extend(commit_topology);
+            }
+        }
+    }
+
+    let mut online = std::collections::BTreeSet::new();
+    let mut offline = std::collections::BTreeSet::new();
+    for peer_id in authoritative_peer_ids {
         if online_peer_ids.contains(&peer_id) {
             online.insert(peer_id);
         } else {
@@ -28053,6 +28081,75 @@ pub(crate) mod tests_runtime_handlers {
         }
     }
 
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn authoritative_lane_peer_ids_fall_back_to_permissioned_commit_topology() {
+        let local_keypair = KeyPair::random();
+        let remote_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            let local_peer = Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_keypair.public_key().clone(),
+            );
+            let remote_peer = Peer::new(
+                "127.0.0.1:10002".parse().expect("valid remote address"),
+                remote_keypair.public_key().clone(),
+            );
+            online_tx
+                .send(HashSet::from([local_peer, remote_peer]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.push(remote_peer_id.clone());
+            topology.commit();
+        }
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut peers = block.world.peers_mut_for_testing().transaction();
+        peers.clear();
+        peers.push(local_peer_id.clone());
+        peers.push(remote_peer_id.clone());
+        peers.apply();
+        block.commit().expect("commit permissioned peer roster");
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+
+        assert!(
+            authoritative.contains(&local_peer_id),
+            "local permissioned validator should remain authoritative without public validator records"
+        );
+        assert!(
+            authoritative.contains(&remote_peer_id),
+            "remote permissioned validator should remain authoritative without public validator records"
+        );
+        assert!(
+            super::is_local_authoritative_for_route(app.as_ref(), route),
+            "permissioned local ingress should treat committed topology peers as authoritative"
+        );
+    }
+
     #[tokio::test]
     async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary() {
         let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
@@ -30767,10 +30864,12 @@ mod tests {
     };
 
     use super::*;
-    #[cfg(feature = "app_api")]
-    use crate::tests_runtime_handlers::{bind_account_alias_for_test, bind_contract_alias_for_test};
     #[cfg(feature = "telemetry")]
     use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
+    #[cfg(feature = "app_api")]
+    use crate::tests_runtime_handlers::{
+        bind_account_alias_for_test, bind_contract_alias_for_test,
+    };
     use crate::{
         limits,
         tests_runtime_handlers::{
@@ -31959,9 +32058,9 @@ mod tests {
             State(app),
             crate::utils::extractors::NoritoJson(request),
         )
-            .await
-            .expect("handler should succeed")
-            .into_response();
+        .await
+        .expect("handler should succeed")
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
@@ -31988,9 +32087,9 @@ mod tests {
             State(app),
             crate::utils::extractors::NoritoJson(request),
         )
-            .await
-            .expect("handler should succeed")
-            .into_response();
+        .await
+        .expect("handler should succeed")
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())

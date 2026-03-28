@@ -90,7 +90,7 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
      --manifest="${OUT}/portal.manifest.to" \
      --chunk-plan="${OUT}/portal.plan.json" \
      --torii-url="${TORII_URL}" \
-     --submitted-epoch="${SUBMITTED_EPOCH}" \
+     --resolve-submitted-epoch=true \
      --authority="${AUTHORITY}" \
      --private-key-file "${KEY_FILE}" \
      --alias-namespace docs \
@@ -106,9 +106,11 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
      `openapi.sbom.manifest.to`. SBOMs typically do **not** receive aliases,
      so omit the alias flags unless governance requests a dedicated namespace
      (e.g. `docs:portal-sbom`).
-   - Set `${SUBMITTED_EPOCH}` to the current consensus epoch (obtainable from
-     `curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` or your ops
-     dashboard) so the registry can track when the manifest entered the ledger.
+   - Use `--submitted-epoch="${SUBMITTED_EPOCH}"` when governance needs a fixed
+     epoch recorded in the release packet. Otherwise
+     `--resolve-submitted-epoch=true` queries `${TORII_URL}/status`, prefers an
+     explicit epoch field when present, and falls back to
+     `(blocks - 1) / sumeragi.epoch_length_blocks`.
 
 2. **Alternative: `iroha app sorafs pin register`**
 

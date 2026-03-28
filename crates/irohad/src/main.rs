@@ -178,19 +178,18 @@ fn build_shared_sorafs_provider_cache(
         return None;
     };
 
-    let admission = match iroha_torii::sorafs::AdmissionRegistry::load_from_dir(
-        &admission_cfg.envelopes_dir,
-    ) {
-        Ok(registry) => Arc::new(registry),
-        Err(err) => {
-            iroha_logger::error!(
-                ?err,
-                dir = ?admission_cfg.envelopes_dir,
-                "failed to load shared SoraFS provider admission registry"
-            );
-            return None;
-        }
-    };
+    let admission =
+        match iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir) {
+            Ok(registry) => Arc::new(registry),
+            Err(err) => {
+                iroha_logger::error!(
+                    ?err,
+                    dir = ?admission_cfg.envelopes_dir,
+                    "failed to load shared SoraFS provider admission registry"
+                );
+                return None;
+            }
+        };
 
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
@@ -941,9 +940,7 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
                 BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcChunkCompact(_)
-                | BlockMessage::BlockBodyResponse(_) => {
-                    IngressPolicy::bulk()
-                }
+                | BlockMessage::BlockBodyResponse(_) => IngressPolicy::bulk(),
                 BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
                 BlockMessage::BlockSyncUpdate(_) | BlockMessage::ExecWitness(_) => {
                     IngressPolicy::bulk()
@@ -1853,13 +1850,15 @@ impl NetworkRelayShared {
             }
             SoracloudLocalReadProxyRequest(_)
             | SoracloudLocalReadProxyResponse(_)
+            | ToriiProxyRequest(_)
+            | ToriiProxyResponse(_)
             | GenesisRequest(_)
             | GenesisResponse(_)
             | Health
             | Connect(_) => {
                 // Genesis bootstrap is handled by the dedicated bootstrapper listener.
-                // Health frames are handled elsewhere. Connect and Soracloud proxy frames go to
-                // Torii via its own subscriber tasks when those surfaces are enabled.
+                // Health frames are handled elsewhere. Connect and Torii/Soracloud proxy frames
+                // go to Torii via its own subscriber tasks when those surfaces are enabled.
             }
             TimePing(p) => {
                 iroha_core::time::handle_message(
@@ -3941,8 +3940,7 @@ impl Iroha {
                     );
                 } else {
                     let expected_hash = config.genesis.expected_hash;
-                    let genesis_account = AccountId::new(effective_genesis_public_key.clone(),
-                    );
+                    let genesis_account = AccountId::new(effective_genesis_public_key.clone());
                     match bootstrapper
                         .fetch_genesis(&candidates, &genesis_account, expected_hash)
                         .await
@@ -4015,8 +4013,7 @@ impl Iroha {
                     "non-empty block store detected; using stored genesis for restart",
                 );
             } else {
-                let genesis_account = AccountId::new(effective_genesis_public_key.clone(),
-                );
+                let genesis_account = AccountId::new(effective_genesis_public_key.clone());
                 if let Err(err) = iroha_core::validate_genesis_block(
                     &genesis_block.0,
                     &genesis_account,
@@ -4672,7 +4669,8 @@ impl Iroha {
         let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
 
         let chain_id = Arc::new(config.common.chain.clone());
-        let local_validator_account_id = AccountId::new(config.common.key_pair.public_key().clone());
+        let local_validator_account_id =
+            AccountId::new(config.common.key_pair.public_key().clone());
         let local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
         let runtime_mutation_sink = Arc::new(QueuedSoracloudRuntimeMutationSink::new(
             Arc::clone(&chain_id),
@@ -8354,8 +8352,7 @@ mod tests {
             let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let bls_account_id =
-                AccountId::new(bls_keypair.public_key().clone());
+            let bls_account_id = AccountId::new(bls_keypair.public_key().clone());
 
             let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
                 .with_instructions([
