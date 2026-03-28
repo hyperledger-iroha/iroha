@@ -1857,9 +1857,9 @@ impl NetworkRelayShared {
             | Health
             | Connect(_) => {
                 // Genesis bootstrap is handled by the dedicated bootstrapper listener.
-                // Health frames are handled elsewhere. Connect, Soracloud proxy, and Torii
-                // proxy frames go to Torii via its own subscriber tasks when those surfaces are
-                // enabled.
+                // Health frames are handled elsewhere. Connect, Soracloud local-read proxy,
+                // and Torii proxy frames go to Torii via its own subscriber tasks when those
+                // surfaces are enabled.
             }
             TimePing(p) => {
                 iroha_core::time::handle_message(

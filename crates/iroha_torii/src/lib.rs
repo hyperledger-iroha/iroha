@@ -330,6 +330,8 @@ mod connect;
 mod data_dir;
 mod event;
 #[cfg(feature = "app_api")]
+mod contract_sources;
+#[cfg(feature = "app_api")]
 pub mod explorer;
 #[cfg(feature = "app_api")]
 pub mod filter;
@@ -6491,6 +6493,37 @@ async fn handler_explorer_instruction_detail(
     .await
     {
         Ok(response) => Ok(response),
+        Err(error) => Ok(explorer_json_error_response(error)),
+    }
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_explorer_instruction_contract_view(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath((hash, index)): AxPath<(String, u64)>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/explorer/instructions/{hash}/{index}/contract-view",
+        )
+        .await?;
+    }
+    match crate::contract_sources::handle_get_instruction_contract_view(
+        app.state.clone(),
+        hash,
+        index,
+    )
+    .await
+    {
+        Ok(response) => Ok(response.into_response()),
         Err(error) => Ok(explorer_json_error_response(error)),
     }
 }
@@ -13639,6 +13672,103 @@ async fn handler_get_contract_code(
         ))) => Ok(axum::http::StatusCode::NOT_FOUND.into_response()),
         Err(e) => Err(e),
     }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_contract_code_view(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(code_hash): axum::extract::Path<String>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return crate::contract_sources::handle_get_contract_code_view(app.state.clone(), code_hash)
+            .await
+            .map(axum::response::IntoResponse::into_response);
+    }
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/code/{code_hash}/contract-view:get",
+        app.api_token_enforced(),
+    );
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::contract_sources::handle_get_contract_code_view(app.state.clone(), code_hash).await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))) => Ok(axum::http::StatusCode::NOT_FOUND.into_response()),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_contract_verified_source_job(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(code_hash): axum::extract::Path<String>,
+    crate::utils::extractors::NoritoJson(payload): crate::utils::extractors::NoritoJson<
+        crate::contract_sources::SubmitVerifiedContractSourceDto,
+    >,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/code/{code_hash}/verified-source/jobs",
+    )
+    .await?;
+    let (status, body) = crate::contract_sources::handle_post_verified_source_job(
+        code_hash,
+        payload,
+        app.sorafs_node.clone(),
+    )
+    .await?;
+    Ok((status, body).into_response())
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_contract_verified_source_job(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path((code_hash, job_id)): axum::extract::Path<(String, String)>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}",
+    )
+    .await?;
+    crate::contract_sources::handle_get_verified_source_job(code_hash, job_id)
+        .await
+        .map(axum::response::IntoResponse::into_response)
 }
 
 #[cfg(feature = "app_api")]
@@ -21145,6 +21275,18 @@ impl Torii {
                 .route(
                     "/v1/contracts/code/{code_hash}",
                     get(handler_get_contract_code),
+                )
+                .route(
+                    "/v1/contracts/code/{code_hash}/contract-view",
+                    get(handler_get_contract_code_view),
+                )
+                .route(
+                    "/v1/contracts/code/{code_hash}/verified-source/jobs",
+                    post(handler_post_contract_verified_source_job),
+                )
+                .route(
+                    "/v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}",
+                    get(handler_get_contract_verified_source_job),
                 );
             router.merge(group)
         });
@@ -21810,6 +21952,10 @@ impl Torii {
                 .route(
                     "/v1/explorer/instructions/{hash}/{index}",
                     get(handler_explorer_instruction_detail),
+                )
+                .route(
+                    "/v1/explorer/instructions/{hash}/{index}/contract-view",
+                    get(handler_explorer_instruction_contract_view),
                 );
 
             #[cfg(feature = "telemetry")]

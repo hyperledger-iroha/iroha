@@ -4,203 +4,343 @@ direction: ltr
 source: docs/source/universal_accounts_guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5d525863066feb78b2668d766816ed9404cef6e8159dea85db0fc8c1bcec9d01
-source_last_modified: "2026-01-30T18:06:03.658066+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: f972f8f82b7f4e89c1d48b0dbbc6eb5b73303e2fab0f580ab21e63990ba03af8
+source_last_modified: "2026-03-27T19:05:17.617064+00:00"
+translation_last_reviewed: 2026-03-28
+translator: machine-google-reviewed
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+18НХ00000026Х
 
-# Universal Account Guide
+# Универсаль иҫәп яҙмаһы буйынса ҡулланма
 
-This guide distils the UAID (Universal Account ID) rollout requirements from
-the Nexus roadmap and packages them into an operator + SDK focused walkthrough.
-It covers UAID derivation, portfolio/manifest inspection, regulator templates,
-and the evidence that must accompany every `iroha app space-directory manifest
-publish` run (roadmap reference: `roadmap.md:2209`).
+Был ҡулланма дистилляция UAID (Универсаль иҫәп яҙмаһы идентификаторы) ролл-аут талаптарын 2019 йылдан.
+Nexus юл картаһы һәм уларҙы операторға + SDK йүнәлтелгән проходкаға йыйып ала.
+Ул ҡаплай UAID сығарыу, портфолио/манифест тикшерергә, регулятор шаблондар,
+һәм дәлилдәр, улар менән бергә булырға тейеш һәр `iroha ҡушымта йыһан-каталог манифест
+18НИ00000027Хюл картаһы.мд:2209`).
 
-## 1. UAID quick reference
+## 1. УАИД тиҙ белешмә- УАИД - `uaid:<hex>` литералдары, унда `<hex>` - Блейк2б-256 дайджест, уның
+  ЛСБ ҡуйылған Norito. Каноник тибы 1942 йылда йәшәй.
+  I18НИ00000031Х.
+- Иҫәп яҙмалары (`Account` һәм `AccountDetails`) хәҙер опциональ `uaid` йөрөтә
+  ялан шулай ҡушымталар өйрәнә ала идентификаторы индивидуаль хеширование.
+- Йәшерен функция идентификаторы сәйәсәте үҙ теләге менән нормалаштырылған индереүҙәрҙе бәйләй ала
+  (телефон номерҙары, электрон почта, иҫәп номерҙары, партнер телмәрҙәре) `opaque:` идентификаторҙарына
+  UAID исемдәр киңлеге аҫтында. Сылбырҙағы киҫәктәр Torii,
+  I18НИ00000037Х, һәм I18НИ00000038Х индексы.
+- Космос каталогы `World::uaid_dataspaces` картаһын һаҡлай, ул һәр УАИД-ты бәйләй
+  әүҙем манифесттар һылтанма яһаған мәғлүмәттәр киңлеге иҫәптәренә. 18НТ00000006Х ҡабаттан ҡуллана, тип
+  карта өсөн `/portfolio` һәм `/uaids/*` API-лар.
+- `POST /v1/accounts/onboard` 2019 йыл өсөн ғәҙәттәгесә йыһан каталогы манифестын баҫтырып сығара.
+  глобаль мәғлүмәттәр киңлеге ҡасан бер ниндәй ҙә юҡ, шуға күрә UAID шунда уҡ бәйләнгән.
+  Онбординг органдары `CanPublishSpaceDirectoryManifest{dataspace=0}` тоторға тейеш.
+- Бөтә SDK-лар ҙа UAID литералдарын канонлаштырыу өсөн ярҙамсыларҙы асып һала (мәҫәлән,
+  `UaidLiteral` в Android SDK). Ярҙамсылар сеймал ҡабул итә 64-гекс дайджест
+  (LSB=1) йәки `uaid:<hex>` литералдар һәм ҡабаттан ҡулланыу шул уҡ Norito кодектар шулай
+  дайджест телдәр аша дрейфлай алмай.
 
-- UAIDs are `uaid:<hex>` literals where `<hex>` is a Blake2b-256 digest whose
-  LSB is set to `1`. The canonical type lives in
-  `crates/iroha_data_model/src/nexus/manifest.rs::UniversalAccountId`.
-- Account records (`Account` and `AccountDetails`) now carry an optional `uaid`
-  field so applications can learn the identifier without bespoke hashing.
-- Space Directory maintains a `World::uaid_dataspaces` map that ties each UAID
-  to the dataspace accounts referenced by active manifests. Torii reuses that
-  map for the `/portfolio` and `/uaids/*` APIs.
-- `POST /v1/accounts/onboard` publishes a default Space Directory manifest for
-  the global dataspace when none exists, so the UAID is immediately bound.
-  Onboarding authorities must hold `CanPublishSpaceDirectoryManifest{dataspace=0}`.
-- All SDKs expose helpers for canonicalising UAID literals (e.g.,
-  `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests
-  (LSB=1) or `uaid:<hex>` literals and re-use the same Norito codecs so the
-  digest cannot drift across languages.
+## 1.1 Йәшерен идентификатор сәйәсәте
 
-## 2. Deriving and verifying UAIDs
+UAIDs хәҙер икенсе үҙенсәлек ҡатламы өсөн якорь булып тора:
 
-There are three supported ways to obtain a UAID:
+- Глобаль `IdentifierPolicyId` (`<kind>#<business_rule>`) билдәләй
+  исемдәр киңлеге, йәмәғәт йөкләмәһе метамағлүмәттәре, резолютор тикшерелгән асҡыс, һәм
+  канонический режим нормализации входа (`Exact`, `LowercaseTrimmed`,
+  18НИ00000050Х, 18НИ00000051Х, йәки 18НИ00000052Х).
+- Дәғүә бер алынған `opaque:` идентификаторын теүәл бер UAID һәм бер
+  канонический `AccountId` шул сәйәсәт буйынса, әммә сылбыр ғына ҡабул итә
+  дәғүә ҡасан ул ҡул ҡуйылған `IdentifierResolutionReceipt` оҙатыла.
+- Ҡарарлыҡ `resolve -> transfer` ағымы булып ҡала. 18НТ00000007Х асыҡ булмағанды хәл итә
+  ручка һәм канон `AccountId` ҡайтара; күсермәләр һаман да маҡсатлы
+  канон иҫәп яҙмаһы, түгел, `uaid:` йәки `opaque:` литералдары туранан-тура.
+- Сәйәсәт хәҙер BFV индереү-шифрлау параметрҙары аша баҫтырып сығара ала
+  I18НИ00000060Х. Ҡасан бар, Torii уларҙы рекламалай
+  `GET /v1/identifier-policies`, һәм клиенттар тапшырырға мөмкин BFV-уралған индереү
+  ябай текст урынына. Программаланған сәйәсәт BFV параметрҙарын урап ала
+  канон `BfvProgrammedPublicParameters` пакет, шулай уҡ баҫтырып сығара
+  йәмәғәт I18НИ00000063Х; мираҫ сеймал BFV файҙалы йөкләмәләр яңыртыла, тип
+  канонический пакет ҡасан йөкләмә яңынан төҙөлә.
+- Идентификатор маршруттары шул уҡ Torii рөхсәт-маркер һәм ставка-сик аша үтә
+  тикшерә, башҡа ҡушымта-йөҙө ос нөктәләре кеүек. Улар тирәләй обход түгел, нормаль
+  API сәйәсәте.
 
-1. **Read it from world state or SDK models.** Any `Account`/`AccountDetails`
-   payload queried via Torii now has the `uaid` field populated when the
-   participant opted into universal accounts.
-2. **Query the UAID registries.** Torii exposes
-   `GET /v1/space-directory/uaids/{uaid}` which returns the dataspace bindings
-   and manifest metadata the Space Directory host persists (see
-   `docs/space-directory.md` §3 for payload samples).
-3. **Derive it deterministically.** When bootstrapping new UAIDs offline, hash
-   the canonical participant seed with Blake2b-256 and prefix the result with
-   `uaid:`. The snippet below mirrors the helper documented in
-   `docs/space-directory.md` §3.3:
+## 1.2 Терминология
 
-   ```python
-   import hashlib
-   seed = b"participant@example"  # canonical address/domain seed
-   digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
-   print(f"uaid:{digest}")
-   ```
+Исем биреүҙең бүленеше ниәтләп эшләнә:
 
-Always store the literal in lower case and normalise whitespace before hashing.
-CLI helpers such as `iroha app space-directory manifest scaffold` and the Android
-`UaidLiteral` parser apply the same trimming rules so governance reviews can
-cross-check values without ad hoc scripts.
+- `ram_lfe` - тышҡы йәшерен функциялы абстракция. Ул сәйәсәтте үҙ эсенә ала
+  теркәү, йөкләмәләр, йәмәғәт метамағлүмәттәр, башҡарыу квитанциялары, һәм
+  тикшерелгән режим.
+- `BFV` - Бракерски/Фан-Веркотерен гомоморф шифрлау схемаһы, ул ҡулланыла.
+  ҡайһы бер `ram_lfe` бэкэндтар баһалау өсөн шифрланған индереү.
+- `ram_fhe_profile` - BFV-ға хас метамағлүмәттәр, бөтә өсөн икенсе исем түгел
+  үҙенсәлеге. Ул программаланған BFV башҡарыу машинаһын һүрәтләй, тип янсыҡтар һәм .
+  тикшергәндәр сәйәсәт программаланған бэкэнд ҡулланғанда маҡсатлы булырға тейеш.
 
-## 3. Inspecting UAID holdings and manifests
+Аныҡ ҡына әйткәндә:
 
-The deterministic portfolio aggregator in `iroha_core::nexus::portfolio`
-surfaces every asset/dataspace pair that references the UAID. Operators and SDKs
-can consume the data through the following surfaces:
+- `RamLfeProgramPolicy` һәм `RamLfeExecutionReceipt` - ЛФЭ-ҡатлам типтары.
+- 18НИ00000070Х, 18НИ00000071Х, 18НИ00000072Х, һәм
+  `BfvRamProgramProfile` типтары FHE-слой.
+- 18НИ00000074Х һәм 18НИ00000075Х - эске исемдәр
+  программаланған бекэнд тарафынан башҡарылған йәшерен BFV программаһы. Улар 1990 йылда ҡала.
+  FHE яғы, сөнки улар шифрланған башҡарыу механизмын һүрәтләй, ә
+  тышҡы сәйәсәт йәки алыу абстракцияһы.
 
-| Surface | Usage |
-|---------|-------|
-| `GET /v1/accounts/{uaid}/portfolio` | Returns dataspace → asset → balance summaries; described in `docs/source/torii/portfolio_api.md`. |
-| `GET /v1/space-directory/uaids/{uaid}` | Lists dataspace IDs + account literals tied to the UAID. |
-| `GET /v1/space-directory/uaids/{uaid}/manifests` | Provides the full `AssetPermissionManifest` history for audits. |
-| `iroha app space-directory bindings fetch --uaid <literal>` | CLI shortcut that wraps the bindings endpoint and optionally writes the JSON to disk (`--json-out`). |
-| `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` | Fetches the manifest JSON bundle for evidence packs. |
+## 1.3 Иҫәп яҙмаһының идентификаторы һәм псевдонимдар
 
-Example CLI session (Torii URL configured via `torii_api_url` in `iroha.json`):
+Универсаль иҫәп яҙмаһы таратыу канон иҫәп яҙмаһы идентификаторы моделен үҙгәртмәй:
 
-```bash
-iroha app space-directory bindings fetch \
-  --uaid uaid:86e8ee39a3908460a0f4ee257bb25f340cd5b5de72735e9adefe07d5ef4bb0df \
-  --json-out artifacts/uaid86/bindings.json
+- `AccountId` канон, доменһыҙ иҫәп яҙмаһы субъекты булып ҡала.
+- 18NI00000077X - ҡараштар өсөн асыҡ домен контексы йәки
+  домен һылтанмаһын материаллаштырыусы теркәүҙәр. Ул икенсе канон түгел .
+  үҙенсәлеге.
+- SNS/иҫәп яҙмаһы псевдонимдары - был тема өҫтөндә айырым бәйләүҙәр. А
+  домен-квалификациялы псевдоним, мәҫәлән, `merchant@hbl.sbp` һәм мәғлүмәт киңлеге-тамыр псевдоним
+  мәҫәлән, `merchant@sbp` икеһе лә бер үк канонлы `AccountId`-ҡа хәл итә ала.
+- `linked_domains` һаҡланған иҫәп яҙмаларында алынған дәүләт
+  иҫәп яҙмаһы-домен индекстары. Ул әлеге ваҡытта материаллаштырылған һылтанмаларҙы һүрәтләй, тип
+  предмет; ул канон идентификаторының бер өлөшө түгел.
 
-iroha app space-directory manifest fetch \
-  --uaid uaid:86e8ee39a3908460a0f4ee257bb25f340cd5b5de72735e9adefe07d5ef4bb0df \
-  --json-out artifacts/uaid86/manifests.json
-```
+Операторҙар, SDK һәм тестар өсөн тормошҡа ашырыу ҡағиҙәһе: канондан башлана
+`AccountId`, һуңынан өҫтәү псевдоним ҡуртымға, мәғлүмәттәр киңлеге/домен рөхсәттәре, һәм асыҡ
+домен һылтанмалары айырым. Ялған домен-күләмле канон синтезламағыҙ
+иҫәп яҙмаһы тик псевдоним йәки маршрут домен сегментын йөрөткәнгә генә.
 
-Store the JSON snapshots alongside the manifest hash used during reviews; the
-Space Directory watcher rebuilds the `uaid_dataspaces` map whenever manifests
-activate, expire, or revoke, so these snapshots are the fastest way to prove
-what bindings were active at a given epoch.
+Ағымдағы Torii маршруттары:
 
-## 4. Publishing capability manifests with evidence
+| Маршрут | Маҡсат |
+|--------|
+| 18НИ00000083Х | RAM-LFE программаһының әүҙем һәм әүҙем булмаған сәйәсәтен, уларҙы йәмәғәт башҡарыу метамағлүмәттәрен, шул иҫәптән өҫтәмә BFV `input_encryption` параметрҙарын һәм программаланған бекэнд `ram_fhe_profile` исемлегенә индерелә. |
+| 18НИ00000086Х | Ҡабул итә теүәл бер `{ input_hex }` йәки `{ encrypted_input }` һәм ҡайтара штатһыҙ `RamLfeExecutionReceipt` плюс `{ output_hex, output_hash, receipt_hash }` һайланған программа өсөн. Ағымдағы Torii эшләү ваҡыты программаланған BFV бэкэнды өсөн квитанциялар сығара. |
+| 18НИ00000091Х | 18NI00000092X ҡаршы баҫылған сылбырлы программа сәйәсәте һәм теләк буйынса тикшерә, тип шылтыратыусы биргән `output_hex` тура килә квитанция `output_hash`. |
+| 18НИ00000095Х | Йәшерен функциялы сәйәсәт исемдәре киңлектәренең әүҙем һәм әүҙем булмаған исемлектәре плюс уларҙы асыҡ метамағлүмәттәр, шул иҫәптән өҫтәмә BFV `input_encryption` параметрҙары, клиент яғынан шифрланған индереү өсөн кәрәкле `normalization` режимы һәм программаланған BFV сәйәсәте өсөн `ram_fhe_profile`. |
+| 18НИ00000099Х | Ҡабул итә теүәл бер `{ input }` йәки `{ encrypted_input }`. Ябай текст `input` сервер яғынан нормалаштырылған; БФВ `encrypted_input` инде баҫылған сәйәсәт режимы буйынса нормалаштырылырға тейеш. Һуңынан ос нөктәһе `opaque:` ручкаһын сығара һәм ҡул ҡуйылған квитанцияны ҡайтара, тип `ClaimIdentifier` сылбырҙа тапшыра ала, шул иҫәптән сеймал `signature_payload_hex` һәм анализланған `signature_payload`. || 18НИ00000108Х | Ҡабул итә теүәл бер `{ input }` йәки `{ encrypted_input }`. Ябай текст `input` сервер яғынан нормалаштырылған; БФВ `encrypted_input` инде баҫылған сәйәсәт режимы буйынса нормалаштырылырға тейеш. Һуңғы нөктә идентификаторҙы `{ opaque_id, receipt_hash, uaid, account_id, signature }`-ҡа хәл итә, ҡасан әүҙем дәғүә бар, шулай уҡ канон ҡул ҡуйылған файҙалы йөктө `{ signature_payload_hex, signature_payload }` тип ҡайтара. |
+| 18НИ00000115Х | Ҡарап өҫкә ныҡлы `IdentifierClaimRecord` бәйле детерминистик ҡабул итеү хеш шулай операторҙар һәм SDKs аудит дәғүә милек йәки диагностика реплей / тап килмәү етешһеҙлектәре сканерлау тулы идентификатор индексы. |
 
-Use the CLI flow below whenever a new allowance is rolled out. Each step must
-land in the evidence bundle recorded for governance sign-off.
+Torii&#8217;s процесында башҡарыу ваҡыты аҫтында конфигурацияланған
+18НИ00000117Х, ключенный 18НИ00000118Х. Идентификатор маршруттары хәҙер
+ҡабаттан ҡулланыу, шул уҡ RAM-LFE эшләү ваҡыты урынына айырым `identifier_resolver`
+конфиг өҫтө.
 
-1. **Encode the manifest JSON** so reviewers see the deterministic hash before
-   submission:
+Ағымдағы SDK ярҙамы:
 
-   ```bash
-   iroha app space-directory manifest encode \
-     --json fixtures/space_directory/capability/eu_regulator_audit.manifest.json \
-     --out artifacts/eu_regulator_audit.manifest.to \
-     --hash-out artifacts/eu_regulator_audit.manifest.hash
-   ```
+- Мин 18НИ00000120Х тап килә
+  канонилизаторы для `exact`, `lowercase_trimmed`, `phone_e164`,
+  18НИ00000124Х, һәм 18НИ00000125Х.
+- `ToriiClient.listIdentifierPolicies()` сәйәсәт метамағлүмәттәрен, шул иҫәптән BFV исемлегенә инә.
+  индереү-шифрлау метамағлүмәттәр ҡасан сәйәсәт уны баҫтырып сығара, плюс расшифрованный
+  БФВ параметры объекты аша `input_encryption_public_parameters_decoded`.
+  Программаланған сәйәсәт шулай уҡ расшифрованный `ram_fhe_profile` фашлай. Ул ялан - .
+  аңлы рәүештә BFV-scoped: ул янсыҡтарға көтөлгән регистрҙы раҫларға мөмкинлек бирә
+  һан, һыҙат һаны, канонлаштырыу режимы һәм 2019 өсөн минималь шифртексты модуле.
+  программаланған FHE бэкэнд клиент яғынан индереүҙе шифрлау алдынан.
+- I18НИ00000129Х һәм
+  Мин18НИ00000130Х ярҙам
+  JS шылтыратыусылар ҡулланыу баҫылған BFV метамағлүмәттәр һәм төҙөү сәйәсәт-аңлы запрос
+  органдар сәйәсәт-ид һәм нормалаштырыу ҡағиҙәләрен ҡабаттан тормошҡа ашырмай.
+- I18НИ00000131Х һәм
+  Мин18НИ00000132Х хәҙер рөхсәт
+  JS янсыҡтары төҙөү тулы BFV Norito шифртексты конверт локаль рәүештә 2012 йылдан.
+  баҫылған сәйәсәт параметрҙары урынына ташыу алдан төҙөлгән шифртекст hex.
+- 18НИ00000133Х
+  йәшерен идентификаторҙы хәл итә һәм ҡул ҡуйылған квитанцияның файҙалы йөкләмәһен ҡайтара,
+  шул иҫәптән I18НИ00000134Х, I18НИ00000135Х, һәм
+  I18НИ00000136Х.
+- `ТорииКлиент.иссуИдентификаторДәғүә ҡабул итеү(иҫәп яҙмаһыИдентификаторы, { сәйәсәтИдентификаторы, индереү |
+  })` issues the signed receipt needed by `ДәғүәИдентификаторы`.
+- Мин18НИ00000138Х ҡайтарылғанды раҫлай
+  квитанция ҡаршы сәйәсәт хәл итеүсе асҡыс клиент яғында, һәм18НИ00000139Х ала
+  Һуңыраҡ аудит/отладка ағымдары өсөн дәғүә яҙмаһы һаҡланған.
+- `IrohaSwift.ToriiClient` хәҙер `listIdentifierPolicies()`,
+  18НИ00000142Х,
+  18НИ00000143Х,
+  һәм мин18НИ00000144Х, плюс
+  Мин18NI00000145X шул уҡ телефон өсөн/электрон почта/иҫәп яҙмаһы номеры
+  канонлаштырыу режимдары.
+- 18НИ00000146Х һәм
+  18НИ00000147Х /
+  `.encryptedRequest(...)` ярҙамсылары типлаштырылған Swift запрос өҫтөн тәьмин итә.
+  хәл итеү һәм дәғүә-квитанция шылтыратыуҙар, һәм Swift сәйәсәте хәҙер сығара ала BFV .
+  шифр тексты локаль рәүештә `encryptInput(...)` / `encryptedRequest(input:...)` аша.
+- Мин18НИ00000151Х раҫлай, тип
+  өҫкө кимәлдәге квитанция яландары ҡул ҡуйылған файҙалы йөккә тап килә һәм раҫлай
+  резолютор ҡултамғаһы клиент-яҡтан тапшырыу алдынан.
+- Мин 18NI00000152X Android SDK хәҙер фашлай
+  `listIdentifierPolicies()`, `идентификаторҙы хәл итеү (сәйәсәт идентификаторы, индереү,
+  18NI00000154XиссуеИдентификаторыДәғүә ҡабул итеү (иҫәп яҙмаһы идентификаторы, сәйәсәт идентификаторы,
+  18NI00000155XGetIdentifierClaimByReceiptHash(...)`,
+  плюс `IdentifierNormalization` шул уҡ канонизация ҡағиҙәләре өсөн.
+- 18НИ00000157Х һәм
+  18НИ00000158Х /
+  `.encryptedRequest(...)` ярҙамсылары типтерелгән Android запрос өҫтөн тәьмин итеү,
+  18НИ00000160Х /
+  18НИ00000161Х BFV шифрлы текст конвертын сығарыу
+  локаль кимәлдә баҫылған сәйәсәт параметрҙарынан.
+  18НИ00000162Х ҡайтарылғанды раҫлай
+  резолютор ҡултамғаһы клиент-яҡ.
 
-2. **Publish the allowance** using either the Norito payload (`--manifest`) or
-   the JSON description (`--manifest-json`). Record the Torii/CLI receipt plus
-   the `PublishSpaceDirectoryManifest` instruction hash:
+Ағымдағы инструкциялар йыйылмаһы:
 
-   ```bash
-   iroha app space-directory manifest publish \
-     --manifest artifacts/eu_regulator_audit.manifest.to \
-     --reason "ESMA wave 2 onboarding"
-   ```
+- 18НИ00000163Х
+- 18НИ00000164Х
+- `ClaimIdentifier` (квитанция менән бәйле; сеймал `opaque_id` дәғүәләре кире ҡағыла)
+- 18НИ00000167Х
 
-3. **Capture SpaceDirectoryEvent evidence.** Subscribe to
-   `SpaceDirectoryEvent::ManifestActivated` and include the event payload in
-   the bundle so auditors can confirm when the change landed.
+Өс бэкэнд хәҙер `iroha_crypto::ram_lfe`-та бар:
 
-4. **Generate an audit bundle** tying the manifest to its dataspace profile and
-   telemetry hooks:
+- тарихи йөкләмә менән бәйле `HKDF-SHA3-512` ПРФ, һәм
+- БФВ-шифрланған идентификаторҙы ҡулланған БФВ-ға ярҙам иткән йәшерен аффин баһалаусы
+  слоттар туранан-тура. Ҡасан мин18НИ00000170Х стандарт менән төҙөлгән
+  `bfv-accel` функцияһы, BFV йөҙөк ҡабатлау теүәл детерминистик ҡуллана
+  CRT-NTT бэкэнд эске; был функцияны өҙөү кире төшә
+  скаляр мәктәп китабы юлы бер үк сығыштар менән, һәм
+- BFV-ярҙамында йәшерен программаланған баһалаусы, был инструкция-двигателдәр сығара
+  Шифрланған регистрҙар һәм шифрлы текст хәтере аша оперативка стилендә башҡарыу эҙе
+  һыҙаттары асыҡ булмаған идентификатор һәм квитанция хеш сығарыу алдынан. Программаланған
+  бекэнд хәҙер аффин юлға ҡарағанда көслөрәк BFV модуле иҙән талап итә, һәм
+  уның йәмәғәт параметрҙары канон өйөмөндә баҫылып сыға, унда
+  RAM-FHE башҡарыу профиле ҡулланыла янсыҡтар һәм тикшергәндәр.
 
-   ```bash
-   iroha app space-directory manifest audit-bundle \
-     --manifest artifacts/eu_regulator_audit.manifest.to \
-     --profile fixtures/space_directory/profile/cbdc_lane_profile.json \
-     --out-dir artifacts/eu_regulator_audit_bundle
-   ```
+Бында БФВ 2010 йылда тормошҡа ашырылған Бракерски/Фан-Веркотерен ФХЭ схемаһын аңлата.
+I18НИ00000172Х. Ул шифрланған-башҡарыу механизмы
+аффин һәм программаланған бэкэндтар тарафынан ҡулланыла, тышҡы йәшерен исем түгел
+функция абстракцияһы.Torii сәйәсәт йөкләмәһе буйынса баҫылған бекэнд ҡуллана. Ҡасан BFV бекэнд
+әүҙем, ябай текст запростары нормалаштырыла, һуңынан шифрланған сервер-яҡтан тиклем
+баһалау. БФВ `encrypted_input` аффин бэкэнд өсөн запростар баһалана
+туранан-тура һәм инде нормаль булырға тейеш клиент-яҡ; программаланған бекэнд
+шифрланған индереүҙе кире резолютор детерминистик БФВ-ға канонлаштыра
+конверт йәшерен оперативка программаһын башҡарыу алдынан шулай квитанция хештар ҡала
+семантик яҡтан эквивалентлы шифр текстар буйынса тотороҡло.
 
-5. **Verify bindings via Torii** (`bindings fetch` and `manifests fetch`) and
-   archive those JSON files with the hash + bundle above.
+## 2. УАИД-тарҙы сығарыу һәм раҫлау
 
-Evidence checklist:
+Өс ярҙам ысулдары бар, алыу өсөн UAID:
 
-- [ ] Manifest hash (`*.manifest.hash`) signed by the change approver.
-- [ ] CLI/Torii receipt for the publish call (stdout or `--json-out` artefact).
-- [ ] `SpaceDirectoryEvent` payload proving activation.
-- [ ] Audit bundle directory with dataspace profile, hooks, and manifest copy.
-- [ ] Bindings + manifest snapshots fetched from Torii post-activation.
+1. **Уны донъя дәүләт йәки SDK моделдәренән уҡығыҙ.
+   18NT00000014X аша эҙләнгән файҙалы йөк хәҙер `uaid` яланында заполненный, ҡасан
+   ҡатнашыусы универсаль иҫәп яҙмаларына инеүҙе һайланы.
+2. **УАИД теркәүҙәрен һорау.** Torii фашлай
+   `GET /v1/space-directory/uaids/{uaid}`, был мәғлүмәт киңлеге бәйләүҙәрен ҡайтара
+   һәм асыҡ метамағлүмәттәр Space Directory хост һаҡлана (ҡара:
+   18НИ00000178Х §3 өсөн файҙалы йөк өлгөләре).
+3. **Уны детерминистик рәүештә сығарыу.** Ҡасан загрузка яңы UAIDs офлайн, хеш .
+   канон ҡатнашыусы орлоҡ менән Blake2b-256 һәм һөҙөмтә менән префикс
+   I18НИ00000179Х. Түбәндәге өҙөк көҙгө ярҙамсы документлаштырылған 2012 йылда.
+   18НИ00000180Х §3.3:
 
-This mirrors the requirements in `docs/space-directory.md` §3.2 while giving SDK
-owners a single page to point to during release reviews.
+   18НФ00000021ХҺәр ваҡыт һүҙмә-һүҙҙе бәләкәй хәрефтәр менән һаҡлағыҙ һәм хешлау алдынан аҡ бушлыҡты нормалаштырығыҙ.
+CLI ярҙамсылары, мәҫәлән, `iroha app space-directory manifest scaffold` һәм Android
+`UaidLiteral` парсер шул уҡ ҡағиҙәләрҙе ҡулланырға ҡырҡыу, шулай идара итеү тикшерергә мөмкин
+ҡиммәттәрҙе махсус сценарийҙарһыҙ тикшерергә.
 
-## 5. Regulator/regional manifest templates
+## 3. УАИД холдингтарын һәм манифесттарын тикшергән
 
-Use the in-repo fixtures as starting points when crafting capability manifests
-for regulators or regional supervisors. They demonstrate how to scope allow/deny
-rules and explain the policy notes reviewers expect.
+`iroha_core::nexus::portfolio`-та детерминистик портфель агрегаторы
+өҫтө һәр актив/мәғлүмәт киңлеге пары, тип һылтанмалар UAID. Операторҙар һәм SDK-лар
+мәғлүмәттәрҙе түбәндәге йөҙҙәр аша ҡуллана ала:
 
-| Fixture | Purpose | Highlights |
-|---------|---------|------------|
-| `fixtures/space_directory/capability/eu_regulator_audit.manifest.json` | ESMA/ESRB audit feed. | Read-only allowances for `compliance.audit::{stream_reports, request_snapshot}` with deny-wins on retail transfers to keep regulator UAIDs passive. |
-| `fixtures/space_directory/capability/jp_regulator_supervision.manifest.json` | JFSA supervision lane. | Adds a capped `cbdc.supervision.issue_stop_order` allowance (PerDay window + `max_amount`) and an explicit deny on `force_liquidation` to enforce dual controls. |
+| Ер өҫтө | Ҡулланыу |
+|---------|
+| 18НИ00000184Х | Мәғлүмәттәр киңлеген ҡайтара → актив → баланс резюмелары; 18НИ00000185Х-ла һүрәтләнгән. |
+| 18НИ00000186Х | Исемлектәр мәғлүмәт киңлеге идентификаторҙары + иҫәп яҙмаһы литералдары бәйләнгән UAID. |
+| 18НИ00000187Х | Аудит өсөн тулы `AssetPermissionManifest` тарихын бирә. |
+| 18НИ00000189Х | CLI ярлыҡ, был бәйләүҙәрҙең аҙаҡҡы нөктәһен уратып ала һәм теләк буйынса JSON-ды дискҡа яҙа (`--json-out`). |
+| 18НИ00000191Х | Дәлилдәр пакеттары өсөн манифест JSON пакетын ала. |
 
-When cloning these fixtures, update:
+Миҫал CLI сеансы (Torii URL-адресы `torii_api_url` аша `iroha.json`-та конфигурацияланған):
 
-1. `uaid` and `dataspace` ids to match the participant and lane you’re enabling.
-2. `activation_epoch`/`expiry_epoch` windows based on the governance schedule.
-3. `notes` fields with the regulator’s policy references (MiCA article, JFSA
-   circular, etc.).
-4. Allowance windows (`PerSlot`, `PerMinute`, `PerDay`) and optional
-   `max_amount` caps so SDKs enforce the same limits as the host.
+18НФ00000022Х
 
-## 6. Migration notes for SDK consumers
+JSON снимоктарын тикшергәндә ҡулланылған манифест хеш менән бергә һаҡлау; был
+Йыһан каталогы күҙәтеүсеһе `uaid_dataspaces` картаһын ҡасан ғына күренә, яңынан төҙөй
+әүҙемләштереү, срогы үткән, йәки кире ҡайтарыу, шуға күрә был снимоктар иң тиҙ ысул иҫбатлау өсөн .
+ниндәй бәйләүҙәр билдәле бер эпохала әүҙем булған.
 
-Existing SDK integrations that referenced per-domain account IDs must migrate to
-the UAID-centric surfaces described above. Use this checklist during upgrades:
+## 4. Баҫтырыу мөмкинлеге дәлилдәр менән күренә
 
-  account ids. For Rust/JS/Swift/Android this means upgrading to the latest
-  workspace crates or regenerating Norito bindings.
-- **API calls:** Replace domain-scoped portfolio queries with
-  `GET /v1/accounts/{uaid}/portfolio` and the manifest/bindings endpoints.
-  `GET /v1/accounts/{uaid}/portfolio` accepts an optional `asset_id` query
-  parameter when wallets only need a single asset instance. Client helpers such
-  as `ToriiClient.getUaidPortfolio` (JS) and the Android
-  `SpaceDirectoryClient` already wrap these routes; prefer them over bespoke
-  HTTP code.
-- **Caching & telemetry:** Cache entries by UAID + dataspace instead of raw
-  account ids, and emit telemetry showing the UAID literal so operations can
-  line up logs with Space Directory evidence.
-- **Error handling:** New endpoints return the strict UAID parsing errors
-  documented in `docs/source/torii/portfolio_api.md`; surface those codes
-  verbatim so support teams can triage issues without repro steps.
-- **Testing:** Wire the fixtures mentioned above (plus your own UAID manifests)
-  into SDK test suites to prove Norito round-trips and manifest evaluations
-  match the host implementation.
+Ҡулланыу CLI ағымы түбәндәге һәр ваҡыт яңы пособие йәйелдерелгән. Һәр аҙым тейеш
+ер дәлилдәр өйөмө өсөн теркәлгән идара итеү ҡул ҡуйыу.
 
-## 7. References
+1. **Кодировка манифест JSON** шулай итеп, рецензенттар күрә детерминистик хеш алдынан
+   тапшырыу:
 
-- `docs/space-directory.md` — operator playbook with deeper lifecycle detail.
-- `docs/source/torii/portfolio_api.md` — REST schema for UAID portfolio and
-  manifest endpoints.
-- `crates/iroha_cli/src/space_directory.rs` — CLI implementation referenced in
-  this guide.
-- `fixtures/space_directory/capability/*.manifest.json` — regulator, retail, and
-  CBDC manifest templates ready for cloning.
+   18НФ00000023Х
+
+2. **Публикация пособие** ҡулланыу йәки Norito файҙалы йөк (`--manifest`) йәки
+   JSON тасуирламаһы (Torii). Яҙыу Torii/CLI квитанцияһы плюс
+   18NI00000197X инструкцияһы хеш:
+
+   18НФ00000024Х
+
+3. **Космос каталогы ваҡиғалары дәлилдәрен тотоу.** Яҙылыу
+   `SpaceDirectoryEvent::ManifestActivated` һәм ваҡиғаның файҙалы йөкләмәһен үҙ эсенә ала.
+   өйөмө шулай аудиторҙар раҫлай ала, ҡасан үҙгәрештәр ергә төшкән.
+
+4. **Аудит пакетын генерациялау** манифестты уның мәғлүмәт киңлеге профиленә бәйләү һәм
+   телеметрия ҡармаҡтары:
+
+   18НФ00000025Х
+
+5. **Torii аша бәйләүҙәрҙе тикшерергә** (`bindings fetch` һәм `manifests fetch`) һәм
+   архивлау шул JSON файлдар менән хеш + өҫтәге йыйылма.
+
+Дәлилдәр тикшерелгән исемлеге:
+
+- [ ] Үҙгәрештәрҙе раҫлаусы тарафынан ҡул ҡуйылған асыҡ хеш (`*.manifest.hash`).
+- [ ] CLI/Torii квитанция өсөн баҫтырыу шылтыратыуы (stdout йәки `--json-out` артефакт).
+- [ ] `SpaceDirectoryEvent` файҙалы йөк иҫбатлау активацияһы.
+- [ ] Аудит пакеты каталогы менән мәғлүмәттәр киңлеге профиле, ҡармаҡтар һәм манифест күсермәһе.
+- [ ] Бәйләүҙәр + манифест снимоктары Torii пост-активациянан алынған.Был көҙгө талаптарын `docs/space-directory.md` §3.2 биргәндә SDK .
+хужалары бер бит күрһәтергә ваҡытында релиз тикшерелгән.
+
+## 5. Регулятор/региональ манифест ҡалыптары
+
+Ҡулланыу-репо ҡоролма башланғыс нөктә булараҡ, ҡасан ҡорамалдар мөмкинлектәрен күрһәтә
+көйләүселәр йәки төбәк күҙәтеүселәре өсөн. Улар күрһәтә, нисек даирәһе рөхсәт/инҡар итеү
+ҡағиҙәләр һәм аңлатыу сәйәсәт иҫкәрмәләр рецензенттар көтә.
+
+| Ҡоролма | Маҡсат | Һөйләшеүҙәр |
+|----------|---------|
+| 18НИ00000205Х | ESMA/ESRB аудит каналы. | Уҡыу өсөн генә пособиелар `compliance.audit::{stream_reports, request_snapshot}` менән инҡар-еңә ваҡлап һатыу күсермәләрен һаҡлау өсөн регулятор UAIDs пассив. |
+| 18НИ00000207Х | JFSA күҙәтеү һыҙаты. | Өҫтәй ҡапланған `cbdc.supervision.issue_stop_order` пособие (Көнөнә тәҙрә + `max_amount`) һәм асыҡтан-асыҡ кире ҡағыу `force_liquidation` икеләтә контроль үтәү өсөн. |
+
+Был ҡорамалдарҙы клонлағанда яңыртығыҙ:
+
+1. `uaid` һәм `dataspace` ids ҡатнашыусы һәм һыҙат тура килтерергә һеҙ&#8217;ы рөхсәт итеү.
+2. И18НИ00000213Х/И18НИ00000214Х тәҙрәләр идара итеү графигы нигеҙендә.
+3. `notes` яландар менән көйләүсе’сәйәсәт һылтанмалар (MiCA мәҡәлә, JFSA
+   түңәрәк һ.б.).
+4. Пособие тәҙрәләре (`PerSlot`, `PerMinute`, `PerDay`) һәм теләк буйынса
+   `max_amount` ҡапҡастары шулай SDK-лар хост менән бер үк сиктәрҙе үтәй.
+
+## 6. SDK ҡулланыусылар өсөн миграция иҫкәрмәләреБулған SDK интеграциялары, һылтанма буйынса домен иҫәп яҙмаһы идентификаторҙары күсергә тейеш
+өҫтә һүрәтләнгән УАИД-үҙәкле өҫтө. Яңыртыу ваҡытында был тикшерелгән исемлекте ҡулланығыҙ:
+
+  иҫәп яҙмаһы идентификаторҙары. Был өсөн был яңыртыу һуңғы
+  эш урыны йәшниктәр йәки регенерациялау Norito бәйләүҙәр.
+- **API саҡыра:** Домен даирәһендәге портфолио эҙләүҙәрен алмаштырыу
+  `GET /v1/accounts/{uaid}/portfolio` һәм манифест/бәйләүҙәр ос нөктәләре.
+  `GET /v1/accounts/{uaid}/portfolio` опциональ `asset_id` эҙләүен ҡабул итә
+  параметр ҡасан кошелектар тик бер актив экземпляры кәрәк. Клиент ярҙамсылары бындай
+  18НИ00000223Х (ДЖС) һәм Андроид
+  `SpaceDirectoryClient` инде был маршруттарҙы урап; уларҙы өҫтөнлөк бирегеҙ, ә заказ буйынса
+  HTTP коды.
+- **Кэшлау һәм телеметрия:** Кэш яҙмалары UAID + мәғлүмәттәр киңлеге урынына сеймал
+  иҫәп яҙмаһы ids, һәм телеметрия сығарыу күрһәтеү UAID туранан-тура шулай операциялар мөмкин
+  рәткә журналдар менән йыһан каталогы дәлилдәре.
+- **Хаталарҙы эшкәртергә:** Яңы ос нөктәләре ҡәтғи UAID анализлау хаталарын ҡайтара
+  документлаштырылған I18НИ00000225Х; өҫтө шул кодтарҙы
+  һүҙмә-һүҙ шулай ярҙам командалары мәсьәләләрҙе триажлай ала репро аҙымдарһыҙ.
+- **Һынау:** Сым өҫтә телгә алынған ҡоролма (плюс үҙ UAID манифесттары)
+  SDK тест пакеттарына иҫбатлау өсөн Norito әйләнеш-сәйәхәттәр һәм баһалауҙарҙы күрһәтеү
+  тура килтерергә хост тормошҡа ашырыу.
+
+## 7. Һылтанмалар- `docs/space-directory.md` — оператор плейбук менән тәрән йәшәү циклы деталдәре.
+- `docs/source/torii/portfolio_api.md` - UAID портфеле өсөн REST схемаһы һәм
+  асыҡ ос нөктәләре.
+- 18NI00000228X - CLI тормошҡа ашырыу 2012 йылда һылтанма яһала.
+  был ҡулланма.
+- `fixtures/space_directory/capability/*.manifest.json` — регулятор, ваҡлап һатыу һәм
+  CBDC манифест ҡалыптары клонлау өсөн әҙер.
