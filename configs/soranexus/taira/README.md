@@ -77,23 +77,39 @@ From `../iroha2-block-explorer-web`:
    `../iroha/configs/soranexus/taira/taira-explorer.nginx.conf` on the edge host
    (for both domains on one machine), e.g.:
    - `sudo cp ../iroha/configs/soranexus/taira/taira-explorer.nginx.conf /etc/nginx/conf.d/taira.conf`
+   - on the shared macOS/Homebrew host, install the same template as
+     `/opt/homebrew/etc/nginx/servers/taira.sora.org.conf` instead, then point
+     the upstream at the locally served Torii port (currently `127.0.0.1:29080`
+     on that machine rather than the template's `127.0.0.1:18080`)
    - if your Torii endpoint is not `127.0.0.1:18080`, update the `upstream taira_torii_upstream`
      target to the live validator endpoint before reload.
    - keep the dedicated `location = /v1/connect/ws` blocks intact; they forward
      the required websocket `Upgrade` / `Connection: upgrade` headers for
      Iroha Connect on `taira.sora.org`.
+   - do not fold `/v1/connect/ws` into the generic `location /` or
+     `location ^~ /v1/` proxy rules; it must stay an exact-match websocket
+     location with `proxy_http_version 1.1`.
 4. Issue/refresh TLS certificates for both hostnames:
    - `sudo certbot certonly --nginx -d taira.sora.org -d taira-explorer.sora.org`
    - certbot stores this SAN cert under `.../live/taira.sora.org/` and nginx can
      reuse it for both server blocks.
 5. Validate and reload nginx:
    - `sudo nginx -t && sudo systemctl reload nginx`
+   - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
 6. Verify that SNI now serves the correct cert for each host:
    - `curl -vI https://taira.sora.org`
    - `curl -vI https://taira-explorer.sora.org`
    - `echo | openssl s_client -connect taira-explorer.sora.org:443 -servername taira-explorer.sora.org 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName`
-   - verify Connect websocket upgrades on the public Torii host:
-     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: <token_protocol>' 'https://taira.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+   - create a Connect session through the proxy and ask explicitly for JSON:
+     `curl -sS -X POST https://taira.sora.org/v1/connect/session -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`
+   - verify Connect websocket upgrades on both public hostnames with the
+     returned `sid` and app token:
+     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira-explorer.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+   - if those websocket probes now return a Torii-generated app error
+     (`400/401/...`) instead of a proxy-layer `404` / missing-upgrade failure,
+     the reverse-proxy websocket hop is working and any remaining error is in
+     Connect session or token handling rather than nginx.
 
 The Explorer runtime config targets `https://taira.sora.org`, so both UI reads
 and `/v1/*` proxy traffic follow the Taira Torii endpoint.

@@ -37,7 +37,8 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::actual::ToriiOperatorSignatures;
-use iroha_crypto::{PublicKey, Signature};
+use iroha_crypto::{KeyPair, PublicKey, Signature};
+use rand::RngCore as _;
 
 use crate::{JsonBody, SharedAppState, canonical_request_message, json_entry, json_object};
 
@@ -359,6 +360,51 @@ impl OperatorSignatures {
     }
 }
 
+/// Build operator signature headers for an internal Torii request.
+pub(crate) fn signed_request_headers(
+    key_pair: &KeyPair,
+    method: &crate::Method,
+    uri: &crate::Uri,
+    body: &[u8],
+) -> HeaderMap {
+    let timestamp_ms = OperatorSignatures::now_unix_ms();
+    let mut nonce_bytes = [0u8; 12];
+    rand::rng().fill_bytes(&mut nonce_bytes);
+    let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+
+    let msg = OperatorSignatures::operator_request_message(method, uri, body, timestamp_ms, &nonce);
+    let signature = Signature::new(key_pair.private_key(), &msg);
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HEADER_OPERATOR_PUBLIC_KEY,
+        key_pair
+            .public_key()
+            .to_string()
+            .parse()
+            .expect("operator public key header"),
+    );
+    headers.insert(
+        HEADER_OPERATOR_TIMESTAMP_MS,
+        timestamp_ms
+            .to_string()
+            .parse()
+            .expect("operator timestamp header"),
+    );
+    headers.insert(
+        HEADER_OPERATOR_NONCE,
+        nonce.parse().expect("operator nonce header"),
+    );
+    headers.insert(
+        HEADER_OPERATOR_SIGNATURE,
+        BASE64_STANDARD
+            .encode(signature.payload())
+            .parse()
+            .expect("operator signature header"),
+    );
+    headers
+}
+
 pub async fn enforce_operator_access(
     State(app): State<SharedAppState>,
     req: Request,
@@ -407,41 +453,6 @@ mod tests {
     use rand::RngCore as _;
     use tower::ServiceExt as _;
 
-    fn signed_headers(
-        key_pair: &KeyPair,
-        method: &crate::Method,
-        uri: &crate::Uri,
-        body: &[u8],
-        timestamp_ms: u64,
-        nonce: &str,
-    ) -> HeaderMap {
-        let msg =
-            OperatorSignatures::operator_request_message(method, uri, body, timestamp_ms, nonce);
-        let signature = Signature::new(key_pair.private_key(), &msg);
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            HEADER_OPERATOR_PUBLIC_KEY,
-            key_pair
-                .public_key()
-                .to_string()
-                .parse()
-                .expect("public key header"),
-        );
-        headers.insert(
-            HEADER_OPERATOR_TIMESTAMP_MS,
-            timestamp_ms.to_string().parse().expect("timestamp header"),
-        );
-        headers.insert(HEADER_OPERATOR_NONCE, nonce.parse().expect("nonce header"));
-        headers.insert(
-            HEADER_OPERATOR_SIGNATURE,
-            BASE64_STANDARD
-                .encode(signature.payload())
-                .parse()
-                .expect("signature header"),
-        );
-        headers
-    }
-
     #[test]
     fn operator_signatures_rejects_replay() {
         let key_pair = KeyPair::random();
@@ -463,7 +474,35 @@ mod tests {
         let body = b"{}";
         let ts = OperatorSignatures::now_unix_ms();
         let nonce = "nonce-1";
-        let headers = signed_headers(&key_pair, &crate::Method::POST, &uri, body, ts, nonce);
+        let msg = OperatorSignatures::operator_request_message(
+            &crate::Method::POST,
+            &uri,
+            body,
+            ts,
+            nonce,
+        );
+        let signature = Signature::new(key_pair.private_key(), &msg);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_OPERATOR_PUBLIC_KEY,
+            key_pair
+                .public_key()
+                .to_string()
+                .parse()
+                .expect("public key header"),
+        );
+        headers.insert(
+            HEADER_OPERATOR_TIMESTAMP_MS,
+            ts.to_string().parse().expect("timestamp header"),
+        );
+        headers.insert(HEADER_OPERATOR_NONCE, nonce.parse().expect("nonce header"));
+        headers.insert(
+            HEADER_OPERATOR_SIGNATURE,
+            BASE64_STANDARD
+                .encode(signature.payload())
+                .parse()
+                .expect("signature header"),
+        );
 
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("first use ok");
@@ -494,14 +533,34 @@ mod tests {
 
         let uri: crate::Uri = "/v1/configuration?b=2&a=1".parse().unwrap();
         let body = b"{\"foo\":1}";
-        let ts = OperatorSignatures::now_unix_ms();
-        let mut nonce_bytes = [0u8; 12];
-        rand::rng().fill_bytes(&mut nonce_bytes);
-        let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
-        let headers = signed_headers(&key_pair, &crate::Method::POST, &uri, body, ts, &nonce);
+        let headers = signed_request_headers(&key_pair, &crate::Method::POST, &uri, body);
 
         auth.authorize_bytes(&headers, &crate::Method::POST, &uri, body)
             .expect("valid signature");
+    }
+
+    #[test]
+    fn signed_request_headers_authorize_successfully() {
+        let key_pair = KeyPair::random();
+        let cfg = ToriiOperatorSignatures {
+            enabled: true,
+            allow_node_key: true,
+            allowed_public_keys: Vec::new(),
+            max_clock_skew: Duration::from_secs(60),
+            nonce_ttl: Duration::from_secs(300),
+            replay_cache_capacity: NonZeroUsize::new(64).unwrap(),
+        };
+        let auth = OperatorSignatures::new(
+            cfg,
+            key_pair.public_key().clone(),
+            1024,
+            crate::routing::MaybeTelemetry::disabled(),
+        );
+        let uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION.parse().unwrap();
+        let headers = signed_request_headers(&key_pair, &crate::Method::GET, &uri, &[]);
+
+        auth.authorize_bytes(&headers, &crate::Method::GET, &uri, &[])
+            .expect("generated headers should verify");
     }
 
     #[tokio::test]

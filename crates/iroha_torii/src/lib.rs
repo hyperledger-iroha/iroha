@@ -23787,6 +23787,7 @@ impl Torii {
         let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
             collect_peer_urls(&self.online_peers, &self.peer_telemetry_urls),
             self.peer_geo.clone(),
+            Some(self.da_receipt_signer.clone()),
         );
 
         let zk_ivm_prove_jobs = Arc::new(DashMap::new());
@@ -25942,6 +25943,7 @@ pub(crate) mod tests_runtime_handlers {
         let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
             Vec::new(),
             telemetry::peers::GeoLookupConfig::disabled(),
+            None,
         );
 
         let content_config_snapshot = state.content_snapshot();

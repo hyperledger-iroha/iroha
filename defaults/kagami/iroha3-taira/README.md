@@ -23,6 +23,9 @@ Operational note:
 - If this Torii node is exposed through nginx or another reverse proxy, keep
   `/v1/connect/ws` on `proxy_http_version 1.1` and forward websocket
   `Upgrade` plus `Connection: upgrade` headers end-to-end.
+- Keep `/v1/connect/ws` as its own exact-match websocket location ahead of any
+  generic `location /` or `location ^~ /v1/` proxy blocks so future deploys do
+  not accidentally downgrade Connect back to a plain HTTP hop.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-taira

@@ -2,6 +2,43 @@
 
 Last updated: 2026-03-28
 
+Latest sync (2026-03-28 Taira deploy docs now capture the nginx websocket fix):
+the future deploy path for Taira Connect is now written down in-tree instead of
+living only in terminal history.
+
+- `configs/soranexus/taira/README.md` now documents the generic edge-host
+  install flow, the shared macOS/Homebrew nginx path, the exact websocket
+  location requirement, and the Connect session plus websocket smoke checks;
+- `defaults/kagami/iroha3-taira/README.md` now warns future bundle consumers to
+  keep `/v1/connect/ws` ahead of generic `/` and `/v1/` proxy stanzas; and
+- `docs/connect_config.md` now describes how to distinguish a broken proxy hop
+  from an application-level Connect error during rollout verification.
+
+Open work for this slice now remains:
+- if the public internet-facing Taira edge is not this machine, deploy the same
+  nginx websocket location blocks there and rerun the documented Connect smoke
+  against the public hostnames.
+
+Latest sync (2026-03-28 Torii peer-monitor `/configuration` auth fix):
+the live Taira config-monitor warning loop is closed.
+
+- `iroha_torii` now signs peer-monitor `GET /configuration` requests with the
+  node's operator signer instead of polling an operator-only endpoint
+  anonymously;
+- the peer monitor now classifies operator-auth `401/403` payloads as an
+  expected "config unavailable" case and broadens the legacy config decode
+  fallback for mixed-version peers; and
+- the restarted `taira-localnet` deployment is now clean after `2026-03-28T12:03`:
+  `rg` finds no fresh `peer_monitor` configuration warnings in
+  `dist/taira-localnet/peer{0,1,2,3}.log`, and direct Torii status remains
+  healthy.
+
+Open work for this slice now remains:
+- rerun a longer post-fix soak on a future redeploy if you want more than the
+  immediate post-restart proof that the warning loop is gone; and
+- if any older peers still expose only legacy `/configuration` payloads, keep
+  the broadened decode fallback covered when the config DTO evolves again.
+
 Latest sync (2026-03-28 Taira skill/docs gap closure with live endpoint recheck):
 the repo-side gaps from the standalone Taira skill rollout are now closed, and
 the remaining blocker has narrowed back down to the public deployment.
