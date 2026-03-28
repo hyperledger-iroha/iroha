@@ -2,6 +2,32 @@
 
 Last updated: 2026-03-28
 
+Latest sync (2026-03-28 Taira skill/docs gap closure with live endpoint recheck):
+the repo-side gaps from the standalone Taira skill rollout are now closed, and
+the remaining blocker has narrowed back down to the public deployment.
+
+- `README.md` now advertises the Codex-facing Taira plugin and standalone skill
+  from the repository landing page;
+- `plugins/iroha/README.md` now uses the portable
+  `${CODEX_HOME:-$HOME/.codex}` installer path for the standalone skill;
+- `scripts/check_codex_plugin_manifests.py` now validates the repo-shared
+  `skills/sora-taira-testnet/` skill and its `agents/openai.yaml` metadata, and
+  the accompanying test harness covers that new validation path; and
+- the focused `iroha_torii` MCP tests for the writer-prefix policy now pass
+  cleanly again.
+
+Open work for this follow-up now remains:
+- fix the public Taira deployment or ingress so `https://taira.sora.org/v1/mcp`
+  stops returning `HTTP/2 404` for both `GET /v1/mcp` and JSON-RPC
+  `tools/list`;
+- once the public MCP path is live, run the full public smoke again against
+  Taira (`GET /v1/mcp`, `tools/list`, hidden raw `torii.*`, one public read,
+  one explicit-key write flow);
+- publish the repo-shared skill from a GitHub remote that teammates can install
+  from directly if this repository path is not already their source of truth;
+- complete the human-run OpenAI support and Developer Forum submission if the
+  goal is eventual inclusion in the `openai/skills` catalog.
+
 Latest sync (2026-03-28 initial PRECOMMIT sparse-send root-cause fix):
 the next DA/precommit slice is now aimed at the implementation bug in vote
 dissemination rather than at timeout/FSM tuning.
@@ -28,16 +54,21 @@ dissemination rather than at timeout/FSM tuning.
   rebroadcast semantics, frontier-slot ownership, deep catch-up, quorum-timeout
   FSM routing, and recovery paths are intentionally unchanged in this slice.
 
+Focused validation for this slice is now green in an isolated target
+directory:
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib commit_vote_targets_collectors_or_topology -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib precommit_vote_targets_collectors_without_broadcast -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib initial_precommit_emit_does_not_consume_redundant_collectors_immediately -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib rebroadcast_precommit_votes_widen_collectors_when_below_quorum -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib plan_with_sent_preserves_remaining_targets -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib --features iroha-core-tests collector_fanout_floor_respects_quorum_and_bounds -- --nocapture`
+
 Open work from this slice:
-- finish focused `iroha_core` validation for the new initial-send semantics and
-  keep the regression coverage in place:
-  `collector_fanout_floor_respects_quorum_and_bounds`,
-  `commit_vote_targets_collectors_or_topology`,
-  `precommit_vote_targets_collectors_without_broadcast`,
-  `initial_precommit_emit_does_not_consume_redundant_collectors_immediately`,
-  and `rebroadcast_precommit_votes_widen_collectors_when_below_quorum`;
-- run the requested release build next:
-  `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`;
+- clear the unrelated `iroha_torii` account-alias compile break in the current
+  worktree (or rebuild on a tree where it is already fixed), because
+  `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  currently fails in `crates/iroha_torii/src/routing.rs` before either release
+  binary is emitted;
 - rerun the full preserved-peer stable permissioned soak first and collect new
   post-fix evidence for:
   `no strict block height progress=0`,

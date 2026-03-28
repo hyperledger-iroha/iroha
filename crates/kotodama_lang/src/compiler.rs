@@ -8226,7 +8226,7 @@ fn record_instruction_box_access(
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(access_set, r.object.id()),
             RegisterBox::Account(r) => {
-                if let Some(domain) = r.object.domain() {
+                for domain in r.object.linked_domains() {
                     add_domain_r(access_set, domain);
                 }
                 add_account_rw(access_set, r.object.id());

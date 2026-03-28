@@ -938,42 +938,43 @@ pub mod account {
     use super::*;
     use crate::permission::{account::is_account_owner, revoke_permissions};
 
-    /// Registers an account when the caller owns the domain or holds the registration permission.
+    /// Registers an account when the caller governs every linked domain or holds the
+    /// corresponding registration permissions.
     pub fn visit_register_account<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<Account>,
     ) {
-        let domain_id = if let Some(domain_id) = isi.object().domain() {
-            domain_id
-        } else {
+        if isi.object().linked_domains().is_empty() {
             // TODO: Replace this temporary self/unrestricted bridge with explicit domainless
             // account registration permissions once dataspace-aware alias permissions land.
             execute!(executor, isi);
-        };
-
-        match crate::permission::domain::is_domain_owner(
-            domain_id,
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
         }
 
-        let can_register_account_in_domain = CanRegisterAccount {
-            domain: domain_id.clone(),
-        };
-        if can_register_account_in_domain
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
+        for domain_id in isi.object().linked_domains() {
+            match crate::permission::domain::is_domain_owner(
+                domain_id,
+                &executor.context().authority,
+                executor.host(),
+            ) {
+                Err(err) => deny!(executor, err),
+                Ok(true) => continue,
+                Ok(false) => {}
+            }
+
+            let can_register_account_in_domain = CanRegisterAccount {
+                domain: domain_id.clone(),
+            };
+            if !can_register_account_in_domain
+                .is_owned_by(&executor.context().authority, executor.host())
+            {
+                deny!(
+                    executor,
+                    "Can't register account in a domain owned by another account"
+                );
+            }
         }
 
-        deny!(
-            executor,
-            "Can't register account in a domain owned by another account"
-        );
+        execute!(executor, isi);
     }
 
     /// Unregisters an account when the caller owns it or has the unregister permission.

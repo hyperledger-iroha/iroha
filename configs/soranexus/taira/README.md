@@ -79,6 +79,9 @@ From `../iroha2-block-explorer-web`:
    - `sudo cp ../iroha/configs/soranexus/taira/taira-explorer.nginx.conf /etc/nginx/conf.d/taira.conf`
    - if your Torii endpoint is not `127.0.0.1:18080`, update the `upstream taira_torii_upstream`
      target to the live validator endpoint before reload.
+   - keep the dedicated `location = /v1/connect/ws` blocks intact; they forward
+     the required websocket `Upgrade` / `Connection: upgrade` headers for
+     Iroha Connect on `taira.sora.org`.
 4. Issue/refresh TLS certificates for both hostnames:
    - `sudo certbot certonly --nginx -d taira.sora.org -d taira-explorer.sora.org`
    - certbot stores this SAN cert under `.../live/taira.sora.org/` and nginx can
@@ -89,6 +92,8 @@ From `../iroha2-block-explorer-web`:
    - `curl -vI https://taira.sora.org`
    - `curl -vI https://taira-explorer.sora.org`
    - `echo | openssl s_client -connect taira-explorer.sora.org:443 -servername taira-explorer.sora.org 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName`
+   - verify Connect websocket upgrades on the public Torii host:
+     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: <token_protocol>' 'https://taira.sora.org/v1/connect/ws?sid=<sid>&role=app'`
 
 The Explorer runtime config targets `https://taira.sora.org`, so both UI reads
 and `/v1/*` proxy traffic follow the Taira Torii endpoint.

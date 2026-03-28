@@ -14,6 +14,9 @@ PLUGIN_ROOT = Path("plugins") / PLUGIN_NAME
 PLUGIN_MANIFEST = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
 MCP_MANIFEST = PLUGIN_ROOT / ".mcp.json"
 MARKETPLACE_MANIFEST = Path(".agents") / "plugins" / "marketplace.json"
+TAIRA_SKILL_ROOT = Path("skills") / "sora-taira-testnet"
+TAIRA_SKILL_MANIFEST = TAIRA_SKILL_ROOT / "SKILL.md"
+TAIRA_SKILL_AGENT_MANIFEST = TAIRA_SKILL_ROOT / "agents" / "openai.yaml"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -43,6 +46,53 @@ def _expect_file(
     target = root / relative_path[2:]
     if not target.exists():
         errors.append(f"{context} path `{relative_path}` does not exist at {target}")
+
+
+def _parse_simple_frontmatter(path: Path) -> dict[str, str]:
+    content = path.read_text(encoding="utf-8")
+    if not content.startswith("---\n"):
+        raise ValueError(f"{path} must start with YAML frontmatter")
+    end = content.find("\n---\n", 4)
+    if end == -1:
+        raise ValueError(f"{path} must close YAML frontmatter with `---`")
+    frontmatter = content[4:end].splitlines()
+    payload: dict[str, str] = {}
+    for line in frontmatter:
+        if not line.strip():
+            continue
+        key, separator, raw_value = line.partition(":")
+        if not separator:
+            raise ValueError(f"{path} has invalid frontmatter line: {line!r}")
+        value = raw_value.strip()
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        payload[key.strip()] = value
+    return payload
+
+
+def _parse_simple_openai_yaml(path: Path) -> dict[str, dict[str, str]]:
+    payload: dict[str, dict[str, str]] = {}
+    current_section: str | None = None
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        if not raw_line.startswith(" "):
+            key, separator, _ = raw_line.partition(":")
+            if not separator:
+                raise ValueError(f"{path} has invalid top-level line: {raw_line!r}")
+            current_section = key.strip()
+            payload[current_section] = {}
+            continue
+        if current_section is None:
+            raise ValueError(f"{path} contains indented content before a section")
+        key, separator, raw_value = raw_line.strip().partition(":")
+        if not separator:
+            raise ValueError(f"{path} has invalid nested line: {raw_line!r}")
+        value = raw_value.strip()
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        payload[current_section][key.strip()] = value
+    return payload
 
 
 def validate_plugin_manifest(repo_root: Path) -> list[str]:
@@ -193,11 +243,64 @@ def validate_marketplace_manifest(repo_root: Path) -> list[str]:
     return errors
 
 
+def validate_taira_skill(repo_root: Path) -> list[str]:
+    errors: list[str] = []
+    skill_path = repo_root / TAIRA_SKILL_MANIFEST
+    agent_path = repo_root / TAIRA_SKILL_AGENT_MANIFEST
+
+    if not skill_path.exists():
+        return [f"missing standalone Taira skill: {skill_path}"]
+    if not agent_path.exists():
+        return [f"missing standalone Taira agent metadata: {agent_path}"]
+
+    try:
+        frontmatter = _parse_simple_frontmatter(skill_path)
+    except ValueError as error:
+        return [str(error)]
+
+    if frontmatter.get("name") != "sora-taira-testnet":
+        errors.append("standalone Taira skill name must be `sora-taira-testnet`")
+    description = frontmatter.get("description", "")
+    if not description:
+        errors.append("standalone Taira skill must include a non-empty description")
+    elif "https://taira.sora.org/v1/mcp" not in description:
+        errors.append("standalone Taira skill description must mention the Taira MCP URL")
+
+    skill_text = skill_path.read_text(encoding="utf-8")
+    for required in (
+        "https://taira.sora.org/v1/mcp",
+        "iroha.transactions.submit_and_wait",
+        "authority",
+        "private_key",
+    ):
+        if required not in skill_text:
+            errors.append(f"standalone Taira skill body must mention `{required}`")
+
+    try:
+        agent_payload = _parse_simple_openai_yaml(agent_path)
+    except ValueError as error:
+        return [str(error)]
+
+    interface = agent_payload.get("interface")
+    if interface is None:
+        return ["standalone Taira agent metadata must contain an `interface` section"]
+    if interface.get("display_name") != "SORA Taira Testnet":
+        errors.append("standalone Taira skill display_name must be `SORA Taira Testnet`")
+    short_description = interface.get("short_description", "")
+    if not (25 <= len(short_description) <= 64):
+        errors.append("standalone Taira skill short_description must be 25-64 characters")
+    default_prompt = interface.get("default_prompt", "")
+    if "$sora-taira-testnet" not in default_prompt:
+        errors.append("standalone Taira skill default_prompt must mention `$sora-taira-testnet`")
+    return errors
+
+
 def validate_repo(repo_root: Path) -> list[str]:
     errors: list[str] = []
     errors.extend(validate_plugin_manifest(repo_root))
     errors.extend(validate_mcp_manifest(repo_root))
     errors.extend(validate_marketplace_manifest(repo_root))
+    errors.extend(validate_taira_skill(repo_root))
     return errors
 
 

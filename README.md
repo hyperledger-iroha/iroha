@@ -97,6 +97,25 @@ See the full endpoint reference in:
 - [`docs/source/telemetry.md`](./docs/source/telemetry.md)
 - [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
 
+## Codex Integration
+
+This repo includes two Codex-facing Taira surfaces:
+
+- [`plugins/iroha/`](./plugins/iroha): an installable Codex app/plugin with the
+  built-in Taira MCP preset.
+- [`skills/sora-taira-testnet/`](./skills/sora-taira-testnet): a standalone
+  Codex skill for live Taira testnet workflows.
+
+Install the standalone skill from a GitHub checkout of this repo with:
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo <owner>/<repo> \
+  --path skills/sora-taira-testnet
+```
+
+Restart Codex after installation so the skill appears in the Skills tab.
+
 ## Core Crates
 
 - [`crates/iroha`](./crates/iroha): client library.

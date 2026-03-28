@@ -1029,7 +1029,7 @@ where
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(&mut set, &r.object.id().clone()),
             RegisterBox::Account(r) => {
-                if let Some(domain_id) = r.object.domain() {
+                for domain_id in r.object.linked_domains() {
                     add_domain_r(&mut set, domain_id);
                 }
                 add_account_rw(&mut set, r.object.id());

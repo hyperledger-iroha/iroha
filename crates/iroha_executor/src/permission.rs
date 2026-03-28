@@ -978,6 +978,19 @@ pub mod account {
         }
     }
 
+    fn validate_account_alias_domain_owner(
+        domain: &crate::smart_contract::data_model::account::rekey::AccountAliasDomain,
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        // TODO: Replace this legacy domain-name fallback once alias-domain permissions become
+        // fully dataspace-qualified across the executor permission model.
+        let domain_id =
+            crate::smart_contract::data_model::domain::DomainId::new(domain.name().clone());
+        super::domain::Owner { domain: &domain_id }.validate(authority, host, context)
+    }
+
     impl PassCondition for Owner<'_> {
         fn validate(&self, authority: &AccountId, host: &Iroha, _context: &Context) -> Result {
             if is_account_owner(self.account, authority, host) {
@@ -1036,7 +1049,7 @@ pub mod account {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             match &self.scope {
                 AccountAliasPermissionScope::Domain(domain) => {
-                    super::domain::Owner { domain }.validate(authority, host, context)
+                    validate_account_alias_domain_owner(domain, authority, context, host)
                 }
                 AccountAliasPermissionScope::Dataspace(dataspace) => {
                     validate_dataspace_alias_owner(*dataspace, authority, host)
@@ -1058,7 +1071,7 @@ pub mod account {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             match &self.scope {
                 AccountAliasPermissionScope::Domain(domain) => {
-                    super::domain::Owner { domain }.validate(authority, host, context)
+                    validate_account_alias_domain_owner(domain, authority, context, host)
                 }
                 AccountAliasPermissionScope::Dataspace(dataspace) => {
                     validate_dataspace_alias_owner(*dataspace, authority, host)

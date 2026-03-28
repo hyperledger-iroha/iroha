@@ -834,7 +834,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let domain_id = self.object().domain().cloned();
+            let linked_domains = self.object().linked_domains().clone();
             let account: Account = self.object().clone().build(authority);
             ensure_controller_capabilities(
                 account.controller(),
@@ -843,7 +843,7 @@ pub mod isi {
             )?;
             let (account_id, account_value) = account.clone().into_key_value();
 
-            if let Some(domain_id) = domain_id.as_ref() {
+            for domain_id in &linked_domains {
                 if domain_id == &*iroha_genesis::GENESIS_DOMAIN_ID {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "Not allowed to register account in genesis domain"
@@ -855,7 +855,7 @@ pub mod isi {
                 let _domain = state_transaction.world.domain_mut(domain_id)?;
             }
             if state_transaction.world.account(&account_id).is_ok() {
-                let plain_domainless_self_registration = domain_id.is_none()
+                let plain_domainless_self_registration = linked_domains.is_empty()
                     && self.object().metadata().is_empty()
                     && self.object().label().is_none()
                     && self.object().uaid.is_none()
@@ -1025,15 +1025,17 @@ pub mod isi {
                 ));
             }
 
-            if let Some(domain_id) = domain_id {
-                state_transaction
-                    .world
-                    .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                        AccountCreated::new(account, domain_id),
-                    ))));
-            } else {
+            if linked_domains.is_empty() {
                 // TODO: Emit a dedicated domainless account-created event once the event model
                 // stops requiring a concrete origin domain.
+            } else {
+                for domain_id in linked_domains {
+                    state_transaction
+                        .world
+                        .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+                            AccountCreated::new(account.clone(), domain_id),
+                        ))));
+                }
             }
 
             Ok(())
@@ -3643,6 +3645,35 @@ mod tests {
     }
 
     #[test]
+    fn register_account_with_multiple_linked_domains_materializes_all_links() {
+        let mut state = test_state();
+        let first_domain: DomainId = "first.world".parse().expect("domain id");
+        let second_domain: DomainId = "second.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &first_domain, &authority);
+        seed_domain(&mut state, &second_domain, &authority);
+
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let linked_domains = BTreeSet::from([first_domain.clone(), second_domain.clone()]);
+        let new_account = NewAccount::new_domainless(account_id.clone())
+            .with_linked_domains(linked_domains.clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(new_account)
+            .execute(&authority, &mut tx)
+            .expect("register account with multiple linked domains");
+
+        let account = tx.world.account(&account_id).expect("account should exist");
+        assert_eq!(&account.linked_domains, &linked_domains);
+        assert_eq!(
+            tx.world.account_subject_domains.view().get(&account_id),
+            Some(&account.linked_domains)
+        );
+    }
+
+    #[test]
     fn set_account_label_relabels_existing_single_key_account() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
@@ -4687,7 +4718,7 @@ mod tests {
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
         let new_account = NewAccount {
             id: account_id,
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: None,
@@ -4719,7 +4750,7 @@ mod tests {
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
         let new_account = NewAccount {
             id: account_id,
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(uaid),
@@ -4753,7 +4784,7 @@ mod tests {
 
         let first_account = NewAccount {
             id: first_id.clone(),
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(first_uaid),
@@ -4761,7 +4792,7 @@ mod tests {
         };
         let second_account = NewAccount {
             id: second_id.clone(),
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(second_uaid),
