@@ -5369,7 +5369,7 @@ fn genesis_public_key_from_genesis_block(
 
 fn genesis_account(public_key: PublicKey) -> Account {
     let genesis_account_id = AccountId::new(public_key);
-    Account::new(genesis_account_id.to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()))
+    Account::new_in_domain(genesis_account_id.clone(), iroha_genesis::GENESIS_DOMAIN_ID.clone())
         .build(&genesis_account_id)
 }
 
@@ -8469,9 +8469,8 @@ mod tests {
             let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
                 .with_instructions([
                     InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
-                    InstructionBox::from(Register::account(Account::new(
-                        bls_account_id.to_account_id(domain_id),
-                    ))),
+                    InstructionBox::from(Register::account(Account::new_in_domain(
+                        bls_account_id.clone(), domain_id))),
                 ])
                 .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
             let block = SignedBlock::genesis(

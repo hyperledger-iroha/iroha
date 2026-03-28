@@ -57,8 +57,9 @@ fn find_accounts_with_asset() -> Result<()> {
             .skip(1) // Alice has already been registered in genesis
             .cloned()
             .map(|account_id| {
-                Register::account(Account::new(
-                    account_id.to_account_id(wonderland_domain.clone()),
+                Register::account(Account::new_in_domain(
+                    account_id.clone(),
+                    wonderland_domain.clone(),
                 ))
             })
             .collect::<Vec<_>>();

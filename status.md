@@ -71,6 +71,39 @@ Last updated: 2026-03-28
   - `curl -s http://127.0.0.1:29080/status` (healthy: `peers=3`,
     `blocks=9`, `txs_approved=10`)
 
+## 2026-03-28 Taira deploy bundle now forces MCP-enabled rollout
+- Reconciled the Taira public deployment artifacts so `taira.sora.org` is no
+  longer documented as bypassing the shared nginx edge host:
+  `configs/soranexus/taira/dns_records.json` now points both public hostnames
+  at the same edge machine expected by `taira-explorer.nginx.conf`.
+- Added explicit `/v1/mcp` proxy locations to
+  `configs/soranexus/taira/taira-explorer.nginx.conf` on both the public Torii
+  and Explorer virtual hosts so future route edits cannot accidentally bury MCP
+  behind the generic `/` or `/v1/` catch-alls.
+- Added `configs/soranexus/taira/taira-irohad.service`, a sample systemd unit
+  that starts the validator from the shipped
+  `configs/soranexus/taira/{config.toml,genesis.json}` pair under `--sora` so
+  the live process uses the curated `torii.mcp` writer profile instead of an
+  operator-local config drift.
+- Added `configs/soranexus/taira/check_mcp_rollout.sh`, a repo-shipped rollout
+  smoke that fails unless both `GET /v1/mcp` and JSON-RPC `tools/list` return
+  `200`, expose `iroha.*`, and hide raw `torii.*`.
+- Updated `configs/soranexus/taira/README.md` and
+  `defaults/kagami/iroha3-taira/README.md` to make the live rollout order
+  explicit: start the validator from the shipped config, prove loopback MCP,
+  then reload nginx and only declare success once the public MCP smoke passes.
+- Validation for this deploy slice:
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh` (pass)
+  - `python3 -m json.tool configs/soranexus/taira/dns_records.json >/dev/null`
+    (pass)
+  - `git diff --check -- configs/soranexus/taira/dns_records.json configs/soranexus/taira/taira-irohad.service configs/soranexus/taira/check_mcp_rollout.sh configs/soranexus/taira/taira-explorer.nginx.conf configs/soranexus/taira/README.md defaults/kagami/iroha3-taira/README.md status.md roadmap.md`
+    (pass)
+- Live public verification immediately before this update still showed
+  `https://taira.sora.org/v1/mcp` returning `HTTP/2 404`, which is consistent
+  with the running validator still not using the MCP-enabled config yet. The
+  repo now contains the concrete service + edge + smoke bundle needed for the
+  next Taira rollout.
+
 ## 2026-03-28 Taira skill/docs gap-closure follow-up
 - Added a repo-root discoverability entry in `README.md` for the Codex-facing
   Taira surfaces so users can find both `plugins/iroha/` and the standalone
@@ -148,17 +181,50 @@ Last updated: 2026-03-28
     `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib plan_with_sent_preserves_remaining_targets -- --nocapture`,
     and
     `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib --features iroha-core-tests collector_fanout_floor_respects_quorum_and_bounds -- --nocapture`;
-  - the requested release build was attempted with
-    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
-    but failed outside this slice in `crates/iroha_torii/src/routing.rs`
-    because pre-existing account-alias worktree changes no longer satisfy
-    `AccountId::to_account_id(DomainId)` / `MultisigRegister::with_account(..., Into<Option<DomainId>>, ...)`;
-  - no fresh `iroha3d` / `izanami` release binaries were emitted under
-    `/tmp/iroha_target_precommitfix/release`, so the preserved-peer
-    permissioned and NPoS soaks could not be rerun on a clean post-fix build
-    in this turn; and
-  - there is therefore still no fresh post-fix soak evidence to compare
-    against the earlier Cut 1 / Cut 2 logs.
+  - the requested release build now succeeds on the current worktree:
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`;
+  - the build unblock required only a compatibility fix in
+    `crates/iroha_torii/src/routing.rs` so the in-flight account-alias
+    changes pass `DomainId` / `Option<DomainId>` where the current APIs
+    require them;
+  - preserved-peer stable permissioned rerun, using
+    `/tmp/iroha_target_precommitfix/release/{iroha3d,izanami}`, still fails
+    the unchanged gate:
+    log=`/tmp/izanami_permissioned_precommitfix_20260328T113805Z.log`,
+    tmpdir=`/tmp/iroha-soak-permissioned-precommitfix_20260328T113805Z`,
+    permitdir=`/tmp/iroha-permit-permissioned-precommitfix_20260328T113805Z`,
+    final error=`no strict block height progress for 600s (strict min height 186, quorum min height 186, target 2000, tolerated_failures 0)`,
+    summary=`successes=726 failures=50 izanami_ingress_failover_total=184 izanami_ingress_endpoint_unhealthy_total=177`;
+  - the permissioned rerun preserved the recovery-path invariants
+    (`requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`) and showed
+    no `route_unavailable` / `Failed to find asset`, but it still regressed
+    into local liveness/backpressure symptoms:
+    `plan submission failed=49`,
+    `transaction queued for too long=80`,
+    `haven't got tx confirmation within 20s=29`;
+  - preserved-peer stable NPoS rerun also fails the unchanged gate:
+    log=`/tmp/izanami_npos_precommitfix_20260328T115208Z.log`,
+    tmpdir=`/tmp/iroha-soak-npos-precommitfix_20260328T115208Z`,
+    permitdir=`/tmp/iroha-permit-npos-precommitfix_20260328T115208Z`,
+    final error=`no strict block height progress for 600s (strict min height 878, quorum min height 878, target 2000, tolerated_failures 0)`,
+    summary=`successes=4786 failures=151 izanami_ingress_failover_total=138 izanami_ingress_endpoint_unhealthy_total=184`;
+  - the NPoS rerun likewise kept the old recovery markers at zero and also
+    kept `Failed to find asset=0`, but it produced persistent Nexus ingress
+    routing failures before the stall:
+    `route_unavailable=1480` and `plan submission failed=151`;
+  - derived from the logged `interval_ms=` progress samples, both reruns also
+    miss the latency gate even before considering the strict-progress failure:
+    permissioned `interval_p95_ms ~= 1251`, NPoS `interval_p95_ms ~= 2001`;
+    and
+  - net result: the sparse initial `PRECOMMIT` fix corrected the intended
+    dissemination semantics and appears to let NPoS run much farther than the
+    permissioned rerun, but it does not satisfy the acceptance criteria on its
+    own. The remaining dominant failures are now
+    permissioned liveness/backpressure at low height and Nexus authoritative
+    route availability under NPoS, not the old block-repair / fallback-anchor
+    path.
 
 ## 2026-03-28 Repo-shared SORA Taira standalone Codex skill and agent guidance
 - Added a repo-shared standalone Codex skill under

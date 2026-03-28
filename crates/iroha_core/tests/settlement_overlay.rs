@@ -38,8 +38,8 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
-    let alice = Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
-    let bob = Account::new(BOB_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let alice = Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+    let bob = Account::new_in_domain(BOB_ID.clone(), domain_id).build(&ALICE_ID);
 
     let delivery_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),
@@ -83,8 +83,8 @@ fn settlement_state_with_payment_spec(
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
-    let alice = Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
-    let bob = Account::new(BOB_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let alice = Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+    let bob = Account::new_in_domain(BOB_ID.clone(), domain_id).build(&ALICE_ID);
 
     let delivery_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),

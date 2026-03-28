@@ -22813,6 +22813,18 @@ impl Torii {
                         "/v1/sorafs/deal/settle",
                         axum::routing::post(handler_post_sorafs_deal_settle),
                     )
+                    .route(
+                        "/.well-known/sorafs/manifest",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_site_manifest),
+                    )
+                    .route(
+                        "/",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_site_root),
+                    )
+                    .route(
+                        "/{*path}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_site_path),
+                    )
             });
         }
     }
@@ -25714,7 +25726,7 @@ pub(crate) mod tests_runtime_handlers {
     pub(crate) fn world_with_account(account_id: &AccountId) -> World {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(account_id);
-        let account = Account::new(account_id.to_account_id(domain_id)).build(account_id);
+        let account = Account::new_in_domain(account_id.clone(), domain_id).build(account_id);
         World::with([domain], [account], [])
     }
 
@@ -32517,13 +32529,9 @@ mod tests {
         );
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
-        let account = Account::new(
-            authority
-                .clone()
-                .to_account_id("sbp".parse().expect("domain id")),
-        )
-        .with_label(Some(alias_label))
-        .build(&authority);
+        let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
+            .with_label(Some(alias_label))
+            .build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with(
             [domain],
             [authority_account, account],
@@ -32751,7 +32759,7 @@ mod tests {
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let domain_id: DomainId = "sbp".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id))
+        let account = Account::new_in_domain(authority.clone(), domain_id)
             .with_label(Some(AccountLabel::new(
                 "sbp".parse().expect("domain"),
                 "banking".parse().expect("label"),
@@ -32783,13 +32791,9 @@ mod tests {
         );
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
-        let account = Account::new(
-            authority
-                .clone()
-                .to_account_id("sbp".parse().expect("domain id")),
-        )
-        .with_label(Some(primary_label))
-        .build(&authority);
+        let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
+            .with_label(Some(primary_label))
+            .build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with(
             [domain],
             [authority_account, account],
@@ -32866,13 +32870,9 @@ mod tests {
         );
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
-        let account = Account::new(
-            authority
-                .clone()
-                .to_account_id("sbp".parse().expect("domain id")),
-        )
-        .with_label(Some(primary_label))
-        .build(&authority);
+        let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
+            .with_label(Some(primary_label))
+            .build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with(
             [domain],
             [authority_account, account],
@@ -33214,7 +33214,7 @@ mod tests {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "directory".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id))
+        let account = Account::new_in_domain(authority.clone(), domain_id)
             .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
                 b"uaid-directory",
             ))))
@@ -33286,7 +33286,7 @@ mod tests {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "directory".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id))
+        let account = Account::new_in_domain(authority.clone(), domain_id)
             .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
                 b"uaid-directory-program-profile",
             ))))
@@ -33393,7 +33393,7 @@ mod tests {
         let domain_id: DomainId = "directory".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory"));
-        let account = Account::new(authority.clone().to_account_id(domain_id))
+        let account = Account::new_in_domain(authority.clone(), domain_id)
             .with_uaid(Some(uaid))
             .build(&authority);
         let world = World::with([domain], [account], []);
@@ -33499,7 +33499,7 @@ mod tests {
         let domain_id: DomainId = "directory".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-programmed"));
-        let account = Account::new(authority.clone().to_account_id(domain_id))
+        let account = Account::new_in_domain(authority.clone(), domain_id)
             .with_uaid(Some(uaid))
             .build(&authority);
         let world = World::with([domain], [account], []);
@@ -33588,7 +33588,7 @@ mod tests {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "directory".parse().expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-encrypted"));
-        let account = Account::new(authority.clone().to_account_id(domain_id.clone()))
+        let account = Account::new_in_domain(authority.clone(), domain_id.clone())
             .with_uaid(Some(uaid))
             .build(&authority);
         let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
@@ -33728,7 +33728,7 @@ mod tests {
         let domain_id: DomainId = "directory".parse().expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-claim"));
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id))
+        let account = Account::new_in_domain(authority.clone(), domain_id)
             .with_uaid(Some(uaid))
             .build(&authority);
         let world = World::with([domain], [account], []);
@@ -33800,7 +33800,7 @@ mod tests {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "directory".parse().expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-receipt-lookup"));
-        let account = Account::new(authority.clone().to_account_id(domain_id.clone()))
+        let account = Account::new_in_domain(authority.clone(), domain_id.clone())
             .with_uaid(Some(uaid))
             .build(&authority);
         let world = World::with([Domain::new(domain_id).build(&authority)], [account], []);
@@ -33921,7 +33921,7 @@ mod tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
@@ -33974,7 +33974,7 @@ mod tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
@@ -34026,7 +34026,7 @@ mod tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let world = World::with([domain], [account], [definition.clone()]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
@@ -34082,7 +34082,7 @@ mod tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(
@@ -34125,7 +34125,7 @@ mod tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(
@@ -34178,7 +34178,7 @@ mod tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(
@@ -34224,7 +34224,7 @@ mod tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let world = World::with([domain], [account], [long_definition, short_definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(
@@ -35238,7 +35238,7 @@ mod tests {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "wonderland".parse().expect("domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
         let world = World::with_assets([domain], [account], [], [], []);
         let mut app = mk_app_state_for_tests_with_world(world);
         {
@@ -35763,13 +35763,9 @@ mod tests {
         );
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
-        let account = Account::new(
-            authority
-                .clone()
-                .to_account_id("sbp".parse().expect("domain id")),
-        )
-        .with_label(Some(alias_label))
-        .build(&authority);
+        let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
+            .with_label(Some(alias_label))
+            .build(&authority);
         let body = norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 0 })
             .expect("encode request");
         let response = handler_alias_resolve_index(
@@ -35865,13 +35861,9 @@ mod tests {
         );
         let authority_account = Account::new_domainless(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
-        let account = Account::new(
-            authority
-                .clone()
-                .to_account_id("sbp".parse().expect("domain id")),
-        )
-        .with_label(Some(alias_label.clone()))
-        .build(&authority);
+        let account = Account::new_in_domain(authority.clone(), "sbp".parse().expect("domain id"))
+            .with_label(Some(alias_label.clone()))
+            .build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with(
             [domain],
             [authority_account, account],

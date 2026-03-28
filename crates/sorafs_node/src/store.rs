@@ -181,6 +181,7 @@ pub struct StoredManifest {
     retention_epoch: u64,
     retention_source: Option<RetentionSourceV1>,
     last_access: u64,
+    files: Vec<StoredFileRecord>,
     chunk_files: Vec<ChunkFileRecord>,
     por_tree: StoredPorTree,
     manifest_path: PathBuf,
@@ -211,6 +212,8 @@ pub struct StoredManifestParts {
     pub retention_source: Option<RetentionSourceV1>,
     /// Monotonic access counter recorded for LRU eviction ordering.
     pub last_access: u64,
+    /// File descriptors describing how the original dataset maps to payload offsets.
+    pub files: Vec<StoredFileRecord>,
     /// Records describing each stored chunk file.
     pub chunk_files: Vec<ChunkFileRecord>,
     /// Proof-of-retrievability Merkle tree snapshot.
@@ -239,6 +242,7 @@ impl StoredManifest {
             retention_epoch: parts.retention_epoch,
             retention_source: parts.retention_source,
             last_access: parts.last_access,
+            files: parts.files,
             chunk_files: parts.chunk_files,
             por_tree: parts.por_tree,
             manifest_path: parts.manifest_path,
@@ -315,6 +319,18 @@ impl StoredManifest {
     #[must_use]
     pub fn chunk_count(&self) -> usize {
         self.chunk_files.len()
+    }
+
+    /// Returns the stored file descriptors in deterministic payload order.
+    #[must_use]
+    pub fn files(&self) -> &[StoredFileRecord] {
+        &self.files
+    }
+
+    /// Returns metadata for the file identified by the supplied relative path.
+    #[must_use]
+    pub fn file_by_path(&self, path: &[String]) -> Option<&StoredFileRecord> {
+        self.files.iter().find(|file| file.path == path)
     }
 
     /// Returns metadata for the requested chunk.
@@ -445,14 +461,17 @@ impl StoredManifest {
                 taikai_segment_hint: taikai_hint.clone(),
             })
             .collect::<Vec<_>>();
-        let chunk_count = chunks.len();
 
-        let files = vec![FilePlan {
-            path: Vec::new(),
-            first_chunk: 0,
-            chunk_count,
-            size: self.content_length,
-        }];
+        let files = self
+            .files
+            .iter()
+            .map(|file| FilePlan {
+                path: file.path.clone(),
+                first_chunk: file.first_chunk,
+                chunk_count: file.chunk_count,
+                size: file.size,
+            })
+            .collect::<Vec<_>>();
 
         CarBuildPlan {
             chunk_profile: profile,
@@ -491,6 +510,21 @@ pub struct ChunkFileRecord {
     pub role: Option<ChunkRole>,
     /// Optional stripe/group identifier for the chunk.
     pub group_id: Option<u32>,
+}
+
+/// Metadata describing how a logical file maps into the stored payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredFileRecord {
+    /// Relative path components within the dataset root.
+    pub path: Vec<String>,
+    /// Byte offset where the file begins within the concatenated payload.
+    pub offset: u64,
+    /// File length in bytes.
+    pub size: u64,
+    /// Index of the first chunk covering the file.
+    pub first_chunk: usize,
+    /// Number of chunks covering the file.
+    pub chunk_count: usize,
 }
 
 /// Role metadata attached to a stored chunk.
@@ -740,6 +774,8 @@ struct StoredManifestRecord {
     retention_source: Option<RetentionSourceV1>,
     #[norito(default)]
     last_access: u64,
+    #[norito(default)]
+    files: Vec<StoredFileRecordNorito>,
     chunk_files: Vec<StoredChunkRecord>,
     por_tree: StoredPorTree,
 }
@@ -752,6 +788,15 @@ struct StoredChunkRecord {
     digest: [u8; 32],
     #[norito(default)]
     role: Option<StoredChunkRole>,
+}
+
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct StoredFileRecordNorito {
+    path: Vec<String>,
+    offset: u64,
+    size: u64,
+    first_chunk: u32,
+    chunk_count: u32,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -1233,6 +1278,17 @@ impl StorageBackend {
         let stored_at_unix_secs = unix_timestamp();
         let retention_source = RetentionSourceV1::from_manifest(manifest)?;
         let retention_epoch = retention_source.effective_epoch();
+        let files = stored_files_from_plan(plan);
+        let persisted_files = files
+            .iter()
+            .map(|file| StoredFileRecordNorito {
+                path: file.path.clone(),
+                offset: file.offset,
+                size: file.size,
+                first_chunk: file.first_chunk as u32,
+                chunk_count: file.chunk_count as u32,
+            })
+            .collect();
         let last_access = {
             let mut state = self.state.write().expect("storage state poisoned");
             let next_access = state.access_counter.saturating_add(1);
@@ -1253,6 +1309,7 @@ impl StorageBackend {
             retention_epoch,
             retention_source: Some(retention_source.clone()),
             last_access,
+            files: persisted_files,
             chunk_files: chunk_records.clone(),
             por_tree: StoredPorTree::from(&por_tree),
         };
@@ -1562,6 +1619,27 @@ impl StorageBackend {
 
 impl StoredManifest {
     fn from_record(record: StoredManifestRecord, manifest_path: PathBuf) -> Self {
+        let files = if record.files.is_empty() {
+            vec![StoredFileRecord {
+                path: Vec::new(),
+                offset: 0,
+                size: record.content_length,
+                first_chunk: 0,
+                chunk_count: record.chunk_files.len(),
+            }]
+        } else {
+            record
+                .files
+                .iter()
+                .map(|file| StoredFileRecord {
+                    path: file.path.clone(),
+                    offset: file.offset,
+                    size: file.size,
+                    first_chunk: file.first_chunk as usize,
+                    chunk_count: file.chunk_count as usize,
+                })
+                .collect::<Vec<_>>()
+        };
         let chunk_files = record
             .chunk_files
             .iter()
@@ -1591,6 +1669,7 @@ impl StoredManifest {
             retention_epoch: record.retention_epoch,
             retention_source: record.retention_source,
             last_access: record.last_access,
+            files,
             chunk_files,
             por_tree: record.por_tree,
             manifest_path,
@@ -1598,6 +1677,17 @@ impl StoredManifest {
     }
 
     fn to_record(&self) -> StoredManifestRecord {
+        let files = self
+            .files
+            .iter()
+            .map(|file| StoredFileRecordNorito {
+                path: file.path.clone(),
+                offset: file.offset,
+                size: file.size,
+                first_chunk: file.first_chunk as u32,
+                chunk_count: file.chunk_count as u32,
+            })
+            .collect();
         let chunk_files = self
             .chunk_files
             .iter()
@@ -1630,10 +1720,29 @@ impl StoredManifest {
             retention_epoch: self.retention_epoch,
             retention_source: self.retention_source.clone(),
             last_access: self.last_access,
+            files,
             chunk_files,
             por_tree: self.por_tree.clone(),
         }
     }
+}
+
+fn stored_files_from_plan(plan: &CarBuildPlan) -> Vec<StoredFileRecord> {
+    let mut offset = 0u64;
+    plan.files
+        .iter()
+        .map(|file| {
+            let record = StoredFileRecord {
+                path: file.path.clone(),
+                offset,
+                size: file.size,
+                first_chunk: file.first_chunk,
+                chunk_count: file.chunk_count,
+            };
+            offset = offset.saturating_add(file.size);
+            record
+        })
+        .collect()
 }
 
 fn canonical_profile_handle(manifest: &ManifestV1) -> String {
@@ -1784,7 +1893,7 @@ mod tests {
     use std::fs;
 
     use blake3;
-    use sorafs_car::CarPlanError;
+    use sorafs_car::{CarPlanError, FileEntry};
     use sorafs_manifest::{DagCodecId, ManifestBuilder, PinPolicy};
     use tempfile::TempDir;
 
@@ -1854,6 +1963,65 @@ mod tests {
         let por_tree = stored.por_tree();
         assert_eq!(por_tree.payload_len(), plan.content_length);
         assert_eq!(por_tree.chunks().len(), plan.chunks.len());
+    }
+
+    #[test]
+    fn ingest_manifest_preserves_directory_file_layout() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+
+        let files = vec![
+            FileEntry {
+                path: vec!["assets".to_owned(), "app.js".to_owned()],
+                data: b"console.log('sorafs');".to_vec(),
+            },
+            FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: b"<!doctype html><title>SoraFS</title>".to_vec(),
+            },
+        ];
+        let (plan, payload) =
+            CarBuildPlan::from_files_with_profile(files, sorafs_chunker::ChunkProfile::DEFAULT)
+                .expect("directory plan");
+
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0x42; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(&payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+
+        let mut reader = payload.as_slice();
+        let manifest_id = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest directory payload");
+
+        let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        assert_eq!(stored.files().len(), plan.files.len());
+        for (stored_file, planned_file) in stored.files().iter().zip(&plan.files) {
+            assert_eq!(stored_file.path, planned_file.path);
+            assert_eq!(stored_file.size, planned_file.size);
+            assert_eq!(stored_file.first_chunk, planned_file.first_chunk);
+            assert_eq!(stored_file.chunk_count, planned_file.chunk_count);
+        }
+
+        let rebuilt_plan = stored.to_car_plan(sorafs_chunker::ChunkProfile::DEFAULT);
+        assert_eq!(rebuilt_plan.files, plan.files);
+
+        let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload backend");
+        let stored_reloaded = reloaded.manifest(&manifest_id).expect("reloaded manifest");
+        assert_eq!(stored_reloaded.files(), stored.files());
+        assert_eq!(
+            stored_reloaded.file_by_path(&["assets".to_owned(), "app.js".to_owned()]),
+            stored.file_by_path(&["assets".to_owned(), "app.js".to_owned()])
+        );
     }
 
     #[test]

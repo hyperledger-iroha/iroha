@@ -514,9 +514,9 @@ mod tests {
         let register_domain: InstructionBox =
             dm_isi::register::Register::domain(Domain::new(bench_domain.clone())).into();
 
-        let register_account: InstructionBox = dm_isi::register::Register::account(Account::new(
-            authority.clone().to_account_id(bench_domain),
-        ))
+        let register_account: InstructionBox = dm_isi::register::Register::account(
+            Account::new_in_domain(authority.clone(), bench_domain),
+        )
         .into();
 
         let asset_definition_id: AssetDefinitionId =

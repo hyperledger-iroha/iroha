@@ -19,6 +19,34 @@ Open work for this slice now remains:
   nginx websocket location blocks there and rerun the documented Connect smoke
   against the public hostnames.
 
+Latest sync (2026-03-28 Taira deploy bundle aligned to MCP rollout):
+the Taira deployment artifacts now explicitly enforce the MCP-enabled validator
+config and shared edge path, rather than assuming operators will wire the live
+hostnames correctly by hand.
+
+- `configs/soranexus/taira/dns_records.json` now aligns `taira.sora.org` with
+  the shared edge host expected by `taira-explorer.nginx.conf`;
+- `configs/soranexus/taira/taira-explorer.nginx.conf` now carries explicit
+  `/v1/mcp` proxy locations for both public virtual hosts;
+- `configs/soranexus/taira/taira-irohad.service` now provides a sample systemd
+  unit that starts the validator from the shipped Taira config/genesis under
+  `--sora`; and
+- `configs/soranexus/taira/check_mcp_rollout.sh` now gives operators a hard
+  rollout gate for local and public MCP availability plus curated `iroha.*`
+  exposure.
+
+Open work for this follow-up now remains:
+- apply the updated Taira deploy bundle on the live hosts
+  (`taira-irohad.service`, `taira-explorer.nginx.conf`, DNS, and
+  `check_mcp_rollout.sh`);
+- rerun the new local-first smoke gate on the validator host so
+  `http://127.0.0.1:18080/v1/mcp` passes before the next public reload;
+- rerun the public smoke once the edge is reloaded so
+  `https://taira.sora.org/v1/mcp` stops returning `HTTP/2 404`; and
+- after public MCP is live, complete the end-to-end Taira Codex smoke
+  (`GET /v1/mcp`, `tools/list`, hidden `torii.*`, one public read, one
+  explicit-key write flow).
+
 Latest sync (2026-03-28 Torii peer-monitor `/configuration` auth fix):
 the live Taira config-monitor warning loop is closed.
 
@@ -100,25 +128,54 @@ directory:
 - `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib plan_with_sent_preserves_remaining_targets -- --nocapture`
 - `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib --features iroha-core-tests collector_fanout_floor_respects_quorum_and_bounds -- --nocapture`
 
+Fresh rerun evidence on built binaries is now in hand:
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  now succeeds on the current worktree;
+- preserved-peer stable permissioned still fails the acceptance gate at
+  height `186` with
+  `no strict block height progress for 600s`, while the old repair-path
+  markers remain zero
+  (`requested block-sync range pull from committed anchor=0`,
+  `sharing from fallback anchor=0`,
+  `requested missing BlockCreated while awaiting RBC INIT=0`);
+  its dominant symptoms are instead
+  `plan submission failed=49`,
+  `transaction queued for too long=80`,
+  and
+  `haven't got tx confirmation within 20s=29`;
+- preserved-peer stable NPoS also fails the acceptance gate, but only after
+  progressing much farther to height `878`; it keeps the old repair markers
+  and `Failed to find asset` at zero, but it accumulates persistent Nexus
+  ingress failures:
+  `route_unavailable=1480`,
+  `plan submission failed=151`;
+- derived from the logged progress samples, both reruns also miss the latency
+  gate:
+  permissioned `interval_p95_ms ~= 1251`,
+  NPoS `interval_p95_ms ~= 2001`; and
+- the sparse initial-`PRECOMMIT` fix therefore improved dissemination
+  semantics and likely helped NPoS height reach, but it did not close the
+  preserved-peer soak gate by itself.
+
 Open work from this slice:
-- clear the unrelated `iroha_torii` account-alias compile break in the current
-  worktree (or rebuild on a tree where it is already fixed), because
-  `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
-  currently fails in `crates/iroha_torii/src/routing.rs` before either release
-  binary is emitted;
-- rerun the full preserved-peer stable permissioned soak first and collect new
-  post-fix evidence for:
-  `no strict block height progress=0`,
+- debug the permissioned stall around height `186` as an ingress/backpressure
+  problem rather than reopening collector-`k` or timeout-floor tuning; the
+  evidence points at queueing and confirmation starvation, not at the old
+  fallback-anchor / missing-`BlockCreated` repair path;
+- debug the NPoS-specific `route_unavailable: no reachable authoritative peers
+  are available for lane 1 dataspace 1` regression in Nexus routing or
+  authoritative-peer tracking, because that now appears to be the dominant
+  blocker once the consensus tail is partially relieved;
+- keep the recovery invariants hard in future reruns:
   `requested block-sync range pull from committed anchor=0`,
   `sharing from fallback anchor=0`,
-  `requested missing BlockCreated while awaiting RBC INIT=0`, and
-  `interval_p95_ms <= 1000`;
-- only if permissioned reaches target height cleanly, rerun the preserved-peer
-  stable NPoS soak and confirm it also keeps `plan submission failed=0` and
+  `requested missing BlockCreated while awaiting RBC INIT=0`,
+  and
   `Failed to find asset=0`; and
-- stop again and reassess before expanding the change surface if the
-  permissioned rerun still misses the gate, instead of touching NEW_VIEW,
-  rebroadcast semantics, or recovery/FSM logic pre-emptively.
+- stop and reassess before widening the consensus-side change surface again.
+  The next slice should be chosen only after deciding whether the primary
+  blocker is permissioned ingress queueing, Nexus authoritative-route
+  availability, or a remaining consensus liveness issue.
 
 Latest sync (2026-03-28 repo-shared SORA Taira standalone Codex skill):
 this repo now carries a shareable standalone Codex skill for the Taira testnet

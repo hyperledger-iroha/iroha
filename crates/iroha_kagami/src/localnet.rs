@@ -2034,8 +2034,9 @@ fn append_localnet_npos_bootstrap(
         registrations.domains.insert(universal_domain.clone());
     }
     if !registrations.accounts.contains(gas_account_id) {
-        builder = builder.append_instruction(Register::account(Account::new(
-            gas_account_id.to_account_id(ivm_domain.clone()),
+        builder = builder.append_instruction(Register::account(Account::new_in_domain(
+            gas_account_id.clone(),
+            ivm_domain.clone(),
         )));
         registrations.accounts.insert(gas_account_id.clone());
     }
@@ -2058,8 +2059,9 @@ fn append_localnet_npos_bootstrap(
     for peer in peers {
         let validator_id = AccountId::new(peer.public_key.clone());
         if !registrations.accounts.contains(&validator_id) {
-            builder = builder.append_instruction(Register::account(Account::new(
-                validator_id.to_account_id(nexus_domain.clone()),
+            builder = builder.append_instruction(Register::account(Account::new_in_domain(
+                validator_id.clone(),
+                nexus_domain.clone(),
             )));
             registrations.accounts.insert(validator_id.clone());
         }

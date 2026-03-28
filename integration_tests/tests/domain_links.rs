@@ -1,14 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Integration tests for account-domain links and receive-path implicit account creation.
+//! Integration tests for receive-path implicit account creation and domain SNS helpers.
 
 use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    crypto::KeyPair,
     data_model::{
         account::AccountAddress,
-        isi::domain_link::*,
         metadata::Metadata,
         prelude::*,
         sns::{
@@ -29,14 +27,6 @@ fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, R
         context,
     )
     .unwrap()
-}
-
-fn alt_client(signatory: (AccountId, KeyPair), base_client: &Client) -> Client {
-    Client {
-        account: signatory.0,
-        key_pair: signatory.1,
-        ..base_client.clone()
-    }
 }
 
 fn account_controller(account: &AccountId) -> Result<NameControllerV1> {
@@ -120,54 +110,6 @@ fn build_domain_register_request_uses_domain_label_and_owner_controller() -> Res
 }
 
 #[test]
-fn domain_links_roundtrip_without_account_registration() -> Result<()> {
-    let Some((network, _rt)) = start_network(stringify!(
-        domain_links_roundtrip_without_account_registration
-    )) else {
-        return Ok(());
-    };
-    let client = network.client();
-
-    let domain: DomainId = "domain-links-query".parse()?;
-    ensure_registered_domain(&client, &domain)?;
-
-    let (probe_account, _) = gen_account_in("ghost");
-    client.submit_blocking::<InstructionBox>(
-        LinkAccountDomain {
-            account: probe_account.clone(),
-            domain: domain.clone(),
-        }
-        .into(),
-    )?;
-
-    let linked_domains: Vec<DomainId> =
-        client.query_single(FindDomainsByAccountId::new(probe_account.clone()))?;
-    assert_eq!(linked_domains, vec![domain.clone()]);
-
-    let linked_accounts: Vec<AccountId> =
-        client.query_single(FindAccountIdsByDomainId::new(domain.clone()))?;
-    assert_eq!(linked_accounts, vec![probe_account.clone()]);
-
-    client.submit_blocking::<InstructionBox>(
-        UnlinkAccountDomain {
-            account: probe_account.clone(),
-            domain: domain.clone(),
-        }
-        .into(),
-    )?;
-
-    let linked_domains_after: Vec<DomainId> =
-        client.query_single(FindDomainsByAccountId::new(probe_account.clone()))?;
-    assert!(linked_domains_after.is_empty());
-
-    let linked_accounts_after: Vec<AccountId> =
-        client.query_single(FindAccountIdsByDomainId::new(domain))?;
-    assert!(linked_accounts_after.is_empty());
-
-    Ok(())
-}
-
-#[test]
 fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Result<()> {
     let Some((network, _rt)) = start_network(stringify!(
         receive_paths_materialize_unregistered_accounts_for_assets_and_nfts
@@ -228,172 +170,6 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
         accounts
             .iter()
             .any(|account| account.id() == &destination_asset)
-    );
-
-    Ok(())
-}
-
-#[test]
-fn domain_links_allow_subject_authority_for_link_and_unlink() -> Result<()> {
-    let Some((network, _rt)) = start_network(stringify!(
-        domain_links_allow_subject_authority_for_link_and_unlink
-    )) else {
-        return Ok(());
-    };
-    let client = network.client();
-
-    let target_domain: DomainId = "subject-link-target".parse()?;
-    let controller_domain: DomainId = "subject-link-controller".parse()?;
-    ensure_registered_domain(&client, &target_domain)?;
-    ensure_registered_domain(&client, &controller_domain)?;
-
-    let (subject_account, subject_keypair) = gen_account_in(&controller_domain);
-    client.submit_blocking(Register::account(Account::new(
-        subject_account.to_account_id(controller_domain.clone()),
-    )))?;
-    let subject_client = alt_client((subject_account.clone(), subject_keypair), &client);
-
-    subject_client.submit_blocking::<InstructionBox>(
-        LinkAccountDomain {
-            account: subject_account.clone(),
-            domain: target_domain.clone(),
-        }
-        .into(),
-    )?;
-
-    let linked_domains: Vec<DomainId> =
-        client.query_single(FindDomainsByAccountId::new(subject_account.clone()))?;
-    assert!(
-        linked_domains.contains(&target_domain),
-        "subject authority should be able to add a domain link for itself"
-    );
-
-    subject_client.submit_blocking::<InstructionBox>(
-        UnlinkAccountDomain {
-            account: subject_account.clone(),
-            domain: target_domain.clone(),
-        }
-        .into(),
-    )?;
-
-    let linked_domains_after: Vec<DomainId> =
-        client.query_single(FindDomainsByAccountId::new(subject_account))?;
-    assert!(
-        !linked_domains_after.contains(&target_domain),
-        "subject authority should be able to remove its own explicit domain link"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn domain_links_reject_unrelated_authority() -> Result<()> {
-    let Some((network, _rt)) = start_network(stringify!(domain_links_reject_unrelated_authority))
-    else {
-        return Ok(());
-    };
-    let client = network.client();
-
-    let target_domain: DomainId = "reject-unrelated-authority".parse()?;
-    ensure_registered_domain(&client, &target_domain)?;
-
-    let (probe_account, _) = gen_account_in("probe_subject");
-    client.submit_blocking::<InstructionBox>(
-        LinkAccountDomain {
-            account: probe_account.clone(),
-            domain: target_domain.clone(),
-        }
-        .into(),
-    )?;
-
-    let attacker_domain: DomainId = "attacker-controller".parse()?;
-    let (attacker_account, attacker_keypair) = gen_account_in(&attacker_domain);
-    ensure_registered_domain(&client, &attacker_domain)?;
-    client.submit_blocking(Register::account(Account::new(
-        attacker_account.to_account_id(attacker_domain),
-    )))?;
-    let attacker_client = alt_client((attacker_account, attacker_keypair), &client);
-
-    let err = attacker_client
-        .submit_blocking::<InstructionBox>(
-            UnlinkAccountDomain {
-                account: probe_account,
-                domain: target_domain,
-            }
-            .into(),
-        )
-        .expect_err("unrelated authority must be rejected");
-    assert!(
-        err.to_string().contains("not permitted"),
-        "unexpected rejection reason: {err}"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn unlink_domain_link_preserves_materialized_asset_ownership() -> Result<()> {
-    let Some((network, _rt)) = start_network(stringify!(
-        unlink_domain_link_preserves_materialized_asset_ownership
-    )) else {
-        return Ok(());
-    };
-    let client = network.client();
-    if let Err(err) = ensure_alias_domain(&client) {
-        eprintln!("Skipping unlink ownership coverage: failed to ensure `aid` domain: {err}");
-        return Ok(());
-    }
-
-    let domain: DomainId = "unlink-keeps-ownership".parse()?;
-    ensure_registered_domain(&client, &domain)?;
-
-    let destination = gen_account_in(&domain).0;
-    let definition_id =
-        iroha_data_model::asset::AssetDefinitionId::new(domain.clone(), "coin".parse()?);
-    client.submit_blocking(Register::asset_definition(
-        AssetDefinition::numeric(definition_id.clone()).with_name(definition_id.name().to_string()),
-    ))?;
-
-    let source_asset_id = AssetId::new(definition_id.clone(), client.account.clone());
-    client.submit_blocking(Mint::asset_numeric(11u32, source_asset_id.clone()))?;
-    client.submit_blocking(Transfer::asset_numeric(
-        source_asset_id,
-        4u32,
-        destination.clone(),
-    ))?;
-
-    let destination_asset_id = AssetId::new(definition_id, destination.clone());
-    let before = client.query_single(FindAssetById::new(destination_asset_id.clone()))?;
-    assert_eq!(*before.value(), Numeric::from(4u32));
-
-    client.submit_blocking::<InstructionBox>(
-        LinkAccountDomain {
-            account: destination.clone(),
-            domain: domain.clone(),
-        }
-        .into(),
-    )?;
-
-    client.submit_blocking::<InstructionBox>(
-        UnlinkAccountDomain {
-            account: destination.clone(),
-            domain: domain.clone(),
-        }
-        .into(),
-    )?;
-
-    let after = client.query_single(FindAssetById::new(destination_asset_id))?;
-    assert_eq!(
-        *after.value(),
-        Numeric::from(4u32),
-        "unlink should not drop already materialized ownership state"
-    );
-
-    let linked_domains: Vec<DomainId> =
-        client.query_single(FindDomainsByAccountId::new(destination.clone()))?;
-    assert!(
-        !linked_domains.contains(&domain),
-        "unlink should remove explicit subject-domain association"
     );
 
     Ok(())

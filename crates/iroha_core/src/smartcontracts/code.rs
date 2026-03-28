@@ -231,7 +231,7 @@ mod tests {
         let dom: DomainId = "wonderland".parse().expect("domain id");
         let auth = AccountId::of(pubkey);
         let domain = Domain::new(dom.clone()).build(&auth);
-        let account = Account::new(auth.clone().to_account_id(dom.clone())).build(&auth);
+        let account = Account::new_in_domain(auth.clone(), dom.clone()).build(&auth);
         let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
         let state = State::new_for_testing(world, kura, query);
         (state, auth, kp)

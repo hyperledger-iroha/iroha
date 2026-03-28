@@ -1,16 +1,15 @@
 {
   "network": "sora-taira-testnet",
   "zone": "sora.org",
-  "updated_at": "2026-03-03T00:00:00Z",
+  "updated_at": "2026-03-28T00:00:00Z",
   "records": [
     {
       "name": "taira.sora.org",
       "type": "CNAME",
-      "target": "taira-validator-1.sora.org.",
+      "target": "taira-explorer-edge.sora.org.",
       "ttl": 300,
-      "purpose": "Public Torii endpoint for the Taira testnet"
-    }
-    ,
+      "purpose": "Public Torii endpoint for the Taira testnet served by the shared edge"
+    },
     {
       "name": "taira-explorer.sora.org",
       "type": "CNAME",

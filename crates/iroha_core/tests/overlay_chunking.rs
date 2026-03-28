@@ -18,7 +18,7 @@ fn overlay_apply_respects_chunking_and_preserves_effects() {
     let (account_id, kp) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
+    let account = Account::new_in_domain(account_id.clone(), domain_id).build(&account_id);
     let world = iroha_core::state::World::with([domain], [account], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();

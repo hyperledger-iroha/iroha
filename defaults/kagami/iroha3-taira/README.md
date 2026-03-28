@@ -17,6 +17,7 @@ Files:
 - genesis.json — generated with `kagami genesis generate --profile iroha3-taira` and patched with deterministic topology+PoPs
 - verify.txt — stdout from `kagami verify --profile iroha3-taira --genesis genesis.json`
 - config.toml — minimal Nexus config matching the topology (ports 8080/1337) and enabling native Torii MCP with the curated public `iroha.*` writer profile
+  plus an explicit `nexus.fees.fee_asset_id = "xor#universal"` override so public app-api writes charge fees in the live XOR alias instead of the canonical default selector
 - docker-compose.yml — single-node snippet mounting the config/genesis
 
 Operational note:
@@ -26,6 +27,10 @@ Operational note:
 - Keep `/v1/connect/ws` as its own exact-match websocket location ahead of any
   generic `location /` or `location ^~ /v1/` proxy blocks so future deploys do
   not accidentally downgrade Connect back to a plain HTTP hop.
+- For the public Taira deployment, prefer the checked-in validator/edge bundle
+  under `configs/soranexus/taira/`, including `taira-irohad.service`,
+  `taira-explorer.nginx.conf`, and `check_mcp_rollout.sh`, so the public
+  `/v1/mcp` route is proven locally before cutover.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-taira

@@ -543,7 +543,7 @@ mod tests {
         let kp = KeyPair::random();
         let account_id = AccountId::new(kp.public_key().clone());
         let new_account =
-            NewAccount::new_in_domain(account_id, domain_id.clone()).with_uaid(Some(uaid));
+            NewAccount::new_in_domain(account_id.clone(), domain_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -635,7 +635,7 @@ mod tests {
         let kp = KeyPair::random();
         let account_id = AccountId::new(kp.public_key().clone());
         let new_account =
-            NewAccount::new_in_domain(account_id, domain_id.clone()).with_uaid(Some(uaid));
+            NewAccount::new_in_domain(account_id.clone(), domain_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);

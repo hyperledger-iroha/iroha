@@ -404,11 +404,9 @@ pub mod isi {
                 .expect("register domain");
 
             let holder_id = AccountId::new(KeyPair::random().public_key().clone());
-            Register::account(Account::new(
-                holder_id.clone().to_account_id(domain_id.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register holder account");
+            Register::account(Account::new_in_domain(holder_id.clone(), domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register holder account");
 
             let nft_id: NftId = "cleanup$nft-cleanup".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
@@ -485,23 +483,19 @@ pub mod isi {
             Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
-            Register::account(Account::new(ALICE_ID.clone().to_account_id(alice_domain)))
+            Register::account(Account::new_in_domain(ALICE_ID.clone(), alice_domain))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice account");
 
             Register::domain(Domain::new(users_domain.clone()))
                 .execute(&user1, &mut stx)
                 .expect("register users domain");
-            Register::account(Account::new(
-                user1.clone().to_account_id(users_domain.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register user1 account");
-            Register::account(Account::new(
-                user2.clone().to_account_id(users_domain.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register user2 account");
+            Register::account(Account::new_in_domain(user1.clone(), users_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register user1 account");
+            Register::account(Account::new_in_domain(user2.clone(), users_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register user2 account");
 
             let nft_id: NftId = "ticket$users".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
@@ -536,23 +530,19 @@ pub mod isi {
             Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
-            Register::account(Account::new(ALICE_ID.clone().to_account_id(alice_domain)))
+            Register::account(Account::new_in_domain(ALICE_ID.clone(), alice_domain))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice account");
 
             Register::domain(Domain::new(users_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register users domain");
-            Register::account(Account::new(
-                user1.clone().to_account_id(users_domain.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register user1 account");
-            Register::account(Account::new(
-                user2.clone().to_account_id(users_domain.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register user2 account");
+            Register::account(Account::new_in_domain(user1.clone(), users_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register user1 account");
+            Register::account(Account::new_in_domain(user2.clone(), users_domain.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register user2 account");
 
             let nft_id: NftId = "ticket$users".parse().expect("nft id");
             Register::nft(Nft::new(nft_id.clone(), Metadata::default()))

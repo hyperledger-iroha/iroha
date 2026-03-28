@@ -143,12 +143,8 @@ mod tests {
     };
 
     fn alice_account_in(domain: &str) -> Account {
-        Account::new(
-            ALICE_ID
-                .clone()
-                .to_account_id(domain.parse().expect("static domain id")),
-        )
-        .build(&ALICE_ID)
+        Account::new_in_domain(ALICE_ID.clone(), domain.parse().expect("static domain id"))
+            .build(&ALICE_ID)
     }
 
     #[tokio::test]

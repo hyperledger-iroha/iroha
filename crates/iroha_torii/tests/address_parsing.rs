@@ -1440,8 +1440,7 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     let domain_id: DomainId = "wonderland".parse().expect("domain parses");
     let signatory: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
     let account_id = AccountId::new(signatory);
-    let account =
-        Account::new(account_id.clone().to_account_id(domain_id.clone())).build(&account_id);
+    let account = Account::new_in_domain(account_id.clone(), domain_id.clone()).build(&account_id);
     let domain = Domain::new(domain_id).build(&account_id);
     let mut world = World::with([domain], [account], Vec::<AssetDefinition>::new());
     fixtures::seed_peer(&mut world, local_peer_id.clone());

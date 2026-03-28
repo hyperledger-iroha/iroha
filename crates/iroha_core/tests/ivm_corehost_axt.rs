@@ -645,10 +645,9 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     );
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone());
     let genesis_domain = genesis_domain.build(&genesis_account);
-    let genesis_account_value = Account::new(
-        genesis_account
-            .clone()
-            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    let genesis_account_value = Account::new_in_domain(
+        genesis_account.clone(),
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
     )
     .build(&genesis_account);
 
@@ -797,10 +796,9 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     let replay_world = {
         let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone());
         let genesis_domain = genesis_domain.build(&genesis_account);
-        let genesis_account_value = Account::new(
-            genesis_account
-                .clone()
-                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+        let genesis_account_value = Account::new_in_domain(
+            genesis_account.clone(),
+            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
         )
         .build(&genesis_account);
         World::with([genesis_domain], [genesis_account_value], [])
@@ -2977,7 +2975,7 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-placeholder"));
 
     let domain_id: DomainId = "wonderland".parse().expect("domain");
-    let account = Account::new(authority.clone().to_account_id(domain_id.clone()))
+    let account = Account::new_in_domain(authority.clone(), domain_id.clone())
         .with_uaid(Some(uaid))
         .build(&authority);
     let domain = Domain::new(domain_id).build(&authority);
