@@ -95,22 +95,29 @@ Last updated: 2026-03-27
     reads are still open follow-up work once the existing Torii baseline
     compile blockers are cleared.
 
-## 2026-03-27 Follow-up: reverse alias lookup docs now pin the universal-account model explicitly
-- Clarified the contributor and public data-model docs after catching a test
+## 2026-03-27 Follow-up: reverse alias lookup docs and mirrored references now pin the universal-account model explicitly
+- Clarified the contributor and public account-model docs after catching a test
   fixture regression that briefly treated domain context as if it were part of
-  canonical account identity.
+  canonical account identity, and propagated that clarification across the
+  mirrored documentation families instead of leaving it English-only.
 - The documented rule is now explicit in:
   - `AGENTS.md`
   - `docs/source/data_model.md`
   - `docs/source/universal_accounts_guide.md`
-  - `docs/account_structure.hy.md`
+  - `docs/account_structure.md`
+- The mirrored doc families now carry the same clarification:
+  - `docs/source/data_model.*.md`
+  - `docs/source/universal_accounts_guide.*.md`
+  - `docs/account_structure*.md`
 - The shipped clarification now states:
   - `AccountId` is always the canonical domainless account subject;
   - `ScopedAccountId { account, domain }` is only explicit domain context for
     registrations/views that require a linked domain;
   - account aliases are a separate SNS/account-label layer, so both
     `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` resolve
-    to the same canonical `AccountId`; and
+    to the same canonical `AccountId`;
+  - `Account::new_domainless(...)` is the correct registration path for
+    dataspace-root aliases; and
   - `linked_domains` is derived index state, not part of canonical identity.
 - Tightened the reverse-alias query coverage in
   `crates/iroha_core/src/smartcontracts/isi/account.rs` with a dedicated
@@ -118,6 +125,7 @@ Last updated: 2026-03-27
   `FindAliasesByAccountId` now has focused coverage for both
   `merchant@hbl.sbp` and `merchant@sbp`.
 - Validation:
+  - `python3 scripts/translate_i18n_google.py --refresh-mode stale --path-glob 'docs/source/data_model.*.md' --path-glob 'docs/source/universal_accounts_guide.*.md'` (pass; `translated=40`, `failed=0`)
   - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/.cache/cargo-target-alias-core cargo test -p iroha_core find_aliases_by_account_id --lib --quiet` (pass)
 
 ## 2026-03-27 Follow-up: FASTPQ CUDA bench now records BN254 FFT/LDE evidence

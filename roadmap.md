@@ -76,36 +76,6 @@ Open work for this Nexus ingress-routing slice now remains:
 - rerun the targeted Torii and `integration_tests/tests/nexus/cross_dataspace_localnet.rs`
   verification once those pre-existing Torii compile blockers are cleared.
 
-Latest sync (2026-03-27 universal-account / alias-model clarification for reverse alias lookup):
-`AGENTS.md`,
-`docs/source/{data_model.md,universal_accounts_guide.md}`,
-`docs/account_structure.hy.md`,
-and
-`crates/iroha_core/src/smartcontracts/isi/account.rs`
-now pin the canonical account/alias split more explicitly.
-
-- the contributor and public docs now state unambiguously that `AccountId` is
-  always the canonical domainless subject, while `ScopedAccountId` is only
-  explicit domain context for operations that truly require a domain-linked
-  view or registration;
-- the docs now also spell out that aliases are a separate SNS/account-label
-  layer, so both domain-qualified aliases like `merchant@hbl.sbp` and
-  dataspace-root aliases like `merchant@sbp` resolve to the same canonical
-  `AccountId`; and
-- focused `FindAliasesByAccountId` coverage now includes the dataspace-root
-  alias case so the documentation is backed by a live regression.
-
-Validation:
-- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/.cache/cargo-target-alias-core cargo test -p iroha_core find_aliases_by_account_id --lib --quiet`
-
-Open work for this clarification slice now remains:
-- propagate the same explicit universal-account / alias-model wording into the
-  translated `docs/source/data_model.*.md` set so non-English references do not
-  drift back toward domain-scoped identity language; and
-- audit older examples and helper docs that still imply “account in a domain”
-  as identity rather than materialized link state, and rewrite them to use the
-  universal-account-first wording.
-
 Latest sync (2026-03-27 FASTPQ BN254 CUDA bench/report wiring):
 `crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs`
 now carries the low-level BN254 CUDA helper work into the raw bench evidence

@@ -4,55 +4,224 @@ direction: ltr
 source: docs/source/universal_accounts_guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5d525863066feb78b2668d766816ed9404cef6e8159dea85db0fc8c1bcec9d01
-source_last_modified: "2026-01-30T13:46:44.917629+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: f972f8f82b7f4e89c1d48b0dbbc6eb5b73303e2fab0f580ab21e63990ba03af8
+source_last_modified: "2026-03-27T19:05:17.617064+00:00"
+translation_last_reviewed: 2026-03-28
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Universal Account Guide
+# ユニバーサルアカウントガイド
 
-This guide distils the UAID (Universal Account ID) rollout requirements from
-the Nexus roadmap and packages them into an operator + SDK focused walkthrough.
-It covers UAID derivation, portfolio/manifest inspection, regulator templates,
-and the evidence that must accompany every `iroha app space-directory manifest
-publish` run (roadmap reference: `roadmap.md:2209`).
+このガイドでは、UAID (ユニバーサル アカウント ID) ロールアウト要件を以下から抽出します。
+Nexus ロードマップを作成し、それらをオペレーターと SDK に重点を置いたウォークスルーにパッケージ化します。
+UAID の導出、ポートフォリオ/マニフェスト検査、規制テンプレート、
+すべての「iroha app space-directory」マニフェストに添付する必要がある証拠
+publish` run (roadmap reference: `roadmap.md:2209`)。
 
-## 1. UAID quick reference
+## 1. UAID クイックリファレンス- UAID は `uaid:<hex>` リテラルで、`<hex>` は Blake2b-256 ダイジェストです。
+  LSB は `1` に設定されます。正規型は次の場所に存在します。
+  `crates/iroha_data_model/src/nexus/manifest.rs::UniversalAccountId`。
+- アカウント レコード (`Account` および `AccountDetails`) には、オプションの `uaid` が含まれるようになりました。
+  フィールドを使用することで、アプリケーションは特注のハッシュを行わずに識別子を学習できるようになります。
+- 隠し関数識別子ポリシーは、任意の正規化された入力をバインドできます
+  (電話番号、電子メール、アカウント番号、パートナー文字列) から `opaque:` ID
+  UAID 名前空間の下にあります。オンチェーンのピースは `IdentifierPolicy`、
+  `IdentifierClaimRecord`、および `opaque_id -> uaid` インデックス。
+- Space Directory は、各 UAID を結び付ける `World::uaid_dataspaces` マップを維持します。
+  アクティブなマニフェストによって参照されるデータスペース アカウントに。 Torii はそれを再利用します
+  `/portfolio` および `/uaids/*` API のマップ。
+- `POST /v1/accounts/onboard` は、デフォルトのスペース ディレクトリ マニフェストを公開します。
+  グローバル データスペースが存在しない場合は、UAID がすぐにバインドされます。
+  オンボーディング権限者は `CanPublishSpaceDirectoryManifest{dataspace=0}` を保持している必要があります。
+- すべての SDK は、UAID リテラルを正規化するためのヘルパーを公開します (例:
+  Android SDK では `UaidLiteral`)。ヘルパーは生の 64 16 進ダイジェストを受け入れます
+  (LSB=1) または `uaid:<hex>` リテラルを使用し、同じ Norito コーデックを再利用します。
+  ダイジェストは言語をまたいで移動することはできません。
 
-- UAIDs are `uaid:<hex>` literals where `<hex>` is a Blake2b-256 digest whose
-  LSB is set to `1`. The canonical type lives in
-  `crates/iroha_data_model/src/nexus/manifest.rs::UniversalAccountId`.
-- Account records (`Account` and `AccountDetails`) now carry an optional `uaid`
-  field so applications can learn the identifier without bespoke hashing.
-- Space Directory maintains a `World::uaid_dataspaces` map that ties each UAID
-  to the dataspace accounts referenced by active manifests. Torii reuses that
-  map for the `/portfolio` and `/uaids/*` APIs.
-- `POST /v1/accounts/onboard` publishes a default Space Directory manifest for
-  the global dataspace when none exists, so the UAID is immediately bound.
-  Onboarding authorities must hold `CanPublishSpaceDirectoryManifest{dataspace=0}`.
-- All SDKs expose helpers for canonicalising UAID literals (e.g.,
-  `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests
-  (LSB=1) or `uaid:<hex>` literals and re-use the same Norito codecs so the
-  digest cannot drift across languages.
+## 1.1 隠し識別子ポリシー
 
-## 2. Deriving and verifying UAIDs
+UAID は 2 番目の ID レイヤーのアンカーになりました。- グローバル `IdentifierPolicyId` (`<kind>#<business_rule>`) は、
+  名前空間、パブリック コミットメント メタデータ、リゾルバー検証キー、および
+  正規入力正規化モード (`Exact`、`LowercaseTrimmed`、
+  `PhoneE164`、`EmailAddress`、または `AccountNumber`)。
+- クレームは、1 つの派生 `opaque:` 識別子を 1 つの UAID と 1 つの UAID にバインドします。
+  そのポリシーでは正規の `AccountId` ですが、チェーンは
+  署名された `IdentifierResolutionReceipt` が添付されている場合に請求します。
+- 解決策は `resolve -> transfer` フローのままです。 Torii は不透明を解決します
+  を処理し、正規の `AccountId` を返します。転送は依然として
+  `uaid:` または `opaque:` リテラルを直接使用するのではなく、正規アカウントを使用します。
+- ポリシーで BFV 入力暗号化パラメータを公開できるようになりました。
+  `PolicyCommitment.public_parameters`。存在する場合、Torii はそれらをアドバタイズします。
+  `GET /v1/identifier-policies`、クライアントは BFV でラップされた入力を送信する可能性があります
+  平文の代わりに。プログラムされたポリシーは、BFV パラメータをラップします。
+  正規の `BfvProgrammedPublicParameters` バンドルも公開されています。
+  パブリック `ram_fhe_profile`;従来の生の BFV ペイロードはその上にアップグレードされます
+  コミットメントが再構築されるときの正規バンドル。
+- 識別子ルートは同じ Torii アクセス トークンとレート制限を通過します。
+  他のアプリ側のエンドポイントとしてチェックします。それらは通常のバイパスではありません
+  API ポリシー。
 
-There are three supported ways to obtain a UAID:
+## 1.2 用語
 
-1. **Read it from world state or SDK models.** Any `Account`/`AccountDetails`
-   payload queried via Torii now has the `uaid` field populated when the
-   participant opted into universal accounts.
-2. **Query the UAID registries.** Torii exposes
-   `GET /v1/space-directory/uaids/{uaid}` which returns the dataspace bindings
-   and manifest metadata the Space Directory host persists (see
-   `docs/space-directory.md` §3 for payload samples).
-3. **Derive it deterministically.** When bootstrapping new UAIDs offline, hash
-   the canonical participant seed with Blake2b-256 and prefix the result with
-   `uaid:`. The snippet below mirrors the helper documented in
+名前の分割は意図的に行われています。- `ram_lfe` は、外側の隠し関数の抽象化です。ポリシーをカバーします
+  登録、コミットメント、パブリックメタデータ、実行レシート、および
+  検証モード。
+- `BFV` は、Brakerski/Fan-Vercauteren 準同型暗号化方式であり、
+  暗号化された入力を評価するための一部の `ram_lfe` バックエンド。
+- `ram_fhe_profile` は BFV 固有のメタデータであり、全体の 2 番目の名前ではありません
+  特徴。これは、ウォレットと
+  検証者は、ポリシーがプログラムされたバックエンドを使用する場合をターゲットにする必要があります。
+
+具体的には:
+
+- `RamLfeProgramPolicy` および `RamLfeExecutionReceipt` は LFE 層タイプです。
+- `BfvParameters`、`BfvCiphertext`、`BfvProgrammedPublicParameters`、および
+  `BfvRamProgramProfile` は FHE 層タイプです。
+- `HiddenRamFheProgram` および `HiddenRamFheInstruction` は、
+  プログラムされたバックエンドによって実行される非表示の BFV プログラム。彼らはそこに留まります
+  FHE 側では、暗号化された実行メカニズムについて説明しているため、
+  外部ポリシーまたはレシートの抽象化。
+
+## 1.3 アカウント ID とエイリアス
+
+ユニバーサル アカウントのロールアウトでは、正規のアカウント ID モデルは変更されません。- `AccountId` は正規のドメインレス アカウントのサブジェクトのままです。
+- `ScopedAccountId { account, domain }` はビューの明示的なドメイン コンテキスト、または
+  ドメインリンクを具体化する登録。二次正規版ではありません
+  アイデンティティ。
+- SNS/アカウントのエイリアスは、その件名とは別のバインディングです。あ
+  `merchant@hbl.sbp` などのドメイン修飾エイリアスおよびデータスペース ルート エイリアス
+  `merchant@sbp` などは、両方とも同じ正規の `AccountId` に解決できます。
+- 保存されたアカウント レコードの `linked_domains` は、
+  アカウントドメインインデックス。現在具体化されているそのリンクについて説明します
+  件名;これは正規の識別子の一部ではありません。
+
+オペレーター、SDK、テストの実装ルール: 正規のものから開始
+`AccountId`、次にエイリアスのリース、データスペース/ドメインの権限、および明示的な権限を追加します。
+ドメインリンクは個別に作成されます。偽のドメインスコープの正規を合成しないでください。
+エイリアスまたはルートがドメイン セグメントを運ぶという理由だけで、アカウントが作成されます。
+
+現在の Torii ルート:|ルート |目的 |
+|------|-----------|
+| `GET /v1/ram-lfe/program-policies` |アクティブおよび非アクティブな RAM-LFE プログラム ポリシーとそのパブリック実行メタデータ (オプションの BFV `input_encryption` パラメータおよびプログラムされたバックエンド `ram_fhe_profile` を含む) をリストします。 |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` または `{ encrypted_input }` のいずれかを受け入れ、選択したプログラムのステートレス `RamLfeExecutionReceipt` と `{ output_hex, output_hash, receipt_hash }` を返します。現在の Torii ランタイムは、プログラムされた BFV バックエンドのレシートを発行します。 |
+| `POST /v1/ram-lfe/receipts/verify` |ステートレスでは、公開されたオンチェーン プログラム ポリシーに対して `RamLfeExecutionReceipt` を検証し、オプションで呼び出し元が指定した `output_hex` がレシート `output_hash` と一致するかどうかをチェックします。 |
+| `GET /v1/identifier-policies` |アクティブおよび非アクティブな隠し関数ポリシーの名前空間とそのパブリック メタデータをリストします。これには、オプションの BFV `input_encryption` パラメータ、暗号化されたクライアント側入力に必要な `normalization` モード、およびプログラムされた BFV ポリシーの `ram_fhe_profile` が含まれます。 |
+| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | `{ input }` または `{ encrypted_input }` のいずれかを受け入れます。プレーンテキスト `input` はサーバー側で正規化されます。 BFV `encrypted_input` は、公開されたポリシー モードに従ってすでに正規化されている必要があります。次に、エンドポイントは `opaque:` ハンドルを派生し、生の `signature_payload_hex` と解析された `signature_payload` の両方を含む、`ClaimIdentifier` がオンチェーンで送信できる署名付きレシートを返します。 || `POST /v1/identifiers/resolve` | `{ input }` または `{ encrypted_input }` のいずれかを受け入れます。プレーンテキスト `input` はサーバー側で正規化されます。 BFV `encrypted_input` は、公開されたポリシー モードに従ってすでに正規化されている必要があります。アクティブなクレームが存在する場合、エンドポイントは識別子を `{ opaque_id, receipt_hash, uaid, account_id, signature }` に解決し、正規の署名付きペイロードも `{ signature_payload_hex, signature_payload }` として返します。 |
+| `GET /v1/identifiers/receipts/{receipt_hash}` |確定的な受信ハッシュにバインドされた永続的な `IdentifierClaimRecord` を検索するため、オペレーターと SDK は完全な識別子インデックスをスキャンすることなく、クレームの所有権を監査したり、リプレイ / 不一致の失敗を診断したりできます。 |
+
+Torii のインプロセス実行ランタイムは次のように構成されています。
+`torii.ram_lfe.programs[*]`、`program_id` によってキー設定されます。識別子がルーティングされるようになりました
+別の `identifier_resolver` の代わりに、同じ RAM-LFE ランタイムを再利用します。
+構成面。
+
+現在の SDK サポート:
+
+- `normalizeIdentifierInput(value, normalization)` は Rust と一致します
+  `exact`、`lowercase_trimmed`、`phone_e164` の正規化子、
+  `email_address`、および `account_number`。
+- `ToriiClient.listIdentifierPolicies()` は、BFV を含むポリシー メタデータをリストします。
+  ポリシーが公開するときの入力暗号化メタデータとデコードされたメタデータ
+  `input_encryption_public_parameters_decoded` 経由の BFV パラメータ オブジェクト。
+  プログラムされたポリシーは、デコードされた `ram_fhe_profile` も公開します。その分野は
+  意図的にBFVスコープ化: ウォレットが予想されるレジスタを検証できるようにします
+  カウント、レーン数、正規化モード、および最小暗号文係数
+  クライアント側の入力を暗号化する前に、プログラムされた FHE バックエンドを実行します。
+- `getIdentifierBfvPublicParameters(policy)` および
+  `buildIdentifierRequestForPolicy(policy, { input | encryptedInput })` ヘルプ
+  JS 呼び出し元は公開された BFV メタデータを消費し、ポリシー対応リクエストを構築します
+  ポリシー ID と正規化ルールを再実装せずに本体を作成します。
+- `encryptIdentifierInputForPolicy(policy, input, { seedHex? })` および
+  `buildIdentifierRequestForPolicy(policy, { input, encrypt: true })` さあ、
+  JS ウォレットは、完全な BFV Norito 暗号文エンベロープをローカルで構築します。
+  事前に構築された 16 進数の暗号文を配布する代わりに、ポリシー パラメータを公開します。
+- `ToriiClient.resolveIdentifier({ policyId, input | encryptedInput })`
+  隠された識別子を解決し、署名された受信ペイロードを返します。
+  `receipt_hash`、`signature_payload_hex`、および
+  `signature_payload`。
+- `ToriiClient.issueIdentifierClaimReceipt(アカウント ID, { ポリシー ID, 入力 |
+  encryptedInput })` issues the signed receipt needed by `ClaimIdentifier`。
+- `verifyIdentifierResolutionReceipt(receipt, policy)` は返されたものを検証します
+  クライアント側のポリシーリゾルバーキーに対する受信、および`ToriiClient.getIdentifierClaimByReceiptHash(receiptHash)` は
+  後の監査/デバッグ フローのために永続化されたクレーム レコード。
+- `IrohaSwift.ToriiClient` が `listIdentifierPolicies()` を公開するようになりました。
+  `resolveIdentifier(policyId:input:encryptedInputHex:)`、
+  `issueIdentifierClaimReceipt(accountId:policyId:input:encryptedInputHex:)`、
+  および `getIdentifierClaimByReceiptHash(_)`、プラス
+  同じ電話/メール/アカウント番号の `ToriiIdentifierNormalization`
+  正規化モード。
+- `ToriiIdentifierLookupRequest` および
+  `ToriiIdentifierPolicySummary.plaintextRequest(...)` /
+  `.encryptedRequest(...)` ヘルパーは、型付きの Swift リクエスト サーフェスを提供します。
+  呼び出しの解決とクレーム受信が可能になり、Swift ポリシーで BFV を導出できるようになりました。
+  `encryptInput(...)` / `encryptedRequest(input:...)` 経由でローカルに暗号文を送信します。
+- `ToriiIdentifierResolutionReceipt.verifySignature(using:)` はそれを検証します
+  最上位の受信フィールドは署名されたペイロードと一致し、
+  送信前にクライアント側でリゾルバー署名を行います。
+- Android SDK の `HttpClientTransport` が公開されるようになりました
+  `listIdentifierPolicies()`, `resolveIdentifier(policyId, input,
+  encryptedInputHex)`, `issueIdentifierClaimReceipt(accountId、policyId、
+  入力、encryptedInputHex)`, and `getIdentifierClaimByReceiptHash(...)`,
+  さらに、同じ正規化ルールの `IdentifierNormalization`。
+- `IdentifierResolveRequest` および
+  `IdentifierPolicySummary.plaintextRequest(...)` /
+  `.encryptedRequest(...)` ヘルパーは、型指定された Android リクエスト サーフェスを提供します。
+  一方 `IdentifierPolicySummary.encryptInput(...)` /
+  `.encryptedRequestFromInput(...)` BFV 暗号文エンベロープを導出する
+  公開されたポリシーパラメータからローカルで。
+  `IdentifierResolutionReceipt.verifySignature(policy)` は返されたものを検証します
+  クライアント側のリゾルバー署名。
+
+現在の命令セット:
+
+- `RegisterIdentifierPolicy`
+- `ActivateIdentifierPolicy`
+- `ClaimIdentifier` (受信限定、生の `opaque_id` クレームは拒否されます)
+- `RevokeIdentifier`
+
+現在、`iroha_crypto::ram_lfe` には 3 つのバックエンドが存在します。
+
+- 歴史的なコミットメントに拘束された `HKDF-SHA3-512` PRF、および
+- BFV で暗号化された識別子を使用する BFV ベースの秘密アフィン評価器
+  スロットを直接操作します。 `iroha_crypto` をデフォルトでビルドした場合
+  `bfv-accel` 機能、BFV リング乗算は正確な決定論を使用します
+  内部の CRT-NTT バックエンド。その機能を無効にすると、フォールバックされます
+  同一の出力を持つスカラー スクールブック パス、および
+- 命令駆動型の
+  暗号化されたレジスタと暗号文メモリ上の RAM スタイルの実行トレース
+  不透明な識別子と受信ハッシュを導出する前のレーン。プログラムされた
+  バックエンドはアフィン パスよりも強力な BFV モジュラス フロアを必要とするようになりました。
+  そのパブリックパラメータは、
+  ウォレットと検証者によって消費される RAM-FHE 実行プロファイル。
+
+ここで BFV は、で実装された Brakerski/Fan-Vercauteren FHE スキームを意味します。
+`crates/iroha_crypto/src/fhe_bfv.rs`。暗号化実行メカニズムです
+外側の非表示の名前ではなく、アフィンおよびプログラムされたバックエンドによって使用されます。
+関数の抽象化。Torii は、ポリシーコミットメントによって公開されたバックエンドを使用します。 BFV バックエンドの場合
+アクティブである場合、平文リクエストは正規化され、その後サーバー側で暗号化されます。
+評価。アフィン バックエンドに対する BFV `encrypted_input` リクエストが評価されます
+直接、クライアント側ですでに正規化されている必要があります。プログラムされたバックエンド
+暗号化された入力を正規化してリゾルバの決定論的な BFV に戻します
+シークレットRAMプログラムを実行する前にエンベロープを削除するため、受信ハッシュが残ります
+意味的に同等の暗号文間で安定しています。
+
+## 2. UAID の導出と検証
+
+UAID を取得するには 3 つの方法がサポートされています。
+
+1. **ワールド ステートまたは SDK モデルから読み取ります。** 任意の `Account`/`AccountDetails`
+   Torii 経由でクエリされたペイロードには、`uaid` フィールドが設定されるようになりました。
+   参加者はユニバーサルアカウントにオプトインしました。
+2. **UAID レジストリをクエリします。** Torii が公開します
+   `GET /v1/space-directory/uaids/{uaid}` データスペース バインディングを返します
+   スペース ディレクトリ ホストが保持するマニフェスト メタデータ (「
+   ペイロード サンプルについては `docs/space-directory.md` §3)。
+3. **決定論的に導出します。** 新しい UAID をオフラインでブートストラップするときは、ハッシュします。
+   正規の参加者シードに Blake2b-256 を付け、結果に接頭辞を付けます。
+   `uaid:`。以下のスニペットは、次のドキュメントに記載されているヘルパーを反映しています。
    `docs/space-directory.md` §3.3:
 
    ```python
@@ -60,28 +229,26 @@ There are three supported ways to obtain a UAID:
    seed = b"participant@example"  # canonical address/domain seed
    digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
    print(f"uaid:{digest}")
-   ```
+   ```リテラルは常に小文字で保存し、ハッシュする前に空白を正規化してください。
+`iroha app space-directory manifest scaffold` および Android などの CLI ヘルパー
+`UaidLiteral` パーサーは同じトリミング ルールを適用するため、ガバナンス レビューを行うことができます。
+アドホック スクリプトを使用せずに値をクロスチェックします。
 
-Always store the literal in lower case and normalise whitespace before hashing.
-CLI helpers such as `iroha app space-directory manifest scaffold` and the Android
-`UaidLiteral` parser apply the same trimming rules so governance reviews can
-cross-check values without ad hoc scripts.
+## 3. UAID の保有物とマニフェストの検査
 
-## 3. Inspecting UAID holdings and manifests
+`iroha_core::nexus::portfolio` の決定論的ポートフォリオ アグリゲーター
+UAID を参照するすべてのアセット/データスペースのペアを表示します。オペレーターとSDK
+次のサーフェスを通じてデータを消費できます。
 
-The deterministic portfolio aggregator in `iroha_core::nexus::portfolio`
-surfaces every asset/dataspace pair that references the UAID. Operators and SDKs
-can consume the data through the following surfaces:
+|表面 |使い方 |
+|----------|----------|
+| `GET /v1/accounts/{uaid}/portfolio` |データスペース → 資産 → 残高の概要を返します。 `docs/source/torii/portfolio_api.md` に記載されています。 |
+| `GET /v1/space-directory/uaids/{uaid}` | UAID に関連付けられたデータスペース ID とアカウント リテラルをリストします。 |
+| `GET /v1/space-directory/uaids/{uaid}/manifests` |監査用に完全な `AssetPermissionManifest` 履歴を提供します。 |
+| `iroha app space-directory bindings fetch --uaid <literal>` |バインディング エンドポイントをラップし、オプションで JSON をディスクに書き込む CLI ショートカット (`--json-out`)。 |
+| `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` |証拠パックのマニフェスト JSON バンドルを取得します。 |
 
-| Surface | Usage |
-|---------|-------|
-| `GET /v1/accounts/{uaid}/portfolio` | Returns dataspace → asset → balance summaries; described in `docs/source/torii/portfolio_api.md`. |
-| `GET /v1/space-directory/uaids/{uaid}` | Lists dataspace IDs + account literals tied to the UAID. |
-| `GET /v1/space-directory/uaids/{uaid}/manifests` | Provides the full `AssetPermissionManifest` history for audits. |
-| `iroha app space-directory bindings fetch --uaid <literal>` | CLI shortcut that wraps the bindings endpoint and optionally writes the JSON to disk (`--json-out`). |
-| `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` | Fetches the manifest JSON bundle for evidence packs. |
-
-Example CLI session (Torii URL configured via `torii_api_url` in `iroha.json`):
+CLI セッションの例 (`iroha.json` の `torii_api_url` 経由で設定された Torii URL):
 
 ```bash
 iroha app space-directory bindings fetch \
@@ -93,18 +260,18 @@ iroha app space-directory manifest fetch \
   --json-out artifacts/uaid86/manifests.json
 ```
 
-Store the JSON snapshots alongside the manifest hash used during reviews; the
-Space Directory watcher rebuilds the `uaid_dataspaces` map whenever manifests
-activate, expire, or revoke, so these snapshots are the fastest way to prove
-what bindings were active at a given epoch.
+レビュー中に使用されるマニフェスト ハッシュと一緒に JSON スナップショットを保存します。の
+Space Directory ウォッチャーは、マニフェストが発生するたびに `uaid_dataspaces` マップを再構築します。
+アクティブ化、期限切れ、または取り消しを行うため、これらのスナップショットは証明する最速の方法です。
+特定のエポックでどのバインディングがアクティブであったか。
 
-## 4. Publishing capability manifests with evidence
+## 4. 証拠を伴う公開能力マニフェスト
 
-Use the CLI flow below whenever a new allowance is rolled out. Each step must
-land in the evidence bundle recorded for governance sign-off.
+新しい許可がロールアウトされるたびに、以下の CLI フローを使用します。各ステップでは、次のことを行う必要があります。
+ガバナンスの承認のために記録された証拠バンドルに記録されます。
 
-1. **Encode the manifest JSON** so reviewers see the deterministic hash before
-   submission:
+1. **マニフェスト JSON をエンコード**して、レビュー担当者が事前に決定論的ハッシュを確認できるようにする
+   提出:
 
    ```bash
    iroha app space-directory manifest encode \
@@ -113,9 +280,9 @@ land in the evidence bundle recorded for governance sign-off.
      --hash-out artifacts/eu_regulator_audit.manifest.hash
    ```
 
-2. **Publish the allowance** using either the Norito payload (`--manifest`) or
-   the JSON description (`--manifest-json`). Record the Torii/CLI receipt plus
-   the `PublishSpaceDirectoryManifest` instruction hash:
+2. Norito ペイロード (`--manifest`) または
+   JSON 説明 (`--manifest-json`)。 Torii/CLI の受信を記録し、さらに
+   `PublishSpaceDirectoryManifest` 命令ハッシュ:
 
    ```bash
    iroha app space-directory manifest publish \
@@ -123,12 +290,12 @@ land in the evidence bundle recorded for governance sign-off.
      --reason "ESMA wave 2 onboarding"
    ```
 
-3. **Capture SpaceDirectoryEvent evidence.** Subscribe to
-   `SpaceDirectoryEvent::ManifestActivated` and include the event payload in
-   the bundle so auditors can confirm when the change landed.
+3. **SpaceDirectoryEvent の証拠をキャプチャします。**
+   `SpaceDirectoryEvent::ManifestActivated` にイベント ペイロードを含めます
+   このバンドルにより、監査人は変更がいつ反映されたかを確認できます。
 
-4. **Generate an audit bundle** tying the manifest to its dataspace profile and
-   telemetry hooks:
+4. **監査バンドルを生成**して、マニフェストをそのデータスペース プロファイルに関連付け、
+   テレメトリフック:
 
    ```bash
    iroha app space-directory manifest audit-bundle \
@@ -137,70 +304,64 @@ land in the evidence bundle recorded for governance sign-off.
      --out-dir artifacts/eu_regulator_audit_bundle
    ```
 
-5. **Verify bindings via Torii** (`bindings fetch` and `manifests fetch`) and
-   archive those JSON files with the hash + bundle above.
+5. **Torii** (`bindings fetch` および `manifests fetch`) を介してバインディングを確認し、
+   上記のハッシュ + バンドルを使用してこれらの JSON ファイルをアーカイブします。
 
-Evidence checklist:
+証拠チェックリスト:
 
-- [ ] Manifest hash (`*.manifest.hash`) signed by the change approver.
-- [ ] CLI/Torii receipt for the publish call (stdout or `--json-out` artefact).
-- [ ] `SpaceDirectoryEvent` payload proving activation.
-- [ ] Audit bundle directory with dataspace profile, hooks, and manifest copy.
-- [ ] Bindings + manifest snapshots fetched from Torii post-activation.
+- [ ] 変更承認者によって署名されたマニフェスト ハッシュ (`*.manifest.hash`)。
+- [ ] パブリッシュ呼び出しの CLI/Torii 受信 (標準出力または `--json-out` アーティファクト)。
+- [ ] `SpaceDirectoryEvent` ペイロードはアクティブ化を証明します。
+- [ ] データスペース プロファイル、フック、およびマニフェスト コピーを含む監査バンドル ディレクトリ。
+- [ ] バインディング + アクティベーション後に Torii からフェッチされたマニフェスト スナップショット。これは、SDK を提供しながら、`docs/space-directory.md` §3.2 の要件を反映しています。
+所有者は、リリース レビュー中に参照できる 1 つのページを所有します。
 
-This mirrors the requirements in `docs/space-directory.md` §3.2 while giving SDK
-owners a single page to point to during release reviews.
+## 5. 規制当局/地域のマニフェストテンプレート
 
-## 5. Regulator/regional manifest templates
+機能マニフェストを作成する際の開始点としてリポジトリ内フィクスチャを使用する
+規制当局または地域監督者向け。これらは、許可/拒否のスコープを設定する方法を示しています。
+ルールを作成し、レビュー担当者が期待するポリシーノートを説明します。
 
-Use the in-repo fixtures as starting points when crafting capability manifests
-for regulators or regional supervisors. They demonstrate how to scope allow/deny
-rules and explain the policy notes reviewers expect.
+|治具 |目的 |ハイライト |
+|----------|----------|---------------|
+| `fixtures/space_directory/capability/eu_regulator_audit.manifest.json` | ESMA/ESRB 監査フィード。 |レギュレーター UAID をパッシブに保つため、リテール転送で拒否勝利を伴う `compliance.audit::{stream_reports, request_snapshot}` の読み取り専用許可。 |
+| `fixtures/space_directory/capability/jp_regulator_supervision.manifest.json` | JFSA監視レーン。 |上限付きの `cbdc.supervision.issue_stop_order` 許可 (1 日あたりのウィンドウ + `max_amount`) と `force_liquidation` の明示的な拒否を追加して、二重制御を強制します。 |
 
-| Fixture | Purpose | Highlights |
-|---------|---------|------------|
-| `fixtures/space_directory/capability/eu_regulator_audit.manifest.json` | ESMA/ESRB audit feed. | Read-only allowances for `compliance.audit::{stream_reports, request_snapshot}` with deny-wins on retail transfers to keep regulator UAIDs passive. |
-| `fixtures/space_directory/capability/jp_regulator_supervision.manifest.json` | JFSA supervision lane. | Adds a capped `cbdc.supervision.issue_stop_order` allowance (PerDay window + `max_amount`) and an explicit deny on `force_liquidation` to enforce dual controls. |
+これらのフィクスチャのクローンを作成する場合は、以下を更新します。
 
-When cloning these fixtures, update:
+1. 有効にする参加者とレーンに一致する `uaid` および `dataspace` ID。
+2. ガバナンス スケジュールに基づく `activation_epoch`/`expiry_epoch` ウィンドウ。
+3. 規制当局のポリシー参照を含む `notes` フィールド (MiCA 記事、JFSA
+   円形など）。
+4. 許容範囲 (`PerSlot`、`PerMinute`、`PerDay`) およびオプション
+   `max_amount` の上限により、SDK はホストと同じ制限を適用します。
 
-1. `uaid` and `dataspace` ids to match the participant and lane you’re enabling.
-2. `activation_epoch`/`expiry_epoch` windows based on the governance schedule.
-3. `notes` fields with the regulator’s policy references (MiCA article, JFSA
-   circular, etc.).
-4. Allowance windows (`PerSlot`, `PerMinute`, `PerDay`) and optional
-   `max_amount` caps so SDKs enforce the same limits as the host.
+## 6. SDK コンシューマー向けの移行メモドメインごとのアカウント ID を参照していた既存の SDK 統合は、
+前述の UAID 中心のサーフェス。アップグレード中にこのチェックリストを使用してください。
 
-## 6. Migration notes for SDK consumers
+  アカウントID。 Rust/JS/Swift/Android の場合、これは最新のものにアップグレードすることを意味します。
+  ワークスペース クレートまたは Norito バインディングを再生成しています。
+- **API 呼び出し:** ドメイン スコープのポートフォリオ クエリを次のように置き換えます。
+  `GET /v1/accounts/{uaid}/portfolio` およびマニフェスト/バインディング エンドポイント。
+  `GET /v1/accounts/{uaid}/portfolio` はオプションの `asset_id` クエリを受け入れます
+  ウォレットに単一のアセット インスタンスのみが必要な場合のパラメータ。クライアントヘルパーなど
+  `ToriiClient.getUaidPortfolio` (JS) および Android として
+  `SpaceDirectoryClient` はすでにこれらのルートをラップしています。オーダーメイドよりも好きです
+  HTTPコード。
+- **キャッシュとテレメトリ:** 未加工ではなく、UAID + データスペースによってエントリをキャッシュします。
+  アカウント ID を取得し、UAID リテラルを示すテレメトリを発行して、操作を実行できるようにします。
+  ログをスペース ディレクトリの証拠と並べます。
+- **エラー処理:** 新しいエンドポイントは厳密な UAID 解析エラーを返します
+  `docs/source/torii/portfolio_api.md` に文書化されています。それらのコードを表面化する
+  逐語的に伝えられるため、サポート チームは再現手順を行わずに問題を優先順位付けできます。
+- **テスト:** 上記のフィクスチャ (および独自の UAID マニフェスト) を接続します。
+  Norito ラウンドトリップとマニフェスト評価を証明するための SDK テスト スイートへの組み込み
+  ホストの実装と一致します。
 
-Existing SDK integrations that referenced per-domain account IDs must migrate to
-the UAID-centric surfaces described above. Use this checklist during upgrades:
-
-  account ids. For Rust/JS/Swift/Android this means upgrading to the latest
-  workspace crates or regenerating Norito bindings.
-- **API calls:** Replace domain-scoped portfolio queries with
-  `GET /v1/accounts/{uaid}/portfolio` and the manifest/bindings endpoints.
-  `GET /v1/accounts/{uaid}/portfolio` accepts an optional `asset_id` query
-  parameter when wallets only need a single asset instance. Client helpers such
-  as `ToriiClient.getUaidPortfolio` (JS) and the Android
-  `SpaceDirectoryClient` already wrap these routes; prefer them over bespoke
-  HTTP code.
-- **Caching & telemetry:** Cache entries by UAID + dataspace instead of raw
-  account ids, and emit telemetry showing the UAID literal so operations can
-  line up logs with Space Directory evidence.
-- **Error handling:** New endpoints return the strict UAID parsing errors
-  documented in `docs/source/torii/portfolio_api.md`; surface those codes
-  verbatim so support teams can triage issues without repro steps.
-- **Testing:** Wire the fixtures mentioned above (plus your own UAID manifests)
-  into SDK test suites to prove Norito round-trips and manifest evaluations
-  match the host implementation.
-
-## 7. References
-
-- `docs/space-directory.md` — operator playbook with deeper lifecycle detail.
-- `docs/source/torii/portfolio_api.md` — REST schema for UAID portfolio and
-  manifest endpoints.
-- `crates/iroha_cli/src/space_directory.rs` — CLI implementation referenced in
-  this guide.
-- `fixtures/space_directory/capability/*.manifest.json` — regulator, retail, and
-  CBDC manifest templates ready for cloning.
+## 7. 参考文献- `docs/space-directory.md` — より深いライフサイクルの詳細を含むオペレーター プレイブック。
+- `docs/source/torii/portfolio_api.md` — UAID ポートフォリオの REST スキーマと
+  マニフェストエンドポイント。
+- `crates/iroha_cli/src/space_directory.rs` — で参照される CLI 実装
+  このガイド。
+- `fixtures/space_directory/capability/*.manifest.json` — レギュレーター、小売店、および
+  CBDC マニフェスト テンプレートをクローン作成する準備ができました。
