@@ -140,6 +140,31 @@ Open work from this slice:
   blocker is permissioned ingress queueing, Nexus authoritative-route
   availability, or a remaining consensus liveness issue.
 
+Latest sync (2026-03-28 repeatable-trigger ingress repin on `route_unavailable`):
+the first targeted Nexus/NPoS ingress fix is now in `izanami`, not in
+consensus.
+
+- repeatable-trigger plans in `crates/izanami/src/chaos.rs` still pin to one
+  ingress endpoint on the happy path, but query/submit/reconcile now repin to
+  an alternate endpoint when the pinned peer returns `route_unavailable`;
+- the alternate-endpoint helper explicitly excludes the endpoint that just
+  failed the authoritative-route check, so the workload driver no longer
+  retries the same stale pin immediately; and
+- focused tests were added for happy-path pin reuse, alternate failover that
+  skips the pinned endpoint, and `route_unavailable` error detection.
+
+Open work from this slice:
+- rerun the preserved-peer stable NPoS soak after the `izanami` validation is
+  green to see whether `route_unavailable` and `plan submission failed`
+  materially drop from the last baseline (`1480` and `151`, respectively);
+- if NPoS still reports `route_unavailable` after the client-side repin fix,
+  move the next slice into Torii-side authoritative-route visibility or proxy
+  behavior rather than touching nomination/election logic; and
+- keep the permissioned ingress/backpressure stall as separate work. This
+  `izanami` repin fix is aimed at the NPoS/Nexus routing failure and is not
+  expected to resolve the permissioned `transaction queued for too long` /
+  confirmation-starvation path by itself.
+
 Latest sync (2026-03-28 repo-shared SORA Taira standalone Codex skill):
 this repo now carries a shareable standalone Codex skill for the Taira testnet
 in addition to the installable `plugins/iroha/` bundle.

@@ -7671,7 +7671,7 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex,
@@ -7740,7 +7740,7 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex,
@@ -7765,7 +7765,7 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: false,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex,
@@ -7852,7 +7852,7 @@ pub async fn handle_post_contract_view(
         Err(err) => {
             let body = norito::json::to_json_pretty(&ContractViewErrorResponseDto {
                 ok: false,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex: hex::encode(code_hash.as_ref()),
@@ -7874,7 +7874,7 @@ pub async fn handle_post_contract_view(
 
     let body = norito::json::to_json_pretty(&ContractViewResponseDto {
         ok: true,
-        namespace,
+        dataspace: namespace,
         contract_id,
         contract_address,
         code_hash_hex: hex::encode(code_hash.as_ref()),
@@ -14247,8 +14247,8 @@ pub struct ContractCallResponseDto {
     pub ok: bool,
     /// Whether Torii submitted the transaction to the pipeline.
     pub submitted: bool,
-    /// Namespace targeted by the call.
-    pub namespace: String,
+    /// Dataspace targeted by the call.
+    pub dataspace: String,
     /// Contract id targeted by the call.
     pub contract_id: String,
     /// Canonical contract address targeted by the call, when available.
@@ -14311,8 +14311,8 @@ pub struct ContractViewDto {
 pub struct ContractViewResponseDto {
     /// Whether execution succeeded.
     pub ok: bool,
-    /// Namespace targeted by the query.
-    pub namespace: String,
+    /// Dataspace targeted by the query.
+    pub dataspace: String,
     /// Contract id targeted by the query.
     pub contract_id: String,
     /// Canonical contract address targeted by the query, when available.
@@ -14366,7 +14366,7 @@ pub struct ContractViewVmDiagnosticDto {
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 pub struct ContractViewErrorResponseDto {
     pub ok: bool,
-    pub namespace: String,
+    pub dataspace: String,
     pub contract_id: String,
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,

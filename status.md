@@ -2,6 +2,40 @@
 
 Last updated: 2026-03-28
 
+## 2026-03-28 Follow-up: repeatable-trigger ingress now repins on `route_unavailable`
+- Fixed the NPoS/Nexus ingress-authority bug in
+  `crates/izanami/src/chaos.rs` instead of widening the consensus-side change
+  surface:
+  - repeatable-trigger plans still pin to a single ingress endpoint on the
+    happy path;
+  - but if that pinned endpoint returns `route_unavailable`, the
+    query/submit/reconcile path now repins and retries on an alternate ingress
+    endpoint instead of repeatedly hammering the same non-authoritative peer;
+    and
+  - the alternate-endpoint helper explicitly excludes the endpoint that just
+    failed the route check, so the workload driver no longer self-loops on a
+    stale pin.
+- Added focused regression coverage in `crates/izanami/src/chaos.rs` for:
+  - successful pin reuse on the happy path;
+  - alternate-endpoint failover that explicitly skips the pinned endpoint
+    after `route_unavailable`; and
+  - detection of `route_unavailable` errors so only that routing failure class
+    triggers repinning.
+- Verification status:
+  - `cargo fmt --all -- crates/izanami/src/chaos.rs` completed successfully;
+  - focused regression tests now pass in a fresh isolated target dir:
+    `CARGO_TARGET_DIR=/tmp/iroha_target_izanami_routefix2 cargo test -p izanami route_unavailable_error_is_detected -- --nocapture`
+    and
+    `CARGO_TARGET_DIR=/tmp/iroha_target_izanami_routefix2 cargo test -p izanami endpoint_pool_failover_excluding_skips_pinned_endpoint -- --nocapture`;
+  - the `izanami` crate also builds successfully with the same isolated target
+    dir via
+    `CARGO_TARGET_DIR=/tmp/iroha_target_izanami_routefix2 cargo build -p izanami`;
+  - earlier verification attempts in other target dirs were blocked by
+    temporary disk-space pressure and a transient Cargo target-tree rebuild
+    failure; those environment issues no longer block this slice; and
+  - unrelated warnings remain in `iroha_core`, but there is no remaining build
+    or test failure in the `izanami` repeatable-trigger repin slice.
+
 ## 2026-03-28 Taira deploy bundle now forces MCP-enabled rollout
 - Reconciled the Taira public deployment artifacts so `taira.sora.org` is no
   longer documented as bypassing the shared nginx edge host:

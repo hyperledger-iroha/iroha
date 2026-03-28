@@ -1902,10 +1902,10 @@ fn contracts_paths() -> Map {
         "/v1/contracts/instances/{ns}".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",
-            "List contract instances by namespace.",
-            "Return active contract instances for a namespace.",
+            "List contract instances by dataspace.",
+            "Return active contract instances for a dataspace.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("ns", "Contract namespace identifier.")],
+            vec![string_path_param("ns", "Contract dataspace identifier.")],
         )),
     );
     paths

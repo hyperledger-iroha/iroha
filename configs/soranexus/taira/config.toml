@@ -21,6 +21,7 @@ beep = true
 [network]
 address = "0.0.0.0:1337"
 public_address = "taira-validator-1.sora.org:1337"
+max_frame_bytes_tx_gossip = 1048576
 
 [torii]
 address = "0.0.0.0:18080"
