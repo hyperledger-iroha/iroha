@@ -1,0 +1,22 @@
+{
+  "network": "sora-taira-testnet",
+  "zone": "sora.org",
+  "updated_at": "2026-03-03T00:00:00Z",
+  "records": [
+    {
+      "name": "taira.sora.org",
+      "type": "CNAME",
+      "target": "taira-validator-1.sora.org.",
+      "ttl": 300,
+      "purpose": "Public Torii endpoint for the Taira testnet"
+    }
+    ,
+    {
+      "name": "taira-explorer.sora.org",
+      "type": "CNAME",
+      "target": "taira-explorer-edge.sora.org.",
+      "ttl": 300,
+      "purpose": "Iroha 2 Explorer frontend for the Taira testnet"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
-# Sample config for iroha3-testus (generated via cargo xtask kagami-profiles)
-chain = "iroha3-testus"
+# Sample config for iroha3-taira (generated via cargo xtask kagami-profiles)
+chain = "iroha3-taira"
 public_key = "ea0130A71AAB00BE72C1BDF6B6A7F5D107E9D224DE900C3DDF6C84C1F17B0BB31E59A1403C9028320058E08D6659E0E7F92F0F"
 private_key = "8926200717D1BF038741E75D1B8EFC788F0A292D821A6D06420D0FF172E7BCB294BF41"
 

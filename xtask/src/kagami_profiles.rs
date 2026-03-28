@@ -481,9 +481,9 @@ const PROFILES: &[ProfileSpec] = &[
         collectors_r: 1,
     },
     ProfileSpec {
-        slug: "iroha3-testus",
-        profile_flag: "iroha3-testus",
-        chain_id: "iroha3-testus",
+        slug: "iroha3-taira",
+        profile_flag: "iroha3-taira",
+        chain_id: "iroha3-taira",
         min_peers: 7,
         requires_seed: true,
         collectors_k: 3,

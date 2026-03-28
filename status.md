@@ -3202,8 +3202,8 @@ Last updated: 2026-03-27
   `crates/iroha_config/src/parameters/{actual.rs,defaults.rs,user.rs}`,
   `crates/iroha_torii/src/{lib.rs,openapi.rs,routing.rs}`,
   `crates/iroha_torii/tests/accounts_faucet.rs`,
-  `configs/soranexus/testus/config.toml`,
-  and `defaults/kagami/iroha3-testus/config.toml`.
+  `configs/soranexus/taira/config.toml`,
+  and `defaults/kagami/iroha3-taira/config.toml`.
 - The shipped behavior in this slice:
   - Torii now exposes `GET /v1/accounts/faucet/puzzle`, which returns a deterministic memory-hard scrypt puzzle anchored to a recent committed block hash plus an acceptance window in blocks;
   - the effective PoW difficulty is now derived from immutable chain data for the chosen anchor height plus pending queue pressure: a base difficulty plus adaptive extra bits based on recent committed and queued faucet claim volume;
@@ -6315,16 +6315,16 @@ Last updated: 2026-03-27
   `crates/iroha_config/src/parameters/{actual.rs,user.rs}`,
   `crates/iroha_torii/src/{lib.rs,routing.rs,mcp.rs,openapi.rs}`,
   `crates/iroha_torii/tests/accounts_faucet.rs`,
-  `configs/soranexus/testus/{config.toml,genesis.json}`,
-  and `defaults/kagami/iroha3-testus/{config.toml,genesis.json}`.
+  `configs/soranexus/taira/{config.toml,genesis.json}`,
+  and `defaults/kagami/iroha3-taira/{config.toml,genesis.json}`.
 - The shipped behavior in this slice:
   - Torii now accepts optional `[torii.faucet]` config and exposes `POST /v1/accounts/faucet`, which transfers a fixed starter balance from a configured authority account to an existing account that still has zero balance for the configured faucet asset;
   - the faucet response now includes both the configured asset-definition identifier and the concrete funded `asset_id`, so downstream apps can immediately reuse the exact bucket they were credited with;
-  - the TAIRA/testus profile now seeds a dedicated faucet authority plus `xor#sora` in genesis and pre-mints a faucet reserve, while leaving non-TAIRA profiles untouched; and
+  - the TAIRA/taira profile now seeds a dedicated faucet authority plus `xor#sora` in genesis and pre-mints a faucet reserve, while leaving non-TAIRA profiles untouched; and
   - the faucet config parser now accepts on-chain asset aliases in `name#dataspace` / `name#domain.dataspace` form (for example `xor#sora`) for this profile instead of forcing operators to hand-compute the canonical asset-definition address.
 - Validation:
-  - `jq empty configs/soranexus/testus/genesis.json` (pass)
-  - `jq empty defaults/kagami/iroha3-testus/genesis.json` (pass)
+  - `jq empty configs/soranexus/taira/genesis.json` (pass)
+  - `jq empty defaults/kagami/iroha3-taira/genesis.json` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config torii_faucet_tests -- --nocapture` (pass)
 - Remaining implementation gap:
   - the focused `iroha_config` faucet parser path is green, but full `iroha_torii --features app_api` test execution is still blocked in this workspace by unrelated pre-existing `iroha_core` compile errors around missing offline/SNS symbols on the current branch.

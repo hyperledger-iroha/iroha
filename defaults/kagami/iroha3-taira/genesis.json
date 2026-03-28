@@ -1,6 +1,6 @@
 {
   "bls_domain": "bls-iroha2:npos-sumeragi:v1",
-  "chain": "iroha3-testus",
+  "chain": "iroha3-taira",
   "consensus_fingerprint": "0x653bb383f0d53faa4fd9e9995d75f44dd91928ff3f6efc346fa8bbe8eb139ae8",
   "consensus_mode": "Npos",
   "crypto": {
