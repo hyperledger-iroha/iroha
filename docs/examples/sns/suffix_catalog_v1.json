@@ -7,8 +7,8 @@
       "suffix": ".sora",
       "suffix_id": 1,
       "status": "active",
-      "steward_account": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
-      "fund_splitter_account": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+      "steward_account": "sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV",
+      "fund_splitter_account": "sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV",
       "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "min_term_years": 1,
@@ -19,7 +19,7 @@
       "reserved_labels": [
         {
           "label": "treasury",
-          "assigned_to": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+          "assigned_to": "sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV",
           "release_at_ms": null,
           "note": "Protocol reserved"
         }
@@ -49,8 +49,8 @@
       "suffix": ".nexus",
       "suffix_id": 2,
       "status": "paused",
-      "steward_account": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
-      "fund_splitter_account": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+      "steward_account": "sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV",
+      "fund_splitter_account": "sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV",
       "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 300,
       "min_term_years": 1,
@@ -61,13 +61,13 @@
       "reserved_labels": [
         {
           "label": "treasury",
-          "assigned_to": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+          "assigned_to": "sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV",
           "release_at_ms": null,
           "note": "Protocol reserved"
         },
         {
           "label": "guardian",
-          "assigned_to": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+          "assigned_to": "sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV",
           "release_at_ms": null,
           "note": "Guardian controls nexus.* GAR manifests"
         }
@@ -112,8 +112,8 @@
       "suffix": ".dao",
       "suffix_id": 3,
       "status": "revoked",
-      "steward_account": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
-      "fund_splitter_account": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+      "steward_account": "sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV",
+      "fund_splitter_account": "sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV",
       "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 0,
       "min_term_years": 1,

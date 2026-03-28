@@ -18,7 +18,10 @@ local testing and CI.
 - `car pack` — produce a CAR archive, chunk-fetch plan, and JSON summary for CI.
 - `manifest build` — translate the CAR summary into a Norito manifest.
 - `manifest submit` — POST manifests (and optional alias proofs) to Torii,
-  recomputing the chunk digest from a plan when provided.
+  recomputing the chunk digest from a plan when provided; when the dedicated
+  `/v1/sorafs/pin/register` route is unavailable, the CLI falls back to a
+  signed `/transaction` submit automatically and waits for a terminal pipeline
+  status so queued-but-rejected publishes do not look successful.
 - `proof verify` — validate CAR responses against a manifest and emit the
   PoR-ready digests required for registry admission.
 - `manifest sign` — emit a keyless (OIDC-backed) signature bundle so pipelines
@@ -117,6 +120,12 @@ If you need deterministic fixtures to diff against, grab the bundle under
 
 Key behaviours:
 
+- Transaction fallback confirmation: when `manifest submit` has to use the
+  generic `/transaction` endpoint, it polls `/v1/pipeline/transactions/status`
+  until the transaction reaches `Committed`/`Applied` or fails with
+  `Rejected`/`Expired`. Rejections surface the explorer message when Torii
+  exposes `/v1/explorer/transactions/{hash}`.
+
 - `--chunker-handle` defaults to `sorafs.sf1@1.0.0`. Pass an explicit handle to
   switch chunking profiles once the registry grows additional entries.
 - The manifest builder reads the JSON emitted by `car pack`, applies optional
@@ -138,6 +147,9 @@ Key behaviours:
   scope required by your Fulcio policy.
 - `proof verify` rebuilds the PoR store, reports the deterministic chunk digest,
   and surfaces the payload/CAR digests so CI can gate registry submission.
+  Supply `--chunk-plan` for directory or multi-file payloads so verification
+  reuses the exact packed chunk boundaries instead of reconstructing a
+  single-file plan from the manifest alone.
 - `manifest verify-signature` accepts either a bundle or raw signature/public
   key pair, checks the embedded metadata (chunk digests, token hashes) against
   locally recomputed summaries, and ensures the Ed25519 signature matches the
@@ -226,7 +238,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
   --manifest artifacts/manifest.to \
   --chunk-plan artifacts/chunk_plan.json \
   --torii-url https://localhost:8080 \
-  --submitted-epoch=42 \
+  --resolve-submitted-epoch=true \
   --authority=<i105-account-id> \
   --private-key=ed25519:0123...cafe \
   --summary-out artifacts/manifest.submit.json \
@@ -235,10 +247,16 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
 
 - Provide either `--chunk-plan` (preferred) or an explicit
   `--chunk-digest-sha3` to satisfy registry validation.
+- Use `--submitted-epoch=<N>` to pin an explicit epoch, or
+  `--resolve-submitted-epoch=true` to query `<torii-url>/status` and resolve it
+  automatically.
 - Use `--private-key-file` when the credential is stored on disk. The CLI trims
   whitespace automatically.
 - Alias bindings require `--alias-namespace`, `--alias-name`, and
   `--alias-proof` together. The command fails fast if any component is missing.
+- If `<torii-url>/v1/sorafs/pin/register` is not routed on the target node, the
+  CLI automatically derives `chain_id` from the read-side registry endpoints and
+  submits the same `RegisterPinManifest` instruction through `/transaction`.
 - Non-success HTTP responses bubble up as errors with the original body so CI
   can halt on policy violations.
 
@@ -249,6 +267,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
   proof verify \
   --manifest artifacts/manifest.to \
   --car artifacts/payload.car \
+  --chunk-plan artifacts/chunk_plan.json \
   --summary-out artifacts/manifest.verify.json
 ```
 

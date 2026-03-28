@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "iroha-taira": {
+      "type": "http",
+      "url": "https://taira.sora.org/v1/mcp",
+      "note": "Built-in Taira preset for the native Torii MCP endpoint. Custom Nexus/Torii endpoints should be added user-locally with `codex mcp add ... --url https://<torii>/v1/mcp`."
+    }
+  }
+}

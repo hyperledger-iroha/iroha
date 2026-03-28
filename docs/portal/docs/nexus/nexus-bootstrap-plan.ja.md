@@ -34,10 +34,10 @@ description: SoraFS/SoraNet サービスを重ねる前に Nexus の中核バリ
 ## ネットワーク環境
 - 異なるネットワークプレフィックスを持つ 2 つの Nexus 環境を運用する:
 - **Sora Nexus (mainnet)** - 本番ネットワークプレフィックス `nexus`。カノニカルなガバナンスと SoraFS/SoraNet の piggyback サービスをホスト (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`)。
-- **Sora Testus (testnet)** - ステージングのネットワークプレフィックス `testus`。統合テストと pre-release 検証のために mainnet 設定をミラー (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)。
-- 各環境ごとに genesis ファイル、ガバナンスキー、インフラフットプリントを分離する。Testus は Nexus への昇格前に SoraFS/SoraNet の rollouts を検証する場として機能する。
-- CI/CD パイプラインはまず Testus へデプロイし、自動 smoke tests を実行し、チェック合格後に Nexus への手動プロモーションを要求する。
-- 参照用の設定 bundle は `configs/soranexus/nexus/` (mainnet) と `configs/soranexus/testus/` (testnet) にあり、それぞれにサンプル `config.toml`、`genesis.json`、Torii admission ディレクトリが含まれる。
+- **Sora Taira (testnet)** - ステージングのネットワークプレフィックス `taira`。統合テストと pre-release 検証のために mainnet 設定をミラー (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)。
+- 各環境ごとに genesis ファイル、ガバナンスキー、インフラフットプリントを分離する。Taira は Nexus への昇格前に SoraFS/SoraNet の rollouts を検証する場として機能する。
+- CI/CD パイプラインはまず Taira へデプロイし、自動 smoke tests を実行し、チェック合格後に Nexus への手動プロモーションを要求する。
+- 参照用の設定 bundle は `configs/soranexus/nexus/` (mainnet) と `configs/soranexus/taira/` (testnet) にあり、それぞれにサンプル `config.toml`、`genesis.json`、Torii admission ディレクトリが含まれる。
 
 ## ステップ 1 - 設定レビュー
 1. 既存ドキュメントを監査:

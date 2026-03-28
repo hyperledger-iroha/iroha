@@ -178,19 +178,18 @@ fn build_shared_sorafs_provider_cache(
         return None;
     };
 
-    let admission = match iroha_torii::sorafs::AdmissionRegistry::load_from_dir(
-        &admission_cfg.envelopes_dir,
-    ) {
-        Ok(registry) => Arc::new(registry),
-        Err(err) => {
-            iroha_logger::error!(
-                ?err,
-                dir = ?admission_cfg.envelopes_dir,
-                "failed to load shared SoraFS provider admission registry"
-            );
-            return None;
-        }
-    };
+    let admission =
+        match iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir) {
+            Ok(registry) => Arc::new(registry),
+            Err(err) => {
+                iroha_logger::error!(
+                    ?err,
+                    dir = ?admission_cfg.envelopes_dir,
+                    "failed to load shared SoraFS provider admission registry"
+                );
+                return None;
+            }
+        };
 
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
@@ -941,9 +940,7 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
                 BlockMessage::RbcChunk(_)
                 | BlockMessage::RbcChunkCompact(_)
-                | BlockMessage::BlockBodyResponse(_) => {
-                    IngressPolicy::bulk()
-                }
+                | BlockMessage::BlockBodyResponse(_) => IngressPolicy::bulk(),
                 BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
                 BlockMessage::BlockSyncUpdate(_) | BlockMessage::ExecWitness(_) => {
                     IngressPolicy::bulk()
@@ -1861,8 +1858,9 @@ impl NetworkRelayShared {
             | Connect(_)) => {
                 debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
                 // Genesis bootstrap is handled by the dedicated bootstrapper listener.
-                // Health frames are handled elsewhere. Connect plus Torii/Soracloud proxy
-                // frames go to Torii via its own subscriber tasks when those surfaces are enabled.
+                // Health frames are handled elsewhere. Connect, Soracloud local-read proxy,
+                // and Torii proxy frames go to Torii via its own subscriber tasks when those
+                // surfaces are enabled.
             }
             TimePing(p) => {
                 iroha_core::time::handle_message(
@@ -1884,17 +1882,14 @@ impl NetworkRelayShared {
     }
 
     fn is_handled_by_dedicated_subscriber(msg: &iroha_core::NetworkMessage) -> bool {
-        matches!(
-            msg,
-            iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(_)
-                | iroha_core::NetworkMessage::SoracloudLocalReadProxyResponse(_)
-                | iroha_core::NetworkMessage::ToriiProxyRequest(_)
-                | iroha_core::NetworkMessage::ToriiProxyResponse(_)
-                | iroha_core::NetworkMessage::GenesisRequest(_)
-                | iroha_core::NetworkMessage::GenesisResponse(_)
-                | iroha_core::NetworkMessage::Health
-                | iroha_core::NetworkMessage::Connect(_)
-        )
+        msg.is_torii_proxy_control_message()
+            || matches!(
+                msg,
+                iroha_core::NetworkMessage::GenesisRequest(_)
+                    | iroha_core::NetworkMessage::GenesisResponse(_)
+                    | iroha_core::NetworkMessage::Health
+                    | iroha_core::NetworkMessage::Connect(_)
+            )
     }
 
     fn should_apply_low_priority_ingress(msg: &iroha_core::NetworkMessage) -> bool {
@@ -4008,8 +4003,7 @@ impl Iroha {
                     );
                 } else {
                     let expected_hash = config.genesis.expected_hash;
-                    let genesis_account = AccountId::new(effective_genesis_public_key.clone(),
-                    );
+                    let genesis_account = AccountId::new(effective_genesis_public_key.clone());
                     match bootstrapper
                         .fetch_genesis(&candidates, &genesis_account, expected_hash)
                         .await
@@ -4082,8 +4076,7 @@ impl Iroha {
                     "non-empty block store detected; using stored genesis for restart",
                 );
             } else {
-                let genesis_account = AccountId::new(effective_genesis_public_key.clone(),
-                );
+                let genesis_account = AccountId::new(effective_genesis_public_key.clone());
                 if let Err(err) = iroha_core::validate_genesis_block(
                     &genesis_block.0,
                     &genesis_account,
@@ -4739,7 +4732,8 @@ impl Iroha {
         let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
 
         let chain_id = Arc::new(config.common.chain.clone());
-        let local_validator_account_id = AccountId::new(config.common.key_pair.public_key().clone());
+        let local_validator_account_id =
+            AccountId::new(config.common.key_pair.public_key().clone());
         let local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
         let runtime_mutation_sink = Arc::new(QueuedSoracloudRuntimeMutationSink::new(
             Arc::clone(&chain_id),
@@ -7961,6 +7955,55 @@ mod tests {
         }
     }
 
+    mod relay_ingress {
+        use super::*;
+        use iroha_core::torii_proxy::{
+            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
+            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
+            ToriiReadProxyRequestV1, ToriiRouteHintV1,
+        };
+        use iroha_crypto::Hash;
+        use iroha_data_model::nexus::{DataSpaceId, LaneId};
+
+        #[test]
+        fn torii_proxy_frames_are_not_low_priority() {
+            let route = ToriiRouteHintV1 {
+                lane_id: LaneId::new(0),
+                dataspace_id: DataSpaceId::new(0),
+            };
+            let request = iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(
+                ToriiProxyRequestV1 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+                    request_id: Hash::new(b"torii-proxy-request"),
+                    hop_count: 0,
+                    request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+                        endpoint: ToriiReadEndpointV1::AccountsList,
+                        expected_route: route,
+                        path_args: Vec::new(),
+                        query_string: None,
+                        body: Vec::new(),
+                        response_format: ToriiProxyResponseFormatV1::Json,
+                    }),
+                },
+            ));
+            let response = iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(
+                ToriiProxyResponseV1 {
+                    schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+                    request_id: Hash::new(b"torii-proxy-response"),
+                    response: ToriiProxyHttpResponseV1 {
+                        status_code: 200,
+                        headers: Vec::new(),
+                        body: Vec::new(),
+                    },
+                },
+            ));
+
+            assert!(!NetworkRelayShared::should_apply_low_priority_ingress(&request));
+            assert!(!NetworkRelayShared::should_apply_low_priority_ingress(&response));
+        }
+    }
+
     mod norito_archive_len {
         use super::*;
 
@@ -8421,8 +8464,7 @@ mod tests {
             let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let bls_account_id =
-                AccountId::new(bls_keypair.public_key().clone());
+            let bls_account_id = AccountId::new(bls_keypair.public_key().clone());
 
             let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
                 .with_instructions([

@@ -327,6 +327,8 @@ mod block;
 #[cfg(feature = "connect")]
 mod connect;
 #[cfg(feature = "app_api")]
+mod contract_sources;
+#[cfg(feature = "app_api")]
 mod data_dir;
 mod event;
 #[cfg(feature = "app_api")]
@@ -374,27 +376,28 @@ pub use routing::handle_get_proof_tags;
 #[cfg(feature = "p2p_ws")]
 pub use routing::handle_p2p_ws;
 pub use routing::{
-    ActivateInstanceDto, ActivateInstanceResponseDto, ContractCallDto, ContractCallResponseDto,
-    ContractViewDto, ContractViewResponseDto, DeployAndActivateInstanceDto,
-    DeployAndActivateInstanceResponseDto, DeployContractDto, DeployContractResponseDto,
-    EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
-    KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
-    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
-    MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
-    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
-    RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
-    SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
-    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs, handle_get_contract_code_bytes,
-    handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_call,
-    handle_post_contract_deploy, handle_post_contract_instance,
-    handle_post_contract_instance_activate, handle_post_contract_view,
-    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
-    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
-    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
-    handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
-    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
-    handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots, handle_v1_zk_submit_proof,
-    handle_v1_zk_verify, handle_v1_zk_vote_tally, signed_find_proof_by_id,
+    ActivateInstanceDto, ActivateInstanceResponseDto, ContractAliasResolveRequestDto,
+    ContractAliasResolveResponseDto, ContractCallDto, ContractCallResponseDto, ContractViewDto,
+    ContractViewResponseDto, DeployAndActivateInstanceDto, DeployAndActivateInstanceResponseDto,
+    DeployContractDto, DeployContractResponseDto, EvidenceListQuery, EvidenceSubmitRequestDto,
+    KaigiRelayDetailDto, KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto,
+    KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
+    MultisigCancelRequestDto, MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto,
+    PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto,
+    ProofListQuery, QueryOptions, RegisterPinManifestDto, RegisterPinManifestResponseDto,
+    SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
+    ZkRootsGetRequestDto, ZkVkRegisterDto, ZkVkUpdateDto, ZkVoteGetTallyRequestDto,
+    handle_count_proofs, handle_get_contract_code_bytes, handle_get_proof, handle_get_vk,
+    handle_list_proofs, handle_list_vk, handle_post_contract_call, handle_post_contract_deploy,
+    handle_post_contract_instance, handle_post_contract_instance_activate,
+    handle_post_contract_view, handle_post_sorafs_register_manifest,
+    handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
+    handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
+    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
+    handle_v1_new_view_json, handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
+    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots,
+    handle_v1_zk_submit_proof, handle_v1_zk_verify, handle_v1_zk_vote_tally,
+    signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -604,6 +607,23 @@ fn asset_alias_resolve_ok(
     alias_json_response(StatusCode::OK, payload)
 }
 
+fn contract_alias_resolve_ok(
+    contract_alias: &str,
+    contract_address: &str,
+    dataspace: &str,
+    contract_alias_binding: Option<routing::ContractAliasBindingDto>,
+    source: &'static str,
+) -> Result<AxResponse, Error> {
+    let payload = routing::ContractAliasResolveResponseDto {
+        contract_alias: contract_alias.to_owned(),
+        contract_address: contract_address.to_owned(),
+        dataspace: dataspace.to_owned(),
+        contract_alias_binding,
+        source: Some(source.to_owned()),
+    };
+    alias_json_response(StatusCode::OK, payload)
+}
+
 fn alias_error_response(status: StatusCode, message: &str) -> Result<AxResponse, Error> {
     let payload = routing::AliasErrorResponseDto {
         error: message.to_owned(),
@@ -748,6 +768,73 @@ fn resolve_alias_index_on_chain(
             },
         )
         .transpose()
+}
+
+fn resolve_contract_alias_on_chain(
+    app: &SharedAppState,
+    alias_input: &str,
+) -> Result<
+    Option<(
+        iroha_data_model::smart_contract::ContractAlias,
+        iroha_data_model::smart_contract::ContractAddress,
+        Option<iroha_core::state::ContractAliasBindingRecord>,
+        String,
+    )>,
+    Error,
+> {
+    let trimmed = alias_input.trim();
+    if trimmed.is_empty() {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "contract alias must not be empty".to_string(),
+            ),
+        )));
+    }
+
+    let nexus = app.state.nexus_snapshot();
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_str(trimmed)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    contract_alias
+        .resolve_components(&nexus.dataspace_catalog)
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let world = app.state.world_view();
+    let Some(contract_address) = world.contract_address_by_alias_at(&contract_alias, now_ms) else {
+        return Ok(None);
+    };
+    let binding = world
+        .contract_alias_bindings()
+        .get(&contract_address)
+        .cloned();
+    let dataspace_alias = contract_address
+        .dataspace_id()
+        .ok()
+        .and_then(|dataspace_id| nexus.dataspace_catalog.by_id(dataspace_id))
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+
+    Ok(Some((
+        contract_alias,
+        contract_address,
+        binding,
+        dataspace_alias,
+    )))
 }
 
 fn lookup_aliases_by_account_on_chain(
@@ -6411,6 +6498,37 @@ async fn handler_explorer_instruction_detail(
 }
 
 #[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_explorer_instruction_contract_view(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath((hash, index)): AxPath<(String, u64)>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/explorer/instructions/{hash}/{index}/contract-view",
+        )
+        .await?;
+    }
+    match crate::contract_sources::handle_get_instruction_contract_view(
+        app.state.clone(),
+        hash,
+        index,
+    )
+    .await
+    {
+        Ok(response) => Ok(response.into_response()),
+        Err(error) => Ok(explorer_json_error_response(error)),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn explorer_json_error_response(error: Error) -> AxResponse {
     let status = error.status_code();
     let message = error.to_string();
@@ -10217,8 +10335,7 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
         .map(|peer| peer.id().clone())
         .collect();
     let state_view = app.state.view();
-    let mut online = std::collections::BTreeSet::new();
-    let mut offline = std::collections::BTreeSet::new();
+    let mut authoritative_peer_ids = std::collections::BTreeSet::new();
     for ((lane_id, _validator_id), record) in state_view.world().public_lane_validators().iter() {
         if *lane_id != routing_decision.lane_id
             || !matches!(
@@ -10231,7 +10348,33 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
         let Some(signatory) = record.validator.try_signatory() else {
             continue;
         };
-        let peer_id = PeerId::from(signatory.clone());
+        authoritative_peer_ids.insert(PeerId::from(signatory.clone()));
+    }
+
+    // Permissioned deployments do not necessarily materialize public-lane validator records.
+    // When that registry is empty, route against the committed validator roster instead.
+    if authoritative_peer_ids.is_empty() {
+        let fallback_mode = if state_view.world().sumeragi_npos_parameters().is_some() {
+            iroha_config::parameters::actual::ConsensusMode::Npos
+        } else {
+            iroha_config::parameters::actual::ConsensusMode::Permissioned
+        };
+        if matches!(
+            iroha_core::sumeragi::effective_consensus_mode(&state_view, fallback_mode),
+            iroha_config::parameters::actual::ConsensusMode::Permissioned
+        ) {
+            let commit_topology: Vec<_> = state_view.commit_topology().iter().cloned().collect();
+            if commit_topology.is_empty() {
+                authoritative_peer_ids.extend(state_view.world().peers().iter().cloned());
+            } else {
+                authoritative_peer_ids.extend(commit_topology);
+            }
+        }
+    }
+
+    let mut online = std::collections::BTreeSet::new();
+    let mut offline = std::collections::BTreeSet::new();
+    for peer_id in authoritative_peer_ids {
         if online_peer_ids.contains(&peer_id) {
             online.insert(peer_id);
         } else {
@@ -12910,7 +13053,38 @@ async fn process_incoming_torii_proxy_response(
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn attach_soracloud_proxy_network(app: SharedAppState, network: iroha_core::IrohaNetwork) {
+async fn handle_torii_proxy_network_message(
+    app: SharedAppState,
+    network: iroha_core::IrohaNetwork,
+    peer: Peer,
+    payload: iroha_core::NetworkMessage,
+) {
+    debug_assert!(
+        payload.is_torii_proxy_control_message(),
+        "Torii proxy dispatcher should only receive Torii/Soracloud proxy control messages"
+    );
+
+    match payload {
+        iroha_core::NetworkMessage::ToriiProxyRequest(request) => {
+            process_incoming_torii_proxy_request(app, network, peer, *request).await;
+        }
+        iroha_core::NetworkMessage::ToriiProxyResponse(response) => {
+            process_incoming_torii_proxy_response(&app, peer.id().clone(), *response).await;
+        }
+        #[cfg(feature = "app_api")]
+        iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(request) => {
+            process_incoming_soracloud_proxy_request(app, network, peer, *request).await;
+        }
+        #[cfg(feature = "app_api")]
+        iroha_core::NetworkMessage::SoracloudLocalReadProxyResponse(response) => {
+            process_incoming_soracloud_proxy_response(&app, peer.id().clone(), *response).await;
+        }
+        _ => {}
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNetwork) {
     tokio::spawn(async move {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
 
@@ -12931,40 +13105,14 @@ fn attach_soracloud_proxy_network(app: SharedAppState, network: iroha_core::Iroh
         }
 
         while let Some(msg) = rx.recv().await {
-            match msg.payload {
-                iroha_core::NetworkMessage::ToriiProxyRequest(request) => {
-                    process_incoming_torii_proxy_request(
-                        app.clone(),
-                        network.clone(),
-                        msg.peer,
-                        *request,
-                    )
-                    .await;
-                }
-                iroha_core::NetworkMessage::ToriiProxyResponse(response) => {
-                    process_incoming_torii_proxy_response(&app, msg.peer.id().clone(), *response)
-                        .await;
-                }
-                #[cfg(feature = "app_api")]
-                iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(request) => {
-                    process_incoming_soracloud_proxy_request(
-                        app.clone(),
-                        network.clone(),
-                        msg.peer,
-                        *request,
-                    )
-                    .await;
-                }
-                #[cfg(feature = "app_api")]
-                iroha_core::NetworkMessage::SoracloudLocalReadProxyResponse(response) => {
-                    process_incoming_soracloud_proxy_response(
-                        &app,
-                        msg.peer.id().clone(),
-                        *response,
-                    )
-                    .await;
-                }
-                _ => {}
+            if msg.payload.is_torii_proxy_control_message() {
+                handle_torii_proxy_network_message(
+                    app.clone(),
+                    network.clone(),
+                    msg.peer,
+                    msg.payload,
+                )
+                .await;
             }
         }
     });
@@ -14230,6 +14378,106 @@ async fn handler_get_contract_code(
         ))) => Ok(axum::http::StatusCode::NOT_FOUND.into_response()),
         Err(e) => Err(e),
     }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_contract_code_view(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(code_hash): axum::extract::Path<String>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return crate::contract_sources::handle_get_contract_code_view(
+            app.state.clone(),
+            code_hash,
+        )
+        .await
+        .map(axum::response::IntoResponse::into_response);
+    }
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/code/{code_hash}/contract-view:get",
+        app.api_token_enforced(),
+    );
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::contract_sources::handle_get_contract_code_view(app.state.clone(), code_hash).await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))) => Ok(axum::http::StatusCode::NOT_FOUND.into_response()),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_contract_verified_source_job(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(code_hash): axum::extract::Path<String>,
+    crate::utils::extractors::NoritoJson(payload): crate::utils::extractors::NoritoJson<
+        crate::contract_sources::SubmitVerifiedContractSourceDto,
+    >,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/code/{code_hash}/verified-source/jobs",
+    )
+    .await?;
+    let (status, body) = crate::contract_sources::handle_post_verified_source_job(
+        code_hash,
+        payload,
+        app.sorafs_node.clone(),
+    )
+    .await?;
+    Ok((status, body).into_response())
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_contract_verified_source_job(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path((code_hash, job_id)): axum::extract::Path<(String, String)>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}",
+    )
+    .await?;
+    crate::contract_sources::handle_get_verified_source_job(code_hash, job_id)
+        .await
+        .map(axum::response::IntoResponse::into_response)
 }
 
 #[cfg(feature = "app_api")]
@@ -19652,6 +19900,31 @@ async fn handler_asset_alias_resolve(
     )
 }
 
+async fn handler_contract_alias_resolve(
+    State(app): State<SharedAppState>,
+    NoritoJson(request): NoritoJson<routing::ContractAliasResolveRequestDto>,
+) -> Result<AxResponse, Error> {
+    let Some((contract_alias, contract_address, binding, dataspace_alias)) =
+        resolve_contract_alias_on_chain(&app, &request.contract_alias)?
+    else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    contract_alias_resolve_ok(
+        contract_alias.as_ref(),
+        contract_address.as_ref(),
+        &dataspace_alias,
+        binding
+            .as_ref()
+            .map(|record| routing::contract_alias_binding_dto(record, now_ms)),
+        "world_state",
+    )
+}
+
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_program_policies(
     State(app): State<SharedAppState>,
@@ -21570,6 +21843,10 @@ impl Torii {
             let group = group
                 .route("/v1/contracts/deploy", post(handler_post_contract_deploy))
                 .route(
+                    "/v1/contracts/aliases/resolve",
+                    post(handler_contract_alias_resolve),
+                )
+                .route(
                     "/v1/contracts/instance",
                     post(handler_post_contract_instance),
                 )
@@ -21715,6 +21992,18 @@ impl Torii {
                 .route(
                     "/v1/contracts/code/{code_hash}",
                     get(handler_get_contract_code),
+                )
+                .route(
+                    "/v1/contracts/code/{code_hash}/contract-view",
+                    get(handler_get_contract_code_view),
+                )
+                .route(
+                    "/v1/contracts/code/{code_hash}/verified-source/jobs",
+                    post(handler_post_contract_verified_source_job),
+                )
+                .route(
+                    "/v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}",
+                    get(handler_get_contract_verified_source_job),
                 );
             router.merge(group)
         });
@@ -22380,6 +22669,10 @@ impl Torii {
                 .route(
                     "/v1/explorer/instructions/{hash}/{index}",
                     get(handler_explorer_instruction_detail),
+                )
+                .route(
+                    "/v1/explorer/instructions/{hash}/{index}/contract-view",
+                    get(handler_explorer_instruction_contract_view),
                 );
 
             #[cfg(feature = "telemetry")]
@@ -23731,7 +24024,7 @@ impl Torii {
 
         #[cfg(any(feature = "p2p_ws", feature = "connect"))]
         if let Some(network) = app_state.p2p.clone() {
-            attach_soracloud_proxy_network(app_state.clone(), network);
+            attach_torii_proxy_network(app_state.clone(), network);
         }
 
         let base_router: Router<SharedAppState> = Router::new().without_v07_checks();
@@ -25464,6 +25757,31 @@ pub(crate) mod tests_runtime_handlers {
         );
         tx.apply();
         block.commit().expect("commit account alias for test");
+    }
+
+    #[cfg(feature = "app_api")]
+    pub(crate) fn bind_contract_alias_for_test(
+        app: &SharedAppState,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        alias: &str,
+    ) {
+        let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_str(alias)
+            .expect("valid contract alias");
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        tx.world_mut_for_testing()
+            .bind_contract_alias(contract_address, contract_alias, None, None, 0)
+            .expect("bind contract alias");
+        tx.apply();
+        block.commit().expect("commit contract alias for test");
     }
 
     pub(crate) fn signed_app_headers(
@@ -28626,6 +28944,75 @@ pub(crate) mod tests_runtime_handlers {
         }
     }
 
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn authoritative_lane_peer_ids_fall_back_to_permissioned_commit_topology() {
+        let local_keypair = KeyPair::random();
+        let remote_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            let local_peer = Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_keypair.public_key().clone(),
+            );
+            let remote_peer = Peer::new(
+                "127.0.0.1:10002".parse().expect("valid remote address"),
+                remote_keypair.public_key().clone(),
+            );
+            online_tx
+                .send(HashSet::from([local_peer, remote_peer]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.push(remote_peer_id.clone());
+            topology.commit();
+        }
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut peers = block.world.peers_mut_for_testing().transaction();
+        peers.clear();
+        peers.push(local_peer_id.clone());
+        peers.push(remote_peer_id.clone());
+        peers.apply();
+        block.commit().expect("commit permissioned peer roster");
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+
+        assert!(
+            authoritative.contains(&local_peer_id),
+            "local permissioned validator should remain authoritative without public validator records"
+        );
+        assert!(
+            authoritative.contains(&remote_peer_id),
+            "remote permissioned validator should remain authoritative without public validator records"
+        );
+        assert!(
+            super::is_local_authoritative_for_route(app.as_ref(), route),
+            "permissioned local ingress should treat committed topology peers as authoritative"
+        );
+    }
+
     #[tokio::test]
     async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary() {
         let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
@@ -29280,6 +29667,57 @@ pub(crate) mod tests_runtime_handlers {
                 panic!("unsupported proxy schema must fail closed")
             }
         }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
+        let app = mk_app_state_for_tests();
+        let request_id = Hash::new(b"torii-proxy-dispatch");
+        let responder_keypair = KeyPair::random();
+        let responder_peer_id = PeerId::from(responder_keypair.public_key().clone());
+        let responder_peer = Peer::new(
+            "127.0.0.1:1337".parse().expect("valid peer address"),
+            responder_keypair.public_key().clone(),
+        );
+        let expected_response = ToriiProxyHttpResponseV1 {
+            status_code: StatusCode::ACCEPTED.as_u16(),
+            headers: Vec::new(),
+            body: b"torii-proxy-response".to_vec(),
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.torii_proxy_pending.lock().await.insert(
+            request_id,
+            PendingToriiProxyRequest {
+                sender: tx,
+                expected_peer_id: responder_peer_id,
+            },
+        );
+
+        super::handle_torii_proxy_network_message(
+            app.clone(),
+            iroha_core::IrohaNetwork::closed_for_tests(),
+            responder_peer,
+            iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+                schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+                request_id,
+                response: expected_response.clone(),
+            })),
+        )
+        .await;
+
+        assert_eq!(
+            rx.await
+                .expect("pending Torii proxy request should resolve"),
+            expected_response
+        );
+        assert!(
+            !app.torii_proxy_pending
+                .lock()
+                .await
+                .contains_key(&request_id),
+            "Torii proxy response dispatcher must clear the pending request"
+        );
     }
 
     #[tokio::test]
@@ -31340,10 +31778,12 @@ mod tests {
     };
 
     use super::*;
-    #[cfg(feature = "app_api")]
-    use crate::tests_runtime_handlers::bind_account_alias_for_test;
     #[cfg(feature = "telemetry")]
     use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
+    #[cfg(feature = "app_api")]
+    use crate::tests_runtime_handlers::{
+        bind_account_alias_for_test, bind_contract_alias_for_test,
+    };
     use crate::{
         limits,
         tests_runtime_handlers::{
@@ -32516,6 +32956,72 @@ mod tests {
         assert_eq!(dto.alias, alias);
         assert_eq!(dto.account_id, authority.to_string());
         assert_eq!(dto.source.as_deref(), Some("on_chain"));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+        let request = routing::ContractAliasResolveRequestDto {
+            contract_alias: "router::universal".to_string(),
+        };
+
+        let response = handler_contract_alias_resolve(
+            State(app),
+            crate::utils::extractors::NoritoJson(request),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn contract_alias_resolve_returns_bound_contract() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority_account = Account::new_domainless(authority.clone()).build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        bind_contract_alias_for_test(&app, &contract_address, "router::dex.universal");
+        let request = routing::ContractAliasResolveRequestDto {
+            contract_alias: "router::dex.universal".to_string(),
+        };
+
+        let response = handler_contract_alias_resolve(
+            State(app),
+            crate::utils::extractors::NoritoJson(request),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("body")
+            .to_bytes();
+        let dto: routing::ContractAliasResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.contract_alias, "router::dex.universal");
+        assert_eq!(dto.contract_address, contract_address.to_string());
+        assert_eq!(dto.dataspace, "universal");
+        assert_eq!(
+            dto.contract_alias_binding
+                .as_ref()
+                .map(|binding| binding.status.as_str()),
+            Some("permanent")
+        );
+        assert_eq!(dto.source.as_deref(), Some("world_state"));
     }
 
     #[cfg(feature = "app_api")]

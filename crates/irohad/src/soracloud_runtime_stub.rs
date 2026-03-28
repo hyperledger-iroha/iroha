@@ -1,18 +1,13 @@
-use std::{
-    path::PathBuf,
-    sync::Arc,
-    time::Duration,
-};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use iroha_core::{
     queue::Queue,
     soracloud_runtime::{
         SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
         SoracloudLocalReadRequest, SoracloudLocalReadResponse,
-        SoracloudOrderedMailboxExecutionRequest,
-        SoracloudOrderedMailboxExecutionResult, SoracloudPrivateInferenceExecutionRequest,
-        SoracloudPrivateInferenceExecutionResult, SoracloudRuntime,
-        SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
+        SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
+        SoracloudPrivateInferenceExecutionRequest, SoracloudPrivateInferenceExecutionResult,
+        SoracloudRuntime, SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
         SoracloudRuntimeReadHandle, SoracloudRuntimeSnapshot,
     },
     state::State,
@@ -78,7 +73,10 @@ impl SoracloudRuntimeManager {
     }
 
     #[must_use]
-    pub(crate) fn with_mutation_sink(self, _mutation_sink: Arc<QueuedSoracloudRuntimeMutationSink>) -> Self {
+    pub(crate) fn with_mutation_sink(
+        self,
+        _mutation_sink: Arc<QueuedSoracloudRuntimeMutationSink>,
+    ) -> Self {
         self
     }
 
@@ -104,7 +102,10 @@ impl SoracloudRuntimeManager {
         let task = task::spawn(async move {
             shutdown_signal.receive().await;
         });
-        (handle, Child::new(task, OnShutdown::Wait(Duration::from_secs(1))))
+        (
+            handle,
+            Child::new(task, OnShutdown::Wait(Duration::from_secs(1))),
+        )
     }
 }
 
@@ -153,27 +154,35 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
         &self,
         _request: SoracloudLocalReadRequest,
     ) -> Result<SoracloudLocalReadResponse, SoracloudRuntimeExecutionError> {
-        Err(unavailable("embedded Soracloud runtime is disabled for this build"))
+        Err(unavailable(
+            "embedded Soracloud runtime is disabled for this build",
+        ))
     }
 
     fn execute_ordered_mailbox(
         &self,
         _request: SoracloudOrderedMailboxExecutionRequest,
     ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError> {
-        Err(unavailable("embedded Soracloud runtime is disabled for this build"))
+        Err(unavailable(
+            "embedded Soracloud runtime is disabled for this build",
+        ))
     }
 
     fn execute_apartment(
         &self,
         _request: SoracloudApartmentExecutionRequest,
     ) -> Result<SoracloudApartmentExecutionResult, SoracloudRuntimeExecutionError> {
-        Err(unavailable("embedded Soracloud runtime is disabled for this build"))
+        Err(unavailable(
+            "embedded Soracloud runtime is disabled for this build",
+        ))
     }
 
     fn execute_private_inference(
         &self,
         _request: SoracloudPrivateInferenceExecutionRequest,
     ) -> Result<SoracloudPrivateInferenceExecutionResult, SoracloudRuntimeExecutionError> {
-        Err(unavailable("embedded Soracloud runtime is disabled for this build"))
+        Err(unavailable(
+            "embedded Soracloud runtime is disabled for this build",
+        ))
     }
 }

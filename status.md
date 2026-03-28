@@ -64,6 +64,152 @@ Last updated: 2026-03-28
     full `cargo test --workspace` pass was not rerun because it remains a
     multi-hour validation path in this workspace.
 
+## 2026-03-28 Follow-up: account alias cleanup drops public account-domain singular queries
+- Continued the alias-led universal-account cleanup across the live
+  data-model/runtime path so account identity is exposed more consistently as
+  `AccountId` plus alias bindings instead of account-domain lookup helpers.
+- Renamed the account-alias instructions in the data model/core slice to:
+  - `SetPrimaryAccountAlias`
+  - `SetAccountAliasBinding`
+- Extended `FindAliasesByAccountId` payloads to return lease-aware
+  `AccountAliasBindingRecord` data (`status`, `lease_expiry_ms`,
+  `grace_until_ms`, `bound_at_ms`, and the owning `account_id`) sourced from
+  SNS state.
+- Removed the stale singular query surfaces
+  `FindDomainsByAccountId` and `FindAccountIdsByDomainId` from:
+  - `crates/iroha_data_model/src/query/{mod.rs,json/envelope.rs}`
+  - `crates/iroha_data_model/src/visit/visit_query.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/{account.rs,domain.rs,query.rs}`
+- Updated the domain-link query tests to assert against the world-state
+  subject/domain indexes directly rather than re-exposing those transitional
+  account-domain queries as public API.
+- Validation:
+  - `cargo check -p iroha_torii` (pass)
+  - `cargo check -p iroha_core` (pass)
+  - `cargo test -p iroha_data_model find_aliases_by_account_id_roundtrip_with_filters --lib`
+    (pass)
+  - `cargo check -p iroha_data_model` passed earlier in this slice before the
+    final restore of an accidentally dropped `#[test]` attribute on
+    `find_asset_queries_roundtrip_with_public_selectors`; a fresh rerun was
+    still queued behind background Cargo jobs at the stop point.
+
+## 2026-03-28 Codex plugin preset for deployed Torii MCP networks
+- Added a repo-local Codex plugin under `plugins/iroha/` with the required
+  `.codex-plugin/plugin.json`, a fixed Taira `.mcp.json`, repo install docs,
+  SVG assets, and a focused `iroha-live-network` skill for deployed
+  `iroha.*` workflows.
+- Registered the plugin in `.agents/plugins/marketplace.json` so Codex can
+  install it directly from this repository.
+- Enabled the deployed Taira writer-profile MCP defaults in
+  `configs/soranexus/taira/config.toml` and
+  `defaults/kagami/iroha3-taira/config.toml`:
+  `enabled = true`, `profile = "writer"`,
+  `expose_operator_routes = false`,
+  `allow_tool_prefixes = ["iroha."]`.
+- Updated `configs/soranexus/taira/README.md`,
+  `defaults/kagami/iroha3-taira/README.md`, and
+  `crates/iroha_torii/docs/mcp_api.md` to document the public deployed-network
+  rollout, the curated `iroha.*` tool policy, the built-in Taira preset,
+  user-local `codex mcp add ... --url https://<torii>/v1/mcp` custom-network
+  flow, and runtime-only handling of `authority` / `private_key` style inputs.
+- Added `scripts/check_codex_plugin_manifests.py` plus
+  `scripts/tests/check_codex_plugin_manifests_test.py` so malformed plugin,
+  MCP, or marketplace metadata can fail CI.
+- Added focused Torii MCP coverage in
+  `crates/iroha_torii/tests/mcp_endpoints.rs` for the deployed writer profile:
+  the allowlist exposes only `iroha.*`, keeps representative write aliases
+  (`iroha.contracts.call_and_wait`, `iroha.contracts.deploy`,
+  `iroha.accounts.onboard`, `iroha.transactions.submit_and_wait`), and rejects
+  hidden raw `torii.*` tool calls.
+- Validation:
+  - `python3 scripts/check_codex_plugin_manifests.py` (pass)
+  - `python3 -m py_compile scripts/check_codex_plugin_manifests.py scripts/tests/check_codex_plugin_manifests_test.py`
+    (pass)
+  - manual Python execution of the
+    `scripts/tests/check_codex_plugin_manifests_test.py` test functions (pass;
+    local `python3 -m pytest ...` is unavailable because `pytest` is not
+    installed in this environment)
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/mcp_endpoints.rs` (pass)
+  - `cargo check -p iroha_torii` (pass after the later account-alias query
+    cleanup removed the `NameStatus` derive blocker from
+    `crates/iroha_data_model/src/query/mod.rs`)
+- Remaining rollout note: public `https://taira.sora.org/v1/mcp` still needs a
+  redeploy with the shipped `[torii.mcp]` block before the built-in Taira
+  preset can succeed against the live endpoint.
+
+## 2026-03-28 DA/precommit tail tuning stop point: Cut 0 and Cut 1 were clean, Cut 2 regressed permissioned into ingress backpressure
+- Cut 0 restored the `irohad` release build in `crates/irohad/src/main.rs` by
+  handling `ToriiProxyRequest(_)` and `ToriiProxyResponse(_)` in the same no-op
+  relay branch as the other Torii-adjacent proxy/control frames.
+- A permissioned ingress follow-up landed in `crates/iroha_torii/src/lib.rs`
+  so `authoritative_lane_peer_ids(...)` falls back to the committed
+  permissioned topology when `public_lane_validators()` is empty; that removed
+  the clean permissioned soak's `route_unavailable` failure.
+- Cut 1 then landed in `crates/izanami/src/chaos.rs` and
+  `crates/iroha_config/src/parameters/defaults.rs` with the requested
+  shared-host backlog, pipeline, NPoS timeout-floor, and DA multiplier
+  reductions.
+- Clean Cut 1 preserved-peer stable soak evidence:
+  - permissioned log:
+    `/tmp/izanami_permissioned_full_cut1_20260328T061158Z.log`
+    reached target with
+    `quorum_min_height=2003 strict_min_height=2003`,
+    `interval_p50_ms=1001`, `interval_p95_ms=1667`, and target snapshot
+    `phase_collect_da_ms=177`, `phase_collect_precommit_ms=877`;
+  - permissioned counters stayed clean:
+    `no strict block height progress=0`,
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `plan submission failed=0`,
+    `Failed to find asset=0`;
+  - NPoS log:
+    `/tmp/izanami_npos_full_cut1_20260328T064716Z.log`
+    reached target with
+    `quorum_min_height=2005 strict_min_height=2005`,
+    `interval_p50_ms=1251`, `interval_p95_ms=2001`, and target snapshot
+    `phase_collect_da_ms=271`, `phase_collect_precommit_ms=785`; and
+  - NPoS counters also stayed clean:
+    `no strict block height progress=0`,
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `plan submission failed=0`,
+    `Failed to find asset=0`.
+- Those two full Cut 1 baselines satisfied the user's Cut 2 trigger
+  (`interval_p95_ms > 1000` and `phase_collect_precommit_ms >= phase_collect_da_ms`),
+  so Cut 2 was applied:
+  - `IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS: 3 -> 2`
+  - `COLLECTORS_K: 1 -> 2`
+- Focused Cut 2 validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p izanami derive_npos_timing_uses_conservative_floors_for_shared_host_npos_soak --quiet -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p izanami shared_host_stable_soak_profile_ --quiet -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p izanami make_network_builder_ --quiet -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p iroha_core commit_quorum_timeout_tracks_block_time --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p iroha_core commit_quorum_timeout_tracks_sumeragi_parameters --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo test -p iroha_core availability_timeout_from_quorum_scales_for_da --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/tmp/iroha_target_cut2 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- Clean Cut 2 permissioned verification on
+  `/tmp/izanami_permissioned_full_cut2_20260328T074345Z.log`
+  regressed before target height instead of improving:
+  - the last completed strict height was `1306` while the strict reference had
+    already advanced to `1312`;
+  - sampled intervals had already degraded to
+    `p50=1667`, `p95=3335`, `p99=5001`, `max=10003`; and
+  - the run became workload-invalid with
+    `plan submission failed=25`,
+    `transaction queued for too long=39`,
+    `haven't got tx confirmation within 20s=5`,
+    `strict block height is stalled with no lagging peers=21`,
+    while `Failed to find asset` stayed `0`.
+- Net result:
+  - Cut 0 and Cut 1 preserved the frontier/recovery behavior and produced clean
+    evidence that the remaining tail lives in DA/precommit collection; but
+  - Cut 2 did not satisfy the `p95 <= 1000ms` gate and introduced a worse
+    permissioned failure mode, so no frontier-slot ownership, deep-catchup,
+    quorum-timeout FSM routing, repair-path, or other recovery/FSM changes were
+    attempted beyond this point.
+
 ## 2026-03-27 Follow-up: Nexus Torii routed reads now cover dataspace-backed app and Nexus endpoints
 - Extended the Nexus ingress-routing work in
   `crates/iroha_core/src/torii_proxy.rs`,
@@ -104,6 +250,58 @@ Last updated: 2026-03-28
   - this pass still excludes ephemeral live-status reads such as pipeline
     status, and routed reads are currently trust-by-authoritative-peer rather
     than state-root-proof-verified responses.
+
+## 2026-03-27 Full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but the NPoS missing-asset storm is still present
+- Rebuilt `iroha3d` and `izanami` and reran the full 4-peer preserved-peer
+  stable envelopes on the current tree:
+  - build:
+    `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  - permissioned log:
+    `/tmp/izanami_permissioned_workloadfix_20260327T155302Z.log`
+    with preserved peers under
+    `/tmp/iroha-soak-permissioned-workloadfix-NaPyYv/irohad_test_network_pIyxKW`
+  - NPoS log:
+    `/tmp/izanami_npos_workloadfix_20260327T163042Z.log`
+    with preserved peers under
+    `/tmp/iroha-soak-npos-workloadfix-jMkGwz/irohad_test_network_hfeOfk`
+- Permissioned remains liveness-clean and workload-clean on this cut:
+  - reached target height with
+    `quorum_min_height=2007 strict_min_height=2007`
+  - target metrics:
+    `interval_p50_ms=1112`, `interval_p95_ms=1668`
+  - final summary:
+    `successes=11097`, `failures=1`
+  - no workload submission failures at all:
+    `plan submission failed=0`,
+    `transaction queued for too long=0`,
+    `haven't got tx confirmation within 20s=0`
+  - still failed only because Izanami enforces
+    `quorum p95 block interval <= 1000ms`
+- NPoS also remains consensus-liveness clean, but the workload contamination is
+  still real:
+  - reached target height with
+    `quorum_min_height=2007 strict_min_height=2007`
+  - target metrics:
+    `interval_p50_ms=1112`, `interval_p95_ms=1680`
+  - final summary:
+    `successes=10261`, `failures=1351`
+  - every recorded workload failure was the same repeated rejection:
+    `plan submission failed=1351`,
+    `Failed to find asset=1351`,
+    all for one recurring `mint_trigger_repetitions` phantom asset ID
+  - despite that noise, the cluster still stayed aligned and crossed target
+- Preserved-peer frontier/liveness signals on this cut:
+  - `no strict block height progress=0` in both runs
+  - `sharing from fallback anchor=0` in both runs
+  - `requested missing BlockCreated while awaiting RBC INIT=0` in both runs
+  - `requested block-sync range pull from committed anchor=0` in both runs
+  - `FetchBlockBody=0` and `BlockBodyResponse=0` in both runs
+- Net result:
+  - the frontier FSM repair still looks good;
+  - permissioned is now mostly a pure latency-tuning problem; but
+  - the recent Izanami asset-tracking fix did not eliminate the NPoS
+    missing-asset workload storm in the real stable envelope, so the harness
+    contamination root cause is still unresolved.
 
 ## 2026-03-27 Follow-up: Nexus Torii ingress now proxies cross-dataspace transactions and signed queries
 - Extended the Nexus ingress-routing follow-up in
@@ -146,22 +344,29 @@ Last updated: 2026-03-28
     reads are still open follow-up work once the existing Torii baseline
     compile blockers are cleared.
 
-## 2026-03-27 Follow-up: reverse alias lookup docs now pin the universal-account model explicitly
-- Clarified the contributor and public data-model docs after catching a test
+## 2026-03-27 Follow-up: reverse alias lookup docs and mirrored references now pin the universal-account model explicitly
+- Clarified the contributor and public account-model docs after catching a test
   fixture regression that briefly treated domain context as if it were part of
-  canonical account identity.
+  canonical account identity, and propagated that clarification across the
+  mirrored documentation families instead of leaving it English-only.
 - The documented rule is now explicit in:
   - `AGENTS.md`
   - `docs/source/data_model.md`
   - `docs/source/universal_accounts_guide.md`
-  - `docs/account_structure.hy.md`
+  - `docs/account_structure.md`
+- The mirrored doc families now carry the same clarification:
+  - `docs/source/data_model.*.md`
+  - `docs/source/universal_accounts_guide.*.md`
+  - `docs/account_structure*.md`
 - The shipped clarification now states:
   - `AccountId` is always the canonical domainless account subject;
   - `ScopedAccountId { account, domain }` is only explicit domain context for
     registrations/views that require a linked domain;
   - account aliases are a separate SNS/account-label layer, so both
     `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` resolve
-    to the same canonical `AccountId`; and
+    to the same canonical `AccountId`;
+  - `Account::new_domainless(...)` is the correct registration path for
+    dataspace-root aliases; and
   - `linked_domains` is derived index state, not part of canonical identity.
 - Tightened the reverse-alias query coverage in
   `crates/iroha_core/src/smartcontracts/isi/account.rs` with a dedicated
@@ -169,6 +374,7 @@ Last updated: 2026-03-28
   `FindAliasesByAccountId` now has focused coverage for both
   `merchant@hbl.sbp` and `merchant@sbp`.
 - Validation:
+  - `python3 scripts/translate_i18n_google.py --refresh-mode stale --path-glob 'docs/source/data_model.*.md' --path-glob 'docs/source/universal_accounts_guide.*.md'` (pass; `translated=40`, `failed=0`)
   - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/.cache/cargo-target-alias-core cargo test -p iroha_core find_aliases_by_account_id --lib --quiet` (pass)
 
 ## 2026-03-27 Follow-up: FASTPQ CUDA bench now records BN254 FFT/LDE evidence
@@ -3245,8 +3451,8 @@ Last updated: 2026-03-28
   `crates/iroha_config/src/parameters/{actual.rs,defaults.rs,user.rs}`,
   `crates/iroha_torii/src/{lib.rs,openapi.rs,routing.rs}`,
   `crates/iroha_torii/tests/accounts_faucet.rs`,
-  `configs/soranexus/testus/config.toml`,
-  and `defaults/kagami/iroha3-testus/config.toml`.
+  `configs/soranexus/taira/config.toml`,
+  and `defaults/kagami/iroha3-taira/config.toml`.
 - The shipped behavior in this slice:
   - Torii now exposes `GET /v1/accounts/faucet/puzzle`, which returns a deterministic memory-hard scrypt puzzle anchored to a recent committed block hash plus an acceptance window in blocks;
   - the effective PoW difficulty is now derived from immutable chain data for the chosen anchor height plus pending queue pressure: a base difficulty plus adaptive extra bits based on recent committed and queued faucet claim volume;
@@ -6358,16 +6564,16 @@ Last updated: 2026-03-28
   `crates/iroha_config/src/parameters/{actual.rs,user.rs}`,
   `crates/iroha_torii/src/{lib.rs,routing.rs,mcp.rs,openapi.rs}`,
   `crates/iroha_torii/tests/accounts_faucet.rs`,
-  `configs/soranexus/testus/{config.toml,genesis.json}`,
-  and `defaults/kagami/iroha3-testus/{config.toml,genesis.json}`.
+  `configs/soranexus/taira/{config.toml,genesis.json}`,
+  and `defaults/kagami/iroha3-taira/{config.toml,genesis.json}`.
 - The shipped behavior in this slice:
   - Torii now accepts optional `[torii.faucet]` config and exposes `POST /v1/accounts/faucet`, which transfers a fixed starter balance from a configured authority account to an existing account that still has zero balance for the configured faucet asset;
   - the faucet response now includes both the configured asset-definition identifier and the concrete funded `asset_id`, so downstream apps can immediately reuse the exact bucket they were credited with;
-  - the TAIRA/testus profile now seeds a dedicated faucet authority plus `xor#sora` in genesis and pre-mints a faucet reserve, while leaving non-TAIRA profiles untouched; and
+  - the TAIRA/taira profile now seeds a dedicated faucet authority plus `xor#sora` in genesis and pre-mints a faucet reserve, while leaving non-TAIRA profiles untouched; and
   - the faucet config parser now accepts on-chain asset aliases in `name#dataspace` / `name#domain.dataspace` form (for example `xor#sora`) for this profile instead of forcing operators to hand-compute the canonical asset-definition address.
 - Validation:
-  - `jq empty configs/soranexus/testus/genesis.json` (pass)
-  - `jq empty defaults/kagami/iroha3-testus/genesis.json` (pass)
+  - `jq empty configs/soranexus/taira/genesis.json` (pass)
+  - `jq empty defaults/kagami/iroha3-taira/genesis.json` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config torii_faucet_tests -- --nocapture` (pass)
 - Remaining implementation gap:
   - the focused `iroha_config` faucet parser path is green, but full `iroha_torii --features app_api` test execution is still blocked in this workspace by unrelated pre-existing `iroha_core` compile errors around missing offline/SNS symbols on the current branch.

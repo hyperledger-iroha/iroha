@@ -2714,8 +2714,8 @@ pub mod sumeragi {
     use iroha_crypto::Algorithm;
     use nonzero_ext::nonzero;
 
-    /// Number of collectors to use (K). Default is 1 (single proxy tail).
-    pub const COLLECTORS_K: usize = 1;
+    /// Number of collectors to use (K). Default is 2 to avoid a single-collector tail.
+    pub const COLLECTORS_K: usize = 2;
     /// Redundant send fanout (r): how many distinct collectors a validator sends to over time.
     /// Default targets 2f+1 for a 4-peer topology (r=3).
     pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 3;
@@ -2783,10 +2783,10 @@ pub mod sumeragi {
     pub const MODE_FLIP_ENABLED: bool = true;
     /// Default: data availability (RBC + availability QC gating) disabled.
     pub const DA_ENABLED: bool = true;
-    /// Multiplier for DA commit-quorum timeout (applied to block_time + 4 * commit_time).
-    pub const DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 3;
+    /// Multiplier for DA commit-quorum timeout.
+    pub const DA_QUORUM_TIMEOUT_MULTIPLIER: u32 = 2;
     /// Multiplier for availability timeout in DA mode.
-    pub const DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 2;
+    pub const DA_AVAILABILITY_TIMEOUT_MULTIPLIER: u32 = 1;
     /// Floor (ms) for availability timeouts to avoid churn on tiny pipelines.
     pub const DA_AVAILABILITY_TIMEOUT_FLOOR_MS: u64 = 100;
     /// Default interval between kura persistence retry attempts (milliseconds).

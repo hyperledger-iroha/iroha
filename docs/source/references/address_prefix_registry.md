@@ -22,7 +22,7 @@ changes.
 | Network | Chain ID | Chain Discriminant | i105 Prefix | Status | Notes |
 |---------|----------|--------------------|-------------|--------|-------|
 | Sora Nexus (Global) | `sora:nexus:global` | `0x02F1` (753) | `0x02F1` (753) | Production | Canonical prefix for the global Nexus network. Matches the Sora `chain_discriminant`; all production SDK builds MUST default to this value. |
-| Sora Testus (Testnet) | `809574f5-fee7-5e69-bfcf-52451e42d50f` | `0x0171` (369) | `0x0171` (369) | Testnet | Canonical prefix for the public Testus network. Use this prefix when validating addresses and emitting i105 strings for Testus deployments. |
+| Sora Taira (Testnet) | `809574f5-fee7-5e69-bfcf-52451e42d50f` | `0x0171` (369) | `0x0171` (369) | Testnet | Canonical prefix for the public Taira network. Use this prefix when validating addresses and emitting i105 strings for Taira deployments. |
 | Development (local) | `dev.local` | `0x0000` (0) | `0x0000` (0) | Reserved | Convenience prefix for single-node or CI environments. Never use on public networks; collisions are expected. |
 
 ### Usage Guidelines

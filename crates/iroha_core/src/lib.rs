@@ -262,6 +262,21 @@ pub enum NetworkMessage {
     SoranetPowConfig(Vec<u8>),
 }
 
+impl NetworkMessage {
+    /// Returns `true` when the message is handled by Torii's proxy-plane P2P
+    /// subscribers instead of the generic `irohad` relay path.
+    #[must_use]
+    pub const fn is_torii_proxy_control_message(&self) -> bool {
+        matches!(
+            self,
+            Self::SoracloudLocalReadProxyRequest(_)
+                | Self::SoracloudLocalReadProxyResponse(_)
+                | Self::ToriiProxyRequest(_)
+                | Self::ToriiProxyResponse(_)
+        )
+    }
+}
+
 impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         use std::borrow::Cow;
@@ -505,7 +520,13 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::Ordering, collections::BTreeSet, num::NonZeroU64, sync::Arc, time::Duration};
+    use std::{
+        cmp::Ordering,
+        collections::{BTreeMap, BTreeSet},
+        num::NonZeroU64,
+        sync::Arc,
+        time::Duration,
+    };
 
     use iroha_crypto::{Hash, KeyPair, SignatureOf};
     use iroha_data_model::block::{BlockHeader, BlockSignature, builder::BlockBuilder};
@@ -523,12 +544,24 @@ mod tests {
         NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         role::RoleIdWithOwner,
+        soracloud_runtime::{
+            SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
+            SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1, SoracloudLocalReadProxyOutcomeV1,
+            SoracloudLocalReadProxyRequestV1, SoracloudLocalReadProxyResponseV1,
+            SoracloudLocalReadRequest,
+        },
         sumeragi::{
             consensus::{RbcChunk, RbcDeliver, RbcInit, RbcReady},
             message::{
                 BlockCreated, BlockMessage, BlockMessageWire, BlockSyncUpdate,
                 ConsensusParamsAdvert, FetchPendingBlock,
             },
+        },
+        torii_proxy::{
+            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
+            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
+            ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
     };
 
@@ -598,6 +631,74 @@ mod tests {
         let decoded: NetworkMessage = view.decode().expect("decode network message");
 
         assert!(matches!(decoded, NetworkMessage::Health));
+    }
+
+    #[test]
+    fn torii_proxy_control_message_classification_covers_shared_proxy_variants() {
+        let soracloud_request = NetworkMessage::SoracloudLocalReadProxyRequest(Box::new(
+            SoracloudLocalReadProxyRequestV1 {
+                schema_version: SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
+                request_id: Hash::prehashed([0x11; 32]),
+                request: SoracloudLocalReadRequest {
+                    observed_height: 1,
+                    observed_block_hash: None,
+                    service_name: "svc".to_owned(),
+                    service_version: "1.0.0".to_owned(),
+                    handler_name: "read".to_owned(),
+                    handler_class: crate::soracloud_runtime::SoracloudLocalReadKind::Query,
+                    request_method: "GET".to_owned(),
+                    request_path: "/v1/soracloud/test".to_owned(),
+                    handler_path: "/test".to_owned(),
+                    request_query: None,
+                    request_headers: BTreeMap::new(),
+                    request_body: Vec::new(),
+                    request_commitment: Hash::prehashed([0x12; 32]),
+                },
+            },
+        ));
+        let soracloud_response = NetworkMessage::SoracloudLocalReadProxyResponse(Box::new(
+            SoracloudLocalReadProxyResponseV1 {
+                schema_version: SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
+                request_id: Hash::prehashed([0x13; 32]),
+                outcome: SoracloudLocalReadProxyOutcomeV1::Err(
+                    crate::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                        crate::soracloud_runtime::SoracloudRuntimeExecutionErrorKind::Unavailable,
+                        "proxy unavailable",
+                    ),
+                ),
+            },
+        ));
+        let torii_request = NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV1 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+            request_id: Hash::prehashed([0x14; 32]),
+            hop_count: 0,
+            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+                endpoint: ToriiReadEndpointV1::AccountsList,
+                expected_route: ToriiRouteHintV1 {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::GLOBAL,
+                },
+                path_args: Vec::new(),
+                query_string: None,
+                body: Vec::new(),
+                response_format: ToriiProxyResponseFormatV1::Json,
+            }),
+        }));
+        let torii_response = NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id: Hash::prehashed([0x15; 32]),
+            response: ToriiProxyHttpResponseV1 {
+                status_code: 200,
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        }));
+
+        assert!(soracloud_request.is_torii_proxy_control_message());
+        assert!(soracloud_response.is_torii_proxy_control_message());
+        assert!(torii_request.is_torii_proxy_control_message());
+        assert!(torii_response.is_torii_proxy_control_message());
+        assert!(!NetworkMessage::Health.is_torii_proxy_control_message());
     }
 
     #[test]

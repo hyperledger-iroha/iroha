@@ -118,7 +118,7 @@ generated `README.md` into the output directory.
 ## Iroha 3 Profiles
 
 - Run `cargo xtask kagami-profiles` to emit sample bundles for
-  `iroha3-dev`, `iroha3-testus`, and `iroha3-nexus` under
+  `iroha3-dev`, `iroha3-taira`, and `iroha3-nexus` under
   `defaults/kagami/<profile>/`
 - Each bundle includes:
   - `genesis.json`
@@ -126,7 +126,7 @@ generated `README.md` into the output directory.
   - `config.toml`
   - `docker-compose.yml`
   - `README.md`
-- `iroha3-testus` and `iroha3-nexus` require `--vrf-seed-hex` when generating
+- `iroha3-taira` and `iroha3-nexus` require `--vrf-seed-hex` when generating
   or verifying NPoS manifests
 
 See [docs/source/kagami_profiles.md](../../docs/source/kagami_profiles.md) for

@@ -8731,6 +8731,26 @@ impl Client {
         Self::parse_json_ok_response(&response, "contract view request")
     }
 
+    /// Convenience: POST `/v1/contracts/aliases/resolve` with a contract alias literal.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails or the request cannot be serialized.
+    pub fn post_contract_alias_resolve(
+        &self,
+        contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/contracts/aliases/resolve");
+        let payload = norito::json::to_vec(&norito::json!({
+            "contract_alias": contract_alias,
+        }))?;
+        self.send_builder(
+            self.default_request(HttpMethod::POST, url)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON)
+                .body(payload),
+        )
+    }
+
     /// POST `/v1/subscriptions/plans` with a JSON subscription plan payload.
     ///
     /// # Errors

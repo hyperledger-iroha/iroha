@@ -12,7 +12,7 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::DomainId,
     isi::{
-        domain_link::{BindAccountAlias, SetAccountLabel},
+        domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
         register::RegisterBox,
     },
     metadata::Metadata,
@@ -347,19 +347,25 @@ pub fn seed_genesis_alias_bootstrap(
                 }
             }
 
-            if let Some(set_label) = instruction.as_any().downcast_ref::<SetAccountLabel>() {
-                seed_alias_manage_permissions_if_missing(world, authority, &set_label.label);
-                if let Ok(selector) =
-                    selector_for_account_alias(&set_label.label, &dataspace_catalog)
-                {
-                    seed_name_record_if_missing(world, authority, selector);
+            if let Some(set_alias) = instruction
+                .as_any()
+                .downcast_ref::<SetPrimaryAccountAlias>()
+            {
+                if let Some(alias) = set_alias.alias.as_ref() {
+                    seed_alias_manage_permissions_if_missing(world, authority, alias);
+                    if let Ok(selector) = selector_for_account_alias(alias, &dataspace_catalog) {
+                        seed_name_record_if_missing(world, authority, selector);
+                    }
                 }
             }
 
-            if let Some(bind_alias) = instruction.as_any().downcast_ref::<BindAccountAlias>() {
-                seed_alias_manage_permissions_if_missing(world, authority, &bind_alias.label);
+            if let Some(bind_alias) = instruction
+                .as_any()
+                .downcast_ref::<SetAccountAliasBinding>()
+            {
+                seed_alias_manage_permissions_if_missing(world, authority, &bind_alias.alias);
                 if let Ok(selector) =
-                    selector_for_account_alias(&bind_alias.label, &dataspace_catalog)
+                    selector_for_account_alias(&bind_alias.alias, &dataspace_catalog)
                 {
                     seed_name_record_if_missing(world, authority, selector);
                 }
@@ -823,6 +829,52 @@ pub fn renew_name(
     Ok(record)
 }
 
+/// Set the absolute lease expiry for an existing SNS name in authoritative state.
+///
+/// # Errors
+///
+/// Returns [`SnsError`] when the record or policy is missing, the selector is immutable, the
+/// record is tombstoned, or the requested expiry is not in the future.
+pub fn set_name_lease_expiry(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    namespace: SnsNamespace,
+    literal: &str,
+    expires_at_ms: u64,
+) -> Result<NameRecordV1, SnsError> {
+    let selector = selector_for_namespace_literal(
+        namespace,
+        literal,
+        &state_transaction.nexus.dataspace_catalog,
+    )?;
+    ensure_selector_is_mutable(&selector)?;
+    let policy = policy_or_not_found(state_transaction.world(), selector.suffix_id)?;
+    enforce_policy_active(&policy)?;
+    let mut record = record_or_not_found(state_transaction.world(), &selector)?;
+    let now_ms = state_transaction.block_unix_timestamp_ms();
+    refresh_lifecycle(&mut record, now_ms);
+    if matches!(record.status, NameStatus::Tombstoned(_)) {
+        return Err(SnsError::Conflict(format!(
+            "registration `{}` is tombstoned",
+            selector.normalized_label()
+        )));
+    }
+    if expires_at_ms <= now_ms {
+        return Err(SnsError::BadRequest(
+            "lease_expiry_ms must be greater than the current block timestamp".to_owned(),
+        ));
+    }
+
+    record.expires_at_ms = expires_at_ms;
+    record.grace_expires_at_ms =
+        expires_at_ms.saturating_add(u64::from(policy.grace_period_days) * MS_PER_DAY);
+    record.redemption_expires_at_ms = record
+        .grace_expires_at_ms
+        .saturating_add(u64::from(policy.redemption_period_days) * MS_PER_DAY);
+    refresh_lifecycle(&mut record, now_ms);
+    persist_record(state_transaction, &record);
+    Ok(record)
+}
+
 /// Transfer SNS name ownership in authoritative state.
 ///
 /// # Errors
@@ -1126,7 +1178,7 @@ mod tests {
         account::{Account, AccountAddress, AccountId, rekey::AccountLabel},
         block::SignedBlock,
         domain::Domain,
-        isi::{InstructionBox, Register, domain_link::SetAccountLabel},
+        isi::{InstructionBox, Register, domain_link::SetPrimaryAccountAlias},
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         sns::{
@@ -1257,9 +1309,13 @@ mod tests {
                     Account::new(account_id.to_account_id(domain_id.clone()))
                         .with_label(Some(label.clone())),
                 )),
-                InstructionBox::from(SetAccountLabel {
+                InstructionBox::from(SetPrimaryAccountAlias {
                     account: genesis_account.clone(),
-                    label: AccountLabel::new(domain_id.clone(), "ops".parse().expect("label")),
+                    alias: Some(AccountLabel::new(
+                        domain_id.clone(),
+                        "ops".parse().expect("label"),
+                    )),
+                    lease_expiry_ms: None,
                 }),
             ])
             .sign(genesis_key.private_key());

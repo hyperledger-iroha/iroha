@@ -318,15 +318,13 @@ pub fn activate_instance_request_json(
 pub fn contract_call_request_json(
     account: &AccountId,
     private_key: &ExposedPrivateKey,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &str,
     options: ContractCallOptions<'_>,
 ) -> String {
     let mut entries = vec![
         crate::json_entry("authority", account.clone()),
         crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("namespace", namespace),
-        crate::json_entry("contract_id", contract_id),
+        crate::json_entry("contract_address", contract_address),
     ];
     if let Some(ep) = options.entrypoint {
         entries.push(crate::json_entry("entrypoint", ep));
@@ -345,14 +343,12 @@ pub fn contract_call_request_json(
 /// Build JSON string for contract view request body.
 pub fn contract_view_request_json(
     account: &AccountId,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &str,
     options: ContractViewOptions<'_>,
 ) -> String {
     let mut entries = vec![
         crate::json_entry("authority", account.clone()),
-        crate::json_entry("namespace", namespace),
-        crate::json_entry("contract_id", contract_id),
+        crate::json_entry("contract_address", contract_address),
     ];
     if let Some(ep) = options.entrypoint {
         entries.push(crate::json_entry("entrypoint", ep));

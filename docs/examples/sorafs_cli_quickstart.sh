@@ -67,6 +67,7 @@ sorafs_cli manifest submit \
   --manifest "${MANIFEST_PATH}" \
   --chunk-plan "${PLAN_PATH}" \
   --torii-url "${TORII_URL}" \
+  --resolve-submitted-epoch=true \
   --authority "${SORA_AUTHORITY}" \
   --private-key "${SORA_PRIVATE_KEY}" \
   --summary-out "${SUBMIT_SUMMARY}"
@@ -86,6 +87,7 @@ echo "==> Verifying CAR contents locally"
 sorafs_cli proof verify \
   --manifest "${MANIFEST_PATH}" \
   --car "${CAR_PATH}" \
+  --chunk-plan "${PLAN_PATH}" \
   --summary-out "${PROOF_VERIFY_SUMMARY}"
 
 echo "==> Complete. Artefacts written to ${SORA_OUTPUT_DIR}"

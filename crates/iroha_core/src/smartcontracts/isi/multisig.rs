@@ -2527,7 +2527,7 @@ mod tests {
         ChainId, IntoKeyValue,
         account::{AccountId, rekey::AccountLabel},
         block::BlockHeader,
-        isi::{AddSignatory, RemoveSignatory, SetAccountLabel, SetAccountQuorum},
+        isi::{AddSignatory, RemoveSignatory, SetAccountQuorum, SetPrimaryAccountAlias},
         prelude::{Domain, InstructionBox, Register},
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -2625,9 +2625,10 @@ mod tests {
             domain_id.clone(),
             label.parse().expect("account label name"),
         );
-        SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: account_id.clone(),
-            label: label.clone(),
+            alias: Some(label.clone()),
+            lease_expiry_ms: None,
         }
         .execute(authority, state_transaction)
         .expect("bind account label");

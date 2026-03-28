@@ -4,55 +4,220 @@ direction: ltr
 source: docs/source/universal_accounts_guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5d525863066feb78b2668d766816ed9404cef6e8159dea85db0fc8c1bcec9d01
-source_last_modified: "2026-01-30T18:06:03.658066+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: f972f8f82b7f4e89c1d48b0dbbc6eb5b73303e2fab0f580ab21e63990ba03af8
+source_last_modified: "2026-03-27T19:05:17.617064+00:00"
+translation_last_reviewed: 2026-03-28
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Universal Account Guide
+# Ունիվերսալ հաշվի ուղեցույց
 
-This guide distils the UAID (Universal Account ID) rollout requirements from
-the Nexus roadmap and packages them into an operator + SDK focused walkthrough.
-It covers UAID derivation, portfolio/manifest inspection, regulator templates,
-and the evidence that must accompany every `iroha app space-directory manifest
-publish` run (roadmap reference: `roadmap.md:2209`).
+Այս ուղեցույցը թորում է UAID-ի (Համընդհանուր հաշվի ID) ներդրման պահանջները
+Nexus ճանապարհային քարտեզը և փաթեթավորելով դրանք օպերատորի + SDK-ի վրա կենտրոնացված շրջագայության մեջ:
+Այն ընդգրկում է UAID-ի ստացումը, պորտֆելի/մանիֆեստի ստուգումը, կարգավորիչի ձևանմուշները,
+և ապացույցները, որոնք պետք է ուղեկցեն յուրաքանչյուր «iroha» հավելվածի տիեզերական գրացուցակի մանիֆեստին
+հրապարակել` run (roadmap reference: `ճանապարհային քարտեզ.md:2209`):
 
-## 1. UAID quick reference
-
-- UAIDs are `uaid:<hex>` literals where `<hex>` is a Blake2b-256 digest whose
-  LSB is set to `1`. The canonical type lives in
+## 1. UAID-ի արագ հղում- UAID-ները `uaid:<hex>` բառացի են, որտեղ `<hex>`-ը Blake2b-256-ի մարսողություն է, որի
+  LSB-ը դրված է `1`: Կանոնական տեսակը ապրում է
   `crates/iroha_data_model/src/nexus/manifest.rs::UniversalAccountId`.
-- Account records (`Account` and `AccountDetails`) now carry an optional `uaid`
-  field so applications can learn the identifier without bespoke hashing.
-- Space Directory maintains a `World::uaid_dataspaces` map that ties each UAID
-  to the dataspace accounts referenced by active manifests. Torii reuses that
-  map for the `/portfolio` and `/uaids/*` APIs.
-- `POST /v1/accounts/onboard` publishes a default Space Directory manifest for
-  the global dataspace when none exists, so the UAID is immediately bound.
-  Onboarding authorities must hold `CanPublishSpaceDirectoryManifest{dataspace=0}`.
-- All SDKs expose helpers for canonicalising UAID literals (e.g.,
-  `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests
-  (LSB=1) or `uaid:<hex>` literals and re-use the same Norito codecs so the
-  digest cannot drift across languages.
+- Հաշվի գրառումները (`Account` և `AccountDetails`) այժմ ունեն կամընտիր `uaid`
+  դաշտ, որպեսզի հավելվածները կարողանան սովորել նույնացուցիչը՝ առանց պատվերով հեշավորման:
+- Թաքնված ֆունկցիայի նույնացուցիչի քաղաքականությունը կարող է կապել կամայական նորմալացված մուտքերը
+  (հեռախոսահամարներ, էլ. նամակներ, հաշվի համարներ, գործընկերների տողեր) դեպի `opaque:` ID-ներ
+  UAID անվանատարածքի տակ: Շղթայի վրա գտնվող կտորներն են՝ `IdentifierPolicy`,
+  `IdentifierClaimRecord` և `opaque_id -> uaid` ինդեքսը:
+- Space Directory-ը պահպանում է `World::uaid_dataspaces` քարտեզ, որը կապում է յուրաքանչյուր UAID-ին
+  ակտիվ մանիֆեստներով հղվող տվյալների տարածքի հաշիվներին: Torii-ը նորից օգտագործում է դա
+  քարտեզ `/portfolio` և `/uaids/*` API-ների համար:
+- `POST /v1/accounts/onboard`-ը հրապարակում է լռելյայն Տիեզերական գրացուցակի մանիֆեստը
+  գլոբալ տվյալների տարածությունը, երբ ոչ մեկը գոյություն չունի, ուստի UAID-ն անմիջապես կապվում է:
+  Գործող մարմինները պետք է ունենան `CanPublishSpaceDirectoryManifest{dataspace=0}`:
+- Բոլոր SDK-ները բացահայտում են UAID-ի բառացի կանոնականացման օգնականները (օրինակ՝
+  `UaidLiteral` Android SDK-ում): Օգնականներն ընդունում են հում 64 վեցանկյուն մարսողություններ
+  (LSB=1) կամ `uaid:<hex>` բառացի և նորից օգտագործեք նույն Norito կոդեկները, որպեսզի
+  digest-ը չի կարող շեղվել լեզուներով:
 
-## 2. Deriving and verifying UAIDs
+## 1.1 Թաքնված նույնացուցիչի քաղաքականություն
 
-There are three supported ways to obtain a UAID:
+UAID-ները այժմ հանդիսանում են երկրորդ ինքնության շերտի խարիսխը.- Համաշխարհային `IdentifierPolicyId` (`<kind>#<business_rule>`) սահմանում է
+  անվանատարածք, հանրային պարտավորությունների մետատվյալներ, լուծիչի հաստատման բանալի և
+  կանոնական մուտքագրման նորմալացման ռեժիմ (`Exact`, `LowercaseTrimmed`,
+  `PhoneE164`, `EmailAddress` կամ `AccountNumber`):
+- Հայցը կապում է մեկ ստացված `opaque:` նույնացուցիչը հենց մեկ UAID-ի և մեկի հետ
+  կանոնական `AccountId` համաձայն այդ քաղաքականության, բայց շղթան ընդունում է միայն
+  պահանջ, երբ այն ուղեկցվում է ստորագրված `IdentifierResolutionReceipt`-ով:
+- Բանաձևը մնում է `resolve -> transfer` հոսք: Torii-ը լուծում է անթափանցությունը
+  կարգավորել և վերադարձնում է կանոնական `AccountId`; տրանսֆերները դեռևս ուղղված են
+  կանոնական հաշիվ, այլ ոչ թե ուղղակիորեն `uaid:` կամ `opaque:`:
+- Քաղաքականություններն այժմ կարող են հրապարակել BFV մուտքագրման գաղտնագրման պարամետրերը
+  `PolicyCommitment.public_parameters`. Երբ ներկա է, Torii-ը գովազդում է դրանք
+  `GET /v1/identifier-policies`, և հաճախորդները կարող են ներկայացնել BFV-ով փաթաթված մուտքագրում
+  պարզ տեքստի փոխարեն: Ծրագրավորված քաղաքականությունները BFV պարամետրերը պարուրում են ա
+  կանոնական `BfvProgrammedPublicParameters` փաթեթ, որը նաև հրապարակում է
+  հանրային `ram_fhe_profile`; ժառանգված չմշակված BFV բեռնատարները արդիականացվում են դրա վրա
+  կանոնական փաթեթ, երբ պարտավորությունը վերակառուցվի:
+- Նույնացուցիչ երթուղիները անցնում են նույն Torii մուտքի նշանով և տոկոսադրույքի սահմանաչափով
+  ստուգումներ, ինչպես հավելվածի մյուս վերջնակետերը: Դրանք նորմալի շուրջ շրջանցիկ չեն
+  API քաղաքականություն.
 
-1. **Read it from world state or SDK models.** Any `Account`/`AccountDetails`
-   payload queried via Torii now has the `uaid` field populated when the
-   participant opted into universal accounts.
-2. **Query the UAID registries.** Torii exposes
-   `GET /v1/space-directory/uaids/{uaid}` which returns the dataspace bindings
-   and manifest metadata the Space Directory host persists (see
-   `docs/space-directory.md` §3 for payload samples).
-3. **Derive it deterministically.** When bootstrapping new UAIDs offline, hash
-   the canonical participant seed with Blake2b-256 and prefix the result with
-   `uaid:`. The snippet below mirrors the helper documented in
+## 1.2 Տերմինաբանություն
+
+Անվանման բաժանումը միտումնավոր է.- `ram_lfe`-ը արտաքին թաքնված ֆունկցիայի աբստրակցիա է: Այն ընդգրկում է քաղաքականությունը
+  գրանցում, պարտավորություններ, հանրային մետատվյալներ, կատարողական անդորրագրեր և
+  ստուգման ռեժիմ:
+- `BFV`-ը Brakerski/Fan-Vercauteren հոմոմորֆ գաղտնագրման սխեման է, որն օգտագործվում է
+  որոշ `ram_lfe` հետնամասեր՝ կոդավորված մուտքագրումը գնահատելու համար:
+- `ram_fhe_profile`-ը BFV-ին հատուկ մետատվյալ է, այլ ոչ ամբողջի երկրորդ անուն
+  հատկանիշ. Այն նկարագրում է ծրագրավորված BFV կատարման մեքենան, որը դրամապանակներ և
+  ստուգողները պետք է թիրախավորեն, երբ քաղաքականությունն օգտագործում է ծրագրավորված հետին պլանը:
+
+Կոնկրետ առումով.
+
+- `RamLfeProgramPolicy` և `RamLfeExecutionReceipt` LFE-շերտային տեսակներ են:
+- `BfvParameters`, `BfvCiphertext`, `BfvProgrammedPublicParameters` և
+  `BfvRamProgramProfile`-ը FHE շերտի տեսակներն են:
+- `HiddenRamFheProgram` և `HiddenRamFheInstruction` ներքին անվանումներ են
+  թաքնված BFV ծրագիրը, որն իրականացվում է ծրագրավորված հետնամասի կողմից: Նրանք մնում են
+  FHE կողմը, քանի որ նրանք ավելի շուտ նկարագրում են գաղտնագրված կատարման մեխանիզմը, քան
+  արտաքին քաղաքականությունը կամ ստացականի աբստրակցիան:
+
+## 1.3 Հաշվի նույնականացումն ընդդեմ կեղծանունների
+
+Ունիվերսալ հաշվի թողարկումը չի փոխում կանոնական հաշվի նույնականացման մոդելը՝- `AccountId`-ը մնում է կանոնական, առանց տիրույթի հաշվի առարկա:
+- `ScopedAccountId { account, domain }`-ը բացահայտ տիրույթի համատեքստ է դիտումների կամ
+  գրանցումներ, որոնք նյութականացնում են տիրույթի հղումը: Դա երկրորդ կանոնական չէ
+  ինքնությունը։
+- SNS/հաշվի կեղծանունները առանձին կապեր են այդ թեմայի վերևում: Ա
+  տիրույթի համար որակավորված կեղծանուններ, ինչպիսիք են `merchant@hbl.sbp` և տվյալների տարածության արմատական անուն
+  ինչպիսին է `merchant@sbp`-ը, երկուսն էլ կարող են լուծվել նույն կանոնական `AccountId`-ով:
+- `linked_domains`-ը պահված հաշվի գրառումների վրա բխում է վիճակից
+  հաշիվ-տիրույթի ինդեքսներ. Այն նկարագրում է դրա համար ներկայումս նյութականացված հղումները
+  առարկա; այն կանոնական նույնացուցիչի մաս չէ:
+
+Օպերատորների, SDK-ների և թեստերի իրականացման կանոն. սկսել կանոնականից
+`AccountId`, այնուհետև ավելացրեք վարձակալական անուն, տվյալների տարածության/տիրույթի թույլտվություններ և բացահայտ
+տիրույթի հղումները առանձին: Մի սինթեզեք կեղծ տիրույթի շրջանակով կանոնական
+հաշիվ միայն այն պատճառով, որ կեղծանունը կամ երթուղին կրում է տիրույթի հատված:
+
+Ներկայիս Torii երթուղիները.| Երթուղի | Նպատակը |
+|-------|---------|
+| `GET /v1/ram-lfe/program-policies` | Ցուցակում է ակտիվ և ոչ ակտիվ RAM-LFE ծրագրի քաղաքականությունները, գումարած դրանց հրապարակային կատարման մետատվյալները, ներառյալ կամընտիր BFV `input_encryption` պարամետրերը և ծրագրավորված `ram_fhe_profile`: |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | Ընդունում է ճիշտ `{ input_hex }` կամ `{ encrypted_input }`-ից մեկը և վերադարձնում է քաղաքացիություն չունեցող `RamLfeExecutionReceipt` գումարած `{ output_hex, output_hash, receipt_hash }` ընտրված ծրագրի համար: Ներկայիս Torii-ը թողարկում է անդորրագրեր ծրագրավորված BFV հետին պլանի համար: |
+| `POST /v1/ram-lfe/receipts/verify` | Առանց քաղաքացիության հաստատում է `RamLfeExecutionReceipt`-ը` ընդդեմ հրապարակված ցանցային ծրագրի քաղաքականության և ընտրովի ստուգում է, որ զանգահարողի կողմից մատակարարված `output_hex`-ը համընկնում է `output_hash` անդորրագրի հետ: |
+| `GET /v1/identifier-policies` | Ցուցակում է ակտիվ և ոչ ակտիվ թաքնված գործառույթների քաղաքականության անվանատարածքները՝ գումարած դրանց հանրային մետատվյալները, ներառյալ կամընտիր BFV `input_encryption` պարամետրերը, `normalization` ռեժիմը գաղտնագրված հաճախորդի կողմից մուտքագրման համար և `ram_fhe_profile` ծրագրավորված BFV քաղաքականության համար: |
+| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Ընդունում է ճիշտ `{ input }` կամ `{ encrypted_input }`-ից մեկը: Պարզ տեքստ `input` նորմալացված է սերվերի կողմից; BFV `encrypted_input`-ն արդեն պետք է նորմալացվի՝ համաձայն հրապարակված քաղաքականության ռեժիմի: Այնուհետև վերջնակետը ստանում է `opaque:` բռնակը և վերադարձնում է ստորագրված անդորրագիր, որը `ClaimIdentifier`-ը կարող է ներկայացնել շղթայում՝ ներառյալ թե՛ չմշակված `signature_payload_hex`, և թե՛ վերլուծված `signature_payload`: || `POST /v1/identifiers/resolve` | Ընդունում է ճիշտ `{ input }` կամ `{ encrypted_input }`-ից մեկը: Պարզ տեքստ `input` նորմալացված է սերվերի կողմից; BFV `encrypted_input`-ն արդեն պետք է նորմալացվի՝ համաձայն հրապարակված քաղաքականության ռեժիմի: Վերջնական կետը նույնացուցիչը լուծում է `{ opaque_id, receipt_hash, uaid, account_id, signature }`-ում, երբ առկա է ակտիվ պահանջ, ինչպես նաև վերադարձնում է կանոնական ստորագրված օգտակար բեռը որպես `{ signature_payload_hex, signature_payload }`: |
+| `GET /v1/identifiers/receipts/{receipt_hash}` | Փնտրում է `IdentifierClaimRecord`-ը, որը կապված է դետերմինիստական ​​անդորրագրի հեշի հետ, որպեսզի օպերատորները և SDK-ները կարողանան ստուգել սեփականության իրավունքը կամ ախտորոշել վերարտադրման/անհամապատասխանության ձախողումները՝ առանց սկանավորելու նույնացուցիչի ամբողջական ինդեքսը: |
+
+Torii-ի ընթացիկ կատարման ժամանակը կազմաձևված է հետևյալ կերպ.
+`torii.ram_lfe.programs[*]`, բանալիով `program_id`: Նույնականացնող երթուղիներն այժմ
+նորից օգտագործեք նույն RAM-LFE գործարկման ժամանակը առանձին `identifier_resolver`-ի փոխարեն
+կազմաձևման մակերեսը:
+
+Ընթացիկ SDK աջակցություն.- `normalizeIdentifierInput(value, normalization)`-ը համապատասխանում է Rust-ին
+  Կանոնիկիզատորներ `exact`, `lowercase_trimmed`, `phone_e164`,
+  `email_address` և `account_number`:
+- `ToriiClient.listIdentifierPolicies()`-ը թվարկում է քաղաքականության մետատվյալները, ներառյալ BFV-ն
+  մուտքագրման գաղտնագրման մետատվյալներ, երբ քաղաքականությունը հրապարակում է դրանք, գումարած վերծանված
+  BFV պարամետրի օբյեկտ `input_encryption_public_parameters_decoded`-ի միջոցով:
+  Ծրագրավորված քաղաքականությունները նաև բացահայտում են վերծանված `ram_fhe_profile`-ը: Այդ դաշտն է
+  միտումնավոր BFV շրջանակով. այն թույլ է տալիս դրամապանակներին ստուգել սպասվող ռեգիստրը
+  հաշվում, գծերի հաշվարկ, կանոնականացման ռեժիմ և ծածկագրված տեքստի նվազագույն մոդուլ
+  ծրագրավորված FHE backend-ը նախքան հաճախորդի կողմից մուտքագրումը կոդավորելը:
+- `getIdentifierBfvPublicParameters(policy)` և
+  `buildIdentifierRequestForPolicy(policy, { input | encryptedInput })` օգնություն
+  JS զանգահարողները օգտագործում են հրապարակված BFV մետատվյալները և ստեղծում են քաղաքականությանը ծանոթ հարցում
+  մարմիններ՝ առանց քաղաքականության նույնականացման և նորմալացման կանոնների վերակիրառման:
+- `encryptIdentifierInputForPolicy(policy, input, { seedHex? })` և
+  `buildIdentifierRequestForPolicy(policy, { input, encrypt: true })` հիմա թող
+  JS դրամապանակները կառուցում են BFV Norito գաղտնագրված տեքստի ամբողջական ծրարը տեղում՝ սկսած
+  հրապարակված քաղաքականության պարամետրերը՝ նախապես կառուցված գաղտնագրված վեցանկյուն առաքման փոխարեն:
+- `ToriiClient.resolveIdentifier({ policyId, input | encryptedInput })`
+  լուծում է թաքնված նույնացուցիչը և վերադարձնում է ստորագրված անդորրագրի օգտակար բեռը,
+  ներառյալ `receipt_hash`, `signature_payload_hex` և
+  `signature_payload`.
+- `ToriiClient.issueIdentifierClaimReceipt(accountId, { policyId, input |
+  encryptedInput })` issues the signed receipt needed by `ClaimIdentifier`:
+- `verifyIdentifierResolutionReceipt(receipt, policy)`-ը ստուգում է վերադարձվածը
+  անդորրագիր հաճախորդի կողմից քաղաքականության լուծիչ բանալիով, և`ToriiClient.getIdentifierClaimByReceiptHash(receiptHash)`-ը վերցնում է
+  հետագա աուդիտի/վրիպազերծման հոսքերի համար շարունակվող պահանջի գրանցում:
+- `IrohaSwift.ToriiClient`-ն այժմ բացահայտում է `listIdentifierPolicies()`,
+  `resolveIdentifier(policyId:input:encryptedInputHex:)`,
+  `issueIdentifierClaimReceipt(accountId:policyId:input:encryptedInputHex:)`,
+  և `getIdentifierClaimByReceiptHash(_)`, գումարած
+  `ToriiIdentifierNormalization` նույն հեռախոսի/էլ.փոստի/հաշվի համարի համար
+  կանոնականացման ռեժիմներ.
+- `ToriiIdentifierLookupRequest` և
+  `ToriiIdentifierPolicySummary.plaintextRequest(...)` /
+  `.encryptedRequest(...)` օգնականները տրամադրում են մուտքագրված Swift հարցման մակերեսը
+  լուծել և ստանալ հայցերի ստացման զանգերը, և Swift-ի քաղաքականություններն այժմ կարող են ստանալ BFV
+  գաղտնագրված տեքստը տեղական `encryptInput(...)` / `encryptedRequest(input:...)`-ի միջոցով:
+- `ToriiIdentifierResolutionReceipt.verifySignature(using:)` հաստատում է դա
+  վերին մակարդակի անդորրագրի դաշտերը համապատասխանում են ստորագրված օգտակար բեռին և հաստատում են
+  լուծիչի ստորագրությունը հաճախորդի կողմից մինչև ներկայացումը:
+- `HttpClientTransport` Android SDK-ում այժմ բացահայտվում է
+  `listIdentifierPolicies()`, `resolveIdentifier(policyId, ներածում,
+  encryptedInputHex)`, `issueIdentifierClaimReceipt(accountId, PolicyId,
+  մուտքագրում, ծածկագրվածInputHex)`, and `getIdentifierClaimByReceiptHash(...)`,
+  գումարած `IdentifierNormalization` նույն կանոնականացման կանոնների համար:
+- `IdentifierResolveRequest` և
+  `IdentifierPolicySummary.plaintextRequest(...)` /
+  `.encryptedRequest(...)` օգնականները տրամադրում են մուտքագրված Android հարցումների մակերեսը,
+  մինչդեռ `IdentifierPolicySummary.encryptInput(...)` /
+  `.encryptedRequestFromInput(...)` ստացվում է BFV ծածկագրային տեքստի ծրարը
+  տեղական՝ հրապարակված քաղաքականության պարամետրերից:
+  `IdentifierResolutionReceipt.verifySignature(policy)`-ը ստուգում է վերադարձվածը
+  լուծիչի ստորագրությունը հաճախորդի կողմից:
+
+Ընթացիկ հրահանգների հավաքածու.- `RegisterIdentifierPolicy`
+- `ActivateIdentifierPolicy`
+- `ClaimIdentifier` (անդորրագիր, չմշակված `opaque_id` պահանջները մերժվում են)
+- `RevokeIdentifier`
+
+`iroha_crypto::ram_lfe`-ում այժմ գոյություն ունի երեք հետին պլան.
+
+- պատմական պարտավորությունների հետ կապված `HKDF-SHA3-512` PRF, և
+- BFV-ով ապահովված գաղտնի affine գնահատող, որը սպառում է BFV կոդավորված նույնացուցիչը
+  slots ուղղակիորեն. Երբ `iroha_crypto`-ը կառուցված է լռելյայն
+  `bfv-accel` հատկանիշը, BFV օղակի բազմապատկումն օգտագործում է ճշգրիտ դետերմինիստիկա
+  CRT-NTT backend ներքին; Այդ հատկությունն անջատելը վերադառնում է
+  սկալյար դպրոցական ուղի միանման ելքերով, և
+- BFV-ով ապահովված գաղտնի ծրագրավորված գնահատող, որը բխում է հրահանգների վրա հիմնված
+  RAM-ի ոճով կատարման հետք կոդավորված ռեգիստրների և ծածկագրված տեքստի հիշողության վրա
+  երթուղիներ՝ նախքան անթափանց նույնացուցիչը և ստացականի հեշը ստանալը: Ծրագրավորված
+  backend-ն այժմ պահանջում է ավելի ուժեղ BFV մոդուլի հատակ, քան affine ուղին, և
+  դրա հանրային պարամետրերը հրապարակվում են կանոնական փաթեթում, որը ներառում է
+  RAM-FHE կատարման պրոֆիլը սպառված է դրամապանակների և ստուգիչների կողմից:
+
+Այստեղ BFV նշանակում է Brakerski/Fan-Vercauteren FHE սխեման, որն իրականացվել է Հայաստանում
+`crates/iroha_crypto/src/fhe_bfv.rs`. Դա գաղտնագրված կատարման մեխանիզմն է
+օգտագործվում է affine և ծրագրավորված backend-ների կողմից, այլ ոչ թե արտաքին թաքնվածի անունը
+ֆունկցիայի աբստրակցիա։Torii-ն օգտագործում է քաղաքականության պարտավորության կողմից հրապարակված հետին պլանը: Երբ BFV backend
+ակտիվ է, պարզ տեքստի հարցումները նորմալացվում են, այնուհետև նախկինում գաղտնագրվում են սերվերի կողմից
+գնահատում։ BFV `encrypted_input` հարցումները affine backend-ի համար գնահատվում են
+ուղղակիորեն և արդեն պետք է նորմալացվի հաճախորդի կողմից. ծրագրավորված հետնամասը
+կանոնականացնում է կոդավորված մուտքագրումը լուծիչի որոշիչ BFV-ի վրա
+Ծրարը նախքան գաղտնի RAM ծրագիրը գործարկելը, այնպես որ ստացման հեշերը մնան
+կայուն իմաստային առումով համարժեք գաղտնագրված տեքստերի մեջ:
+
+## 2. UAID-ների ստացում և ստուգում
+
+UAID ստանալու երեք աջակցվող եղանակ կա.
+
+1. **Կարդացեք այն համաշխարհային պետական կամ SDK մոդելներից։** Ցանկացած `Account`/`AccountDetails`
+   Torii-ի միջոցով հարցվող օգտակար բեռը այժմ ունի `uaid` դաշտը, երբ
+   մասնակիցը միացել է ունիվերսալ հաշիվներին:
+2. **Հարցրեք UAID-ի գրանցամատյաններին։** Torii-ը բացահայտում է
+   `GET /v1/space-directory/uaids/{uaid}`, որը վերադարձնում է տվյալների տարածության կապերը
+   և մանիֆեստի մետատվյալները, որոնք պահպանվում են Space Directory-ի հյուրընկալողը (տես
+   `docs/space-directory.md` §3 օգտակար բեռի նմուշների համար):
+3. **Դետերմինիստական ձևով ստացեք այն։** Նոր UAID-ները օֆլայն բեռնելիս, հաշեք
+   կանոնական մասնակցի սերմը Blake2b-256-ով և արդյունքի նախածանցով
+   `uaid:`. Ստորև բերված հատվածը արտացոլում է փաստաթղթավորված օգնականը
    `docs/space-directory.md` §3.3:
 
    ```python
@@ -60,28 +225,26 @@ There are three supported ways to obtain a UAID:
    seed = b"participant@example"  # canonical address/domain seed
    digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
    print(f"uaid:{digest}")
-   ```
+   ```Միշտ պահեք բառացի բառը փոքրատառով և նորմալացրեք բացատը նախքան հեշելը:
+CLI օգնականներ, ինչպիսիք են `iroha app space-directory manifest scaffold`-ը և Android-ը
+`UaidLiteral` վերլուծիչը կիրառում է կրճատման նույն կանոնները, որպեսզի կառավարման վերանայումները կարողանան
+խաչաձև ստուգեք արժեքները առանց ժամանակավոր սցենարների:
 
-Always store the literal in lower case and normalise whitespace before hashing.
-CLI helpers such as `iroha app space-directory manifest scaffold` and the Android
-`UaidLiteral` parser apply the same trimming rules so governance reviews can
-cross-check values without ad hoc scripts.
+## 3. UAID-ի ունեցվածքի և մանիֆեստների ստուգում
 
-## 3. Inspecting UAID holdings and manifests
+Պորտֆելի դետերմինիստական ագրեգատորը `iroha_core::nexus::portfolio`-ում
+ցուցադրում է յուրաքանչյուր ակտիվ/տվյալների տարածք, որը հղում է անում UAID-ին: Օպերատորներ և SDK-ներ
+կարող է սպառել տվյալները հետևյալ մակերեսների միջոցով.
 
-The deterministic portfolio aggregator in `iroha_core::nexus::portfolio`
-surfaces every asset/dataspace pair that references the UAID. Operators and SDKs
-can consume the data through the following surfaces:
-
-| Surface | Usage |
+| Մակերեւութային | Օգտագործումը |
 |---------|-------|
-| `GET /v1/accounts/{uaid}/portfolio` | Returns dataspace → asset → balance summaries; described in `docs/source/torii/portfolio_api.md`. |
-| `GET /v1/space-directory/uaids/{uaid}` | Lists dataspace IDs + account literals tied to the UAID. |
-| `GET /v1/space-directory/uaids/{uaid}/manifests` | Provides the full `AssetPermissionManifest` history for audits. |
-| `iroha app space-directory bindings fetch --uaid <literal>` | CLI shortcut that wraps the bindings endpoint and optionally writes the JSON to disk (`--json-out`). |
-| `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` | Fetches the manifest JSON bundle for evidence packs. |
+| `GET /v1/accounts/{uaid}/portfolio` | Վերադարձնում է տվյալների տարածություն → ակտիվ → մնացորդի ամփոփագրեր; նկարագրված է `docs/source/torii/portfolio_api.md`-ում: |
+| `GET /v1/space-directory/uaids/{uaid}` | Ցուցակում է տվյալների տարածքի ID-ները + հաշվի բառացիները՝ կապված UAID-ի հետ: |
+| `GET /v1/space-directory/uaids/{uaid}/manifests` | Ապահովում է `AssetPermissionManifest` ամբողջական պատմությունը աուդիտի համար: |
+| `iroha app space-directory bindings fetch --uaid <literal>` | CLI դյուրանցում, որը փաթաթում է կապերի վերջնակետը և ցանկության դեպքում գրում է JSON սկավառակը (`--json-out`): |
+| `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` | Վերցնում է մանիֆեստի JSON փաթեթը՝ ապացույցների փաթեթների համար: |
 
-Example CLI session (Torii URL configured via `torii_api_url` in `iroha.json`):
+Օրինակ CLI նստաշրջան (Torii URL կազմաձևված `torii_api_url`-ի միջոցով `iroha.json`-ում):
 
 ```bash
 iroha app space-directory bindings fetch \
@@ -93,18 +256,18 @@ iroha app space-directory manifest fetch \
   --json-out artifacts/uaid86/manifests.json
 ```
 
-Store the JSON snapshots alongside the manifest hash used during reviews; the
-Space Directory watcher rebuilds the `uaid_dataspaces` map whenever manifests
-activate, expire, or revoke, so these snapshots are the fastest way to prove
-what bindings were active at a given epoch.
+Պահպանեք JSON-ի նկարները ակնարկների ժամանակ օգտագործվող մանիֆեստի հեշի կողքին. որ
+Space Directory դիտորդը վերակառուցում է `uaid_dataspaces` քարտեզը, երբ դրսևորվում է
+ակտիվացնել, ժամկետը լրանալ կամ չեղարկել, այնպես որ այս լուսանկարներն ապացուցելու ամենաարագ ճանապարհն են
+ինչ կապեր են եղել տվյալ դարաշրջանում։
 
-## 4. Publishing capability manifests with evidence
+## 4. Հրատարակչական կարողությունը դրսևորվում է ապացույցներով
 
-Use the CLI flow below whenever a new allowance is rolled out. Each step must
-land in the evidence bundle recorded for governance sign-off.
+Օգտագործեք ստորև բերված CLI հոսքը, երբ նոր նպաստ է դուրս գալիս: Յուրաքանչյուր քայլ պետք է
+հողը ապացույցների փաթեթում, որը գրանցված է կառավարման ստորագրման համար:
 
-1. **Encode the manifest JSON** so reviewers see the deterministic hash before
-   submission:
+1. **Կոդավորեք JSON մանիֆեստը**, որպեսզի վերանայողները տեսնեն նախապես դետերմինիստական հեշը
+   ներկայացում:
 
    ```bash
    iroha app space-directory manifest encode \
@@ -113,9 +276,9 @@ land in the evidence bundle recorded for governance sign-off.
      --hash-out artifacts/eu_regulator_audit.manifest.hash
    ```
 
-2. **Publish the allowance** using either the Norito payload (`--manifest`) or
-   the JSON description (`--manifest-json`). Record the Torii/CLI receipt plus
-   the `PublishSpaceDirectoryManifest` instruction hash:
+2. **Հրապարակեք նպաստը**՝ օգտագործելով կամ Norito (`--manifest`) կամ
+   JSON նկարագրությունը (`--manifest-json`): Գրանցեք Torii/CLI անդորրագիրը գումարած
+   `PublishSpaceDirectoryManifest` հրահանգի հեշը՝
 
    ```bash
    iroha app space-directory manifest publish \
@@ -123,12 +286,12 @@ land in the evidence bundle recorded for governance sign-off.
      --reason "ESMA wave 2 onboarding"
    ```
 
-3. **Capture SpaceDirectoryEvent evidence.** Subscribe to
-   `SpaceDirectoryEvent::ManifestActivated` and include the event payload in
-   the bundle so auditors can confirm when the change landed.
+3. **Capture SpaceDirectoryEvent ապացույցները։** Բաժանորդագրվեք
+   `SpaceDirectoryEvent::ManifestActivated` և ներառեք միջոցառման օգտակար բեռը
+   փաթեթը, որպեսզի աուդիտորները կարողանան հաստատել, թե երբ է տեղի ունեցել փոփոխությունը:
 
-4. **Generate an audit bundle** tying the manifest to its dataspace profile and
-   telemetry hooks:
+4. **Ստեղծեք աուդիտի փաթեթ**՝ կապելով մանիֆեստը տվյալների տարածության պրոֆիլին և
+   Հեռաչափական կեռիկներ.
 
    ```bash
    iroha app space-directory manifest audit-bundle \
@@ -137,70 +300,64 @@ land in the evidence bundle recorded for governance sign-off.
      --out-dir artifacts/eu_regulator_audit_bundle
    ```
 
-5. **Verify bindings via Torii** (`bindings fetch` and `manifests fetch`) and
-   archive those JSON files with the hash + bundle above.
+5. **Ստուգեք կապերը Torii** (`bindings fetch` և `manifests fetch`) միջոցով և
+   արխիվացրեք այդ JSON ֆայլերը վերևում գտնվող հեշ + փաթեթով:
 
-Evidence checklist:
+Ապացույցների ստուգաթերթ.
 
-- [ ] Manifest hash (`*.manifest.hash`) signed by the change approver.
-- [ ] CLI/Torii receipt for the publish call (stdout or `--json-out` artefact).
-- [ ] `SpaceDirectoryEvent` payload proving activation.
-- [ ] Audit bundle directory with dataspace profile, hooks, and manifest copy.
-- [ ] Bindings + manifest snapshots fetched from Torii post-activation.
+- [ ] Մանիֆեստի հեշ (`*.manifest.hash`) ստորագրված փոփոխությունը հաստատողի կողմից:
+- [ ] CLI/Torii անդորրագիր հրապարակման զանգի համար (stdout կամ `--json-out` արտեֆակտ):
+- [ ] `SpaceDirectoryEvent` օգտակար բեռի ակտիվացում:
+- [ ] Աուդիտ փաթեթի գրացուցակը տվյալների տարածության պրոֆիլով, կեռիկներով և մանիֆեստի պատճենով:
+- [ ] Ամրացումներ + մանիֆեստի նկարներ՝ բերված Torii հետակտիվացումից:Սա արտացոլում է `docs/space-directory.md` §3.2-ի պահանջները՝ միաժամանակ տալով SDK
+սեփականատերերը մեկ էջ պետք է մատնանշեն թողարկման վերանայումների ժամանակ:
 
-This mirrors the requirements in `docs/space-directory.md` §3.2 while giving SDK
-owners a single page to point to during release reviews.
+## 5. Կարգավորող/տարածաշրջանային մանիֆեստի ձևանմուշներ
 
-## 5. Regulator/regional manifest templates
+Օգտագործեք ռեպո հարմարանքները որպես մեկնարկային կետեր, երբ դրսևորվում է արհեստագործական ունակություններ
+կարգավորողների կամ տարածաշրջանային վերահսկողների համար: Նրանք ցույց են տալիս, թե ինչպես կարելի է թույլատրել/մերժել
+կանոնները և բացատրեք այն քաղաքականության նշումները, որոնք ակնկալում են վերանայողները:
 
-Use the in-repo fixtures as starting points when crafting capability manifests
-for regulators or regional supervisors. They demonstrate how to scope allow/deny
-rules and explain the policy notes reviewers expect.
-
-| Fixture | Purpose | Highlights |
+| Հարմարանք | Նպատակը | Կարևորություններ |
 |---------|---------|------------|
-| `fixtures/space_directory/capability/eu_regulator_audit.manifest.json` | ESMA/ESRB audit feed. | Read-only allowances for `compliance.audit::{stream_reports, request_snapshot}` with deny-wins on retail transfers to keep regulator UAIDs passive. |
-| `fixtures/space_directory/capability/jp_regulator_supervision.manifest.json` | JFSA supervision lane. | Adds a capped `cbdc.supervision.issue_stop_order` allowance (PerDay window + `max_amount`) and an explicit deny on `force_liquidation` to enforce dual controls. |
+| `fixtures/space_directory/capability/eu_regulator_audit.manifest.json` | ESMA/ESRB աուդիտի հոսք: | Միայն կարդալու արտոնություններ `compliance.audit::{stream_reports, request_snapshot}`-ի համար՝ մանրածախ փոխանցումների մերժման դեպքում՝ կարգավորող UAID-ները պասիվ պահելու համար: |
+| `fixtures/space_directory/capability/jp_regulator_supervision.manifest.json` | JFSA վերահսկողության գոտի. | Ավելացնում է `cbdc.supervision.issue_stop_order` սահմանափակում (PerDay պատուհան + `max_amount`) և բացահայտ մերժում `force_liquidation`-ին՝ կրկնակի հսկողություն կիրառելու համար: |
 
-When cloning these fixtures, update:
+Այս սարքերը կլոնավորելիս թարմացրեք՝
 
-1. `uaid` and `dataspace` ids to match the participant and lane you’re enabling.
-2. `activation_epoch`/`expiry_epoch` windows based on the governance schedule.
-3. `notes` fields with the regulator’s policy references (MiCA article, JFSA
-   circular, etc.).
-4. Allowance windows (`PerSlot`, `PerMinute`, `PerDay`) and optional
-   `max_amount` caps so SDKs enforce the same limits as the host.
+1. `uaid` և `dataspace` ID-ներ՝ ձեր կողմից միացված մասնակցին և երթուղուն համապատասխանելու համար:
+2. `activation_epoch`/`expiry_epoch` պատուհաններ՝ հիմնված կառավարման ժամանակացույցի վրա:
+3. `notes` դաշտեր՝ կարգավորիչի քաղաքականության հղումներով (MiCA հոդված, JFSA
+   շրջանաձև և այլն):
+4. Նպաստների պատուհաններ (`PerSlot`, `PerMinute`, `PerDay`) և կամընտիր
+   `max_amount`-ը փակում է, որպեսզի SDK-ները կիրառեն նույն սահմանները, ինչ հյուրընկալողը:
 
-## 6. Migration notes for SDK consumers
+## 6. Միգրացիոն նշումներ SDK սպառողների համարԳոյություն ունեցող SDK ինտեգրացիաները, որոնք հղում են կատարում յուրաքանչյուր տիրույթի հաշվի ID-ներին, պետք է տեղափոխվեն
+վերը նկարագրված UAID-կենտրոնացված մակերեսները: Օգտագործեք այս ստուգաթերթը թարմացումների ժամանակ.
 
-Existing SDK integrations that referenced per-domain account IDs must migrate to
-the UAID-centric surfaces described above. Use this checklist during upgrades:
+  հաշվի ID-ներ. Rust/JS/Swift/Android-ի համար սա նշանակում է թարմացում մինչև վերջինը
+  աշխատանքային տարածքի արկղեր կամ վերականգնող Norito կապանքներ:
+- **API զանգեր.** Փոխարինեք տիրույթի շրջանակով պորտֆելի հարցումները
+  `GET /v1/accounts/{uaid}/portfolio` և մանիֆեստի/կապման վերջնակետերը:
+  `GET /v1/accounts/{uaid}/portfolio` ընդունում է կամընտիր `asset_id` հարցումը
+  պարամետր, երբ դրամապանակներին անհրաժեշտ է միայն մեկ ակտիվի օրինակ: Հաճախորդների օգնականները, ինչպիսիք են
+  որպես `ToriiClient.getUaidPortfolio` (JS) և Android
+  `SpaceDirectoryClient` արդեն փաթաթում են այս երթուղիները. գերադասեք դրանք պատվիրվածից
+  HTTP կոդ.
+- **Քեշավորում և հեռաչափություն.** Քեշի գրառումներ UAID-ով + տվյալների տարածություն՝ չմշակվածի փոխարեն
+  հաշվի ID-ներ և արտանետում հեռաչափություն, որը ցույց է տալիս UAID-ը բառացիորեն, որպեսզի գործողությունները կարողանան
+  շարել տեղեկամատյանները Space Directory-ի ապացույցներով:
+- **Սխալների մշակում. ** Նոր վերջնակետերը վերադարձնում են UAID-ի վերլուծման խիստ սխալները
+  փաստաթղթավորված `docs/source/torii/portfolio_api.md`-ում; բացահայտեք այդ ծածկագրերը
+  բառացիորեն, որպեսզի աջակցող թիմերը կարողանան շտկել խնդիրները առանց կրկնօրինակ քայլերի:
+- **Փորձարկում. ** Միացրեք վերը նշված հարմարանքները (գումարած ձեր սեփական UAID մանիֆեստները)
+  SDK թեստային փաթեթների մեջ՝ Norito հետադարձ ուղևորություններն ապացուցելու և գնահատականները ցուցադրելու համար
+  համապատասխանել հյուրընկալող իրականացմանը:
 
-  account ids. For Rust/JS/Swift/Android this means upgrading to the latest
-  workspace crates or regenerating Norito bindings.
-- **API calls:** Replace domain-scoped portfolio queries with
-  `GET /v1/accounts/{uaid}/portfolio` and the manifest/bindings endpoints.
-  `GET /v1/accounts/{uaid}/portfolio` accepts an optional `asset_id` query
-  parameter when wallets only need a single asset instance. Client helpers such
-  as `ToriiClient.getUaidPortfolio` (JS) and the Android
-  `SpaceDirectoryClient` already wrap these routes; prefer them over bespoke
-  HTTP code.
-- **Caching & telemetry:** Cache entries by UAID + dataspace instead of raw
-  account ids, and emit telemetry showing the UAID literal so operations can
-  line up logs with Space Directory evidence.
-- **Error handling:** New endpoints return the strict UAID parsing errors
-  documented in `docs/source/torii/portfolio_api.md`; surface those codes
-  verbatim so support teams can triage issues without repro steps.
-- **Testing:** Wire the fixtures mentioned above (plus your own UAID manifests)
-  into SDK test suites to prove Norito round-trips and manifest evaluations
-  match the host implementation.
-
-## 7. References
-
-- `docs/space-directory.md` — operator playbook with deeper lifecycle detail.
-- `docs/source/torii/portfolio_api.md` — REST schema for UAID portfolio and
-  manifest endpoints.
-- `crates/iroha_cli/src/space_directory.rs` — CLI implementation referenced in
-  this guide.
-- `fixtures/space_directory/capability/*.manifest.json` — regulator, retail, and
-  CBDC manifest templates ready for cloning.
+## 7. Հղումներ- `docs/space-directory.md` — օպերատորի խաղագիրք ավելի խորը կյանքի ցիկլի մանրամասներով:
+- `docs/source/torii/portfolio_api.md` — REST սխեման UAID պորտֆելի համար և
+  բացահայտ վերջնակետեր.
+- `crates/iroha_cli/src/space_directory.rs` — CLI իրականացումը նշված է
+  այս ուղեցույցը:
+- `fixtures/space_directory/capability/*.manifest.json` — կարգավորիչ, մանրածախ և
+  CBDC մանիֆեստի ձևանմուշները պատրաստ են կլոնավորման համար:

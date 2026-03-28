@@ -318,15 +318,13 @@ fn contract_test_app(
 async fn run_contract_view(
     app: &Router,
     authority: &iroha_data_model::account::AccountId,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &str,
     entrypoint: &str,
     payload: Option<&norito::json::Value>,
 ) -> json::Value {
     let body = iroha_torii::test_utils::contract_view_request_json(
         authority,
-        namespace,
-        contract_id,
+        contract_address,
         iroha_torii::test_utils::ContractViewOptions {
             entrypoint: Some(entrypoint),
             payload,
@@ -343,6 +341,14 @@ async fn run_contract_view(
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     json::from_slice(&bytes).expect("decode contract view response")
+}
+
+fn deployed_contract_address(response: &json::Value) -> String {
+    response
+        .get("contract_address")
+        .and_then(json::Value::as_str)
+        .expect("contract_address present in deploy response")
+        .to_owned()
 }
 
 #[tokio::test]
@@ -392,6 +398,7 @@ async fn contracts_call_enqueues_transaction() {
     assert_eq!(deploy_resp.status(), http::StatusCode::OK);
     let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
     let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
     let abi_hash_hex = deploy_json
         .get("abi_hash_hex")
         .and_then(json::Value::as_str)
@@ -425,8 +432,7 @@ async fn contracts_call_enqueues_transaction() {
     let missing_limit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
         iroha_torii::json_entry("private_key", creds.private_key.to_string()),
-        iroha_torii::json_entry("namespace", "apps"),
-        iroha_torii::json_entry("contract_id", "calc.v1"),
+        iroha_torii::json_entry("contract_address", contract_address.as_str()),
     ]);
     let missing_limit_body = json::to_json(&missing_limit_payload).expect("serialize call request");
     let missing_limit_req = http::Request::builder()
@@ -441,8 +447,7 @@ async fn contracts_call_enqueues_transaction() {
     let zero_limit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "calc.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("main"),
             payload: None,
@@ -463,8 +468,7 @@ async fn contracts_call_enqueues_transaction() {
     let call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "calc.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("main"),
             payload: Some(&payload),
@@ -493,14 +497,14 @@ async fn contracts_call_enqueues_transaction() {
             .get("namespace")
             .and_then(json::Value::as_str)
             .unwrap(),
-        "apps"
+        "universal"
     );
     assert_eq!(
         call_json
-            .get("contract_id")
+            .get("contract_address")
             .and_then(json::Value::as_str)
             .unwrap(),
-        "calc.v1"
+        contract_address
     );
     assert_eq!(
         call_json
@@ -536,8 +540,7 @@ async fn contracts_call_enqueues_transaction() {
     let draft_payload = norito::json!({ "note": "client-signed" });
     let draft_body = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
-        iroha_torii::json_entry("namespace", "apps"),
-        iroha_torii::json_entry("contract_id", "calc.v1"),
+        iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
         iroha_torii::json_entry("payload", draft_payload.clone()),
         iroha_torii::json_entry("gas_limit", 5_000u64),
@@ -604,8 +607,7 @@ async fn contracts_call_enqueues_transaction() {
             "signature_b64",
             base64::engine::general_purpose::STANDARD.encode(detached_signature.payload()),
         ),
-        iroha_torii::json_entry("namespace", "apps"),
-        iroha_torii::json_entry("contract_id", "calc.v1"),
+        iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
         iroha_torii::json_entry("payload", draft_payload),
         iroha_torii::json_entry("creation_time_ms", creation_time_ms),
@@ -698,6 +700,9 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
         .unwrap();
     let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
     assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -725,8 +730,7 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
 
     let body = iroha_torii::test_utils::contract_view_request_json(
         &creds.account,
-        "apps",
-        "viewtrap.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractViewOptions {
             entrypoint: Some("explode"),
             payload: None,
@@ -803,6 +807,9 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         .unwrap();
     let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
     assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -832,8 +839,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     let call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "dispatch.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("credit_by_payload"),
             payload: Some(&payload),
@@ -870,8 +876,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     let asset_call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "dispatch.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("record_asset_by_payload"),
             payload: Some(&asset_payload),
@@ -956,6 +961,9 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         .unwrap();
     let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
     assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -985,8 +993,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     let credit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "declared.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("credit_by_payload"),
             payload: Some(&credit_payload),
@@ -1012,8 +1019,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     let asset_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "declared.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("record_asset_by_payload"),
             payload: Some(&asset_payload),
@@ -1037,8 +1043,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     let view_json = run_contract_view(
         &app,
         &creds.account,
-        "apps",
-        "declared.v1",
+        contract_address.as_str(),
         "declared_state",
         None,
     )
@@ -1136,6 +1141,9 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         .unwrap();
     let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
     assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1165,8 +1173,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     let write_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "declared_isi.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("write_with_isi"),
             payload: Some(&write_payload),
@@ -1190,8 +1197,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     let view_json = run_contract_view(
         &app,
         &creds.account,
-        "apps",
-        "declared_isi.v1",
+        contract_address.as_str(),
         "declared_state",
         None,
     )
@@ -1286,6 +1292,9 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         .unwrap();
     let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
     assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1319,8 +1328,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     let write_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "declared_mint.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("write_with_mint"),
             payload: Some(&write_payload),
@@ -1344,8 +1352,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     let view_json = run_contract_view(
         &app,
         &creds.account,
-        "apps",
-        "declared_mint.v1",
+        contract_address.as_str(),
         "declared_state",
         None,
     )
@@ -1440,6 +1447,9 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         .unwrap();
     let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
     assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1468,8 +1478,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "n3x_like.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("init_hub"),
             payload: None,
@@ -1500,8 +1509,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let deposit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "n3x_like.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("deposit_like"),
             payload: Some(&deposit_payload),
@@ -1525,8 +1533,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let view_json = run_contract_view(
         &app,
         &creds.account,
-        "apps",
-        "n3x_like.v1",
+        contract_address.as_str(),
         "state_snapshot",
         None,
     )
@@ -1610,6 +1617,9 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         .unwrap();
     let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
     assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1638,8 +1648,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "n3x_burn.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("init_hub"),
             payload: None,
@@ -1670,8 +1679,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let deposit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "n3x_burn.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("deposit_like"),
             payload: Some(&deposit_payload),
@@ -1700,8 +1708,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let burn_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
-        "apps",
-        "n3x_burn.v1",
+        contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("burn_like"),
             payload: Some(&burn_payload),
@@ -1725,8 +1732,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let view_json = run_contract_view(
         &app,
         &creds.account,
-        "apps",
-        "n3x_burn.v1",
+        contract_address.as_str(),
         "state_snapshot",
         None,
     )

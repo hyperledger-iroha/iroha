@@ -475,26 +475,21 @@ pub mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
+        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
 
-    /// Register a `SoraFS` pin manifest when permitted (or during genesis).
+    /// Register a `SoraFS` pin manifest.
+    ///
+    /// Public submissions rely on the universal-lane Nexus fee schedule instead
+    /// of an additional executor permission gate.
     pub fn visit_register_pin_manifest<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RegisterPinManifest,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanRegisterSorafsPin.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't register SoraFS pin manifest");
+        execute!(executor, isi);
     }
 
     /// Approve a pending `SoraFS` pin manifest when permitted.
@@ -2746,9 +2741,8 @@ mod sorafs_permission_tests {
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
+        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -2837,6 +2831,18 @@ mod sorafs_permission_tests {
         assert!(
             executor.verdict().is_err(),
             "expected denial without permission"
+        );
+    }
+
+    fn assert_allowed_without_permission<T: Clone>(
+        instruction: T,
+        visit: impl Fn(&mut MockExecutor, &T),
+    ) {
+        let mut executor = MockExecutor::new(false);
+        visit(&mut executor, &instruction);
+        assert!(
+            executor.verdict().is_ok(),
+            "expected instruction to be permitted without permission"
         );
     }
 
@@ -3027,12 +3033,13 @@ mod sorafs_permission_tests {
         };
     }
 
-    sorafs_permission_case!(
-        register_pin_manifest_requires_permission,
-        register_pin_manifest(),
-        CanRegisterSorafsPin,
-        sorafs::visit_register_pin_manifest
-    );
+    #[test]
+    fn register_pin_manifest_is_public() {
+        assert_allowed_without_permission(
+            register_pin_manifest(),
+            sorafs::visit_register_pin_manifest,
+        );
+    }
 
     sorafs_permission_case!(
         approve_pin_manifest_requires_permission,

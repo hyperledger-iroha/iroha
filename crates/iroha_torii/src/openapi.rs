@@ -1846,7 +1846,7 @@ fn contracts_paths() -> Map {
         Value::Object(json_post_operation(
             "Contracts",
             "Call a deployed contract.",
-            "Invoke a contract entrypoint by canonical contract address or by the legacy namespace and contract id compatibility binding.",
+            "Invoke a contract entrypoint by canonical contract address or by on-chain contract alias.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -1858,6 +1858,17 @@ fn contracts_paths() -> Map {
             "Contracts",
             "Execute a read-only contract view.",
             "Execute a manifest-validated read-only contract view entrypoint and return its decoded result.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/aliases/resolve".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Resolve a contract alias.",
+            "Resolve an on-chain contract alias to its canonical contract address and current lease status.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -9820,6 +9831,7 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/resolve"));
         assert!(paths.contains_key("/v1/aliases/resolve_index"));
         assert!(paths.contains_key("/v1/assets/aliases/resolve"));
+        assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
         assert!(paths.contains_key("/v1/time/now"));
         assert!(paths.contains_key("/v1/time/status"));
         assert!(paths.contains_key("/v1/ledger/headers"));

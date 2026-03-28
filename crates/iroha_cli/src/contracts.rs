@@ -23,6 +23,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use ivm::{PointerType, host::IVMHost};
+use reqwest::StatusCode;
 
 use crate::{Run, RunContext};
 
@@ -51,7 +52,7 @@ pub enum Command {
     Manifest(ManifestCommand),
     /// Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
     Simulate(SimulateArgs),
-    /// List active contract instances in a namespace (supports filters and pagination)
+    /// List active contract instances in a dataspace (supports filters and pagination)
     Instances(InstancesArgs),
 }
 
@@ -85,6 +86,8 @@ pub enum AliasCommand {
     Lease(ContractAliasLeaseArgs),
     /// Release the current on-chain alias binding for a contract address
     Release(ContractAliasReleaseArgs),
+    /// Resolve an on-chain contract alias to its current canonical contract address
+    Resolve(ContractAliasResolveArgs),
 }
 
 impl Run for AliasCommand {
@@ -92,6 +95,7 @@ impl Run for AliasCommand {
         match self {
             AliasCommand::Lease(args) => args.run(context),
             AliasCommand::Release(args) => args.run(context),
+            AliasCommand::Resolve(args) => args.run(context),
         }
     }
 }
@@ -193,6 +197,43 @@ impl Run for ContractAliasReleaseArgs {
         context.submit(vec![InstructionBox::from(SetContractAlias::clear(
             contract_address,
         ))])
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ContractAliasResolveArgs {
+    /// Alias literal in `name::domain.dataspace` or `name::dataspace` format.
+    pub contract_alias: String,
+}
+
+impl Run for ContractAliasResolveArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let contract_alias: iroha::data_model::smart_contract::ContractAlias = self
+            .contract_alias
+            .parse()
+            .wrap_err("invalid contract alias")?;
+        let client: Client = context.client_from_config();
+        let response = client
+            .post_contract_alias_resolve(&contract_alias)
+            .wrap_err("failed to call `/v1/contracts/aliases/resolve`")?;
+        let status = response.status();
+        let body = response.into_body();
+
+        match status {
+            StatusCode::OK => {
+                let value: norito::json::Value =
+                    norito::json::from_slice(&body).wrap_err("decode contract alias response")?;
+                context.print_data(&value)
+            }
+            StatusCode::NOT_FOUND => {
+                Err(eyre!("contract alias `{contract_alias}` not found"))
+            }
+            status => Err(eyre!(
+                "contract alias resolve request failed with HTTP {}: {}",
+                status,
+                std::str::from_utf8(&body).unwrap_or("")
+            )),
+        }
     }
 }
 
@@ -2713,9 +2754,9 @@ impl Run for ManifestArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct InstancesArgs {
-    /// Namespace to list (e.g., apps)
-    #[arg(long, value_name = "NS")]
-    pub namespace: String,
+    /// Dataspace to list (e.g., universal)
+    #[arg(long, value_name = "DATASPACE")]
+    pub dataspace: String,
     /// Filter: `contract_id` substring (case-sensitive)
     #[arg(long)]
     pub contains: Option<String>,
@@ -2743,7 +2784,7 @@ impl Run for InstancesArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         let value = client.get_contracts_instances_by_ns_filtered_json(
-            &self.namespace,
+            &self.dataspace,
             self.contains.as_deref(),
             self.hash_prefix.as_deref(),
             self.offset,
@@ -2753,7 +2794,11 @@ impl Run for InstancesArgs {
         if self.table {
             // Pretty table renderer
             use norito::json::Value;
-            let ns = value.get("namespace").and_then(Value::as_str).unwrap_or("");
+            let dataspace = value
+                .get("dataspace")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("namespace").and_then(Value::as_str))
+                .unwrap_or("");
             let total = value.get("total").and_then(Value::as_u64).unwrap_or(0);
             let offset = value.get("offset").and_then(Value::as_u64).unwrap_or(0);
             let limit = value.get("limit").and_then(Value::as_u64).unwrap_or(0);
@@ -2763,10 +2808,10 @@ impl Run for InstancesArgs {
                 .cloned()
                 .unwrap_or_default();
             // Compute widths
-            let mut w_ns = "Namespace".len();
+            let mut w_dataspace = "Dataspace".len();
             let mut w_id = "Contract ID".len();
             let mut w_hash = "Code Hash".len();
-            w_ns = w_ns.max(ns.len());
+            w_dataspace = w_dataspace.max(dataspace.len());
             let mut items: Vec<(String, String)> = Vec::new();
             for row in rows {
                 if let Value::Object(m) = row {
@@ -2795,32 +2840,33 @@ impl Run for InstancesArgs {
                 "",
                 "",
                 "",
-                ns = w_ns,
+                ns = w_dataspace,
                 id = w_id,
                 hash = w_hash
             );
             // Header
             context.println(format!(
-                "Namespace: {ns}  (total={total}, offset={offset}, limit={limit})"
+                "Dataspace: {dataspace}  (total={total}, offset={offset}, limit={limit})"
             ))?;
             context.println(&sep)?;
             context.println(format!(
-                "| {namespace:<ns_width$} | {contract:<id_width$} | {hash_label:<hash_width$} |",
-                namespace = "Namespace",
+                "| {dataspace:<ns_width$} | {contract:<id_width$} | {hash_label:<hash_width$} |",
+                dataspace = "Dataspace",
                 contract = "Contract ID",
                 hash_label = "Code Hash",
-                ns_width = w_ns,
+                ns_width = w_dataspace,
                 id_width = w_id,
                 hash_width = w_hash
             ))?;
             context.println(&sep)?;
             // Rows
-            let ns_width = w_ns;
+            let ns_width = w_dataspace;
             let id_width = w_id;
             let hash_width = w_hash;
             for (cid, hash) in items {
                 context.println(format!(
-                    "| {ns:<ns_width$} | {cid:<id_width$} | {hash:<hash_width$} |"
+                    "| {dataspace:<ns_width$} | {cid:<id_width$} | {hash:<hash_width$} |",
+                    dataspace = dataspace
                 ))?;
             }
             context.println(&sep)?;

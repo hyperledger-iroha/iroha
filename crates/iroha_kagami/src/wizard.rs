@@ -27,8 +27,8 @@ pub enum Profile {
     Iroha2,
     /// Sora Nexus (mainnet).
     Nexus,
-    /// Sora Testus (testnet).
-    Testus,
+    /// Sora Taira (testnet).
+    Taira,
 }
 
 impl fmt::Display for Profile {
@@ -36,7 +36,7 @@ impl fmt::Display for Profile {
         match self {
             Profile::Iroha2 => write!(f, "Iroha2 (single lane)"),
             Profile::Nexus => write!(f, "Sora Nexus (mainnet)"),
-            Profile::Testus => write!(f, "Sora Testus (testnet)"),
+            Profile::Taira => write!(f, "Sora Taira (testnet)"),
         }
     }
 }
@@ -149,16 +149,16 @@ impl ProfileDefaults {
                 config_template: Some("configs/soranexus/nexus/config.toml"),
                 genesis_template: "configs/soranexus/nexus/genesis.json",
             },
-            Profile::Testus => Self {
+            Profile::Taira => Self {
                 chain: "809574f5-fee7-5e69-bfcf-52451e42d50f",
                 p2p_port: 1337,
                 torii_port: 18080,
-                host: "testus.mof3.sora.org",
+                host: "taira-validator-1.sora.org",
                 trusted_peers: &[
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@testus.mof3.sora.org:1337",
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@taira-validator-1.sora.org:1337",
                 ],
-                config_template: Some("configs/soranexus/testus/config.toml"),
-                genesis_template: "configs/soranexus/testus/genesis.json",
+                config_template: Some("configs/soranexus/taira/config.toml"),
+                genesis_template: "configs/soranexus/taira/genesis.json",
             },
         }
     }
@@ -183,7 +183,7 @@ impl<T: Write> RunArgs<T> for Args {
         let genesis_path = answers.output_dir.join("genesis.json");
 
         let sorafs_dir = answers.output_dir.join("sorafs_admission");
-        if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
+        if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
             fs::create_dir_all(&sorafs_dir)
                 .wrap_err("failed to create sorafs admission directory")?;
         }
@@ -230,7 +230,7 @@ impl<T: Write> RunArgs<T> for Args {
         let next_command = format!(
             "cd {} && irohad {}--config {} --genesis-manifest-json {}",
             answers.output_dir.display(),
-            if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
+            if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
                 "--sora "
             } else {
                 ""
@@ -258,7 +258,7 @@ impl<T: Write> RunArgs<T> for Args {
         writeln!(writer, "config: {}", config_path.display())?;
         writeln!(writer, "genesis: {}", genesis_path.display())?;
         writeln!(writer, "guide: {}", guide_path.display())?;
-        if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
+        if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
             writeln!(writer, "sora profile: pass --sora when starting irohad")?;
         }
         writeln!(writer, "next: {next_command}")?;
@@ -524,7 +524,7 @@ fn resolve_profile(args: &Args) -> Result<Profile> {
 
     Select::new(
         "Which profile do you want to set up?",
-        vec![Profile::Iroha2, Profile::Nexus, Profile::Testus],
+        vec![Profile::Iroha2, Profile::Nexus, Profile::Taira],
     )
     .prompt()
     .wrap_err("failed to read profile selection")
@@ -767,7 +767,7 @@ fn apply_overrides(
         )),
     );
 
-    if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
+    if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
         let mut sorafs = table(config, "torii.sorafs");
         sorafs.insert(
             "admission_envelopes_dir".into(),
