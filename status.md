@@ -45,24 +45,33 @@ Last updated: 2026-03-28
   - the wrong-dataspace routed-read integration slice is now green end to end
     in the full 12-peer localnet regression on this host.
 
-## 2026-03-28 Follow-up: `irohad` relay now treats Torii proxy frames as dedicated-subscriber traffic
-- Updated `crates/irohad/src/main.rs` so the generic network relay explicitly
-  ignores `NetworkMessage::ToriiProxyRequest` and
-  `NetworkMessage::ToriiProxyResponse` in the same branch as the existing
-  Soracloud proxy / genesis / health / connect control-plane messages,
-  matching the dedicated Torii subscriber path in `crates/iroha_torii/src/lib.rs`.
-- Added a small `NetworkRelayShared::is_handled_by_dedicated_subscriber(...)`
-  helper plus a focused `network_relay_tests` regression so future Torii proxy
-  enum growth is checked explicitly instead of falling back to another
-  non-exhaustive `match` failure in `irohad`.
+## 2026-03-28 Follow-up: `irohad` relay and Torii now share proxy-plane message classification
+- Updated `crates/iroha_core/src/lib.rs`,
+  `crates/irohad/src/main.rs`,
+  and
+  `crates/iroha_torii/src/lib.rs`
+  so the Torii/Soracloud proxy-plane message set now lives in
+  `NetworkMessage::is_torii_proxy_control_message()` instead of being
+  duplicated ad hoc in `irohad`.
+- `irohad` now consumes that shared classification when deciding which control
+  frames bypass the generic relay, while Torii routes the same classified
+  messages through a dedicated proxy-plane dispatcher helper before invoking
+  the concrete Torii/Soracloud request/response handlers.
+- Added focused regressions for both sides of the fix:
+  - `iroha_core` now tests that the shared classifier covers both Soracloud and
+    Torii proxy request/response variants; and
+  - `iroha_torii` now tests that the subscriber-facing proxy dispatcher
+    actually resolves a pending `ToriiProxyResponse` instead of only asserting
+    a predicate in `irohad`.
 - Validation:
   - `cargo fmt --all` (pass)
-  - `cargo check -p irohad --message-format short` (pass)
-  - `cargo test -p irohad dedicated_subscriber_message_set_includes_torii_proxy_frames -- --nocapture` (pass)
+  - `cargo test -p iroha_core torii_proxy_control_message_classification_covers_shared_proxy_variants --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii torii_proxy_network_message_dispatch_resolves_pending_response --lib -- --nocapture` (pass)
+  - `cargo check -p irohad --message-format short` previously passed before this follow-up refactor; a fresh rerun after the refactor is currently blocked by an unrelated already-running repository `cargo test` process holding the shared artifact lock.
 - Residual note:
-  - this follow-up validated the touched `irohad` slice only; the repository’s
-    full `cargo test --workspace` pass was not rerun because it remains a
-    multi-hour validation path in this workspace.
+  - this follow-up validated the touched proxy-plane slices only; the
+    repository’s full `cargo test --workspace` pass was not rerun because it
+    remains a multi-hour validation path in this workspace.
 
 ## 2026-03-28 Follow-up: account alias cleanup drops public account-domain singular queries
 - Continued the alias-led universal-account cleanup across the live

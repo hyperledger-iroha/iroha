@@ -170,30 +170,34 @@ Open work for this routed-read integration slice now remains:
 - keep pushing toward proof-backed routed reads once the underlying committed
   state inclusion-proof plumbing exists.
 
-Latest sync (2026-03-28 `irohad` relay / Torii proxy exhaustiveness):
+Latest sync (2026-03-28 shared Torii proxy-plane classification + dispatch tests):
+`crates/iroha_core/src/lib.rs`
+and
 `crates/irohad/src/main.rs`
-now keeps the generic relay aligned with Torii’s dedicated control-plane
-subscriber for proxy request/response traffic.
+and
+`crates/iroha_torii/src/lib.rs`
+now share the Torii/Soracloud proxy-plane message contract instead of keeping
+that classification implicit in multiple places.
 
-- `NetworkMessage::ToriiProxyRequest` and `ToriiProxyResponse` are now
-  explicitly classified as relay-ignored dedicated-subscriber messages
-  alongside the existing Soracloud proxy / genesis / health / connect frames;
-- a focused relay regression now covers both Torii proxy variants so future
-  control-plane enum additions fail in tests before they break `irohad`
-  compilation again; and
-- targeted `irohad` formatting, check, and unit-test validation now pass for
-  this slice.
+- `NetworkMessage::is_torii_proxy_control_message()` now defines the shared
+  Torii/Soracloud proxy-plane message set once in `iroha_core`;
+- `irohad` now uses that shared classifier when deciding which messages bypass
+  the generic relay, while Torii now routes the same classified frames through
+  a dedicated proxy-plane dispatcher helper before invoking the concrete
+  request/response handlers; and
+- focused tests now cover both the shared classifier and the Torii subscriber
+  dispatch path for pending `ToriiProxyResponse` resolution.
 
 Validation:
 - `cargo fmt --all`
-- `cargo check -p irohad --message-format short`
-- `cargo test -p irohad dedicated_subscriber_message_set_includes_torii_proxy_frames -- --nocapture`
+- `cargo test -p iroha_core torii_proxy_control_message_classification_covers_shared_proxy_variants --lib -- --nocapture`
+- `cargo test -p iroha_torii torii_proxy_network_message_dispatch_resolves_pending_response --lib -- --nocapture`
 
 Open work for this relay-control-plane slice now remains:
-- keep `irohad`’s dedicated-subscriber ignore set synchronized with the actual
-  Torii control-plane subscriber whenever new `NetworkMessage` control variants
-  are added, so enum evolution does not regress back into relay exhaustiveness
-  failures.
+- rerun the targeted `irohad` validation once the unrelated already-running
+  repository `cargo test` process releases the shared cargo artifact lock, so
+  the post-refactor `irohad` binary path is rechecked on top of the new shared
+  classifier.
 
 Latest sync (2026-03-27 full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but NPoS is still contaminated by one repeated missing-asset failure):
 the rebuilt 4-peer preserved-peer stable envelopes on
