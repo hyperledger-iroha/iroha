@@ -14,7 +14,7 @@ use norito::codec::{Decode, Encode};
 
 pub use self::{
     model::*,
-    rekey::{AccountLabel, AccountRekeyRecord},
+    rekey::{AccountAlias, AccountLabel, AccountRekeyRecord},
 };
 pub mod address;
 pub mod admission;

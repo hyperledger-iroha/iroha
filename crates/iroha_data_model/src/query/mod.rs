@@ -854,12 +854,8 @@ mod model {
         FindExecutorDataModel(FindExecutorDataModel),
         /// Fetch current global parameters.
         FindParameters(FindParameters),
-        /// Fetch linked domains for an account subject.
-        FindDomainsByAccountId(account::prelude::FindDomainsByAccountId),
         /// Fetch aliases bound to an account subject.
         FindAliasesByAccountId(account::prelude::FindAliasesByAccountId),
-        /// Fetch linked account ids for a domain.
-        FindAccountIdsByDomainId(domain::prelude::FindAccountIdsByDomainId),
         /// Fetch a proof record by its identifier.
         FindProofRecordById(proof::prelude::FindProofRecordById),
         /// Fetch a contract manifest by its code hash.
@@ -2447,9 +2443,7 @@ impl_iter_queries! {
 impl_singular_queries! {
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
-    account::prelude::FindDomainsByAccountId => Vec<crate::domain::DomainId>,
     account::prelude::FindAliasesByAccountId => Vec<account::AccountAliasBindingRecord>,
-    domain::prelude::FindAccountIdsByDomainId => Vec<crate::account::AccountId>,
     proof::prelude::FindProofRecordById => crate::proof::ProofRecord,
     smart_contract::prelude::FindContractManifestByCodeHash => crate::smart_contract::manifest::ContractManifest,
     runtime::prelude::FindAbiVersion => crate::query::runtime::AbiVersion,
@@ -2714,15 +2708,15 @@ pub mod account {
     use crate::prelude::AssetDefinitionId;
 
     /// API-facing record describing one alias bound to an account.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
-    )]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, iroha_schema::IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     pub struct AccountAliasBindingRecord {
+        /// Canonical account identifier that owns the binding.
+        pub account_id: crate::account::AccountId,
         /// Canonical alias literal such as `merchant@hbl.sbp`.
         pub alias: String,
         /// Dataspace alias such as `sbp`.
@@ -2733,6 +2727,17 @@ pub mod account {
         /// Whether this alias is the account's primary label.
         #[norito(default)]
         pub is_primary: bool,
+        /// Effective SNS lifecycle status for the alias.
+        pub status: crate::sns::NameStatus,
+        /// Lease expiry timestamp (unix ms) when the alias ceases to be active.
+        #[norito(default)]
+        pub lease_expiry_ms: Option<u64>,
+        /// End of the grace period (unix ms) after expiry.
+        #[norito(default)]
+        pub grace_until_ms: Option<u64>,
+        /// Timestamp (unix ms) when the current lease term started.
+        #[norito(default)]
+        pub bound_at_ms: u64,
     }
 
     queries! {
@@ -2761,17 +2766,6 @@ pub mod account {
                 pub asset_definition: AssetDefinitionId,
             }
 
-            /// [`FindDomainsByAccountId`] query lists domains linked to the account subject.
-            #[derive(Display)]
-            #[display("Find domains linked to account `{id}`")]
-            #[repr(transparent)]
-            // SAFETY: `FindDomainsByAccountId` has no trap representation in `AccountId`
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
-            pub struct FindDomainsByAccountId {
-                /// Domainless account identifier whose linked domain memberships should be resolved.
-                pub id: crate::account::AccountId,
-            }
-
             /// [`FindAliasesByAccountId`] query lists aliases bound to the account subject.
             #[derive(Display)]
             #[display("Find aliases bound to account `{id}`")]
@@ -2792,13 +2786,6 @@ pub mod account {
         /// Return the queried asset definition identifier.
         pub fn asset_definition_id(&self) -> &AssetDefinitionId {
             &self.asset_definition
-        }
-    }
-
-    impl FindDomainsByAccountId {
-        /// Return the queried account identifier.
-        pub fn account_id(&self) -> &crate::account::AccountId {
-            &self.id
         }
     }
 
@@ -2823,7 +2810,7 @@ pub mod account {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::{
             AccountAliasBindingRecord, FindAccountIds, FindAccounts, FindAccountsWithAsset,
-            FindAliasesByAccountId, FindDomainsByAccountId,
+            FindAliasesByAccountId,
         };
     }
 }
@@ -3154,7 +3141,6 @@ pub mod domain {
 
     use std::{format, string::String, vec::Vec};
 
-    use crate::domain::DomainId;
     use derive_more::Display;
 
     queries! {
@@ -3164,28 +3150,11 @@ pub mod domain {
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindDomains;
 
-        /// [`FindAccountIdsByDomainId`] query lists account identifiers linked to a domain.
-        #[derive(Display)]
-        #[display("Find account ids linked to domain `{id}`")]
-        #[repr(transparent)]
-        // SAFETY: `FindAccountIdsByDomainId` has no trap representation in `DomainId`
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
-        pub struct FindAccountIdsByDomainId {
-            /// Domain identifier whose linked accounts should be resolved.
-            pub id: DomainId,
-        }
-    }
-
-    impl FindAccountIdsByDomainId {
-        /// Return the queried domain identifier.
-        pub fn domain_id(&self) -> &DomainId {
-            &self.id
-        }
     }
 
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::{FindAccountIdsByDomainId, FindDomains};
+        pub use super::FindDomains;
     }
 }
 

@@ -40232,9 +40232,10 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
     let register =
         MultisigRegister::with_account(multisig_account.clone(), alias_label.domain.clone(), spec);
-    let bind_alias = SetAccountLabel {
+    let bind_alias = SetPrimaryAccountAlias {
         account: multisig_account.clone(),
-        label: alias_label,
+        alias: Some(alias_label),
+        lease_expiry_ms: None,
     };
 
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())

@@ -51,6 +51,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
   - Domain-qualified aliases such as `merchant@hbl.sbp` carry both a domain and dataspace in the alias binding.
   - Dataspace-root aliases such as `merchant@sbp` carry only the dataspace and therefore pair naturally with `Account::new_domainless(...)`.
   - Tests and fixtures should seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately instead of encoding domain assumptions into the account identity itself.
+  - Public singular account lookup now focuses on aliases (`FindAliasesByAccountId`); subject-domain membership stays an internal index/detail instead of a dedicated account lookup API.
 
 ### Asset Definitions and Assets
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` exposed textually as an unprefixed Base58 address with versioning and checksum.

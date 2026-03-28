@@ -39150,9 +39150,10 @@ mod tests {
             )
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-            iroha_data_model::isi::domain_link::SetAccountLabel {
+            iroha_data_model::isi::domain_link::SetPrimaryAccountAlias {
                 account: ALICE_ID.clone(),
-                label: banking_label.clone(),
+                alias: Some(banking_label.clone()),
+                lease_expiry_ms: None,
             }
             .execute(&ALICE_ID, &mut stx)
             .unwrap();

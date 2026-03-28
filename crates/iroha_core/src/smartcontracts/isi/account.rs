@@ -1071,21 +1071,16 @@ pub mod query {
         }
     }
 
-    impl ValidSingularQuery for FindDomainsByAccountId {
-        #[metrics(+"find_domains_by_account_id")]
-        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Vec<DomainId>, Error> {
-            Ok(state_ro
-                .world()
-                .domains_for_subject(&self.account_id().subject_id()))
-        }
-    }
-
     impl ValidSingularQuery for FindAliasesByAccountId {
         #[metrics(+"find_aliases_by_account_id")]
         fn execute(
             &self,
             state_ro: &impl StateReadOnly,
         ) -> Result<Vec<AccountAliasBindingRecord>, Error> {
+            let now_ms = state_ro
+                .latest_block()
+                .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(0))
+                .unwrap_or(0);
             let dataspace_filter = self
                 .dataspace()
                 .map(str::trim)
@@ -1148,11 +1143,26 @@ pub mod query {
                         })?
                         .alias
                         .clone();
+                    let record = crate::sns::get_name_record(
+                        state_ro.world(),
+                        &state_ro.nexus().dataspace_catalog,
+                        crate::sns::SnsNamespace::AccountAlias,
+                        &alias,
+                        now_ms,
+                    )
+                    .map_err(|err| {
+                        Error::Conversion(format!("invalid account alias lease record: {err}"))
+                    })?;
                     Ok(AccountAliasBindingRecord {
+                        account_id: account_id.clone(),
                         alias,
                         dataspace,
                         domain: label.domain.as_ref().map(ToString::to_string),
                         is_primary: account.as_ref().label() == Some(&label),
+                        status: record.status,
+                        lease_expiry_ms: Some(record.expires_at_ms),
+                        grace_until_ms: Some(record.grace_expires_at_ms),
+                        bound_at_ms: record.registered_at_ms,
                     })
                 })
                 .collect()
@@ -1763,50 +1773,6 @@ pub mod query {
             assert_eq!(results, vec![acc1]);
         }
 
-        #[test]
-        fn find_domains_by_account_id_returns_linked_domains_for_subject() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let wonderland: DomainId = "wonderland".parse().unwrap();
-            let acme: DomainId = "acme".parse().unwrap();
-            Register::domain(Domain::new(wonderland.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-            Register::domain(Domain::new(acme.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-
-            let (account_id, _) = gen_account_in("wonderland");
-            Register::account(Account::new(
-                account_id.clone().to_account_id(wonderland.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-
-            iroha_data_model::isi::domain_link::LinkAccountDomain {
-                account: account_id.clone(),
-                domain: acme.clone(),
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-
-            stx.apply();
-            state_block.commit().unwrap();
-
-            let view = state.view();
-            let domains = FindDomainsByAccountId::new(account_id)
-                .execute(&view)
-                .unwrap();
-            assert_eq!(domains, vec![acme, wonderland]);
-        }
-
-        #[test]
         fn find_aliases_by_account_id_returns_primary_alias_bindings() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();

@@ -2,6 +2,68 @@
 
 Last updated: 2026-03-28
 
+Latest sync (2026-03-28 account alias cleanup / account-domain query removal):
+the universal-account cleanup now pushes one step further into the public query
+surface and alias instructions.
+
+- `SetAccountLabel` / `BindAccountAlias` have been renamed in the active
+  data-model/core path to `SetPrimaryAccountAlias` /
+  `SetAccountAliasBinding`;
+- `FindAliasesByAccountId` now returns lease-aware alias binding records backed
+  by SNS state; and
+- the stale singular query surfaces `FindDomainsByAccountId` and
+  `FindAccountIdsByDomainId` have been removed from the public
+  data-model/runtime path so account-domain membership stays an internal
+  index/detail instead of a first-class account identity API.
+
+Open work from this slice:
+- finish the broader `ScopedAccountId` / domain-linked account registration
+  cleanup across CLI, Torii tests, bridge helpers, IVM, and docs so account
+  creation and account-targeting ABIs stop depending on scoped account IDs;
+- decide whether `linked_domains` remains a transient internal projection only
+  or is removed entirely from stored account records once the remaining
+  link-index consumers are migrated; and
+- update the translated/public account-structure docs once the broader
+  `ScopedAccountId` removal lands, so the multilingual docs do not need a
+  second churn pass.
+
+Latest sync (2026-03-28 Codex plugin rollout for deployed Torii MCP networks):
+the repo now ships the first deployed-network Codex integration slice for
+native Torii MCP.
+
+- `plugins/iroha/` now contains the installable Codex plugin manifest, fixed
+  Taira MCP preset, plugin README, live-network skill, and assets; and
+- `.agents/plugins/marketplace.json` now registers that plugin for repo-local
+  installation.
+- Taira deployment defaults now ship the intended public writer profile in
+  `configs/soranexus/taira/config.toml` and
+  `defaults/kagami/iroha3-taira/config.toml`:
+  `enabled = true`, `profile = "writer"`,
+  `expose_operator_routes = false`,
+  `allow_tool_prefixes = ["iroha."]`; and
+- Torii MCP docs and Taira/Kagami READMEs now document the built-in Taira
+  preset, custom `codex mcp add ... --url https://<torii>/v1/mcp` workflow,
+  curated `iroha.*` public tool exposure, and runtime-only key-material
+  expectations.
+
+Open work for this rollout now remains:
+- redeploy Taira and the matching Nexus overlays with the shipped
+  `[torii.mcp]` block so public `/v1/mcp` stops returning `404` and exposes the
+  curated `iroha.*` writer-profile surface;
+- run the post-redeploy public smoke against Taira:
+  `GET /v1/mcp`, JSON-RPC `tools/list`, confirm raw `torii.*` tools stay
+  hidden, verify one anonymous/public read succeeds, and verify one write flow
+  succeeds only when explicit runtime key material is supplied;
+- rerun the focused
+  `CARGO_INCREMENTAL=0 cargo test -p iroha_torii --test mcp_endpoints mcp_writer_prefix_policy_ -- --nocapture`
+  validation now that the earlier `crates/iroha_data_model/src/query/mod.rs`
+  `NameStatus` derive blocker has been cleared;
+- install `pytest` locally if the plugin-manifest validator test should run via
+  `python3 -m pytest scripts/tests/check_codex_plugin_manifests_test.py`
+  instead of the temporary manual harness; and
+- when a stable public Nexus Torii URL exists, document it as a user-local
+  custom MCP server rather than hardcoding another repo preset.
+
 Latest sync (2026-03-28 DA/precommit tuning stop point after Cut 2 regression):
 the requested deterministic tuning slices have now hit the user-defined stop
 condition:

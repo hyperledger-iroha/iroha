@@ -30,6 +30,11 @@ pub struct AccountLabel {
     pub dataspace: DataSpaceId,
 }
 
+/// Preferred alias-led name for [`AccountLabel`].
+///
+/// The data model is moving away from "label" terminology for account-facing alias surfaces.
+pub type AccountAlias = AccountLabel;
+
 impl AccountLabel {
     /// Create a new account label in the default `universal` dataspace.
     pub fn new(domain: DomainId, label: Name) -> Self {

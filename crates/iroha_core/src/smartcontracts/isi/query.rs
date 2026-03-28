@@ -420,13 +420,7 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindParameters(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
-            SingularQueryBox::FindDomainsByAccountId(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
             SingularQueryBox::FindAliasesByAccountId(q) => {
-                Ok(SingularQueryOutputBox::from(q.execute(state)?))
-            }
-            SingularQueryBox::FindAccountIdsByDomainId(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindProofRecordById(q) => {

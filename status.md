@@ -2,6 +2,79 @@
 
 Last updated: 2026-03-28
 
+## 2026-03-28 Follow-up: account alias cleanup drops public account-domain singular queries
+- Continued the alias-led universal-account cleanup across the live
+  data-model/runtime path so account identity is exposed more consistently as
+  `AccountId` plus alias bindings instead of account-domain lookup helpers.
+- Renamed the account-alias instructions in the data model/core slice to:
+  - `SetPrimaryAccountAlias`
+  - `SetAccountAliasBinding`
+- Extended `FindAliasesByAccountId` payloads to return lease-aware
+  `AccountAliasBindingRecord` data (`status`, `lease_expiry_ms`,
+  `grace_until_ms`, `bound_at_ms`, and the owning `account_id`) sourced from
+  SNS state.
+- Removed the stale singular query surfaces
+  `FindDomainsByAccountId` and `FindAccountIdsByDomainId` from:
+  - `crates/iroha_data_model/src/query/{mod.rs,json/envelope.rs}`
+  - `crates/iroha_data_model/src/visit/visit_query.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/{account.rs,domain.rs,query.rs}`
+- Updated the domain-link query tests to assert against the world-state
+  subject/domain indexes directly rather than re-exposing those transitional
+  account-domain queries as public API.
+- Validation:
+  - `cargo check -p iroha_torii` (pass)
+  - `cargo check -p iroha_core` (pass)
+  - `cargo test -p iroha_data_model find_aliases_by_account_id_roundtrip_with_filters --lib`
+    (pass)
+  - `cargo check -p iroha_data_model` passed earlier in this slice before the
+    final restore of an accidentally dropped `#[test]` attribute on
+    `find_asset_queries_roundtrip_with_public_selectors`; a fresh rerun was
+    still queued behind background Cargo jobs at the stop point.
+
+## 2026-03-28 Codex plugin preset for deployed Torii MCP networks
+- Added a repo-local Codex plugin under `plugins/iroha/` with the required
+  `.codex-plugin/plugin.json`, a fixed Taira `.mcp.json`, repo install docs,
+  SVG assets, and a focused `iroha-live-network` skill for deployed
+  `iroha.*` workflows.
+- Registered the plugin in `.agents/plugins/marketplace.json` so Codex can
+  install it directly from this repository.
+- Enabled the deployed Taira writer-profile MCP defaults in
+  `configs/soranexus/taira/config.toml` and
+  `defaults/kagami/iroha3-taira/config.toml`:
+  `enabled = true`, `profile = "writer"`,
+  `expose_operator_routes = false`,
+  `allow_tool_prefixes = ["iroha."]`.
+- Updated `configs/soranexus/taira/README.md`,
+  `defaults/kagami/iroha3-taira/README.md`, and
+  `crates/iroha_torii/docs/mcp_api.md` to document the public deployed-network
+  rollout, the curated `iroha.*` tool policy, the built-in Taira preset,
+  user-local `codex mcp add ... --url https://<torii>/v1/mcp` custom-network
+  flow, and runtime-only handling of `authority` / `private_key` style inputs.
+- Added `scripts/check_codex_plugin_manifests.py` plus
+  `scripts/tests/check_codex_plugin_manifests_test.py` so malformed plugin,
+  MCP, or marketplace metadata can fail CI.
+- Added focused Torii MCP coverage in
+  `crates/iroha_torii/tests/mcp_endpoints.rs` for the deployed writer profile:
+  the allowlist exposes only `iroha.*`, keeps representative write aliases
+  (`iroha.contracts.call_and_wait`, `iroha.contracts.deploy`,
+  `iroha.accounts.onboard`, `iroha.transactions.submit_and_wait`), and rejects
+  hidden raw `torii.*` tool calls.
+- Validation:
+  - `python3 scripts/check_codex_plugin_manifests.py` (pass)
+  - `python3 -m py_compile scripts/check_codex_plugin_manifests.py scripts/tests/check_codex_plugin_manifests_test.py`
+    (pass)
+  - manual Python execution of the
+    `scripts/tests/check_codex_plugin_manifests_test.py` test functions (pass;
+    local `python3 -m pytest ...` is unavailable because `pytest` is not
+    installed in this environment)
+  - `rustfmt --edition 2024 crates/iroha_torii/tests/mcp_endpoints.rs` (pass)
+  - `cargo check -p iroha_torii` (pass after the later account-alias query
+    cleanup removed the `NameStatus` derive blocker from
+    `crates/iroha_data_model/src/query/mod.rs`)
+- Remaining rollout note: public `https://taira.sora.org/v1/mcp` still needs a
+  redeploy with the shipped `[torii.mcp]` block before the built-in Taira
+  preset can succeed against the live endpoint.
+
 ## 2026-03-28 DA/precommit tail tuning stop point: Cut 0 and Cut 1 were clean, Cut 2 regressed permissioned into ingress backpressure
 - Cut 0 restored the `irohad` release build in `crates/irohad/src/main.rs` by
   handling `ToriiProxyRequest(_)` and `ToriiProxyResponse(_)` in the same no-op
