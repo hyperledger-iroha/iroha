@@ -1906,23 +1906,23 @@ mod tests {
         let sora = address
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
             .expect("sora");
-        let testus = address
+        let taira = address
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_TEST)
             .expect("test");
         let dev = address
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_DEV)
             .expect("dev");
 
-        assert_ne!(sora, testus);
+        assert_ne!(sora, taira);
         assert_ne!(sora, dev);
-        assert_ne!(testus, dev);
+        assert_ne!(taira, dev);
         assert!(!sora.contains(':'));
-        assert!(!testus.contains(':'));
+        assert!(!taira.contains(':'));
         assert!(!dev.contains(':'));
 
         for (literal, discriminant) in [
             (sora, CHAIN_DISCRIMINANT_SORA),
-            (testus, CHAIN_DISCRIMINANT_TEST),
+            (taira, CHAIN_DISCRIMINANT_TEST),
             (dev, CHAIN_DISCRIMINANT_DEV),
         ] {
             let decoded = AccountAddress::from_i105_for_discriminant(&literal, Some(discriminant))

@@ -85,8 +85,8 @@ Guided node/bootstrap flow for configuring a peer against an existing network pr
     Vanilla single-lane Iroha 2 style network (no Sora profile needed)
   - `nexus`:
     Sora Nexus (mainnet)
-  - `testus`:
-    Sora Testus (testnet)
+  - `taira`:
+    Sora Taira (testnet)
 
 * `--output-dir <PATH>` — Directory where generated config/genesis files will be written
 
@@ -317,18 +317,18 @@ Generate a genesis configuration and standard-output in JSON format
 
 ###### **Options:**
 
-* `--profile <PROFILE>` — Optional profile: picks Iroha3 defaults for dev/testus/nexus (sets chain id, DA/RBC, collector knobs)
+* `--profile <PROFILE>` — Optional profile: picks Iroha3 defaults for dev/taira/nexus (sets chain id, DA/RBC, collector knobs)
 
   Possible values:
   - `iroha3-dev`:
     Local-only developer network
-  - `iroha3-testus`:
+  - `iroha3-taira`:
     Public Sora test network
   - `iroha3-nexus`:
     Sora Nexus main network
 
 * `--chain-id <CHAIN_ID>` — Optional explicit chain id (overrides profile default)
-* `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for `iroha3-testus`/`iroha3-nexus` when NPoS is selected; ignored for permissioned manifests
+* `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for `iroha3-taira`/`iroha3-nexus` when NPoS is selected; ignored for permissioned manifests
 * `--executor <PATH>` — Optional path (relative to output) to the executor bytecode file (.to). If omitted, no executor upgrade is included in genesis
 * `--ivm-dir <PATH>` — Relative path from the directory of output file to the directory that contains IVM bytecode libraries
 * `--genesis-public-key <MULTI_HASH>`
@@ -459,18 +459,18 @@ Verify a genesis manifest against a preset profile
 
 ###### **Options:**
 
-* `--profile <PROFILE>` — Profile to verify against (`iroha3-dev`, `iroha3-testus`, `iroha3-nexus`)
+* `--profile <PROFILE>` — Profile to verify against (`iroha3-dev`, `iroha3-taira`, `iroha3-nexus`)
 
   Possible values:
   - `iroha3-dev`:
     Local-only developer network
-  - `iroha3-testus`:
+  - `iroha3-taira`:
     Public Sora test network
   - `iroha3-nexus`:
     Sora Nexus main network
 
 * `--genesis <PATH>` — Path to the genesis manifest (JSON)
-* `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for NPoS testus/nexus manifests
+* `--vrf-seed-hex <HEX>` — Optional VRF seed (hex, 32 bytes). Required for NPoS taira/nexus manifests
 
 
 

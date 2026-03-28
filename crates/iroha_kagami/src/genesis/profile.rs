@@ -13,7 +13,7 @@ pub enum GenesisProfile {
     /// Local-only developer network.
     Iroha3Dev,
     /// Public Sora test network.
-    Iroha3Testus,
+    Iroha3Taira,
     /// Sora Nexus main network.
     Iroha3Nexus,
 }
@@ -53,8 +53,8 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
             collectors_redundant_send_r: redundant_send_r_from_len(1),
             seed_policy: SeedPolicy::DerivedFromChain,
         },
-        GenesisProfile::Iroha3Testus => ProfileDefaults {
-            chain_id: ChainId::from("iroha3-testus"),
+        GenesisProfile::Iroha3Taira => ProfileDefaults {
+            chain_id: ChainId::from("iroha3-taira"),
             collectors_k: 3,
             min_peers: 4,
             collectors_redundant_send_r: redundant_send_r_from_len(4),
@@ -127,11 +127,11 @@ mod tests {
         assert_eq!(dev.collectors_redundant_send_r, 1);
         assert_eq!(dev.min_peers, 1);
 
-        let testus = profile_defaults(GenesisProfile::Iroha3Testus);
-        assert_eq!(testus.chain_id, ChainId::from("iroha3-testus"));
-        assert_eq!(testus.collectors_k, 3);
-        assert_eq!(testus.collectors_redundant_send_r, 3);
-        assert_eq!(testus.min_peers, 4);
+        let taira = profile_defaults(GenesisProfile::Iroha3Taira);
+        assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
+        assert_eq!(taira.collectors_k, 3);
+        assert_eq!(taira.collectors_redundant_send_r, 3);
+        assert_eq!(taira.min_peers, 4);
 
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn profile_requires_npos_only_for_nexus() {
         assert!(!profile_requires_npos(GenesisProfile::Iroha3Dev));
-        assert!(!profile_requires_npos(GenesisProfile::Iroha3Testus));
+        assert!(!profile_requires_npos(GenesisProfile::Iroha3Taira));
         assert!(profile_requires_npos(GenesisProfile::Iroha3Nexus));
     }
 }

@@ -1,6 +1,6 @@
-# Sora Testus (testnet) validator configuration
-# Network prefix: `testus`
-# Start with: `irohad --sora --config configs/soranexus/testus/config.toml`
+# Sora Taira (testnet) validator configuration
+# Network prefix: `taira`
+# Start with: `irohad --sora --config configs/soranexus/taira/config.toml`
 
 chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
 chain_discriminant = 369
@@ -8,7 +8,7 @@ public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69B
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
 
 trusted_peers = [
-  "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@testus.mof3.sora.org:1337",
+  "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@taira-validator-1.sora.org:1337",
 ]
 trusted_peers_pop = [
   { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" },
@@ -20,11 +20,11 @@ beep = true
 
 [network]
 address = "0.0.0.0:1337"
-public_address = "testus.mof3.sora.org:1337"
+public_address = "taira-validator-1.sora.org:1337"
 
 [torii]
 address = "0.0.0.0:18080"
-public_address = "https://testus.mof3.sora.org:18080"
+public_address = "https://taira.sora.org"
 
 [torii.onboarding]
 authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
@@ -49,7 +49,7 @@ pow_vrf_seed_enabled = true
 [torii.sorafs]
 discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch"]
-admission_envelopes_dir = "configs/soranexus/testus/sorafs_admission"
+admission_envelopes_dir = "configs/soranexus/taira/sorafs_admission"
 
 [sorafs.repair]
 enabled = false
@@ -83,15 +83,6 @@ feature_bits = 0b11
 [nexus]
 lane_count = 3
 
-[nexus.fees]
-fee_asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
-base_fee = "0"
-per_byte_fee = "0"
-per_instruction_fee = "0.001"
-per_gas_unit_fee = "0.00005"
-sponsorship_enabled = false
-sponsor_max_fee = "0"
-
 [[nexus.lane_catalog]]
 index = 0
 alias = "core"
@@ -103,6 +94,7 @@ index = 1
 alias = "governance"
 description = "Governance & parliament traffic"
 dataspace = "governance"
+governance = "parliament"
 
 [[nexus.lane_catalog]]
 index = 2
@@ -124,6 +116,16 @@ description = "Governance proposals & manifests"
 alias = "zk"
 id = 2
 description = "Zero-knowledge proofs and attachments"
+
+[nexus.governance]
+default_module = "parliament"
+
+[nexus.governance.modules.parliament]
+module_type = "parliament_sortition_jit"
+
+[nexus.governance.modules.parliament.params]
+selection = "multibody_sortition"
+approval_flow = "jit"
 
 [nexus.routing_policy]
 default_lane = 0
@@ -171,5 +173,21 @@ request_timeout_ms = 43200000
 [nexus.da.rotation]
 max_hits_per_window = 4
 window_slots = 48
-seed_tag = "iroha:da:rotate:v1\0"
+seed_tag = "iroha:da:rotate:v1\u0000"
 latency_decay = 0.25
+
+[governance]
+plain_voting_enabled = false
+parliament_committee_size = 21
+parliament_term_blocks = 43200
+parliament_min_stake = 1
+parliament_eligibility_asset_id = "SORA#stake"
+parliament_alternate_size = 21
+parliament_quorum_bps = 6667
+rules_committee_size = 7
+agenda_council_size = 9
+interest_panel_size = 11
+review_panel_size = 13
+policy_jury_size = 25
+oversight_committee_size = 7
+fma_committee_size = 5

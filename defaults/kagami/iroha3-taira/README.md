@@ -1,6 +1,6 @@
-# iroha3-testus sample bundle
+# iroha3-taira sample bundle
 
-- chain id: iroha3-testus
+- chain id: iroha3-taira
 - collectors: k=3 r=2
 - VRF seed (hex): 8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B
 - genesis public key: ed0120CFBB23652880ABCAEEE2FA6F512A1657E5D7EDBC7B45589721FD86C2FEC9F559
@@ -14,10 +14,10 @@
 - peer 7: public_key=ea01308E10E640916ADFAC87A8B22FE4EF7383AAC610D09DC07322029A0913CA919176887FF1B418DEF885113E3CCC4C9CAC53 address=127.0.0.1:1343 pop_hex=935f3cb1167a391410d16ba2a7558a0400b76b8433c6fc9cafa23f8c584c5167354ea180672cab3be55db8c86ec81e7d133a03bada91ccfa69c0cca4675398dea7299abc51f086b1760d37281d61fc01de20279cd0bd597a970e0549b035c00e
 
 Files:
-- genesis.json — generated with `kagami genesis generate --profile iroha3-testus` and patched with deterministic topology+PoPs
-- verify.txt — stdout from `kagami verify --profile iroha3-testus --genesis genesis.json`
+- genesis.json — generated with `kagami genesis generate --profile iroha3-taira` and patched with deterministic topology+PoPs
+- verify.txt — stdout from `kagami verify --profile iroha3-taira --genesis genesis.json`
 - config.toml — minimal Nexus config matching the topology (ports 8080/1337)
 - docker-compose.yml — single-node snippet mounting the config/genesis
 
 Regenerate:
-- cargo xtask kagami-profiles --profile iroha3-testus
+- cargo xtask kagami-profiles --profile iroha3-taira
