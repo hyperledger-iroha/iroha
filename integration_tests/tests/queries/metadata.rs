@@ -53,8 +53,9 @@ fn find_accounts_with_asset() {
                 ))
                 .expect("Failed to grant account registration permission to Alice");
             test_client
-                .submit_blocking(Register::account(Account::new(
-                    BOB_ID.to_account_id(wonderland_domain.clone()),
+                .submit_blocking(Register::account(Account::new_in_domain(
+                    BOB_ID.clone(),
+                    wonderland_domain.clone(),
                 )))
                 .expect("Failed to register Bob account");
         }

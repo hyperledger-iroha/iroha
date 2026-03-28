@@ -27,12 +27,9 @@ use nonzero_ext::nonzero;
 fn fresh_state() -> State {
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
     let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
-    let account: Account = Account::new(
-        ALICE_ID
-            .clone()
-            .to_account_id("wonderland".parse().expect("domain")),
-    )
-    .build(&ALICE_ID);
+    let account: Account =
+        Account::new_in_domain(ALICE_ID.clone(), "wonderland".parse().expect("domain"))
+            .build(&ALICE_ID);
     let world = World::with([domain], [account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

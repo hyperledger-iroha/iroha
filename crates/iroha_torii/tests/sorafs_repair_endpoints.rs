@@ -106,7 +106,7 @@ fn seed_worker_permission(state: &Arc<State>, worker_id: &AccountId, provider_id
     Register::domain(Domain::new(domain_id.clone()))
         .execute(worker_id, &mut tx)
         .expect("register domain");
-    Register::account(Account::new(worker_id.clone().to_account_id(domain_id)))
+    Register::account(Account::new_in_domain(worker_id.clone(), domain_id))
         .execute(worker_id, &mut tx)
         .expect("register account");
     let permission = Permission::from(CanOperateSorafsRepair {

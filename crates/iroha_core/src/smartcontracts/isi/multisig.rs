@@ -434,7 +434,7 @@ fn rekey_account_id(
     for domain in linked_domains {
         state_transaction
             .world
-            .link_account_subject_domain(&new_account.to_account_id(domain));
+            .link_account_subject_domain(&new_account, &domain);
     }
 
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
@@ -4944,7 +4944,7 @@ mod tests {
         }
         state_transaction
             .world
-            .link_account_subject_domain(&shared_account.to_account_id(alt_domain.clone()));
+            .link_account_subject_domain(&shared_account, &alt_domain);
         assert_eq!(
             domain_owner(&state_transaction, &home_domain).expect("domain owner lookup"),
             owner_id,

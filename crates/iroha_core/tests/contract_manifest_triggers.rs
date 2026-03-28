@@ -56,7 +56,7 @@ fn setup_state() -> (State, AccountId, KeyPair) {
     let domain_id: DomainId = "wonderland".parse().expect("domain");
     let account_id = AccountId::new(kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
+    let account = Account::new_in_domain(account_id.clone(), domain_id).build(&account_id);
     let world = World::with([domain], [account], core::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
     (state, account_id, kp)

@@ -392,6 +392,15 @@ pub struct SorafsTokenOverrides {
     pub requests_per_minute: Option<u32>,
 }
 
+/// File metadata attached to a `SoraFS` storage pin request for directory payloads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsStorageFileEntry<'a> {
+    /// Relative path components within the dataset root.
+    pub path: &'a [String],
+    /// File size in bytes.
+    pub size: u64,
+}
+
 /// Optional tuning knobs applied when orchestrating `SoraFS` gateway fetches.
 #[derive(Debug, Default, Clone)]
 pub struct SorafsGatewayFetchOptions {
@@ -7725,13 +7734,28 @@ impl Client {
         &self,
         manifest_bytes: &[u8],
         payload_bytes: &[u8],
+        files: Option<&[SorafsStorageFileEntry<'_>]>,
     ) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/storage/pin");
         let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(manifest_bytes);
         let payload_b64 = base64::engine::general_purpose::STANDARD.encode(payload_bytes);
+        let files_json = files.map(|entries| {
+            norito::json::Value::Array(
+                entries
+                    .iter()
+                    .map(|entry| {
+                        norito::json!({
+                            "path": (entry.path.to_vec()),
+                            "size": (entry.size),
+                        })
+                    })
+                    .collect(),
+            )
+        });
         let body = norito::json::to_vec(&norito::json!({
-            "manifest_b64": manifest_b64,
-            "payload_b64": payload_b64,
+            "manifest_b64": (manifest_b64),
+            "payload_b64": (payload_b64),
+            "files": (files_json.unwrap_or(norito::json::Value::Null)),
         }))?;
         self.default_request(HttpMethod::POST, url)
             .header("Content-Type", APPLICATION_JSON)

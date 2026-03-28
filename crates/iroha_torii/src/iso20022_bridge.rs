@@ -1400,7 +1400,7 @@ mod tests {
         let asset_definition_id =
             AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("name"));
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
         let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
             .with_name("USD".to_owned())
             .build(&authority);

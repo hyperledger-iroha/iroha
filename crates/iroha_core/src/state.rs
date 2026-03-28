@@ -28,7 +28,6 @@ use iroha_data_model::{
     IntoKeyValue,
     account::{
         AccountDomainSelector, AccountEntry, AccountId, AccountValue, OpaqueAccountId,
-        ScopedAccountId,
         rekey::{AccountLabel, AccountRekeyRecord},
     },
     asset::{
@@ -14745,32 +14744,30 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         removed
     }
 
-    /// Link a domain-scoped account subject to its domain membership indexes.
-    pub fn link_account_subject_domain(&mut self, account_id: &ScopedAccountId) {
+    /// Link an account subject to a domain in the subject/domain membership indexes.
+    pub fn link_account_subject_domain(&mut self, account_id: &AccountId, domain: &DomainId) {
         let subject = account_id.subject_id();
-        let domain = account_id.domain().clone();
         let mut domains = self
             .account_subject_domains
             .get(&subject)
             .cloned()
             .unwrap_or_default();
-        domains.insert(domain);
+        domains.insert(domain.clone());
         self.account_subject_domains
             .insert(subject.clone(), domains);
         self.sync_account_value_linked_domains(&subject);
         self.rebuild_domain_account_subject_index();
     }
 
-    /// Unlink a domain-scoped account subject from its domain membership indexes.
-    pub fn unlink_account_subject_domain(&mut self, account_id: &ScopedAccountId) {
+    /// Unlink an account subject from a domain in the subject/domain membership indexes.
+    pub fn unlink_account_subject_domain(&mut self, account_id: &AccountId, domain: &DomainId) {
         let subject = account_id.subject_id();
-        let domain = account_id.domain().clone();
         let mut domains = self
             .account_subject_domains
             .get(&subject)
             .cloned()
             .unwrap_or_default();
-        domains.remove(&domain);
+        domains.remove(domain);
         self.account_subject_domains
             .insert(subject.clone(), domains);
         self.sync_account_value_linked_domains(&subject);
@@ -22735,7 +22732,7 @@ mod fastpq_tx_set_hash_tests {
         let (authority, keypair) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("valid domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
         let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23463,11 +23460,7 @@ mod replay_validation_tests {
     fn new_genesis_account(
         account_id: &iroha_data_model::account::AccountId,
     ) -> iroha_data_model::account::NewAccount {
-        Account::new(
-            account_id
-                .clone()
-                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
-        )
+        Account::new_in_domain(account_id.clone(), iroha_genesis::GENESIS_DOMAIN_ID.clone())
     }
 
     #[test]
@@ -23576,7 +23569,7 @@ mod replay_validation_tests {
             ],
             [
                 new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new(user_id.clone().to_account_id(user_domain_id)).build(&genesis_id),
+                Account::new_in_domain(user_id.clone(), user_domain_id).build(&genesis_id),
             ],
             [],
         );
@@ -23984,7 +23977,7 @@ mod replay_validation_tests {
             ],
             [
                 new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new(user_id.clone().to_account_id(user_domain.clone())).build(&genesis_id),
+                Account::new_in_domain(user_id.clone(), user_domain.clone()).build(&genesis_id),
             ],
             [],
         );
@@ -24049,7 +24042,7 @@ mod replay_validation_tests {
             ],
             [
                 new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new(user_id.to_account_id(user_domain)).build(&genesis_id),
+                Account::new_in_domain(user_id.clone(), user_domain).build(&genesis_id),
             ],
             [],
         );
@@ -24115,15 +24108,11 @@ mod permission_cache_tests {
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone().to_account_id(wonderland_domain_id()))
+        Account::new_in_domain(account_id.clone(), wonderland_domain_id())
     }
 
     fn new_genesis_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new(
-            account_id
-                .clone()
-                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
-        )
+        Account::new_in_domain(account_id.clone(), iroha_genesis::GENESIS_DOMAIN_ID.clone())
     }
 
     #[test]
@@ -27872,7 +27861,7 @@ mod tests {
             .build(&authority);
 
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
         (
             World::with([domain], [account], [definition]),
             definition_id,
@@ -27884,12 +27873,9 @@ mod tests {
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let genesis_domain =
             Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-        let genesis_account = Account::new(
-            genesis_id
-                .clone()
-                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
-        )
-        .build(&genesis_id);
+        let genesis_account =
+            Account::new_in_domain(genesis_id.clone(), iroha_genesis::GENESIS_DOMAIN_ID.clone())
+                .build(&genesis_id);
         let state = State::new_for_testing(
             World::with([genesis_domain], [genesis_account], []),
             crate::kura::Kura::blank_kura_for_testing(),
@@ -28171,7 +28157,7 @@ mod tests {
         account_id: &AccountId,
         domain_id: &DomainId,
     ) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone().to_account_id(domain_id.clone()))
+        Account::new_in_domain(account_id.clone(), domain_id.clone())
     }
 
     fn new_sample_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
@@ -28220,7 +28206,7 @@ mod tests {
         Register::domain(Domain::new(recipient_domain.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(recipient.clone()))
+        Register::account(Account::from_scoped_id(recipient.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -28641,7 +28627,7 @@ mod tests {
         let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
         #[cfg(not(feature = "telemetry"))]
         let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        tx.link_account_subject_domain(&acme_account);
+        tx.link_account_subject_domain(acme_account.account(), acme_account.domain());
         tx.apply();
         block.commit();
 
@@ -28683,7 +28669,7 @@ mod tests {
         let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
         #[cfg(not(feature = "telemetry"))]
         let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        tx.link_account_subject_domain(&acme_account);
+        tx.link_account_subject_domain(acme_account.account(), acme_account.domain());
 
         let stored = tx
             .account(&shared_subject)
@@ -28774,7 +28760,7 @@ mod tests {
         let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
         #[cfg(not(feature = "telemetry"))]
         let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        tx.link_account_subject_domain(&acme_account);
+        tx.link_account_subject_domain(acme_account.account(), acme_account.domain());
         let removed = tx.remove_account_with_links(&wonderland_account);
         assert!(removed.is_some(), "linked scoped account must be removed");
         let linked_domains = tx

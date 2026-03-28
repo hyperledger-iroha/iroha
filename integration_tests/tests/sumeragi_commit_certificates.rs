@@ -542,8 +542,9 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
         if validator_id != gas_account_id {
             bootstrap_tx.push(
-                Register::account(Account::new(
-                    validator_id.to_account_id(nexus_domain.clone()),
+                Register::account(Account::new_in_domain(
+                    validator_id.clone(),
+                    nexus_domain.clone(),
                 ))
                 .into(),
             );

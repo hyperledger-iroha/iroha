@@ -41,7 +41,7 @@ fn domain_owner_domain_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.to_account_id(kingdom_id.clone()));
+    let bob = Account::new_in_domain(bob_id.clone(), kingdom_id.clone());
     test_client.submit_blocking(Register::account(bob))?;
 
     // Asset-definition registration is issuer-owned in first-release semantics.
@@ -89,7 +89,7 @@ fn domain_owner_account_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id);
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let mad_hatter = Account::new(mad_hatter_id.to_account_id("kingdom".parse()?));
+    let mad_hatter = Account::new_in_domain(mad_hatter_id.clone(), "kingdom".parse()?);
     test_client.submit_blocking(Register::account(mad_hatter))?;
 
     // check that the canonical ALICE account as owner of domain can edit metadata of account in her domain
@@ -142,10 +142,10 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
+    let bob = Account::new_in_domain(bob_id.clone(), "kingdom".parse()?);
     test_client.submit_blocking(Register::account(bob))?;
 
-    let rabbit = Account::new(rabbit_id.to_account_id("kingdom".parse()?));
+    let rabbit = Account::new_in_domain(rabbit_id.clone(), "kingdom".parse()?);
     test_client.submit_blocking(Register::account(rabbit))?;
 
     // Register asset definition by "bob@kingdom" so he is owner of it.
@@ -208,7 +208,7 @@ fn domain_owner_asset_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
+    let bob = Account::new_in_domain(bob_id.clone(), "kingdom".parse()?);
     test_client.submit_blocking(Register::account(bob))?;
 
     // Register asset definition by "bob@kingdom" so he is owner of it.
@@ -254,7 +254,7 @@ fn domain_owner_nft_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
+    let bob = Account::new_in_domain(bob_id.clone(), "kingdom".parse()?);
     test_client.submit_blocking(Register::account(bob))?;
 
     // Grant permission to register NFT to "bob@kingdom"
@@ -310,7 +310,7 @@ fn domain_owner_trigger_permissions() -> Result<()> {
     let kingdom = Domain::new(kingdom_id);
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
+    let bob = Account::new_in_domain(bob_id.clone(), "kingdom".parse()?);
     test_client.submit_blocking(Register::account(bob))?;
 
     let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
@@ -383,7 +383,7 @@ fn domain_owner_transfer() -> Result<()> {
     let kingdom = Domain::new(kingdom_id.clone());
     test_client.submit_blocking(Register::domain(kingdom))?;
 
-    let bob = Account::new(bob_id.to_account_id("kingdom".parse()?));
+    let bob = Account::new_in_domain(bob_id.clone(), "kingdom".parse()?);
     test_client.submit_blocking(Register::account(bob))?;
 
     let domain = test_client
@@ -424,11 +424,13 @@ fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
 
     let builder = NetworkBuilder::new()
         .with_genesis_instruction(Register::domain(Domain::new(users_domain.clone())))
-        .with_genesis_instruction(Register::account(Account::new(
-            user1.to_account_id(users_domain.clone()),
+        .with_genesis_instruction(Register::account(Account::new_in_domain(
+            user1.clone(),
+            users_domain.clone(),
         )))
-        .with_genesis_instruction(Register::account(Account::new(
-            user2.to_account_id(users_domain.clone()),
+        .with_genesis_instruction(Register::account(Account::new_in_domain(
+            user2.clone(),
+            users_domain.clone(),
         )))
         .with_genesis_instruction(Register::domain(Domain::new(foo_domain.clone())))
         .next_genesis_transaction()

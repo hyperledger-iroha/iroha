@@ -31,7 +31,7 @@ fn build_world() -> (
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id)).build(&alice_id);
+    let acc_a = Account::new_in_domain(alice_id.clone(), domain_id).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();

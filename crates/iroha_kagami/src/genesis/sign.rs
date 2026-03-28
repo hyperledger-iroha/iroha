@@ -177,8 +177,9 @@ fn append_npos_bootstrap(
         registrations.domains.insert(escrow_domain_id.clone());
     }
     if !registrations.accounts.contains(escrow_account_id) {
-        builder = builder.append_instruction(Register::account(Account::new(
-            escrow_account_id.to_account_id(escrow_domain_id.clone()),
+        builder = builder.append_instruction(Register::account(Account::new_in_domain(
+            escrow_account_id.clone(),
+            escrow_domain_id.clone(),
         )));
         registrations.accounts.insert(escrow_account_id.clone());
     }
@@ -193,8 +194,9 @@ fn append_npos_bootstrap(
     for peer in topology {
         let validator_id = AccountId::new(peer.public_key().clone());
         if !registrations.accounts.contains(&validator_id) {
-            builder = builder.append_instruction(Register::account(Account::new(
-                validator_id.to_account_id(nexus_domain.clone()),
+            builder = builder.append_instruction(Register::account(Account::new_in_domain(
+                validator_id.clone(),
+                nexus_domain.clone(),
             )));
             registrations.accounts.insert(validator_id.clone());
         }

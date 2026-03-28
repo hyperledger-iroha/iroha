@@ -226,7 +226,7 @@ fn create_implicit_account(
     {
         state_transaction
             .world
-            .link_account_subject_domain(&destination.to_account_id(linked_domain.clone()));
+            .link_account_subject_domain(&destination, &linked_domain);
         state_transaction
             .world
             .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
@@ -412,7 +412,8 @@ mod tests {
         domain_id: DomainId,
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
-        iroha_data_model::account::NewAccount::new_in_domain(account_id, domain_id).build(authority)
+        iroha_data_model::account::NewAccount::new_in_domain(account_id.clone(), domain_id)
+            .build(authority)
     }
 
     fn test_state(mut world: World) -> State {
