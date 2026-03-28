@@ -4,6 +4,7 @@ import { blake2b } from "@noble/hashes/blake2b";
 const encoder = new TextEncoder();
 const SID_PREFIX = encoder.encode("iroha-connect|sid|");
 const CONNECT_URI_VERSION = "1";
+const CONNECT_URI_SCHEME = "iroha://connect";
 const DEFAULT_TORII_BASE_URL = "https://taira.sora.org";
 
 function requireNonEmptyString(value, name) {
@@ -104,28 +105,42 @@ function baseUrlFromLocation() {
   return `${window.location.protocol}//${window.location.host}`;
 }
 
-function buildConnectUri(path, sidBase64Url, chainId, node) {
+function normalizeConnectRole(role, name = "role") {
+  if (role === "app" || role === "wallet") {
+    return role;
+  }
+  throw new TypeError(`${name} must be 'app' or 'wallet'`);
+}
+
+function normalizeOptionalString(value) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function buildConnectUri(sidBase64Url, chainId, node, role, token = null) {
   const params = new URLSearchParams({
     sid: sidBase64Url,
     chain_id: chainId,
     v: CONNECT_URI_VERSION,
+    role: normalizeConnectRole(role),
   });
   if (node) {
     params.set("node", node);
   }
-  return `iroha://${path}?${params.toString()}`;
+  if (token) {
+    params.set("token", requireNonEmptyString(token, "token"));
+  }
+  return `${CONNECT_URI_SCHEME}?${params.toString()}`;
 }
 
 export function buildConnectWebSocketUrl(baseUrl, sid, role = "app") {
   const normalizedBaseUrl = requireNonEmptyString(baseUrl, "baseUrl");
   const normalizedSid = requireNonEmptyString(sid, "sid");
-  if (role !== "app" && role !== "wallet") {
-    throw new TypeError("role must be 'app' or 'wallet'");
-  }
+  const normalizedRole = normalizeConnectRole(role);
   const url = new URL("/v1/connect/ws", `${normalizedBaseUrl}/`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("sid", normalizedSid);
-  url.searchParams.set("role", role);
+  url.searchParams.set("role", normalizedRole);
   return url.toString();
 }
 
@@ -172,8 +187,8 @@ export function createConnectSessionPreview(options = {}) {
       publicKey,
       privateKey,
     },
-    walletUri: buildConnectUri("connect", sidBase64Url, chainId, node),
-    appUri: buildConnectUri("connect/app", sidBase64Url, chainId, node),
+    walletUri: buildConnectUri(sidBase64Url, chainId, node, "wallet"),
+    appUri: buildConnectUri(sidBase64Url, chainId, node, "app"),
     wsUrl: buildConnectWebSocketUrl(toriiBaseUrl, sidBase64Url, "app"),
     createdAt: Date.now(),
   };
@@ -234,12 +249,45 @@ export function buildConnectTokenProtocol(token) {
   return `iroha-connect.token.v1.${toBase64Url(encoder.encode(normalized))}`;
 }
 
+export function resolveConnectLaunchUri(role, preview = null, session = null) {
+  const normalizedRole = normalizeConnectRole(role);
+  const sessionUri =
+    normalizedRole === "wallet"
+      ? normalizeOptionalString(session?.wallet_uri)
+      : normalizeOptionalString(session?.app_uri);
+  if (sessionUri) {
+    return sessionUri;
+  }
+  return normalizedRole === "wallet"
+    ? normalizeOptionalString(preview?.walletUri) ?? ""
+    : normalizeOptionalString(preview?.appUri) ?? "";
+}
+
+function mergeConnectProtocols(protocols, tokenProtocol) {
+  if (protocols === undefined || protocols === null) {
+    return [tokenProtocol];
+  }
+  if (typeof protocols === "string") {
+    return protocols === tokenProtocol ? [protocols] : [tokenProtocol, protocols];
+  }
+  if (Array.isArray(protocols)) {
+    const normalized = protocols.map((protocol, index) =>
+      requireNonEmptyString(protocol, `protocols[${index}]`)
+    );
+    return normalized.includes(tokenProtocol)
+      ? normalized
+      : [tokenProtocol, ...normalized];
+  }
+  throw new TypeError("protocols must be a string or array");
+}
+
 export function openConnectWebSocket(baseUrl, sid, token, role = "app", options = {}) {
   const WebSocketImpl = options.webSocketImpl ?? globalThis.WebSocket;
   if (typeof WebSocketImpl !== "function") {
     throw new Error("WebSocket implementation is required");
   }
-  return new WebSocketImpl(buildConnectWebSocketUrl(baseUrl, sid, role), [
-    buildConnectTokenProtocol(token),
-  ]);
+  return new WebSocketImpl(
+    buildConnectWebSocketUrl(baseUrl, sid, role),
+    mergeConnectProtocols(options.protocols, buildConnectTokenProtocol(token)),
+  );
 }

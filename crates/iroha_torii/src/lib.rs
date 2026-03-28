@@ -327,10 +327,10 @@ mod block;
 #[cfg(feature = "connect")]
 mod connect;
 #[cfg(feature = "app_api")]
+mod contract_sources;
+#[cfg(feature = "app_api")]
 mod data_dir;
 mod event;
-#[cfg(feature = "app_api")]
-mod contract_sources;
 #[cfg(feature = "app_api")]
 pub mod explorer;
 #[cfg(feature = "app_api")]
@@ -10425,7 +10425,6 @@ fn torii_route_for_lane_id(
     })
 }
 
-#[cfg(feature = "app_api")]
 fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -10468,6 +10467,581 @@ fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
         HeaderName::from_static("x-iroha-routed-by"),
         HeaderValue::from_static(routed_by),
     );
+}
+
+fn signed_query_requires_fanout(request: &iroha_data_model::query::QueryRequest) -> bool {
+    !matches!(request, iroha_data_model::query::QueryRequest::Continue(_))
+}
+
+fn clone_verified_query_request(
+    request: &iroha_data_model::query::QueryRequestWithAuthority,
+) -> iroha_data_model::query::QueryRequestWithAuthority {
+    let bytes = norito::to_bytes(request)
+        .expect("verified routed query requests should encode deterministically");
+    norito::decode_from_bytes(&bytes)
+        .expect("verified routed query requests should decode deterministically")
+}
+
+fn fanout_verified_query_request(
+    request: &iroha_data_model::query::QueryRequestWithAuthority,
+) -> iroha_data_model::query::QueryRequestWithAuthority {
+    let mut request = clone_verified_query_request(request);
+    if let iroha_data_model::query::QueryRequest::Start(start) = &mut request.request {
+        start.params.pagination = iroha_data_model::query::parameters::Pagination::default();
+        let fetch_size_cap = crate::routing::app_query_limits().max_fetch_size;
+        start.params.fetch_size = iroha_data_model::query::parameters::FetchSize::new(
+            std::num::NonZeroU64::new(fetch_size_cap),
+        );
+    }
+    request
+}
+
+fn unsupported_routed_query_response(message: impl Into<String>) -> Response {
+    torii_proxy_error_response(StatusCode::NOT_IMPLEMENTED, "query_unsupported", message)
+}
+
+fn should_skip_iterable_routed_query_route_error(response: &Response) -> bool {
+    response.status() == StatusCode::NOT_FOUND
+}
+
+fn merge_query_batch_boxes(
+    left: iroha_data_model::query::QueryOutputBatchBox,
+    right: iroha_data_model::query::QueryOutputBatchBox,
+) -> Result<iroha_data_model::query::QueryOutputBatchBox, Response> {
+    use iroha_data_model::query::QueryOutputBatchBox;
+
+    macro_rules! merge_variant {
+        ($left:ident, $right:ident, $variant:ident) => {{
+            $left.extend($right);
+            Ok(QueryOutputBatchBox::$variant($left))
+        }};
+    }
+
+    match (left, right) {
+        (QueryOutputBatchBox::PublicKey(mut left), QueryOutputBatchBox::PublicKey(right)) => {
+            merge_variant!(left, right, PublicKey)
+        }
+        (QueryOutputBatchBox::String(mut left), QueryOutputBatchBox::String(right)) => {
+            merge_variant!(left, right, String)
+        }
+        (QueryOutputBatchBox::Metadata(mut left), QueryOutputBatchBox::Metadata(right)) => {
+            merge_variant!(left, right, Metadata)
+        }
+        (QueryOutputBatchBox::Json(mut left), QueryOutputBatchBox::Json(right)) => {
+            merge_variant!(left, right, Json)
+        }
+        (QueryOutputBatchBox::Numeric(mut left), QueryOutputBatchBox::Numeric(right)) => {
+            merge_variant!(left, right, Numeric)
+        }
+        (QueryOutputBatchBox::Name(mut left), QueryOutputBatchBox::Name(right)) => {
+            merge_variant!(left, right, Name)
+        }
+        (QueryOutputBatchBox::DomainId(mut left), QueryOutputBatchBox::DomainId(right)) => {
+            merge_variant!(left, right, DomainId)
+        }
+        (QueryOutputBatchBox::Domain(mut left), QueryOutputBatchBox::Domain(right)) => {
+            merge_variant!(left, right, Domain)
+        }
+        (QueryOutputBatchBox::AccountId(mut left), QueryOutputBatchBox::AccountId(right)) => {
+            merge_variant!(left, right, AccountId)
+        }
+        (QueryOutputBatchBox::Account(mut left), QueryOutputBatchBox::Account(right)) => {
+            merge_variant!(left, right, Account)
+        }
+        (QueryOutputBatchBox::AssetId(mut left), QueryOutputBatchBox::AssetId(right)) => {
+            merge_variant!(left, right, AssetId)
+        }
+        (QueryOutputBatchBox::Asset(mut left), QueryOutputBatchBox::Asset(right)) => {
+            merge_variant!(left, right, Asset)
+        }
+        (
+            QueryOutputBatchBox::AssetDefinitionId(mut left),
+            QueryOutputBatchBox::AssetDefinitionId(right),
+        ) => merge_variant!(left, right, AssetDefinitionId),
+        (
+            QueryOutputBatchBox::AssetDefinition(mut left),
+            QueryOutputBatchBox::AssetDefinition(right),
+        ) => merge_variant!(left, right, AssetDefinition),
+        (
+            QueryOutputBatchBox::RepoAgreement(mut left),
+            QueryOutputBatchBox::RepoAgreement(right),
+        ) => merge_variant!(left, right, RepoAgreement),
+        (QueryOutputBatchBox::NftId(mut left), QueryOutputBatchBox::NftId(right)) => {
+            merge_variant!(left, right, NftId)
+        }
+        (QueryOutputBatchBox::Nft(mut left), QueryOutputBatchBox::Nft(right)) => {
+            merge_variant!(left, right, Nft)
+        }
+        (QueryOutputBatchBox::RwaId(mut left), QueryOutputBatchBox::RwaId(right)) => {
+            merge_variant!(left, right, RwaId)
+        }
+        (QueryOutputBatchBox::Rwa(mut left), QueryOutputBatchBox::Rwa(right)) => {
+            merge_variant!(left, right, Rwa)
+        }
+        (QueryOutputBatchBox::Role(mut left), QueryOutputBatchBox::Role(right)) => {
+            merge_variant!(left, right, Role)
+        }
+        (QueryOutputBatchBox::Parameter(mut left), QueryOutputBatchBox::Parameter(right)) => {
+            merge_variant!(left, right, Parameter)
+        }
+        (QueryOutputBatchBox::Permission(mut left), QueryOutputBatchBox::Permission(right)) => {
+            merge_variant!(left, right, Permission)
+        }
+        (
+            QueryOutputBatchBox::CommittedTransaction(mut left),
+            QueryOutputBatchBox::CommittedTransaction(right),
+        ) => merge_variant!(left, right, CommittedTransaction),
+        (
+            QueryOutputBatchBox::TransactionResult(mut left),
+            QueryOutputBatchBox::TransactionResult(right),
+        ) => merge_variant!(left, right, TransactionResult),
+        (
+            QueryOutputBatchBox::TransactionResultHash(mut left),
+            QueryOutputBatchBox::TransactionResultHash(right),
+        ) => merge_variant!(left, right, TransactionResultHash),
+        (
+            QueryOutputBatchBox::TransactionEntrypoint(mut left),
+            QueryOutputBatchBox::TransactionEntrypoint(right),
+        ) => merge_variant!(left, right, TransactionEntrypoint),
+        (
+            QueryOutputBatchBox::TransactionEntrypointHash(mut left),
+            QueryOutputBatchBox::TransactionEntrypointHash(right),
+        ) => merge_variant!(left, right, TransactionEntrypointHash),
+        (QueryOutputBatchBox::Peer(mut left), QueryOutputBatchBox::Peer(right)) => {
+            merge_variant!(left, right, Peer)
+        }
+        (QueryOutputBatchBox::RoleId(mut left), QueryOutputBatchBox::RoleId(right)) => {
+            merge_variant!(left, right, RoleId)
+        }
+        (QueryOutputBatchBox::TriggerId(mut left), QueryOutputBatchBox::TriggerId(right)) => {
+            merge_variant!(left, right, TriggerId)
+        }
+        (QueryOutputBatchBox::Trigger(mut left), QueryOutputBatchBox::Trigger(right)) => {
+            merge_variant!(left, right, Trigger)
+        }
+        (QueryOutputBatchBox::Action(mut left), QueryOutputBatchBox::Action(right)) => {
+            merge_variant!(left, right, Action)
+        }
+        (QueryOutputBatchBox::Block(mut left), QueryOutputBatchBox::Block(right)) => {
+            merge_variant!(left, right, Block)
+        }
+        (QueryOutputBatchBox::BlockHeader(mut left), QueryOutputBatchBox::BlockHeader(right)) => {
+            merge_variant!(left, right, BlockHeader)
+        }
+        (
+            QueryOutputBatchBox::BlockHeaderHash(mut left),
+            QueryOutputBatchBox::BlockHeaderHash(right),
+        ) => merge_variant!(left, right, BlockHeaderHash),
+        (QueryOutputBatchBox::ProofRecord(mut left), QueryOutputBatchBox::ProofRecord(right)) => {
+            merge_variant!(left, right, ProofRecord)
+        }
+        (
+            QueryOutputBatchBox::OfflineAllowanceRecord(mut left),
+            QueryOutputBatchBox::OfflineAllowanceRecord(right),
+        ) => merge_variant!(left, right, OfflineAllowanceRecord),
+        (
+            QueryOutputBatchBox::OfflineToOnlineTransfer(mut left),
+            QueryOutputBatchBox::OfflineToOnlineTransfer(right),
+        ) => merge_variant!(left, right, OfflineToOnlineTransfer),
+        (
+            QueryOutputBatchBox::OfflineCounterSummary(mut left),
+            QueryOutputBatchBox::OfflineCounterSummary(right),
+        ) => merge_variant!(left, right, OfflineCounterSummary),
+        (
+            QueryOutputBatchBox::OfflineVerdictRevocation(mut left),
+            QueryOutputBatchBox::OfflineVerdictRevocation(right),
+        ) => merge_variant!(left, right, OfflineVerdictRevocation),
+        (left, right) => Err(torii_proxy_error_response(
+            StatusCode::CONFLICT,
+            "query_conflict",
+            format!(
+                "cannot merge routed query batches of different kinds: left={left:?}, right={right:?}"
+            ),
+        )),
+    }
+}
+
+fn canonicalize_query_items<T>(
+    items: Vec<T>,
+    pagination: iroha_data_model::query::parameters::Pagination,
+) -> Vec<T>
+where
+    T: norito::codec::Encode,
+{
+    let mut unique = BTreeMap::new();
+    for item in items {
+        let key =
+            norito::to_bytes(&item).expect("query batch items should encode deterministically");
+        unique.entry(key).or_insert(item);
+    }
+
+    let offset = usize::try_from(pagination.offset_value()).unwrap_or(usize::MAX);
+    let limit = pagination
+        .limit_value()
+        .map(|value| usize::try_from(value.get()).unwrap_or(usize::MAX))
+        .unwrap_or(usize::MAX);
+    unique.into_values().skip(offset).take(limit).collect()
+}
+
+fn canonicalize_query_batch_box(
+    batch: iroha_data_model::query::QueryOutputBatchBox,
+    pagination: iroha_data_model::query::parameters::Pagination,
+) -> iroha_data_model::query::QueryOutputBatchBox {
+    use iroha_data_model::query::QueryOutputBatchBox;
+
+    macro_rules! canonicalize_variant {
+        ($items:expr, $variant:ident) => {
+            QueryOutputBatchBox::$variant(canonicalize_query_items($items, pagination))
+        };
+    }
+
+    match batch {
+        QueryOutputBatchBox::PublicKey(items) => canonicalize_variant!(items, PublicKey),
+        QueryOutputBatchBox::String(items) => canonicalize_variant!(items, String),
+        QueryOutputBatchBox::Metadata(items) => canonicalize_variant!(items, Metadata),
+        QueryOutputBatchBox::Json(items) => canonicalize_variant!(items, Json),
+        QueryOutputBatchBox::Numeric(items) => canonicalize_variant!(items, Numeric),
+        QueryOutputBatchBox::Name(items) => canonicalize_variant!(items, Name),
+        QueryOutputBatchBox::DomainId(items) => canonicalize_variant!(items, DomainId),
+        QueryOutputBatchBox::Domain(items) => canonicalize_variant!(items, Domain),
+        QueryOutputBatchBox::AccountId(items) => canonicalize_variant!(items, AccountId),
+        QueryOutputBatchBox::Account(items) => canonicalize_variant!(items, Account),
+        QueryOutputBatchBox::AssetId(items) => canonicalize_variant!(items, AssetId),
+        QueryOutputBatchBox::Asset(items) => canonicalize_variant!(items, Asset),
+        QueryOutputBatchBox::AssetDefinitionId(items) => {
+            canonicalize_variant!(items, AssetDefinitionId)
+        }
+        QueryOutputBatchBox::AssetDefinition(items) => {
+            canonicalize_variant!(items, AssetDefinition)
+        }
+        QueryOutputBatchBox::RepoAgreement(items) => canonicalize_variant!(items, RepoAgreement),
+        QueryOutputBatchBox::NftId(items) => canonicalize_variant!(items, NftId),
+        QueryOutputBatchBox::Nft(items) => canonicalize_variant!(items, Nft),
+        QueryOutputBatchBox::RwaId(items) => canonicalize_variant!(items, RwaId),
+        QueryOutputBatchBox::Rwa(items) => canonicalize_variant!(items, Rwa),
+        QueryOutputBatchBox::Role(items) => canonicalize_variant!(items, Role),
+        QueryOutputBatchBox::Parameter(items) => canonicalize_variant!(items, Parameter),
+        QueryOutputBatchBox::Permission(items) => canonicalize_variant!(items, Permission),
+        QueryOutputBatchBox::CommittedTransaction(items) => {
+            canonicalize_variant!(items, CommittedTransaction)
+        }
+        QueryOutputBatchBox::TransactionResult(items) => {
+            canonicalize_variant!(items, TransactionResult)
+        }
+        QueryOutputBatchBox::TransactionResultHash(items) => {
+            canonicalize_variant!(items, TransactionResultHash)
+        }
+        QueryOutputBatchBox::TransactionEntrypoint(items) => {
+            canonicalize_variant!(items, TransactionEntrypoint)
+        }
+        QueryOutputBatchBox::TransactionEntrypointHash(items) => {
+            canonicalize_variant!(items, TransactionEntrypointHash)
+        }
+        QueryOutputBatchBox::Peer(items) => canonicalize_variant!(items, Peer),
+        QueryOutputBatchBox::RoleId(items) => canonicalize_variant!(items, RoleId),
+        QueryOutputBatchBox::TriggerId(items) => canonicalize_variant!(items, TriggerId),
+        QueryOutputBatchBox::Trigger(items) => canonicalize_variant!(items, Trigger),
+        QueryOutputBatchBox::Action(items) => canonicalize_variant!(items, Action),
+        QueryOutputBatchBox::Block(items) => canonicalize_variant!(items, Block),
+        QueryOutputBatchBox::BlockHeader(items) => canonicalize_variant!(items, BlockHeader),
+        QueryOutputBatchBox::BlockHeaderHash(items) => {
+            canonicalize_variant!(items, BlockHeaderHash)
+        }
+        QueryOutputBatchBox::ProofRecord(items) => canonicalize_variant!(items, ProofRecord),
+        QueryOutputBatchBox::OfflineAllowanceRecord(items) => {
+            canonicalize_variant!(items, OfflineAllowanceRecord)
+        }
+        QueryOutputBatchBox::OfflineToOnlineTransfer(items) => {
+            canonicalize_variant!(items, OfflineToOnlineTransfer)
+        }
+        QueryOutputBatchBox::OfflineCounterSummary(items) => {
+            canonicalize_variant!(items, OfflineCounterSummary)
+        }
+        QueryOutputBatchBox::OfflineVerdictRevocation(items) => {
+            canonicalize_variant!(items, OfflineVerdictRevocation)
+        }
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_torii_verified_query_via_proxy(
+    app: &SharedAppState,
+    request: iroha_data_model::query::QueryRequestWithAuthority,
+    routing_decision: RoutingDecision,
+) -> Result<iroha_data_model::query::QueryResponse, Response> {
+    let request_bytes = match norito::to_bytes(&request) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return Err(torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "serialization_failure",
+                format!("failed to encode verified routed query request: {error}"),
+            ));
+        }
+    };
+    let response = execute_torii_proxy_request_with_fallback(
+        app,
+        routing_decision,
+        ToriiProxyRequestKindV1::VerifiedQuery {
+            request_bytes,
+            expected_route: ToriiRouteHintV1::from(routing_decision),
+            response_format: ToriiProxyResponseFormatV1::Norito,
+        },
+    )
+    .await;
+    if !response.status().is_success() {
+        return Err(response);
+    }
+
+    let (_, body) = response.into_parts();
+    let body = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(body) => body,
+        Err(error) => {
+            return Err(torii_proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                "route_unavailable",
+                format!("failed to read proxied query response body: {error}"),
+            ));
+        }
+    };
+    norito::decode_from_bytes::<iroha_data_model::query::QueryResponse>(&body).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::BAD_GATEWAY,
+            "route_unavailable",
+            format!("failed to decode proxied routed query response: {error}"),
+        )
+    })
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_torii_verified_query_for_route(
+    app: &SharedAppState,
+    request: iroha_data_model::query::QueryRequestWithAuthority,
+    routing_decision: RoutingDecision,
+) -> Result<iroha_data_model::query::QueryResponse, Response> {
+    if is_local_authoritative_for_route(app.as_ref(), routing_decision) {
+        routing::execute_verified_query_with_opts(
+            app.query_service.clone(),
+            app.state.clone(),
+            request,
+            app.telemetry.clone(),
+            QueryOptions::default(),
+        )
+        .await
+        .map_err(IntoResponse::into_response)
+    } else {
+        execute_torii_verified_query_via_proxy(app, request, routing_decision).await
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_torii_verified_query_exhaustive_for_route(
+    app: &SharedAppState,
+    request: iroha_data_model::query::QueryRequestWithAuthority,
+    routing_decision: RoutingDecision,
+) -> Result<iroha_data_model::query::QueryResponse, Response> {
+    let authority = request.authority.clone();
+    let mut current_request = request;
+    let mut accumulated_batch: Option<iroha_data_model::query::QueryOutputBatchBox> = None;
+
+    loop {
+        match execute_torii_verified_query_for_route(app, current_request, routing_decision).await?
+        {
+            iroha_data_model::query::QueryResponse::Singular(output) => {
+                if accumulated_batch.is_some() {
+                    return Err(unsupported_routed_query_response(
+                        "routed query returned a singular batch after iterable continuation",
+                    ));
+                }
+                return Ok(iroha_data_model::query::QueryResponse::Singular(output));
+            }
+            iroha_data_model::query::QueryResponse::Iterable(output) => {
+                let (batch_tuple, _, continue_cursor) = output.into_parts();
+                let mut tuple = batch_tuple.tuple;
+                if tuple.len() != 1 {
+                    return Err(unsupported_routed_query_response(
+                        "routed iterable queries currently support only a single projected batch",
+                    ));
+                }
+                let route_batch = tuple
+                    .pop()
+                    .expect("single-batch routed query tuple should contain one batch");
+                accumulated_batch = Some(match accumulated_batch.take() {
+                    Some(existing) => merge_query_batch_boxes(existing, route_batch)?,
+                    None => route_batch,
+                });
+
+                if let Some(cursor) = continue_cursor {
+                    current_request = iroha_data_model::query::QueryRequestWithAuthority {
+                        authority: authority.clone(),
+                        request: iroha_data_model::query::QueryRequest::Continue(cursor),
+                    };
+                    continue;
+                }
+
+                let batch = accumulated_batch
+                    .take()
+                    .expect("iterable routed query should accumulate at least one batch");
+                return Ok(iroha_data_model::query::QueryResponse::Iterable(
+                    iroha_data_model::query::QueryOutput::new(
+                        iroha_data_model::query::QueryOutputBatchBoxTuple::new(vec![batch]),
+                        0,
+                        None,
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_torii_query_via_fanout(
+    app: &SharedAppState,
+    verified_query: iroha_data_model::query::QueryRequestWithAuthority,
+    format: ResponseFormat,
+) -> Response {
+    let routes = torii_all_dataspace_routes(app.as_ref());
+    if routes.is_empty() {
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            "no Nexus dataspace routes are configured",
+        );
+    }
+
+    let routed_by = routed_by_for_routes(app, &routes);
+    match &verified_query.request {
+        iroha_data_model::query::QueryRequest::Singular(_) => {
+            let mut last_not_found = None;
+            let mut successes = Vec::new();
+            for route in routes {
+                match execute_torii_verified_query_exhaustive_for_route(
+                    app,
+                    clone_verified_query_request(&verified_query),
+                    route,
+                )
+                .await
+                {
+                    Ok(iroha_data_model::query::QueryResponse::Singular(output)) => {
+                        successes.push(output);
+                    }
+                    Ok(other) => {
+                        return torii_proxy_error_response(
+                            StatusCode::CONFLICT,
+                            "query_conflict",
+                            format!(
+                                "routed singular query returned incompatible response {other:?}"
+                            ),
+                        );
+                    }
+                    Err(response) if response.status() == StatusCode::NOT_FOUND => {
+                        last_not_found = Some(response);
+                    }
+                    Err(response) => return response,
+                }
+            }
+
+            let Some(first) = successes.first().cloned() else {
+                return last_not_found.unwrap_or_else(|| {
+                    torii_proxy_error_response(
+                        StatusCode::NOT_FOUND,
+                        "not_found",
+                        "query result was not found in any dataspace",
+                    )
+                });
+            };
+            if successes.iter().skip(1).any(|output| output != &first) {
+                return torii_proxy_error_response(
+                    StatusCode::CONFLICT,
+                    "query_conflict",
+                    "routed singular query returned conflicting dataspace results",
+                );
+            }
+
+            let mut response = crate::utils::respond_with_format(
+                iroha_data_model::query::QueryResponse::Singular(first),
+                format,
+            );
+            insert_routed_by_header(&mut response, routed_by);
+            response
+        }
+        iroha_data_model::query::QueryRequest::Start(start) => {
+            let fanout_request = fanout_verified_query_request(&verified_query);
+            let mut merged_batch: Option<iroha_data_model::query::QueryOutputBatchBox> = None;
+            let mut last_not_found = None;
+            for route in routes {
+                match execute_torii_verified_query_exhaustive_for_route(
+                    app,
+                    clone_verified_query_request(&fanout_request),
+                    route,
+                )
+                .await
+                {
+                    Ok(iroha_data_model::query::QueryResponse::Iterable(output)) => {
+                        let mut tuple = output.batch.tuple;
+                        if tuple.len() != 1 {
+                            return unsupported_routed_query_response(
+                                "routed iterable queries currently support only a single projected batch",
+                            );
+                        }
+                        let route_batch = tuple
+                            .pop()
+                            .expect("single-batch routed query tuple should contain one batch");
+                        merged_batch = Some(match merged_batch.take() {
+                            Some(existing) => {
+                                match merge_query_batch_boxes(existing, route_batch) {
+                                    Ok(batch) => batch,
+                                    Err(response) => return response,
+                                }
+                            }
+                            None => route_batch,
+                        });
+                    }
+                    Ok(other) => {
+                        return torii_proxy_error_response(
+                            StatusCode::CONFLICT,
+                            "query_conflict",
+                            format!(
+                                "routed iterable query returned incompatible response {other:?}"
+                            ),
+                        );
+                    }
+                    Err(response) if should_skip_iterable_routed_query_route_error(&response) => {
+                        last_not_found = Some(response);
+                    }
+                    Err(response) => return response,
+                }
+            }
+
+            let Some(batch) = merged_batch else {
+                return last_not_found.unwrap_or_else(|| {
+                    torii_proxy_error_response(
+                        StatusCode::NOT_FOUND,
+                        "not_found",
+                        "query result was not found in any dataspace",
+                    )
+                });
+            };
+            let batch = canonicalize_query_batch_box(batch, start.params.pagination);
+            let mut response = crate::utils::respond_with_format(
+                iroha_data_model::query::QueryResponse::Iterable(
+                    iroha_data_model::query::QueryOutput::new(
+                        iroha_data_model::query::QueryOutputBatchBoxTuple::new(vec![batch]),
+                        0,
+                        None,
+                    ),
+                ),
+                format,
+            );
+            insert_routed_by_header(&mut response, routed_by);
+            response
+        }
+        iroha_data_model::query::QueryRequest::Continue(_) => torii_proxy_error_response(
+            StatusCode::BAD_REQUEST,
+            "query_unsupported",
+            "routed cross-dataspace query fanout does not support client-provided continuation requests",
+        ),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -10969,6 +11543,82 @@ mod torii_routed_read_tests {
         assert_eq!(decoded.offset, params.offset);
         assert_eq!(decoded.asset, params.asset);
         assert_eq!(decoded.scope, params.scope);
+    }
+
+    #[test]
+    fn canonicalize_query_batch_box_deduplicates_and_applies_pagination() {
+        let pagination =
+            iroha_data_model::query::parameters::Pagination::new(std::num::NonZeroU64::new(2), 1);
+        let batch = canonicalize_query_batch_box(
+            iroha_data_model::query::QueryOutputBatchBox::String(vec![
+                "b".to_owned(),
+                "a".to_owned(),
+                "b".to_owned(),
+                "c".to_owned(),
+            ]),
+            pagination,
+        );
+
+        let iroha_data_model::query::QueryOutputBatchBox::String(items) = batch else {
+            panic!("expected string batch");
+        };
+        assert_eq!(items, vec!["a".to_owned(), "b".to_owned()]);
+    }
+
+    #[test]
+    fn fanout_verified_query_request_uses_current_fetch_size_limit() {
+        let request = iroha_data_model::query::json::IterableQueryJson {
+            kind: iroha_data_model::query::json::IterableQueryKind::FindDomains,
+            params: iroha_data_model::query::json::IterableQueryParamsJson {
+                limit: Some(3),
+                offset: Some(7),
+                fetch_size: Some(1),
+                sort_by_metadata_key: None,
+                order: None,
+                ids_projection: None,
+                lane_id: None,
+                dsid: None,
+            },
+            predicate: None,
+        }
+        .into_request(iroha_test_samples::ALICE_ID.clone())
+        .expect("iterable request should build");
+
+        let request = fanout_verified_query_request(&request);
+        let iroha_data_model::query::QueryRequest::Start(start) = request.request else {
+            panic!("expected iterable routed query");
+        };
+        assert_eq!(
+            start.params.pagination,
+            iroha_data_model::query::parameters::Pagination::default()
+        );
+        assert_eq!(
+            start.params.fetch_size.fetch_size,
+            std::num::NonZeroU64::new(crate::routing::app_query_limits().max_fetch_size)
+        );
+    }
+
+    #[test]
+    fn merge_query_batch_boxes_rejects_mismatched_variants() {
+        let error = merge_query_batch_boxes(
+            iroha_data_model::query::QueryOutputBatchBox::String(vec!["a".to_owned()]),
+            iroha_data_model::query::QueryOutputBatchBox::Numeric(vec![
+                iroha_primitives::numeric::Numeric::from(1_u32),
+            ]),
+        )
+        .expect_err("mismatched routed query batches should fail");
+
+        assert_eq!(error.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn iterable_routed_query_skips_not_found_route_errors_only() {
+        assert!(should_skip_iterable_routed_query_route_error(
+            &torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
+        ));
+        assert!(!should_skip_iterable_routed_query_route_error(
+            &torii_proxy_error_response(StatusCode::BAD_REQUEST, "invalid", "bad request")
+        ));
     }
 
     #[tokio::test]
@@ -11909,7 +12559,6 @@ async fn execute_torii_read_for_route(
     }
 }
 
-#[cfg(feature = "app_api")]
 fn routed_by_for_routes(app: &SharedAppState, routes: &[RoutingDecision]) -> &'static str {
     if !routes.is_empty()
         && routes
@@ -12252,6 +12901,58 @@ async fn process_incoming_torii_proxy_request(
                     format!("failed to decode proxied signed query: {error}"),
                 ),
             },
+            ToriiProxyRequestKindV1::VerifiedQuery {
+                request_bytes,
+                expected_route,
+                response_format,
+            } => {
+                match norito::decode_from_bytes::<iroha_data_model::query::QueryRequestWithAuthority>(
+                    &request_bytes,
+                ) {
+                    Ok(request) => {
+                        let routing_decision: RoutingDecision = expected_route.into();
+                        if !is_local_authoritative_for_route(&app, routing_decision) {
+                            torii_proxy_error_response(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "route_unavailable",
+                                format!(
+                                    "local peer is not authoritative for lane {} dataspace {}",
+                                    routing_decision.lane_id.as_u32(),
+                                    routing_decision.dataspace_id.as_u64()
+                                ),
+                            )
+                        } else {
+                            let format = response_format_from_torii_proxy(response_format);
+                            match routing::execute_verified_query_with_opts(
+                                app.query_service.clone(),
+                                app.state.clone(),
+                                request,
+                                app.telemetry.clone(),
+                                QueryOptions::default(),
+                            )
+                            .await
+                            {
+                                Ok(query_response) => {
+                                    let mut response =
+                                        crate::utils::respond_with_format(query_response, format);
+                                    insert_routing_headers(
+                                        &mut response,
+                                        routing_decision,
+                                        "proxy",
+                                    );
+                                    response
+                                }
+                                Err(error) => error.into_response(),
+                            }
+                        }
+                    }
+                    Err(error) => torii_proxy_error_response(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proxy_request",
+                        format!("failed to decode proxied verified query: {error}"),
+                    ),
+                }
+            }
             #[cfg(feature = "app_api")]
             ToriiProxyRequestKindV1::Read(read_request) => {
                 let routing_decision: RoutingDecision = read_request.expected_route.into();
@@ -12352,7 +13053,38 @@ async fn process_incoming_torii_proxy_response(
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn attach_soracloud_proxy_network(app: SharedAppState, network: iroha_core::IrohaNetwork) {
+async fn handle_torii_proxy_network_message(
+    app: SharedAppState,
+    network: iroha_core::IrohaNetwork,
+    peer: Peer,
+    payload: iroha_core::NetworkMessage,
+) {
+    debug_assert!(
+        payload.is_torii_proxy_control_message(),
+        "Torii proxy dispatcher should only receive Torii/Soracloud proxy control messages"
+    );
+
+    match payload {
+        iroha_core::NetworkMessage::ToriiProxyRequest(request) => {
+            process_incoming_torii_proxy_request(app, network, peer, *request).await;
+        }
+        iroha_core::NetworkMessage::ToriiProxyResponse(response) => {
+            process_incoming_torii_proxy_response(&app, peer.id().clone(), *response).await;
+        }
+        #[cfg(feature = "app_api")]
+        iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(request) => {
+            process_incoming_soracloud_proxy_request(app, network, peer, *request).await;
+        }
+        #[cfg(feature = "app_api")]
+        iroha_core::NetworkMessage::SoracloudLocalReadProxyResponse(response) => {
+            process_incoming_soracloud_proxy_response(&app, peer.id().clone(), *response).await;
+        }
+        _ => {}
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNetwork) {
     tokio::spawn(async move {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
 
@@ -12373,40 +13105,14 @@ fn attach_soracloud_proxy_network(app: SharedAppState, network: iroha_core::Iroh
         }
 
         while let Some(msg) = rx.recv().await {
-            match msg.payload {
-                iroha_core::NetworkMessage::ToriiProxyRequest(request) => {
-                    process_incoming_torii_proxy_request(
-                        app.clone(),
-                        network.clone(),
-                        msg.peer,
-                        *request,
-                    )
-                    .await;
-                }
-                iroha_core::NetworkMessage::ToriiProxyResponse(response) => {
-                    process_incoming_torii_proxy_response(&app, msg.peer.id().clone(), *response)
-                        .await;
-                }
-                #[cfg(feature = "app_api")]
-                iroha_core::NetworkMessage::SoracloudLocalReadProxyRequest(request) => {
-                    process_incoming_soracloud_proxy_request(
-                        app.clone(),
-                        network.clone(),
-                        msg.peer,
-                        *request,
-                    )
-                    .await;
-                }
-                #[cfg(feature = "app_api")]
-                iroha_core::NetworkMessage::SoracloudLocalReadProxyResponse(response) => {
-                    process_incoming_soracloud_proxy_response(
-                        &app,
-                        msg.peer.id().clone(),
-                        *response,
-                    )
-                    .await;
-                }
-                _ => {}
+            if msg.payload.is_torii_proxy_control_message() {
+                handle_torii_proxy_network_message(
+                    app.clone(),
+                    network.clone(),
+                    msg.peer,
+                    msg.payload,
+                )
+                .await;
             }
         }
     });
@@ -13683,9 +14389,12 @@ async fn handler_get_contract_code_view(
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        return crate::contract_sources::handle_get_contract_code_view(app.state.clone(), code_hash)
-            .await
-            .map(axum::response::IntoResponse::into_response);
+        return crate::contract_sources::handle_get_contract_code_view(
+            app.state.clone(),
+            code_hash,
+        )
+        .await
+        .map(axum::response::IntoResponse::into_response);
     }
     let token_hdr = headers
         .get("x-api-token")
@@ -18490,6 +19199,14 @@ async fn handler_signed_query(
                 iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
             )));
         }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    if signed_query_requires_fanout(query_request.request())
+        && torii_all_dataspace_routes(app.as_ref()).len() > 1
+    {
+        let verified_query = routing::verify_signed_query_request(&query_request)?;
+        return Ok(execute_torii_query_via_fanout(&app, verified_query, format).await);
     }
 
     let routing_decision = match resolve_signed_query_routing(app.as_ref(), &query_request) {
@@ -23307,7 +24024,7 @@ impl Torii {
 
         #[cfg(any(feature = "p2p_ws", feature = "connect"))]
         if let Some(network) = app_state.p2p.clone() {
-            attach_soracloud_proxy_network(app_state.clone(), network);
+            attach_torii_proxy_network(app_state.clone(), network);
         }
 
         let base_router: Router<SharedAppState> = Router::new().without_v07_checks();
@@ -28950,6 +29667,57 @@ pub(crate) mod tests_runtime_handlers {
                 panic!("unsupported proxy schema must fail closed")
             }
         }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
+        let app = mk_app_state_for_tests();
+        let request_id = Hash::new(b"torii-proxy-dispatch");
+        let responder_keypair = KeyPair::random();
+        let responder_peer_id = PeerId::from(responder_keypair.public_key().clone());
+        let responder_peer = Peer::new(
+            "127.0.0.1:1337".parse().expect("valid peer address"),
+            responder_keypair.public_key().clone(),
+        );
+        let expected_response = ToriiProxyHttpResponseV1 {
+            status_code: StatusCode::ACCEPTED.as_u16(),
+            headers: Vec::new(),
+            body: b"torii-proxy-response".to_vec(),
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.torii_proxy_pending.lock().await.insert(
+            request_id,
+            PendingToriiProxyRequest {
+                sender: tx,
+                expected_peer_id: responder_peer_id,
+            },
+        );
+
+        super::handle_torii_proxy_network_message(
+            app.clone(),
+            iroha_core::IrohaNetwork::closed_for_tests(),
+            responder_peer,
+            iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+                schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+                request_id,
+                response: expected_response.clone(),
+            })),
+        )
+        .await;
+
+        assert_eq!(
+            rx.await
+                .expect("pending Torii proxy request should resolve"),
+            expected_response
+        );
+        assert!(
+            !app.torii_proxy_pending
+                .lock()
+                .await
+                .contains_key(&request_id),
+            "Torii proxy response dispatcher must clear the pending request"
+        );
     }
 
     #[tokio::test]

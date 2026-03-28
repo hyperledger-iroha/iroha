@@ -3646,6 +3646,23 @@ impl Actor {
         added
     }
 
+    fn restore_initial_precommit_collector_state(&mut self) {
+        let Some(primary) = self
+            .subsystems
+            .propose
+            .collector_plan_targets
+            .first()
+            .cloned()
+        else {
+            return;
+        };
+        let targets = self.subsystems.propose.collector_plan_targets.clone();
+        self.subsystems.propose.collector_plan =
+            Some(super::collectors::CollectorPlan::with_sent(targets, 1));
+        self.subsystems.propose.collectors_contacted.clear();
+        self.note_collector_contact(primary, false);
+    }
+
     fn vote_recorded_or_queued_for_validation(
         &self,
         vote: &crate::sumeragi::consensus::Vote,
@@ -3861,9 +3878,7 @@ impl Actor {
         let vote_msg = Arc::new(BlockMessage::QcVote(vote));
         let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
         self.ensure_collector_plan(&signature_topology, height, view);
-        while let Some(peer) = self.next_redundant_collector() {
-            self.note_collector_contact(peer.clone(), true);
-        }
+        self.restore_initial_precommit_collector_state();
         let mut collector_targets: Vec<_> = self
             .subsystems
             .propose
@@ -3883,8 +3898,6 @@ impl Actor {
             collector_targets = signature_topology.as_ref().to_vec();
             collector_targets.retain(|peer| peer != &local_peer_id);
         }
-        let remote_floor = usize::from(self.subsystems.propose.collector_redundant_limit.max(1))
-            .min(signature_topology.as_ref().len().saturating_sub(1));
         let mut parallel_added = 0usize;
         if !fallback_to_topology {
             let parallel = self.config.collectors.parallel_topology_fanout;
@@ -3902,39 +3915,30 @@ impl Actor {
                     }
                 }
             }
-            let _ = Self::top_up_remote_targets_to_floor(
-                &signature_topology,
-                &local_peer_id,
-                &mut collector_targets,
-                remote_floor,
-            );
         }
-        if fallback_to_topology {
-            iroha_logger::info!(
+        let initial_targets = u64::try_from(collector_targets.len()).unwrap_or(u64::MAX);
+        super::status::set_collectors_targeted_current(initial_targets);
+        #[cfg(feature = "telemetry")]
+        self.telemetry
+            .set_collectors_targeted_current(initial_targets);
+        iroha_logger::info!(
+            height,
+            view,
+            block = ?block_hash,
+            signer = local_idx,
+            initial_targets = collector_targets.len(),
+            seeded_collectors = self.subsystems.propose.collectors_contacted.len(),
+            parallel_added,
+            fallback_to_topology,
+            "sending initial precommit vote"
+        );
+        if fallback_to_topology && collector_targets.is_empty() {
+            debug!(
                 height,
                 view,
                 block = ?block_hash,
                 signer = local_idx,
-                targets = collector_targets.len(),
-                "sending precommit vote to commit topology (collector plan empty or local-only)"
-            );
-        } else if parallel_added > 0 {
-            iroha_logger::info!(
-                height,
-                view,
-                block = ?block_hash,
-                signer = local_idx,
-                targets = collector_targets.len(),
-                "sending precommit vote to collectors with parallel topology fanout"
-            );
-        } else {
-            iroha_logger::info!(
-                height,
-                view,
-                block = ?block_hash,
-                signer = local_idx,
-                targets = collector_targets.len(),
-                "sending precommit vote to collectors"
+                "initial precommit vote had no remote targets after local-only topology fallback"
             );
         }
         for peer in collector_targets {

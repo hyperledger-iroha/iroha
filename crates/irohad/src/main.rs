@@ -1848,14 +1848,15 @@ impl NetworkRelayShared {
             SoranetPowConfig(bytes) => {
                 self.apply_remote_pow_update(&bytes).await;
             }
-            SoracloudLocalReadProxyRequest(_)
+            msg @ (SoracloudLocalReadProxyRequest(_)
             | SoracloudLocalReadProxyResponse(_)
             | ToriiProxyRequest(_)
             | ToriiProxyResponse(_)
             | GenesisRequest(_)
             | GenesisResponse(_)
             | Health
-            | Connect(_) => {
+            | Connect(_)) => {
+                debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
                 // Genesis bootstrap is handled by the dedicated bootstrapper listener.
                 // Health frames are handled elsewhere. Connect, Soracloud local-read proxy,
                 // and Torii proxy frames go to Torii via its own subscriber tasks when those
@@ -1878,6 +1879,17 @@ impl NetworkRelayShared {
                 .await;
             }
         }
+    }
+
+    fn is_handled_by_dedicated_subscriber(msg: &iroha_core::NetworkMessage) -> bool {
+        msg.is_torii_proxy_control_message()
+            || matches!(
+                msg,
+                iroha_core::NetworkMessage::GenesisRequest(_)
+                    | iroha_core::NetworkMessage::GenesisResponse(_)
+                    | iroha_core::NetworkMessage::Health
+                    | iroha_core::NetworkMessage::Connect(_)
+            )
     }
 
     fn should_apply_low_priority_ingress(msg: &iroha_core::NetworkMessage) -> bool {
@@ -2224,6 +2236,12 @@ mod network_relay_tests {
                 BlockMessage, BlockMessageWire, BlockSyncUpdate, ConsensusParamsAdvert, ControlFlow,
             },
         },
+        torii_proxy::{
+            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
+            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
+            ToriiReadProxyRequestV1, ToriiRouteHintV1,
+        },
         tx::AcceptedTransaction,
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
@@ -2231,6 +2249,7 @@ mod network_relay_tests {
         AccountId, ChainId, Level,
         block::{BlockHeader, BlockSignature, SignedBlock},
         isi::Log,
+        nexus::{DataSpaceId, LaneId},
         peer::{Peer, PeerId},
         transaction::TransactionBuilder,
     };
@@ -2536,6 +2555,37 @@ mod network_relay_tests {
             BTreeSet::new(),
         ));
         iroha_core::NetworkMessage::BlockSync(Box::new(msg))
+    }
+
+    fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
+        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV1 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+            request_id: Hash::prehashed([0x41; 32]),
+            hop_count: 0,
+            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+                endpoint: ToriiReadEndpointV1::AccountsList,
+                expected_route: ToriiRouteHintV1 {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::GLOBAL,
+                },
+                path_args: Vec::new(),
+                query_string: None,
+                body: Vec::new(),
+                response_format: ToriiProxyResponseFormatV1::Json,
+            }),
+        }))
+    }
+
+    fn torii_proxy_response_msg() -> iroha_core::NetworkMessage {
+        iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id: Hash::prehashed([0x42; 32]),
+            response: ToriiProxyHttpResponseV1 {
+                status_code: 200,
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        }))
     }
 
     fn qc_vote_msg() -> iroha_core::NetworkMessage {
@@ -3035,6 +3085,18 @@ mod network_relay_tests {
             Some(LowPriorityIngressDropReason::Bytes)
         );
         assert_eq!(limiter.should_drop(&peer, 1), None);
+    }
+
+    #[test]
+    fn dedicated_subscriber_message_set_includes_torii_proxy_frames() {
+        let request = torii_proxy_request_msg();
+        let response = torii_proxy_response_msg();
+
+        assert!(NetworkRelayShared::is_handled_by_dedicated_subscriber(&request));
+        assert!(NetworkRelayShared::is_handled_by_dedicated_subscriber(&response));
+        assert!(!NetworkRelayShared::is_handled_by_dedicated_subscriber(
+            &consensus_params_msg()
+        ));
     }
 
     #[test]

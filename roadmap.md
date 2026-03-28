@@ -2,6 +2,56 @@
 
 Last updated: 2026-03-28
 
+Latest sync (2026-03-28 initial PRECOMMIT sparse-send root-cause fix):
+the next DA/precommit slice is now aimed at the implementation bug in vote
+dissemination rather than at timeout/FSM tuning.
+
+- restored the ineffective Cut 2 collector constant changes back to the clean
+  Cut 1 baseline
+  (`IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS: 2 -> 3`,
+  `COLLECTORS_K: 2 -> 1`) while keeping the Cut 0 / Cut 1 backlog, pipeline,
+  DA multiplier, timeout-floor, `redundant_send_r = 3`, and
+  `parallel_topology_fanout = 1` settings intact;
+- recorded why the Cut 2 `k` tuning could never help the preserved-peer 4-peer
+  soaks: `collector_fanout_floor()` collapses `k = 1/2/3` to the same
+  quorum-sized fanout (`3` remotes), so those `k` deltas are observationally
+  equivalent in that envelope; and
+- fixed the real root cause in
+  `crates/iroha_core/src/sumeragi/main_loop/commit.rs` by changing only the
+  initial `PRECOMMIT` dissemination semantics:
+  `init_collector_plan()` still seeds the primary collector deterministically,
+  but the first `emit_precommit_vote()` no longer drains redundant collectors
+  or performs remote-floor top-up. The initial send now targets only the
+  seeded collector set plus any configured parallel-topology additions, with
+  fallback to full topology only when the collector plan is empty or local-only.
+  Timeout/rebroadcast logic still owns later widening, and NEW_VIEW,
+  rebroadcast semantics, frontier-slot ownership, deep catch-up, quorum-timeout
+  FSM routing, and recovery paths are intentionally unchanged in this slice.
+
+Open work from this slice:
+- finish focused `iroha_core` validation for the new initial-send semantics and
+  keep the regression coverage in place:
+  `collector_fanout_floor_respects_quorum_and_bounds`,
+  `commit_vote_targets_collectors_or_topology`,
+  `precommit_vote_targets_collectors_without_broadcast`,
+  `initial_precommit_emit_does_not_consume_redundant_collectors_immediately`,
+  and `rebroadcast_precommit_votes_widen_collectors_when_below_quorum`;
+- run the requested release build next:
+  `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`;
+- rerun the full preserved-peer stable permissioned soak first and collect new
+  post-fix evidence for:
+  `no strict block height progress=0`,
+  `requested block-sync range pull from committed anchor=0`,
+  `sharing from fallback anchor=0`,
+  `requested missing BlockCreated while awaiting RBC INIT=0`, and
+  `interval_p95_ms <= 1000`;
+- only if permissioned reaches target height cleanly, rerun the preserved-peer
+  stable NPoS soak and confirm it also keeps `plan submission failed=0` and
+  `Failed to find asset=0`; and
+- stop again and reassess before expanding the change surface if the
+  permissioned rerun still misses the gate, instead of touching NEW_VIEW,
+  rebroadcast semantics, or recovery/FSM logic pre-emptively.
+
 Latest sync (2026-03-28 repo-shared SORA Taira standalone Codex skill):
 this repo now carries a shareable standalone Codex skill for the Taira testnet
 in addition to the installable `plugins/iroha/` bundle.
@@ -142,6 +192,84 @@ Open work from this stop point:
   `interval_p95_ms <= 1000`, and NPoS must still keep
   `plan submission failed=0` and `Failed to find asset=0`.
 
+Latest sync (2026-03-28 Nexus localnet fee bootstrap + Norito GPU-startup hardening):
+`integration_tests/tests/nexus/{cross_dataspace_localnet.rs,cross_dataspace_zk_stark_localnet.rs}`
+now explicitly seed the Nexus fee asset in their custom multilane genesis and
+disable Norito GPU compression for those localnets.
+
+- both tests opt out of the default NPoS bootstrap, so they now register the
+  configured fee asset definition themselves, include the `universal` domain,
+  and mint fee balances for Alice, Bob, and validator accounts;
+- this closes the earlier setup-grant rejection path where the first routed tx
+  failed with `Failed to find asset definition: 5PeSrQmLNwwKtruJvDZrbrm9RuMw`;
+- both localnet builders now set `norito.allow_gpu_compression = false`, which
+  avoids the observed macOS startup hang where one peer blocked in
+  `libgpuzstd_metal` before binding P2P/Torii; and
+- the cheap genesis smoke passes again with the fixed custom bootstrap.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test mod cross_dataspace_localnet_genesis_preexecution_smoke -- --nocapture`
+- `cargo test -p integration_tests --test mod cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture --test-threads=1`
+  (pass on a fresh post-patch run; total `41.929s`)
+
+Open work for this localnet stabilization slice now remains:
+- keep the wrong-dataspace routed-read assertions in place as the stable
+  regression for this ingress-routing work; and
+- if similar macOS startup hangs appear in other large localnets, decide
+  whether `iroha_test_network` should default `norito.allow_gpu_compression`
+  off for multi-peer test networks instead of patching individual suites.
+
+Latest sync (2026-03-28 Nexus routed-read localnet coverage):
+`integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+now checks routed read responses through wrong-dataspace Nexus ingress instead
+of limiting integration coverage to tx submission plus low-level balance
+queries.
+
+- the localnet regression now performs raw app-API GETs through Nexus-lane
+  submitters for public-lane validators, account assets, asset-definition
+  lookup, and dataspace account summary;
+- the new helper preserves `x-iroha-routed-by` and route headers so the test
+  can assert the ingress behavior that the Rust client helpers currently drop;
+- the full 12-peer atomic-swap regression is green again on this host after
+  the localnet fee bootstrap and CPU-only Norito startup hardening.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test mod cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture --test-threads=1`
+  (pass; total `41.929s`)
+
+Open work for this routed-read integration slice now remains:
+- add similar header-aware wrong-dataspace coverage for any remaining routed
+  endpoints that still only have unit coverage; and
+- keep pushing toward proof-backed routed reads once the underlying committed
+  state inclusion-proof plumbing exists.
+
+Latest sync (2026-03-28 `irohad` relay / Torii proxy exhaustiveness):
+`crates/irohad/src/main.rs`
+now keeps the generic relay aligned with Torii’s dedicated control-plane
+subscriber for proxy request/response traffic.
+
+- `NetworkMessage::ToriiProxyRequest` and `ToriiProxyResponse` are now
+  explicitly classified as relay-ignored dedicated-subscriber messages
+  alongside the existing Soracloud proxy / genesis / health / connect frames;
+- a focused relay regression now covers both Torii proxy variants so future
+  control-plane enum additions fail in tests before they break `irohad`
+  compilation again; and
+- targeted `irohad` formatting, check, and unit-test validation now pass for
+  this slice.
+
+Validation:
+- `cargo fmt --all`
+- `cargo check -p irohad --message-format short`
+- `cargo test -p irohad dedicated_subscriber_message_set_includes_torii_proxy_frames -- --nocapture`
+
+Open work for this relay-control-plane slice now remains:
+- keep `irohad`’s dedicated-subscriber ignore set synchronized with the actual
+  Torii control-plane subscriber whenever new `NetworkMessage` control variants
+  are added, so enum evolution does not regress back into relay exhaustiveness
+  failures.
+
 Latest sync (2026-03-27 full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but NPoS is still contaminated by one repeated missing-asset failure):
 the rebuilt 4-peer preserved-peer stable envelopes on
 `/tmp/izanami_permissioned_workloadfix_20260327T155302Z.log`
@@ -175,46 +303,45 @@ Open work from this soak result:
   stable envelope again before using its p95 number as a clean consensus-only
   performance signal.
 
-Latest sync (2026-03-27 Nexus cross-dataspace Torii ingress proxying):
-`crates/iroha_core/src/{lib.rs,queue.rs,queue/router.rs,torii_proxy.rs}`
+Latest sync (2026-03-27 Nexus cross-dataspace Torii routed reads):
+`crates/iroha_core/src/torii_proxy.rs`
 and
 `crates/iroha_torii/src/{lib.rs,routing.rs}`
 and
 `integration_tests/tests/nexus/cross_dataspace_localnet.rs`
-now cover the first authoritative-forwarding slice for Nexus ingress routing.
+now cover the broader routed-read slice for Nexus ingress, not just
+authoritative tx / signed-query forwarding.
 
-- Torii now has versioned P2P proxy envelopes for signed transactions and
-  signed queries, local-peer attribution for ingress routing decisions, and a
-  control-plane subscriber that can dispatch Torii proxy requests/responses
-  alongside the existing Soracloud proxy traffic;
-- `POST /transaction` now resolves the Nexus lane/dataspace at ingress and
-  forwards to an authoritative peer when the local node is outside the target
-  lane, while preserving route headers plus `x-iroha-routed-by`;
-- signed `POST /query` requests now resolve the same authority-based routing
-  policy and proxy to an authoritative peer when the ingress node is not
-  authoritative, and the cross-dataspace localnet regression now submits/query
-  checks through Nexus-lane peers instead of leader-targeting the destination
-  dataspace directly; and
-- the focused verification path is unblocked from an unrelated macOS cfg issue
-  in `fastpq_prover`, but targeted `iroha_torii` compilation is still blocked
-  by existing `routing.rs`/`ivm` baseline errors outside this slice.
+- Torii now routes dataspace-backed app and Nexus reads through the same
+  control-plane proxy layer across account, asset-definition, domain, NFT,
+  RWA, portfolio, and Nexus summary endpoints;
+- multi-dataspace list / aggregate reads now fan out across dataspaces and
+  merge deterministically at ingress, while singleton fan-out reads return a
+  deterministic conflict instead of silently choosing one dataspace reply;
+- the earlier `iroha_torii` baseline compile blockers are fixed, targeted
+  routed-read tests pass, and the Nexus integration test harness compiles and
+  still passes the cheap genesis pre-execution smoke; but
+- full `cargo test -p iroha_torii --lib` remains red in this branch because of
+  unrelated pre-existing failures outside the Nexus routing slice.
 
 Validation:
 - `cargo fmt --all`
-- `cargo test -p iroha_core resolve_query_routing_decision --lib --message-format short`
+- `cargo test -p iroha_torii torii_routed_read_tests --lib --message-format short`
+- `cargo test -p integration_tests --test mod --no-run --message-format short`
+- `cargo test -p integration_tests --test mod cross_dataspace_localnet_genesis_preexecution_smoke -- --nocapture`
 
 Open work for this Nexus ingress-routing slice now remains:
-- extend the same proxy path beyond signed `POST /query` into the remaining
-  dataspace-aware Torii convenience reads that still answer from local state
+- add proof-backed routed reads if the project still wants ingress to verify
+  returned state against committed roots instead of trusting authoritative peer
+  responses;
+- extend the normalized routed-read layer to any remaining dataspace-backed
+  singleton/convenience endpoints that are still answered from local state
   only;
-- implement the planned fan-out/merge behavior for multi-dataspace reads where
-  a single authoritative dataspace cannot be inferred deterministically from
-  the request authority/selectors;
-- add focused Torii unit coverage for proxy request/response handling once the
-  existing baseline `crates/iroha_torii/src/routing.rs` compile failures are
-  repaired upstream; and
-- rerun the targeted Torii and `integration_tests/tests/nexus/cross_dataspace_localnet.rs`
-  verification once those pre-existing Torii compile blockers are cleared.
+- stabilize the end-to-end multi-peer integration coverage that now exercises
+  routed reads through wrong-dataspace ingress nodes, since the current
+  full-scenario validation is blocked by an unrelated peer-startup flake; and
+- return to a whole-crate green `cargo test -p iroha_torii --lib` baseline so
+  future routing regressions can be validated without unrelated test noise.
 
 Latest sync (2026-03-27 FASTPQ BN254 CUDA bench/report wiring):
 `crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs`

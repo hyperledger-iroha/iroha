@@ -10675,12 +10675,20 @@ pub mod isi {
                     .cloned()
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|label| label.domain.as_ref() == Some(&domain_id))
+                    .filter(|label| {
+                        label
+                            .domain
+                            .as_ref()
+                            .is_some_and(|label_domain| label_domain == &domain_id)
+                    })
                     .collect();
                 if let Some(account) = state_transaction.world.accounts.get_mut(&account_id)
-                    && account
-                        .label()
-                        .is_some_and(|label| label.domain.as_ref() == Some(&domain_id))
+                    && account.label().is_some_and(|label| {
+                        label
+                            .domain
+                            .as_ref()
+                            .is_some_and(|label_domain| label_domain == &domain_id)
+                    })
                 {
                     account.set_label(None);
                 }

@@ -74,10 +74,10 @@ fn main() -> Result<()> {
         .parse()
         .wrap_err("failed to parse --contract-address")?;
 
-    let code = fs::read(&args.code_file)
-        .wrap_err_with(|| format!("read {}", args.code_file.display()))?;
-    let verified =
-        ivm::verify_contract_artifact(&code).map_err(|err| eyre!("verify contract artifact: {err}"))?;
+    let code =
+        fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
+    let verified = ivm::verify_contract_artifact(&code)
+        .map_err(|err| eyre!("verify contract artifact: {err}"))?;
     let manifest = verified.manifest.signed(&signer);
     let code_hash = verified.code_hash;
     let nonce_key = Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)

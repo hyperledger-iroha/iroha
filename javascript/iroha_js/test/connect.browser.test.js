@@ -8,6 +8,7 @@ import {
   deleteConnectSession,
   openConnectWebSocket,
   registerConnectSession,
+  resolveConnectLaunchUri,
   toHex,
 } from "../src/connect.browser.js";
 
@@ -37,8 +38,8 @@ test("createConnectSessionPreview is deterministic with fixed nonce and keypair"
   assert.equal(first.sidBase64Url, second.sidBase64Url);
   assert.equal(first.sidBase64Url.includes("="), false);
   assert.equal(toHex(first.nonce), "11".repeat(16));
-  assert.equal(first.walletUri, `iroha://connect?sid=${first.sidBase64Url}&chain_id=alpha-net&v=1&node=https%3A%2F%2Ftaira.sora.org`);
-  assert.equal(first.appUri, `iroha://connect/app?sid=${first.sidBase64Url}&chain_id=alpha-net&v=1&node=https%3A%2F%2Ftaira.sora.org`);
+  assert.equal(first.walletUri, `iroha://connect?sid=${first.sidBase64Url}&chain_id=alpha-net&v=1&role=wallet&node=https%3A%2F%2Ftaira.sora.org`);
+  assert.equal(first.appUri, `iroha://connect?sid=${first.sidBase64Url}&chain_id=alpha-net&v=1&role=app&node=https%3A%2F%2Ftaira.sora.org`);
   assert.equal(
     first.wsUrl,
     `wss://taira.sora.org/v1/connect/ws?sid=${first.sidBase64Url}&role=app`,
@@ -65,8 +66,8 @@ test("registerConnectSession posts sid and node directly to Torii", async () => 
       return new Response(
         JSON.stringify({
           sid: "sid123",
-          wallet_uri: "iroha://connect?sid=sid123",
-          app_uri: "iroha://connect/app?sid=sid123",
+          wallet_uri: "iroha://connect?sid=sid123&role=wallet&token=wallet-token",
+          app_uri: "iroha://connect?sid=sid123&role=app&token=app-token",
           token_app: "app-token",
           token_wallet: "wallet-token",
         }),
@@ -99,10 +100,28 @@ test("deleteConnectSession tolerates missing sessions and uses DELETE", async ()
   assert.equal(calls[0].init.method, "DELETE");
 });
 
-test("openConnectWebSocket sends the connect token as subprotocol", () => {
+test("resolveConnectLaunchUri prefers canonical session deeplinks", () => {
+  assert.equal(
+    resolveConnectLaunchUri(
+      "wallet",
+      {
+        walletUri: "iroha://connect?sid=preview&role=wallet",
+        appUri: "iroha://connect?sid=preview&role=app",
+      },
+      {
+        wallet_uri: "iroha://connect?sid=session&role=wallet&token=wallet-token",
+        app_uri: "iroha://connect?sid=session&role=app&token=app-token",
+      },
+    ),
+    "iroha://connect?sid=session&role=wallet&token=wallet-token",
+  );
+});
+
+test("openConnectWebSocket sends the connect token as the first subprotocol", () => {
   RecordingWebSocket.instances.length = 0;
   const socket = openConnectWebSocket("https://taira.sora.org", "sid123", "token-app", "app", {
     webSocketImpl: RecordingWebSocket,
+    protocols: ["iroha-connect"],
   });
 
   assert(socket instanceof RecordingWebSocket);
@@ -113,5 +132,6 @@ test("openConnectWebSocket sends the connect token as subprotocol", () => {
   );
   assert.deepEqual(RecordingWebSocket.instances[0].protocols, [
     buildConnectTokenProtocol("token-app"),
+    "iroha-connect",
   ]);
 });

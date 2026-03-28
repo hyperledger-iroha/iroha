@@ -10865,7 +10865,11 @@ impl World {
                 ));
             };
             if let Some(domain) = &label.domain
-                && !account_value.as_ref().linked_domains().contains(domain)
+                && !account_value
+                    .as_ref()
+                    .linked_domains()
+                    .iter()
+                    .any(|linked_domain| domain == linked_domain)
             {
                 return Err(format!(
                     "Account alias {label:?} requires linked domain {domain}"
@@ -10895,7 +10899,11 @@ impl World {
                 ));
             }
             if let Some(domain) = &label.domain
-                && !value.as_ref().linked_domains().contains(domain)
+                && !value
+                    .as_ref()
+                    .linked_domains()
+                    .iter()
+                    .any(|linked_domain| domain == linked_domain)
             {
                 return Err(format!(
                     "Account alias {label:?} requires linked domain {domain}"
@@ -10981,7 +10989,11 @@ impl World {
                 ));
             };
             if let Some(domain) = &label.domain
-                && !account_value.as_ref().linked_domains().contains(domain)
+                && !account_value
+                    .as_ref()
+                    .linked_domains()
+                    .iter()
+                    .any(|linked_domain| domain == linked_domain)
             {
                 return Err(format!(
                     "Account rekey record {label:?} requires linked domain {domain}"
@@ -39118,7 +39130,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanManageAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            domain_id.clone(),
+                            domain_id.clone().into(),
                         ),
                     },
                 ),
@@ -39142,7 +39154,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanResolveAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            domain_id.clone(),
+                            domain_id.clone().into(),
                         ),
                     },
                 ),

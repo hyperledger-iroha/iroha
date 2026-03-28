@@ -99,8 +99,8 @@ pub mod account {
     #[derive(Debug, Clone, PartialEq, Eq, iroha_schema::IntoSchema)]
     #[norito(tag = "scope", content = "value", rename_all = "snake_case")]
     pub enum AccountAliasPermissionScope {
-        /// Permission scoped to a specific linked domain alias segment.
-        Domain(DomainId),
+        /// Permission scoped to a specific dataspace-local alias-domain segment.
+        Domain(iroha_data_model::account::rekey::AccountAliasDomain),
         /// Permission scoped to a dataspace alias segment.
         Dataspace(DataSpaceId),
     }
@@ -147,7 +147,7 @@ pub mod account {
 
             match scope {
                 "domain" => Ok(Self::Domain(
-                    <DomainId as norito::json::JsonDeserialize>::json_from_value(value)?,
+                    <iroha_data_model::account::rekey::AccountAliasDomain as norito::json::JsonDeserialize>::json_from_value(value)?,
                 )),
                 "dataspace" => Ok(Self::Dataspace(
                     <DataSpaceId as norito::json::JsonDeserialize>::json_from_value(value)?,

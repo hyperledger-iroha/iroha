@@ -9741,7 +9741,7 @@ mod tests {
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(alias_domain.clone()),
+                scope: AccountAliasPermissionScope::Domain(alias_domain.clone().into()),
             }),
         );
         tx.apply();

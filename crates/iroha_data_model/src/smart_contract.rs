@@ -10,8 +10,7 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
-    account::{AccountAddressError, AccountId},
-    domain::DomainId,
+    account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
     error::ParseError,
     name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
@@ -234,17 +233,16 @@ impl ContractAlias {
     pub fn resolve_components(
         &self,
         catalog: &DataSpaceCatalog,
-    ) -> Result<(Name, Option<DomainId>, DataSpaceId), ParseError> {
+    ) -> Result<(Name, Option<AccountAliasDomain>, DataSpaceId), ParseError> {
         let name = self
             .name_segment()
             .parse()
             .map_err(|_| ParseError::new("contract alias name segment is invalid"))?;
         let domain = self
             .domain_segment()
-            .map(|value| {
-                value
-                    .parse()
-                    .map_err(|_| ParseError::new("contract alias domain segment is invalid"))
+            .map(str::parse::<AccountAliasDomain>)
+            .map(|result| {
+                result.map_err(|_| ParseError::new("contract alias domain segment is invalid"))
             })
             .transpose()?;
         let dataspace = catalog
@@ -645,6 +643,34 @@ mod contract_address_tests {
         assert_eq!(alias.name_segment(), "router");
         assert_eq!(alias.domain_segment(), None);
         assert_eq!(alias.dataspace_segment(), "universal");
+    }
+
+    #[test]
+    fn contract_alias_resolves_alias_domain_segment() {
+        let alias: ContractAlias = "router::dex.sbp".parse().expect("valid alias");
+        let catalog = DataSpaceCatalog::new(vec![
+            crate::nexus::DataSpaceMetadata::default(),
+            crate::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(9),
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("catalog");
+
+        let (name, domain, dataspace) = alias.resolve_components(&catalog).expect("resolve");
+
+        assert_eq!(name, "router".parse::<Name>().expect("name"));
+        assert_eq!(
+            domain,
+            Some(
+                "dex"
+                    .parse::<AccountAliasDomain>()
+                    .expect("alias-domain segment")
+            )
+        );
+        assert_eq!(dataspace, DataSpaceId::new(9));
     }
 
     #[test]

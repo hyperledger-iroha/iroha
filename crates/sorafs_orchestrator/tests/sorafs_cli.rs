@@ -1088,7 +1088,10 @@ fn manifest_submit_falls_back_to_blocks_over_epoch_length() {
         .output()
         .expect("command executes");
 
-    assert!(output.status.success(), "CLI must succeed with fallback epoch resolution");
+    assert!(
+        output.status.success(),
+        "CLI must succeed with fallback epoch resolution"
+    );
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
     assert_eq!(
@@ -1197,7 +1200,9 @@ fn manifest_submit_transaction_fallback_waits_for_commit() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
     assert_eq!(
-        summary_stdout.get("submission_mode").and_then(Value::as_str),
+        summary_stdout
+            .get("submission_mode")
+            .and_then(Value::as_str),
         Some("transaction_fallback")
     );
     assert_eq!(
@@ -1570,8 +1575,11 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
     let site_dir = tempdir.path().join("site");
     let assets_dir = site_dir.join("assets");
     fs::create_dir_all(&assets_dir).expect("create assets dir");
-    fs::write(site_dir.join("index.html"), "<!doctype html><html><body>ok</body></html>")
-        .expect("write index");
+    fs::write(
+        site_dir.join("index.html"),
+        "<!doctype html><html><body>ok</body></html>",
+    )
+    .expect("write index");
     fs::write(site_dir.join("env.json"), "{\"NETWORK\":\"taira\"}\n").expect("write env");
     fs::write(assets_dir.join("app.js"), "console.log('sorafs');\n").expect("write app");
 
@@ -1614,7 +1622,9 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
         from_slice(&fs::read(&plan_path).expect("read plan")).expect("plan json");
     let specs = chunk_fetch_specs_from_json(&plan_value).expect("plan specs");
     assert_eq!(
-        summary_stdout.get("chunk_plan_source").and_then(Value::as_str),
+        summary_stdout
+            .get("chunk_plan_source")
+            .and_then(Value::as_str),
         Some(plan_path.to_string_lossy().as_ref())
     );
     assert_eq!(

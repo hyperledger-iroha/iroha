@@ -2452,7 +2452,7 @@ mod measured_bytes_impls {
     use iroha_data_model::{
         account::{
             AccountController, AccountDetails, AccountId, AccountLabel, AccountRekeyRecord,
-            MultisigMember, MultisigPolicy, OpaqueAccountId,
+            MultisigMember, MultisigPolicy, OpaqueAccountId, rekey::AccountAliasDomain,
         },
         asset::{
             AssetDefinition, AssetDefinitionId, AssetId,
@@ -2824,6 +2824,12 @@ mod measured_bytes_impls {
     impl MeasuredBytes for DomainId {
         fn measured_bytes(&self) -> usize {
             size_of::<DomainId>().saturating_add(self.name.measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for AccountAliasDomain {
+        fn measured_bytes(&self) -> usize {
+            size_of::<AccountAliasDomain>().saturating_add(self.0.measured_bytes_extra())
         }
     }
 

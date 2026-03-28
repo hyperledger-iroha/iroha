@@ -363,11 +363,11 @@ pub fn seed_genesis_alias_bootstrap(
                 .as_any()
                 .downcast_ref::<SetAccountAliasBinding>()
             {
-                seed_alias_manage_permissions_if_missing(world, authority, &bind_alias.alias);
-                if let Ok(selector) =
-                    selector_for_account_alias(&bind_alias.alias, &dataspace_catalog)
-                {
-                    seed_name_record_if_missing(world, authority, selector);
+                if let Some(alias) = bind_alias.alias.as_ref() {
+                    seed_alias_manage_permissions_if_missing(world, authority, alias);
+                    if let Ok(selector) = selector_for_account_alias(alias, &dataspace_catalog) {
+                        seed_name_record_if_missing(world, authority, selector);
+                    }
                 }
             }
         }
@@ -1366,7 +1366,7 @@ mod tests {
         );
         assert!(
             permissions.contains(&Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(domain_id),
+                scope: AccountAliasPermissionScope::Domain(domain_id.into()),
             })),
             "genesis authority must be able to manage the alias domain used at genesis"
         );

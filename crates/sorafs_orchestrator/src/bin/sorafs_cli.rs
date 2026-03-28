@@ -4507,8 +4507,8 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
 
-    let torii_base_url = Url::parse(&torii_url)
-        .map_err(|err| format!("invalid `--torii-url` value: {err}"))?;
+    let torii_base_url =
+        Url::parse(&torii_url).map_err(|err| format!("invalid `--torii-url` value: {err}"))?;
     let torii_endpoint = torii_base_url
         .join("v1/sorafs/pin/register")
         .map_err(|err| format!("failed to build Torii endpoint URL: {err}"))?;
@@ -4846,7 +4846,10 @@ fn submit_manifest_via_transaction_endpoint(
     let mut request = client
         .post(tx_endpoint.as_str())
         .header(CONTENT_TYPE, "application/x-norito");
-    if let Some(version) = api_version_hint.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(version) = api_version_hint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         request = request.header("x-iroha-api-version", version);
     }
     let response = request
@@ -4909,12 +4912,14 @@ fn submit_manifest_via_transaction_endpoint(
         .into_bytes();
     let failure_message = match confirmation.kind {
         TransactionConfirmationKind::Rejected => Some(match confirmation.rejection_message {
-            Some(message) => format!("fallback transaction `{tx_hash_hex}` was rejected: {message}"),
+            Some(message) => {
+                format!("fallback transaction `{tx_hash_hex}` was rejected: {message}")
+            }
             None => format!("fallback transaction `{tx_hash_hex}` was rejected"),
         }),
-        TransactionConfirmationKind::Expired => {
-            Some(format!("fallback transaction `{tx_hash_hex}` expired before commit"))
-        }
+        TransactionConfirmationKind::Expired => Some(format!(
+            "fallback transaction `{tx_hash_hex}` expired before commit"
+        )),
         _ => None,
     };
 
@@ -4936,7 +4941,8 @@ fn wait_for_transaction_confirmation(
     let status_endpoint = torii_base_url
         .join("v1/pipeline/transactions/status")
         .map_err(|err| format!("failed to build transaction status endpoint URL: {err}"))?;
-    let deadline = Instant::now() + Duration::from_millis(DEFAULT_MANIFEST_SUBMIT_CONFIRM_TIMEOUT_MS);
+    let deadline =
+        Instant::now() + Duration::from_millis(DEFAULT_MANIFEST_SUBMIT_CONFIRM_TIMEOUT_MS);
     let poll_interval = Duration::from_millis(DEFAULT_MANIFEST_SUBMIT_CONFIRM_POLL_MS);
     let mut last_observed_status = "QUEUED".to_string();
 
@@ -5185,7 +5191,10 @@ fn resolve_chain_id_from_sorafs_registry(
         };
         let status = response.status();
         let response_bytes = response.bytes().map_err(|err| {
-            format!("failed to read registry response from `{}`: {err}", endpoint)
+            format!(
+                "failed to read registry response from `{}`: {err}",
+                endpoint
+            )
         })?;
         let body = response_bytes.to_vec();
         if !status.is_success() {
@@ -5202,15 +5211,16 @@ fn resolve_chain_id_from_sorafs_registry(
         match resolve_chain_id_from_registry_value(&value) {
             Ok(chain_id) => return Ok(chain_id),
             Err(err) => {
-                last_error =
-                    Some(format!("failed to resolve chain id from `{}`: {err}", endpoint));
+                last_error = Some(format!(
+                    "failed to resolve chain id from `{}`: {err}",
+                    endpoint
+                ));
             }
         }
     }
 
-    Err(last_error.unwrap_or_else(|| {
-        "failed to resolve chain id from SoraFS registry endpoints".to_string()
-    }))
+    Err(last_error
+        .unwrap_or_else(|| "failed to resolve chain id from SoraFS registry endpoints".to_string()))
 }
 
 fn resolve_chain_id_from_registry_value(value: &Value) -> Result<String, String> {
@@ -5222,7 +5232,10 @@ fn resolve_chain_id_from_registry_value(value: &Value) -> Result<String, String>
     Ok(chain_id.to_string())
 }
 
-fn resolve_submitted_epoch_from_status(client: &HttpClient, torii_base_url: &Url) -> Result<u64, String> {
+fn resolve_submitted_epoch_from_status(
+    client: &HttpClient,
+    torii_base_url: &Url,
+) -> Result<u64, String> {
     let status_endpoint = torii_base_url
         .join("status")
         .map_err(|err| format!("failed to build Torii status endpoint URL: {err}"))?;
@@ -5230,7 +5243,12 @@ fn resolve_submitted_epoch_from_status(client: &HttpClient, torii_base_url: &Url
         .get(status_endpoint.as_str())
         .header("Accept", "application/json")
         .send()
-        .map_err(|err| format!("failed to query Torii status at `{}`: {err}", status_endpoint))?;
+        .map_err(|err| {
+            format!(
+                "failed to query Torii status at `{}`: {err}",
+                status_endpoint
+            )
+        })?;
     let status = response.status();
     let response_bytes = response
         .bytes()
@@ -5245,11 +5263,19 @@ fn resolve_submitted_epoch_from_status(client: &HttpClient, torii_base_url: &Url
         ));
     }
 
-    let status_value: Value = from_slice(&body)
-        .map_err(|err| format!("failed to decode Torii status JSON from `{}`: {err}", status_endpoint))?;
+    let status_value: Value = from_slice(&body).map_err(|err| {
+        format!(
+            "failed to decode Torii status JSON from `{}`: {err}",
+            status_endpoint
+        )
+    })?;
 
-    resolve_submitted_epoch_from_status_value(&status_value)
-        .map_err(|err| format!("failed to resolve submitted epoch from `{}`: {err}", status_endpoint))
+    resolve_submitted_epoch_from_status_value(&status_value).map_err(|err| {
+        format!(
+            "failed to resolve submitted epoch from `{}`: {err}",
+            status_endpoint
+        )
+    })
 }
 
 fn resolve_submitted_epoch_from_status_value(status_value: &Value) -> Result<u64, String> {
@@ -7250,11 +7276,15 @@ mod tests {
         assert!(should_fallback_manifest_submit_status(
             StatusCode::METHOD_NOT_ALLOWED
         ));
-        assert!(should_fallback_manifest_submit_status(StatusCode::NOT_FOUND));
+        assert!(should_fallback_manifest_submit_status(
+            StatusCode::NOT_FOUND
+        ));
         assert!(should_fallback_manifest_submit_status(
             StatusCode::NOT_IMPLEMENTED
         ));
-        assert!(!should_fallback_manifest_submit_status(StatusCode::BAD_REQUEST));
+        assert!(!should_fallback_manifest_submit_status(
+            StatusCode::BAD_REQUEST
+        ));
     }
 
     #[test]

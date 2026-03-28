@@ -3131,6 +3131,169 @@ pub struct QueryOptions {
     pub gas_units: Option<u64>,
 }
 
+/// Verify a signed query and return the authenticated request payload.
+pub(crate) fn verify_signed_query_request(
+    query: &SignedQuery,
+) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
+    let iroha_data_model::query::QuerySignature(sig) = &query.signature;
+    sig.verify(query.payload.authority.signatory(), &query.payload)
+        .map_err(|_| {
+            Error::from(ValidationFail::NotPermitted(
+                "query signature failed verification".to_string(),
+            ))
+        })?;
+    let bytes = norito::to_bytes(&query.payload).map_err(|error| {
+        Error::from(ValidationFail::InternalError(format!(
+            "failed to encode verified query request payload: {error}"
+        )))
+    })?;
+    norito::decode_from_bytes(&bytes).map_err(|error| {
+        Error::from(ValidationFail::InternalError(format!(
+            "failed to decode verified query request payload: {error}"
+        )))
+    })
+}
+
+/// Execute a previously verified query request with the provided options.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub(crate) async fn execute_verified_query_with_opts(
+    live_query_store: LiveQueryStoreHandle,
+    state: Arc<CoreState>,
+    query: iroha_data_model::query::QueryRequestWithAuthority,
+    tel: MaybeTelemetry,
+    opts: QueryOptions,
+) -> Result<iroha_data_model::query::QueryResponse> {
+    use iroha_core::{
+        query::snapshot::{
+            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode,
+        },
+        smartcontracts::isi::query::QueryLimits,
+    };
+    #[cfg(feature = "telemetry")]
+    let start = std::time::Instant::now();
+
+    let authority = query.authority.clone();
+    let request = query.request;
+    let pipeline = state.pipeline_snapshot();
+
+    // Map config cursor mode to lane cursor mode (with query override)
+    let mode = {
+        match opts.cursor_mode.as_deref() {
+            Some("ephemeral") => LaneCursorMode::Ephemeral,
+            Some("stored") => LaneCursorMode::Stored,
+            Some(other) => {
+                iroha_logger::warn!(
+                    other,
+                    "unknown cursor_mode override; falling back to config"
+                );
+                match pipeline.query_default_cursor_mode {
+                    iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
+                        LaneCursorMode::Ephemeral
+                    }
+                    iroha_config::parameters::actual::QueryCursorMode::Stored => {
+                        LaneCursorMode::Stored
+                    }
+                }
+            }
+            None => match pipeline.query_default_cursor_mode {
+                iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
+                    LaneCursorMode::Ephemeral
+                }
+                iroha_config::parameters::actual::QueryCursorMode::Stored => LaneCursorMode::Stored,
+            },
+        }
+    };
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    let mode_label = match mode {
+        LaneCursorMode::Ephemeral => "ephemeral",
+        LaneCursorMode::Stored => "stored",
+    };
+
+    // Optional gas gating for stored cursor mode (resource bound).
+    // If configured (> 0) and the effective mode is Stored, enforce a minimum
+    // client-provided budget. For continuations, honor the cursor's gas budget.
+    // This does not actually charge gas; it simply guards resource usage for server-side cursors.
+    {
+        let min_gas = pipeline.query_stored_min_gas_units;
+        if min_gas > 0 && matches!(mode, LaneCursorMode::Stored) {
+            let provided = match &request {
+                iroha_data_model::query::QueryRequest::Continue(cursor) => {
+                    cursor.gas_budget.unwrap_or(0)
+                }
+                _ => opts.gas_units.unwrap_or(0),
+            };
+            if provided < min_gas {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "stored cursor requires at least {min_gas} gas units"
+                ))
+                .into());
+            }
+        }
+    }
+
+    // Execute on a captured snapshot using the selected mode, offloaded to
+    // a blocking worker pool to avoid tying up the server thread.
+    let state_cloned = Arc::clone(&state);
+    let store_cloned = live_query_store.clone();
+    let authority_cloned = authority.clone();
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    let continue_budget = match &request {
+        iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
+        _ => None,
+    };
+    let limits = QueryLimits::new(app_query_limits().max_fetch_size);
+    let resp = tokio::task::spawn_blocking(move || {
+        run_on_snapshot_with_mode(
+            &state_cloned,
+            &store_cloned,
+            &authority_cloned,
+            request,
+            mode,
+            limits,
+        )
+    })
+    .await
+    .map_err(|e| ValidationFail::InternalError(format!("query worker join error: {e}")))
+    .and_then(|r| {
+        r.map_err(|e| match e {
+            SnapshotQueryError::Validation(v) => v,
+            SnapshotQueryError::Execution(exec) => ValidationFail::QueryFailed(exec),
+        })
+    })?;
+
+    #[cfg(feature = "telemetry")]
+    if tel.is_enabled() {
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        let metrics = tel.metrics().await;
+        metrics
+            .torii_query_snapshot_requests
+            .with_label_values(&[mode_label])
+            .inc();
+        if matches!(resp, QueryResponse::Iterable(_)) {
+            metrics
+                .torii_query_snapshot_first_batch_ms
+                .with_label_values(&[mode_label])
+                .observe(ms);
+        }
+        if matches!(mode, LaneCursorMode::Stored) {
+            if let Some(units) = opts.gas_units {
+                metrics
+                    .torii_query_snapshot_gas_consumed_units_total
+                    .with_label_values(&[mode_label])
+                    .inc_by(units);
+            }
+            if let Some(units) = continue_budget {
+                metrics
+                    .torii_query_snapshot_gas_consumed_units_total
+                    .with_label_values(&[mode_label])
+                    .inc_by(units);
+            }
+        }
+    }
+
+    Ok(resp)
+}
+
 // ---------------------- Iroha Connect (feature-gated) ----------------------
 
 #[cfg(feature = "connect")]
@@ -6059,142 +6222,8 @@ pub async fn handle_queries_with_opts(
     crate::NoritoQuery(opts): crate::NoritoQuery<QueryOptions>,
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
-    use iroha_core::{
-        query::snapshot::{
-            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode,
-        },
-        smartcontracts::isi::query::QueryLimits,
-    };
-    #[cfg(feature = "telemetry")]
-    let start = std::time::Instant::now();
-
-    let iroha_data_model::query::SignedQuery {
-        payload: query,
-        signature,
-    } = query;
-    let authority = query.authority.clone();
-    let iroha_data_model::query::QuerySignature(sig) = &signature;
-    sig.verify(authority.signatory(), &query).map_err(|_| {
-        ValidationFail::NotPermitted("query signature failed verification".to_string())
-    })?;
-    let pipeline = state.pipeline_snapshot();
-
-    // Map config cursor mode to lane cursor mode (with query override)
-    let mode = {
-        match opts.cursor_mode.as_deref() {
-            Some("ephemeral") => LaneCursorMode::Ephemeral,
-            Some("stored") => LaneCursorMode::Stored,
-            Some(other) => {
-                iroha_logger::warn!(
-                    other,
-                    "unknown cursor_mode override; falling back to config"
-                );
-                match pipeline.query_default_cursor_mode {
-                    iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
-                        LaneCursorMode::Ephemeral
-                    }
-                    iroha_config::parameters::actual::QueryCursorMode::Stored => {
-                        LaneCursorMode::Stored
-                    }
-                }
-            }
-            None => match pipeline.query_default_cursor_mode {
-                iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
-                    LaneCursorMode::Ephemeral
-                }
-                iroha_config::parameters::actual::QueryCursorMode::Stored => LaneCursorMode::Stored,
-            },
-        }
-    };
-    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-    let mode_label = match mode {
-        LaneCursorMode::Ephemeral => "ephemeral",
-        LaneCursorMode::Stored => "stored",
-    };
-
-    let request = query.request;
-
-    // Optional gas gating for stored cursor mode (resource bound).
-    // If configured (> 0) and the effective mode is Stored, enforce a minimum
-    // client-provided budget. For continuations, honor the cursor's gas budget.
-    // This does not actually charge gas; it simply guards resource usage for server-side cursors.
-    {
-        let min_gas = pipeline.query_stored_min_gas_units;
-        if min_gas > 0 && matches!(mode, LaneCursorMode::Stored) {
-            let provided = match &request {
-                iroha_data_model::query::QueryRequest::Continue(cursor) => {
-                    cursor.gas_budget.unwrap_or(0)
-                }
-                _ => opts.gas_units.unwrap_or(0),
-            };
-            if provided < min_gas {
-                return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                    "stored cursor requires at least {min_gas} gas units"
-                ))
-                .into());
-            }
-        }
-    }
-
-    // Execute on a captured snapshot using the selected mode, offloaded to
-    // a blocking worker pool to avoid tying up the server thread.
-    let state_cloned = Arc::clone(&state);
-    let store_cloned = live_query_store.clone();
-    let authority_cloned = authority.clone();
-    let continue_budget = match &request {
-        iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
-        _ => None,
-    };
-    let limits = QueryLimits::new(app_query_limits().max_fetch_size);
-    let resp = tokio::task::spawn_blocking(move || {
-        run_on_snapshot_with_mode(
-            &state_cloned,
-            &store_cloned,
-            &authority_cloned,
-            request,
-            mode,
-            limits,
-        )
-    })
-    .await
-    .map_err(|e| ValidationFail::InternalError(format!("query worker join error: {e}")))
-    .and_then(|r| {
-        r.map_err(|e| match e {
-            SnapshotQueryError::Validation(v) => v,
-            SnapshotQueryError::Execution(exec) => ValidationFail::QueryFailed(exec),
-        })
-    })?;
-
-    #[cfg(feature = "telemetry")]
-    if tel.is_enabled() {
-        let ms = start.elapsed().as_secs_f64() * 1000.0;
-        let metrics = tel.metrics().await;
-        metrics
-            .torii_query_snapshot_requests
-            .with_label_values(&[mode_label])
-            .inc();
-        if matches!(resp, QueryResponse::Iterable(_)) {
-            metrics
-                .torii_query_snapshot_first_batch_ms
-                .with_label_values(&[mode_label])
-                .observe(ms);
-        }
-        if matches!(mode, LaneCursorMode::Stored) {
-            if let Some(units) = opts.gas_units {
-                metrics
-                    .torii_query_snapshot_gas_consumed_units_total
-                    .with_label_values(&[mode_label])
-                    .inc_by(units);
-            }
-            if let Some(units) = continue_budget {
-                metrics
-                    .torii_query_snapshot_gas_consumed_units_total
-                    .with_label_values(&[mode_label])
-                    .inc_by(units);
-            }
-        }
-    }
-
+    let query = verify_signed_query_request(&query)?;
+    let resp = execute_verified_query_with_opts(live_query_store, state, query, tel, opts).await?;
     Ok(crate::utils::respond_with_format(resp, format))
 }
 

@@ -476,8 +476,7 @@ pub mod sorafs {
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
         CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -2743,8 +2742,7 @@ mod sorafs_permission_tests {
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
         CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -3037,7 +3035,10 @@ mod sorafs_permission_tests {
 
     #[test]
     fn register_pin_manifest_is_public() {
-        assert_allowed_without_permission(register_pin_manifest(), sorafs::visit_register_pin_manifest);
+        assert_allowed_without_permission(
+            register_pin_manifest(),
+            sorafs::visit_register_pin_manifest,
+        );
     }
 
     sorafs_permission_case!(
