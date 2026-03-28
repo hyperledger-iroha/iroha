@@ -2,6 +2,85 @@
 
 Last updated: 2026-03-28
 
+Latest sync (2026-03-28 Taira Sorafs upload proxy fix):
+the public edge on this machine no longer rejects larger Sorafs uploads with
+`413 Request Entity Too Large`.
+
+- both the checked-in Taira nginx template and the active Homebrew vhost now
+  set `client_max_body_size 64m;` on the `taira.sora.org` and
+  `taira-explorer.sora.org` TLS server blocks;
+- after `nginx -t && nginx -s reload`, 2 MiB `POST /v1/sorafs/storage/pin`
+  requests now reach Torii and fail at application content-type validation
+  (`415`) instead of dying at nginx; and
+- direct Torii status serving remained healthy after the reload.
+
+Open work for this slice now remains:
+- rerun `yarn taira:publish` from a shell that has valid
+  `SORAFS_AUTHORITY` / `SORAFS_PRIVATE_KEY`;
+- if the serving nodes are not reading directly from this checkout, sync
+  `configs/soranexus/taira/sorafs_sites.json` to those deployed nodes and
+  restart/redeploy them so root serving picks up the new binding; and
+- re-verify `https://taira.sora.org/.well-known/sorafs/manifest`,
+  `https://taira.sora.org/`, and `https://taira.sora.org/status` after the
+  publish completes.
+
+Latest sync (2026-03-28 Taira MCP restored on the served localnet):
+the local/public `404` on `/v1/mcp` is closed on this machine.
+
+- the served `dist/taira-localnet/peer{0,1,2,3}.toml` files now carry the
+  shipped `[torii.mcp]` writer profile and the restarted `taira-localnet`
+  screen session exposes MCP again on both `http://127.0.0.1:29080/v1/mcp` and
+  `https://taira.sora.org/v1/mcp`; and
+- `iroha_kagami` now generates the same `[torii.mcp]` block automatically for
+  Sora-profile localnets, with focused regression coverage.
+
+Open work for this slice now remains:
+- keep the Taira reset path one-command reproducible by folding the remaining
+  live-only overlays into generation, not just MCP:
+  the loopback peer mesh/telemetry host adjustments and the extra faucet-funding
+  genesis mint still require manual post-generation edits in `dist/`.
+
+Latest sync (2026-03-28 Taira faucet funding overlay restored after reset):
+the live Taira faucet is healthy again, and the post-reset 400s have been
+traced to a missing genesis funding overlay rather than a PoW or account-format
+regression.
+
+- the served `dist/taira-localnet` bundle now includes the missing faucet
+  authority mint again, has been re-signed with the deterministic
+  `taira-localgenesis` key material, and has been restarted from clean storage;
+- a real solved-PoW claim now returns `202` and commits in block 2; and
+- a second claim for the same account now fails for the intended reason:
+  `account already has a positive faucet asset balance`.
+
+Open work for this slice now remains:
+- fold the full Taira live overlay into a reproducible reset path so future
+  `kagami localnet` redeploys on this machine do not require manual post-gen
+  edits for either the loopback peer mesh or the extra faucet-funding genesis
+  mint; and
+- if the checked-in Taira bundle is supposed to mirror the served localnet more
+  closely, capture this faucet-funding overlay in a repo-owned config/script
+  rather than only in the untracked `dist/` deployment directory.
+
+Latest sync (2026-03-28 Taira local reset after iroha/explorer update):
+the local Taira validator set and explorer are back on the latest checkouts,
+and the fresh-genesis redeploy is healthy again on this machine.
+
+- `iroha_kagami` now compiles against the updated account/domain API after the
+  `Account::new_in_domain(...)` and `register.object.domain()` fixes; and
+- the reset flow again regenerates `dist/taira-localnet`, restarts the detached
+  `taira-localnet` screen session, serves a live faucet puzzle, returns valid
+  Connect sessions, and points the rebuilt explorer bundle at
+  `https://taira.sora.org`.
+
+Open work for this slice now remains:
+- teach `kagami localnet` to separate the internal peer-mesh/telemetry host
+  from the external `--public-host`, so Taira resets on this machine no longer
+  require manual post-generation edits to `trusted_peers`,
+  `network.public_address`, and `torii.peer_telemetry_urls`; and
+- if this local Taira reset is meant to stay fully one-command reproducible,
+  move the live-only faucet authority plus faucet-funding overlay out of manual
+  `dist/` edits into a documented generation/signing path.
+
 Latest sync (2026-03-28 Taira deploy docs now capture the nginx websocket fix):
 the future deploy path for Taira Connect is now written down in-tree instead of
 living only in terminal history.
