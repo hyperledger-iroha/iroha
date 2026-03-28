@@ -310,6 +310,9 @@ target Torii host already exposes native MCP at `/v1/mcp`.
 - Built-in preset: `https://taira.sora.org/v1/mcp`
 - Custom deployments: add a user-local MCP server, for example
   `codex mcp add iroha-custom --url https://<torii>/v1/mcp`
+- Standalone skill: this repo also ships `skills/sora-taira-testnet/` for the
+  Codex Skills surface. Install it from a GitHub checkout of this repo with
+  your local skill installer and restart Codex so it appears in the Skills tab.
 
 The plugin does not parameterize `.mcp.json` and does not persist secrets. For
 custom networks, keep endpoint-specific auth and any signing material in the

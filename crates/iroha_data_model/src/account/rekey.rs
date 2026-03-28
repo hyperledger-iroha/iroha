@@ -1,6 +1,7 @@
 //! Stable account rekey metadata for tracking alias-backed account continuity.
 
-use std::{io::Cursor, string::String, vec::Vec};
+use core::fmt;
+use std::{io::Cursor, str::FromStr, string::String, vec::Vec};
 
 use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
@@ -12,6 +13,70 @@ use crate::{
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
 
+/// Dataspace-scoped alias-domain segment used only inside account aliases.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[repr(transparent)]
+#[norito(transparent, decode_from_slice)]
+pub struct AccountAliasDomain(pub Name);
+
+impl AccountAliasDomain {
+    /// Borrow the underlying alias-domain segment name.
+    #[must_use]
+    pub fn name(&self) -> &Name {
+        &self.0
+    }
+}
+
+impl fmt::Display for AccountAliasDomain {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<Name> for AccountAliasDomain {
+    fn from(value: Name) -> Self {
+        Self(value)
+    }
+}
+
+impl From<DomainId> for AccountAliasDomain {
+    fn from(value: DomainId) -> Self {
+        Self(value.name().clone())
+    }
+}
+
+impl From<AccountAliasDomain> for Name {
+    fn from(value: AccountAliasDomain) -> Self {
+        value.0
+    }
+}
+
+impl FromStr for AccountAliasDomain {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        s.parse::<Name>()
+            .map(Self)
+            .map_err(|_| ParseError::new("account alias domain segment is invalid"))
+    }
+}
+
+impl PartialEq<DomainId> for AccountAliasDomain {
+    fn eq(&self, other: &DomainId) -> bool {
+        self.name() == other.name()
+    }
+}
+
+impl PartialEq<AccountAliasDomain> for DomainId {
+    fn eq(&self, other: &AccountAliasDomain) -> bool {
+        self.name() == other.name()
+    }
+}
+
 /// Stable on-chain account alias that survives signatory rotation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -19,26 +84,24 @@ use crate::{
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-pub struct AccountLabel {
+pub struct AccountAlias {
     /// Human-readable alias label unique within the alias namespace.
     pub label: Name,
-    /// Optional concrete domain scope for the alias.
+    /// Optional alias-domain scope for the alias, unique only within its dataspace.
     #[norito(default)]
-    pub domain: Option<DomainId>,
+    pub domain: Option<AccountAliasDomain>,
     /// Dataspace in which the alias is registered.
     #[norito(default)]
     pub dataspace: DataSpaceId,
 }
 
-/// Preferred alias-led name for [`AccountLabel`].
-///
-/// The data model is moving away from "label" terminology for account-facing alias surfaces.
-pub type AccountAlias = AccountLabel;
+/// Back-compat alias for older "label" terminology.
+pub type AccountLabel = AccountAlias;
 
-impl AccountLabel {
+impl AccountAlias {
     /// Create a new account label in the default `universal` dataspace.
     pub fn new(domain: DomainId, label: Name) -> Self {
-        Self::new_in_dataspace(label, Some(domain), DataSpaceId::GLOBAL)
+        Self::new_in_dataspace(label, Some(domain.into()), DataSpaceId::GLOBAL)
     }
 
     /// Create a new domainless account label in the provided dataspace.
@@ -49,7 +112,11 @@ impl AccountLabel {
 
     /// Create a new account label from explicit alias components.
     #[must_use]
-    pub fn new_in_dataspace(label: Name, domain: Option<DomainId>, dataspace: DataSpaceId) -> Self {
+    pub fn new_in_dataspace(
+        label: Name,
+        domain: Option<AccountAliasDomain>,
+        dataspace: DataSpaceId,
+    ) -> Self {
         Self {
             label,
             domain,
@@ -72,11 +139,7 @@ impl AccountLabel {
             .map_err(|_| ParseError::new("account alias label segment is invalid"))?;
         let domain = segments
             .domain
-            .map(|domain| {
-                domain
-                    .parse()
-                    .map_err(|_| ParseError::new("account alias domain segment is invalid"))
-            })
+            .map(str::parse::<AccountAliasDomain>)
             .transpose()?;
         let dataspace = catalog
             .by_alias(segments.dataspace)
@@ -179,7 +242,7 @@ fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
     })
 }
 
-impl<'a> norito::core::DecodeFromSlice<'a> for AccountLabel {
+impl<'a> norito::core::DecodeFromSlice<'a> for AccountAlias {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = Cursor::new(bytes);
         let value: Self = norito::codec::Decode::decode(&mut cursor)?;
@@ -210,18 +273,22 @@ mod tests {
     #[test]
     fn account_label_parses_domainful_literal() {
         let label =
-            AccountLabel::from_literal("Treasury@Banking.Retail", &catalog()).expect("valid alias");
+            AccountAlias::from_literal("Treasury@Banking.Retail", &catalog()).expect("valid alias");
         assert_eq!(label.label.as_ref(), "treasury");
         assert_eq!(
             label.domain,
-            Some("banking".parse::<DomainId>().expect("domain id"))
+            Some(
+                "banking"
+                    .parse::<AccountAliasDomain>()
+                    .expect("alias domain")
+            )
         );
         assert_eq!(label.dataspace, DataSpaceId::new(7));
     }
 
     #[test]
     fn account_label_parses_domainless_literal() {
-        let label = AccountLabel::from_literal("primary@retail", &catalog()).expect("valid alias");
+        let label = AccountAlias::from_literal("primary@retail", &catalog()).expect("valid alias");
         assert_eq!(label.label.as_ref(), "primary");
         assert_eq!(label.domain, None);
         assert_eq!(label.dataspace, DataSpaceId::new(7));
@@ -231,7 +298,7 @@ mod tests {
     fn account_label_roundtrips_canonical_literal() {
         let catalog = catalog();
         let label =
-            AccountLabel::from_literal("Treasury@Banking.Retail", &catalog).expect("valid alias");
+            AccountAlias::from_literal("Treasury@Banking.Retail", &catalog).expect("valid alias");
         assert_eq!(
             label.to_literal(&catalog).expect("literal"),
             "treasury@banking.retail"
@@ -240,7 +307,7 @@ mod tests {
 
     #[test]
     fn account_label_rejects_unknown_dataspace_alias() {
-        let err = AccountLabel::from_literal("primary@banking.missing", &catalog())
+        let err = AccountAlias::from_literal("primary@banking.missing", &catalog())
             .expect_err("unknown dataspace must fail");
         assert!(err.to_string().contains("unknown dataspace alias"));
     }
@@ -259,7 +326,7 @@ mod tests {
             "primary@.retail",
         ] {
             assert!(
-                AccountLabel::from_literal(raw, &catalog()).is_err(),
+                AccountAlias::from_literal(raw, &catalog()).is_err(),
                 "must fail: {raw}"
             );
         }

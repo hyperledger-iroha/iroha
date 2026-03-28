@@ -1,4 +1,4 @@
-//! Account subject and domain link management instructions.
+//! Account subject, alias binding, and domain link management instructions.
 
 use super::*;
 
@@ -15,12 +15,15 @@ isi! {
 impl crate::seal::Instruction for LinkAccountDomain {}
 
 isi! {
-    /// Bind or renew a non-primary alias for an existing account.
+    /// Bind, renew, or clear non-primary aliases for an existing account.
     pub struct SetAccountAliasBinding {
         /// Account whose alias binding should be reconciled.
         pub account: AccountId,
         /// Desired on-chain alias for the account.
-        pub alias: crate::account::rekey::AccountAlias,
+        ///
+        /// `None` clears every non-primary alias currently bound to the account.
+        #[norito(default)]
+        pub alias: Option<crate::account::rekey::AccountAlias>,
         /// Optional lease expiry timestamp (unix ms). When provided, the authoritative SNS lease
         /// for the alias is updated before the binding is reconciled.
         #[norito(default)]
@@ -41,8 +44,18 @@ impl SetAccountAliasBinding {
     ) -> Self {
         Self {
             account,
-            alias,
+            alias: Some(alias),
             lease_expiry_ms,
+        }
+    }
+
+    /// Create an instruction that clears all non-primary alias bindings for the account.
+    #[must_use]
+    pub fn clear(account: AccountId) -> Self {
+        Self {
+            account,
+            alias: None,
+            lease_expiry_ms: None,
         }
     }
 }

@@ -2714,8 +2714,9 @@ pub mod sumeragi {
     use iroha_crypto::Algorithm;
     use nonzero_ext::nonzero;
 
-    /// Number of collectors to use (K). Default is 2 to avoid a single-collector tail.
-    pub const COLLECTORS_K: usize = 2;
+    /// Number of collectors to use (K). Default is 1; small topologies still widen via
+    /// `collector_fanout_floor()` when quorum-sized collector sets are required.
+    pub const COLLECTORS_K: usize = 1;
     /// Redundant send fanout (r): how many distinct collectors a validator sends to over time.
     /// Default targets 2f+1 for a 4-peer topology (r=3).
     pub const COLLECTORS_REDUNDANT_SEND_R: u8 = 3;

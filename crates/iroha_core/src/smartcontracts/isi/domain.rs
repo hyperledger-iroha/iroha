@@ -834,7 +834,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let domain_id = self.object().domain().cloned();
+            let linked_domains = self.object().linked_domains().clone();
             let account: Account = self.object().clone().build(authority);
             ensure_controller_capabilities(
                 account.controller(),
@@ -843,7 +843,7 @@ pub mod isi {
             )?;
             let (account_id, account_value) = account.clone().into_key_value();
 
-            if let Some(domain_id) = domain_id.as_ref() {
+            for domain_id in &linked_domains {
                 if domain_id == &*iroha_genesis::GENESIS_DOMAIN_ID {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "Not allowed to register account in genesis domain"
@@ -855,7 +855,7 @@ pub mod isi {
                 let _domain = state_transaction.world.domain_mut(domain_id)?;
             }
             if state_transaction.world.account(&account_id).is_ok() {
-                let plain_domainless_self_registration = domain_id.is_none()
+                let plain_domainless_self_registration = linked_domains.is_empty()
                     && self.object().metadata().is_empty()
                     && self.object().label().is_none()
                     && self.object().uaid.is_none()
@@ -897,7 +897,10 @@ pub mod isi {
                     ));
                 }
                 if let Some(label_domain) = &label.domain
-                    && !account.linked_domains.contains(label_domain)
+                    && !account
+                        .linked_domains
+                        .iter()
+                        .any(|linked_domain| label_domain == linked_domain)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -1022,15 +1025,17 @@ pub mod isi {
                 ));
             }
 
-            if let Some(domain_id) = domain_id {
-                state_transaction
-                    .world
-                    .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                        AccountCreated::new(account, domain_id),
-                    ))));
-            } else {
+            if linked_domains.is_empty() {
                 // TODO: Emit a dedicated domainless account-created event once the event model
                 // stops requiring a concrete origin domain.
+            } else {
+                for domain_id in linked_domains {
+                    state_transaction
+                        .world
+                        .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+                            AccountCreated::new(account.clone(), domain_id),
+                        ))));
+                }
             }
 
             Ok(())
@@ -2728,6 +2733,36 @@ pub mod isi {
                 alias,
                 lease_expiry_ms,
             } = self;
+            let existing_label = state_transaction.world.account(&account)?.label().cloned();
+            let Some(alias) = alias else {
+                if lease_expiry_ms.is_some() {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "lease_expiry_ms requires alias binding".into(),
+                        ),
+                    )
+                    .into());
+                }
+                let existing_aliases = state_transaction
+                    .world
+                    .account_aliases_by_account
+                    .get(&account)
+                    .cloned()
+                    .unwrap_or_default();
+                for existing_alias in existing_aliases {
+                    if existing_label.as_ref() == Some(&existing_alias) {
+                        continue;
+                    }
+                    state_transaction
+                        .world
+                        .remove_account_alias_binding(&existing_alias);
+                    state_transaction
+                        .world
+                        .account_rekey_records
+                        .remove(existing_alias.clone());
+                }
+                return Ok(());
+            };
             if account_label_is_pii(&alias) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "Account alias looks like raw PII; use UAID/opaque identifiers instead"
@@ -2750,7 +2785,6 @@ pub mod isi {
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
-            state_transaction.world.account(&account)?;
             let existing_alias_binding =
                 state_transaction.world.account_aliases.get(&alias).cloned();
             if let Some(existing_owner) = existing_alias_binding.as_ref() {
@@ -3213,7 +3247,6 @@ mod tests {
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         prelude::World,
         query::store::LiveQueryStore,
-        smartcontracts::ValidSingularQuery,
         state::State,
     };
 
@@ -3303,7 +3336,7 @@ mod tests {
         tx.world.add_account_permission(
             authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(domain.clone()),
+                scope: AccountAliasPermissionScope::Domain(domain.clone().into()),
             }),
         );
         tx.world.add_account_permission(
@@ -3612,6 +3645,35 @@ mod tests {
     }
 
     #[test]
+    fn register_account_with_multiple_linked_domains_materializes_all_links() {
+        let mut state = test_state();
+        let first_domain: DomainId = "first.world".parse().expect("domain id");
+        let second_domain: DomainId = "second.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &first_domain, &authority);
+        seed_domain(&mut state, &second_domain, &authority);
+
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let linked_domains = BTreeSet::from([first_domain.clone(), second_domain.clone()]);
+        let new_account = NewAccount::new_domainless(account_id.clone())
+            .with_linked_domains(linked_domains.clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(new_account)
+            .execute(&authority, &mut tx)
+            .expect("register account with multiple linked domains");
+
+        let account = tx.world.account(&account_id).expect("account should exist");
+        assert_eq!(&account.linked_domains, &linked_domains);
+        assert_eq!(
+            tx.world.account_subject_domains.view().get(&account_id),
+            Some(&account.linked_domains)
+        );
+    }
+
+    #[test]
     fn set_account_label_relabels_existing_single_key_account() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
@@ -3778,7 +3840,7 @@ mod tests {
 
         let err = SetAccountAliasBinding {
             account: account_id,
-            alias,
+            alias: Some(alias),
             lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
@@ -4053,14 +4115,14 @@ mod tests {
 
         SetAccountAliasBinding {
             account: account_id.clone(),
-            alias: banking_label.clone(),
+            alias: Some(banking_label.clone()),
             lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect("bind banking alias");
         SetAccountAliasBinding {
             account: account_id.clone(),
-            alias: issuance_label.clone(),
+            alias: Some(issuance_label.clone()),
             lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
@@ -4141,7 +4203,7 @@ mod tests {
         .expect("register account with primary label");
         SetAccountAliasBinding {
             account: account_id.clone(),
-            alias: bound_label.clone(),
+            alias: Some(bound_label.clone()),
             lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
@@ -4162,6 +4224,87 @@ mod tests {
                 .is_none(),
             "reverse alias index must be cleared on unregister"
         );
+    }
+
+    #[test]
+    fn clear_account_alias_binding_removes_non_primary_aliases_only() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+
+        let primary_label =
+            AccountLabel::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
+        let root_alias =
+            AccountLabel::domainless("public".parse::<Name>().unwrap(), DataSpaceId::GLOBAL);
+        let domain_alias =
+            AccountLabel::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(keypair.public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        seed_account_alias_lease(&mut tx, &authority, &primary_label);
+        seed_account_alias_lease(&mut tx, &authority, &root_alias);
+        seed_account_alias_lease(&mut tx, &authority, &domain_alias);
+        Register::account(
+            Account::new(account_id.clone().to_account_id(domain_id.clone()))
+                .with_label(Some(primary_label.clone())),
+        )
+        .execute(&authority, &mut tx)
+        .expect("register account with primary label");
+        SetAccountAliasBinding {
+            account: account_id.clone(),
+            alias: Some(root_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("bind root alias");
+        SetAccountAliasBinding {
+            account: account_id.clone(),
+            alias: Some(domain_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("bind domain alias");
+
+        SetAccountAliasBinding::clear(account_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear secondary aliases");
+
+        assert_eq!(
+            tx.world.account_aliases.get(&primary_label),
+            Some(&account_id),
+            "primary alias binding must remain"
+        );
+        assert!(tx.world.account_aliases.get(&root_alias).is_none());
+        assert!(tx.world.account_aliases.get(&domain_alias).is_none());
+        assert!(
+            tx.world.account_rekey_records.get(&root_alias).is_none(),
+            "cleared secondary alias must drop its rekey record"
+        );
+        assert!(
+            tx.world.account_rekey_records.get(&domain_alias).is_none(),
+            "cleared secondary alias must drop its rekey record"
+        );
+        assert_eq!(
+            tx.world
+                .account(&account_id)
+                .expect("account should exist")
+                .label(),
+            Some(&primary_label),
+            "clear must not remove the primary alias"
+        );
+        let remaining_aliases = tx
+            .world
+            .account_aliases_by_account
+            .get(&account_id)
+            .expect("reverse index should keep the primary alias");
+        assert_eq!(remaining_aliases.len(), 1);
+        assert!(remaining_aliases.contains(&primary_label));
     }
 
     #[test]
@@ -4195,7 +4338,7 @@ mod tests {
 
         SetAccountAliasBinding {
             account: account_id.clone(),
-            alias: alias.clone(),
+            alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
@@ -4249,7 +4392,7 @@ mod tests {
 
         SetAccountAliasBinding {
             account: account_id.clone(),
-            alias: alias.clone(),
+            alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
@@ -4294,7 +4437,7 @@ mod tests {
 
         SetAccountAliasBinding {
             account: account_id.clone(),
-            alias: alias.clone(),
+            alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
@@ -4339,7 +4482,7 @@ mod tests {
 
         SetAccountAliasBinding {
             account: first_id.clone(),
-            alias: alias.clone(),
+            alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&domain_owner, &mut tx)
@@ -4347,7 +4490,7 @@ mod tests {
 
         let err = SetAccountAliasBinding {
             account: second_id.clone(),
-            alias: alias.clone(),
+            alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&unauthorized, &mut tx)
@@ -4403,7 +4546,7 @@ mod tests {
 
         SetAccountAliasBinding {
             account: first_id.clone(),
-            alias: alias.clone(),
+            alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&domain_owner, &mut tx)
@@ -4411,7 +4554,7 @@ mod tests {
 
         SetAccountAliasBinding {
             account: second_id.clone(),
-            alias: alias.clone(),
+            alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
@@ -4471,7 +4614,7 @@ mod tests {
 
         SetAccountAliasBinding {
             account: first_id.clone(),
-            alias: alias.clone(),
+            alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&domain_owner, &mut tx)
@@ -4479,7 +4622,7 @@ mod tests {
 
         SetAccountAliasBinding {
             account: second_id.clone(),
-            alias: alias.clone(),
+            alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
@@ -4575,7 +4718,7 @@ mod tests {
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
         let new_account = NewAccount {
             id: account_id,
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: None,
@@ -4607,7 +4750,7 @@ mod tests {
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
         let new_account = NewAccount {
             id: account_id,
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(uaid),
@@ -4641,7 +4784,7 @@ mod tests {
 
         let first_account = NewAccount {
             id: first_id.clone(),
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(first_uaid),
@@ -4649,7 +4792,7 @@ mod tests {
         };
         let second_account = NewAccount {
             id: second_id.clone(),
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(second_uaid),
@@ -7310,7 +7453,7 @@ mod tests {
 
     #[test]
     fn set_contract_alias_updates_world_indexes() {
-        let mut state = test_state();
+        let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address =
             ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
@@ -7348,7 +7491,7 @@ mod tests {
 
     #[test]
     fn set_contract_alias_rejects_account_alias_collision() {
-        let mut state = test_state();
+        let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address =
             ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
@@ -7421,7 +7564,7 @@ mod tests {
 
         let err = SetAccountAliasBinding {
             account: authority.clone(),
-            alias: label,
+            alias: Some(label),
             lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)

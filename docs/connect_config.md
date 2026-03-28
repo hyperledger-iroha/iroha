@@ -56,6 +56,10 @@ Notes:
   registered; requests to `/v1/connect/ws` and `/v1/connect/status` return 404.
 - The server requires a client‑provided `sid` for `/v1/connect/session` (base64url or hex, 32 bytes).
   It no longer generates a fallback `sid`.
+- If Torii is served behind nginx or another reverse proxy, `/v1/connect/ws`
+  must preserve the websocket upgrade hop. For nginx, use
+  `proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`, and
+  `proxy_set_header Connection "upgrade"` on the proxied websocket route.
 
 See also: `crates/iroha_config/src/parameters/{user,actual}.rs` and defaults in
 `crates/iroha_config/src/parameters/defaults.rs` (module `connect`).

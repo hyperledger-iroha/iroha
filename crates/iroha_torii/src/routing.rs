@@ -39883,7 +39883,9 @@ pub async fn handle_v1_accounts_onboard(
     }
 
     let register_builder = match alias_label.domain.clone() {
-        Some(domain) => dm::Account::new(account_id.to_account_id(domain)),
+        Some(domain) => {
+            dm::Account::new(account_id.to_account_id(dm::DomainId::new(domain.into())))
+        }
         None => dm::Account::new_domainless(account_id.clone()),
     };
     let register = Register::account(
@@ -40259,8 +40261,14 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
         .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
-    let register =
-        MultisigRegister::with_account(multisig_account.clone(), alias_label.domain.clone(), spec);
+    let register = MultisigRegister::with_account(
+        multisig_account.clone(),
+        alias_label
+            .domain
+            .clone()
+            .map(|domain| dm::DomainId::new(domain.into())),
+        spec,
+    );
     let bind_alias = SetPrimaryAccountAlias {
         account: multisig_account.clone(),
         alias: Some(alias_label),

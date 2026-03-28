@@ -19,5 +19,10 @@ Files:
 - config.toml — minimal Nexus config matching the topology (ports 8080/1337) and enabling native Torii MCP with the curated public `iroha.*` writer profile
 - docker-compose.yml — single-node snippet mounting the config/genesis
 
+Operational note:
+- If this Torii node is exposed through nginx or another reverse proxy, keep
+  `/v1/connect/ws` on `proxy_http_version 1.1` and forward websocket
+  `Upgrade` plus `Connection: upgrade` headers end-to-end.
+
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-taira

@@ -498,7 +498,7 @@ fn instruction_self_registers_authority(
         return false;
     };
 
-    if registration.domain().is_some() {
+    if !registration.linked_domains().is_empty() {
         return false;
     }
 

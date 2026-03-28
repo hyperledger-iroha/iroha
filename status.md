@@ -2,6 +2,122 @@
 
 Last updated: 2026-03-28
 
+## 2026-03-28 Taira skill/docs gap-closure follow-up
+- Added a repo-root discoverability entry in `README.md` for the Codex-facing
+  Taira surfaces so users can find both `plugins/iroha/` and the standalone
+  `skills/sora-taira-testnet/` skill from the main repository landing page.
+- Tightened the standalone skill install instructions in
+  `plugins/iroha/README.md` to use the portable
+  `${CODEX_HOME:-$HOME/.codex}` path instead of assuming `~/.codex`.
+- Extended `scripts/check_codex_plugin_manifests.py` and its tests to validate
+  the repo-shared `skills/sora-taira-testnet/` skill plus
+  `skills/sora-taira-testnet/agents/openai.yaml`, removing the repo's
+  dependency on external `PyYAML` just to catch obvious skill-shape regressions.
+- Revalidated the focused Torii MCP coverage:
+  - `python3 scripts/check_codex_plugin_manifests.py` (pass)
+  - `python3 -m py_compile scripts/check_codex_plugin_manifests.py scripts/tests/check_codex_plugin_manifests_test.py`
+    (pass)
+  - manual execution of the validator test functions in
+    `scripts/tests/check_codex_plugin_manifests_test.py` (pass)
+  - `git diff --check -- README.md AGENTS.md plugins/iroha/README.md crates/iroha_torii/docs/mcp_api.md scripts/check_codex_plugin_manifests.py scripts/tests/check_codex_plugin_manifests_test.py skills/sora-taira-testnet/SKILL.md skills/sora-taira-testnet/agents/openai.yaml status.md roadmap.md`
+    (pass)
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_torii --test mcp_endpoints mcp_writer_prefix_policy_ -- --nocapture`
+    (pass; `2 passed`)
+- Live deployment verification after the reported Taira redeploy still shows the
+  public MCP path unavailable:
+  - `curl -i -sS https://taira.sora.org/v1/mcp` returned `HTTP/2 404`
+  - `curl -i -sS -X POST https://taira.sora.org/v1/mcp -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`
+    also returned `HTTP/2 404`
+- Net result: the repo-side skill/docs/validation gaps are closed, but the live
+  Taira MCP rollout is still externally blocked by the public endpoint not
+  serving `/v1/mcp` yet.
+
+## 2026-03-28 Follow-up: initial PRECOMMIT dissemination now stays sparse until retransmit
+- Restored the ineffective Cut 2 collector constant changes back to the clean
+  Cut 1 baseline:
+  - `crates/izanami/src/chaos.rs` now restores
+    `IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS = 3`; and
+  - `crates/iroha_config/src/parameters/defaults.rs` now restores
+    `COLLECTORS_K = 1` while keeping
+    `COLLECTORS_REDUNDANT_SEND_R = 3` and
+    `COLLECTORS_PARALLEL_TOPOLOGY_FANOUT = 1`.
+- Fixed the actual root cause in
+  `crates/iroha_core/src/sumeragi/main_loop/commit.rs` instead of tuning
+  timeouts/FSM behavior:
+  - `init_collector_plan()` still deterministically seeds the primary
+    collector into `collectors_contacted`;
+  - the initial `emit_precommit_vote()` path no longer drains
+    `next_redundant_collector()` on the first send;
+  - the first `PRECOMMIT` send no longer tops up to the remote-floor; and
+  - widening to additional collectors remains owned by the existing
+    timeout/rebroadcast path.
+- Root-cause record for the failed Cut 2 tuning:
+  - on a 4-peer topology, `collector_fanout_floor()` collapses `k = 1`, `2`,
+    and `3` to the same effective quorum-sized collector set (`3` remote
+    validators), so changing `k` alone cannot reduce the initial fanout; and
+  - before this fix, the initial `PRECOMMIT` send path immediately widened
+    itself anyway by draining redundant collectors and topping up to the
+    remote-floor, so the intended sparse collector semantics never actually
+    took effect in the shared-host 4-peer soaks.
+- Focused regression coverage now locks in the intended semantics:
+  - `collector_fanout_floor_respects_quorum_and_bounds`
+  - `commit_vote_targets_collectors_or_topology`
+  - `precommit_vote_targets_collectors_without_broadcast`
+  - `initial_precommit_emit_does_not_consume_redundant_collectors_immediately`
+  - `rebroadcast_precommit_votes_widen_collectors_when_below_quorum`
+- New observability on the initial `PRECOMMIT` path now logs a consistent
+  record with `initial_targets`, `seeded_collectors`, `parallel_added`, and
+  `fallback_to_topology` so soak triage can distinguish sparse first-send
+  behavior from later widening.
+- Verification status for this slice:
+  - focused `iroha_core` validation now passes in an isolated target
+    directory:
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib commit_vote_targets_collectors_or_topology -- --nocapture`,
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib precommit_vote_targets_collectors_without_broadcast -- --nocapture`,
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib initial_precommit_emit_does_not_consume_redundant_collectors_immediately -- --nocapture`,
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib rebroadcast_precommit_votes_widen_collectors_when_below_quorum -- --nocapture`,
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib plan_with_sent_preserves_remaining_targets -- --nocapture`,
+    and
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib --features iroha-core-tests collector_fanout_floor_respects_quorum_and_bounds -- --nocapture`;
+  - the requested release build was attempted with
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+    but failed outside this slice in `crates/iroha_torii/src/routing.rs`
+    because pre-existing account-alias worktree changes no longer satisfy
+    `AccountId::to_account_id(DomainId)` / `MultisigRegister::with_account(..., Into<Option<DomainId>>, ...)`;
+  - no fresh `iroha3d` / `izanami` release binaries were emitted under
+    `/tmp/iroha_target_precommitfix/release`, so the preserved-peer
+    permissioned and NPoS soaks could not be rerun on a clean post-fix build
+    in this turn; and
+  - there is therefore still no fresh post-fix soak evidence to compare
+    against the earlier Cut 1 / Cut 2 logs.
+
+## 2026-03-28 Repo-shared SORA Taira standalone Codex skill and agent guidance
+- Added a repo-shared standalone Codex skill under
+  `skills/sora-taira-testnet/` with both `SKILL.md` and
+  `agents/openai.yaml` so the Taira testnet guidance can be distributed from
+  this repository rather than only from a developer-local `~/.codex/skills/`
+  install.
+- Updated `plugins/iroha/README.md` with the standalone skill install flow so
+  teammates can install `skills/sora-taira-testnet/` from a GitHub checkout of
+  this repo using Codex's built-in GitHub skill installer.
+- Updated `crates/iroha_torii/docs/mcp_api.md` so the Torii MCP reference now
+  points readers to both the installable `plugins/iroha/` bundle and the
+  standalone `skills/sora-taira-testnet/` skill path for the Codex Skills
+  surface.
+- Updated `AGENTS.md` so repository agents explicitly consult
+  `skills/sora-taira-testnet/SKILL.md` for live Taira/Torii MCP work and treat
+  `authority`, `private_key`, bearer tokens, and forwarded auth headers as
+  runtime-only secrets.
+- Validation:
+  - Ruby YAML parse of `skills/sora-taira-testnet/SKILL.md` (pass)
+  - stdlib sanity checks for the standalone skill metadata and Taira endpoint
+    references (pass)
+  - `quick_validate.py` remains unavailable in this environment because the
+    bundled validator depends on `PyYAML`, which is not installed locally
+- External follow-up remains open: I cannot submit an OpenAI support/catalog
+  request on the user's behalf from this environment, so any `openai/skills`
+  catalog inclusion still requires a human-run support/forum submission.
+
 ## 2026-03-28 Follow-up: Nexus cross-dataspace localnets now seed fee assets and disable Norito GPU compression
 - Fixed the custom multilane localnet genesis in
   `integration_tests/tests/nexus/{cross_dataspace_localnet.rs,cross_dataspace_zk_stark_localnet.rs}`

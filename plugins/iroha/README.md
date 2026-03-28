@@ -30,6 +30,22 @@ install the `iroha` plugin through Codex.
 The plugin assumes the repo is the source of truth and keeps only the Taira
 preset committed.
 
+## Standalone Codex skill
+
+This repo also ships a standalone skill at `skills/sora-taira-testnet/` for the
+Codex Skills surface.
+
+To install that skill from a GitHub checkout of this repo, use the built-in
+installer script from your local Codex environment:
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo <owner>/<repo> \
+  --path skills/sora-taira-testnet
+```
+
+Restart Codex after installation so the skill appears in the Skills tab.
+
 ## Add a custom Torii endpoint
 
 Custom Nexus/Torii networks are intentionally user-local rather than committed

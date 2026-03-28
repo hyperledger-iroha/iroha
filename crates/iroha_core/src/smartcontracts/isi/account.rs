@@ -558,7 +558,7 @@ pub mod query {
                 iroha_executor_data_model::permission::account::CanManageAccountAlias {
                     scope:
                         iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            domain.clone(),
+                            domain.clone().into(),
                         ),
                 },
             ),
@@ -1102,8 +1102,10 @@ pub mod query {
                 .filter(|value| !value.is_empty())
                 .map(|domain| {
                     domain
-                        .parse::<DomainId>()
-                        .map_err(|err| Error::Conversion(format!("invalid domain: {err}")))
+                        .parse::<iroha_data_model::account::rekey::AccountAliasDomain>()
+                        .map_err(|err| {
+                            Error::Conversion(format!("invalid alias domain segment: {err}"))
+                        })
                 })
                 .transpose()?;
 
@@ -1773,6 +1775,7 @@ pub mod query {
             assert_eq!(results, vec![acc1]);
         }
 
+        #[test]
         fn find_aliases_by_account_id_returns_primary_alias_bindings() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -1810,7 +1813,7 @@ pub mod query {
             let (account_id, _) = gen_account_in("hbl");
             let primary_label = AccountLabel::new_in_dataspace(
                 "merchant".parse().expect("label"),
-                Some(linked_domain.clone()),
+                Some(linked_domain.clone().into()),
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
@@ -1877,7 +1880,7 @@ pub mod query {
             let (account_id, _) = gen_account_in("hbl");
             let primary_label = AccountLabel::new_in_dataspace(
                 "merchant".parse().expect("label"),
-                Some(linked_domain.clone()),
+                Some(linked_domain.clone().into()),
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);

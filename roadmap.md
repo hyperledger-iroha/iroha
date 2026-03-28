@@ -1,6 +1,112 @@
 # Roadmap (Open Work Only)
 
 Last updated: 2026-03-28
+
+Latest sync (2026-03-28 Taira skill/docs gap closure with live endpoint recheck):
+the repo-side gaps from the standalone Taira skill rollout are now closed, and
+the remaining blocker has narrowed back down to the public deployment.
+
+- `README.md` now advertises the Codex-facing Taira plugin and standalone skill
+  from the repository landing page;
+- `plugins/iroha/README.md` now uses the portable
+  `${CODEX_HOME:-$HOME/.codex}` installer path for the standalone skill;
+- `scripts/check_codex_plugin_manifests.py` now validates the repo-shared
+  `skills/sora-taira-testnet/` skill and its `agents/openai.yaml` metadata, and
+  the accompanying test harness covers that new validation path; and
+- the focused `iroha_torii` MCP tests for the writer-prefix policy now pass
+  cleanly again.
+
+Open work for this follow-up now remains:
+- fix the public Taira deployment or ingress so `https://taira.sora.org/v1/mcp`
+  stops returning `HTTP/2 404` for both `GET /v1/mcp` and JSON-RPC
+  `tools/list`;
+- once the public MCP path is live, run the full public smoke again against
+  Taira (`GET /v1/mcp`, `tools/list`, hidden raw `torii.*`, one public read,
+  one explicit-key write flow);
+- publish the repo-shared skill from a GitHub remote that teammates can install
+  from directly if this repository path is not already their source of truth;
+- complete the human-run OpenAI support and Developer Forum submission if the
+  goal is eventual inclusion in the `openai/skills` catalog.
+
+Latest sync (2026-03-28 initial PRECOMMIT sparse-send root-cause fix):
+the next DA/precommit slice is now aimed at the implementation bug in vote
+dissemination rather than at timeout/FSM tuning.
+
+- restored the ineffective Cut 2 collector constant changes back to the clean
+  Cut 1 baseline
+  (`IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS: 2 -> 3`,
+  `COLLECTORS_K: 2 -> 1`) while keeping the Cut 0 / Cut 1 backlog, pipeline,
+  DA multiplier, timeout-floor, `redundant_send_r = 3`, and
+  `parallel_topology_fanout = 1` settings intact;
+- recorded why the Cut 2 `k` tuning could never help the preserved-peer 4-peer
+  soaks: `collector_fanout_floor()` collapses `k = 1/2/3` to the same
+  quorum-sized fanout (`3` remotes), so those `k` deltas are observationally
+  equivalent in that envelope; and
+- fixed the real root cause in
+  `crates/iroha_core/src/sumeragi/main_loop/commit.rs` by changing only the
+  initial `PRECOMMIT` dissemination semantics:
+  `init_collector_plan()` still seeds the primary collector deterministically,
+  but the first `emit_precommit_vote()` no longer drains redundant collectors
+  or performs remote-floor top-up. The initial send now targets only the
+  seeded collector set plus any configured parallel-topology additions, with
+  fallback to full topology only when the collector plan is empty or local-only.
+  Timeout/rebroadcast logic still owns later widening, and NEW_VIEW,
+  rebroadcast semantics, frontier-slot ownership, deep catch-up, quorum-timeout
+  FSM routing, and recovery paths are intentionally unchanged in this slice.
+
+Focused validation for this slice is now green in an isolated target
+directory:
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib commit_vote_targets_collectors_or_topology -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib precommit_vote_targets_collectors_without_broadcast -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib initial_precommit_emit_does_not_consume_redundant_collectors_immediately -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib rebroadcast_precommit_votes_widen_collectors_when_below_quorum -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib plan_with_sent_preserves_remaining_targets -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib --features iroha-core-tests collector_fanout_floor_respects_quorum_and_bounds -- --nocapture`
+
+Open work from this slice:
+- clear the unrelated `iroha_torii` account-alias compile break in the current
+  worktree (or rebuild on a tree where it is already fixed), because
+  `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  currently fails in `crates/iroha_torii/src/routing.rs` before either release
+  binary is emitted;
+- rerun the full preserved-peer stable permissioned soak first and collect new
+  post-fix evidence for:
+  `no strict block height progress=0`,
+  `requested block-sync range pull from committed anchor=0`,
+  `sharing from fallback anchor=0`,
+  `requested missing BlockCreated while awaiting RBC INIT=0`, and
+  `interval_p95_ms <= 1000`;
+- only if permissioned reaches target height cleanly, rerun the preserved-peer
+  stable NPoS soak and confirm it also keeps `plan submission failed=0` and
+  `Failed to find asset=0`; and
+- stop again and reassess before expanding the change surface if the
+  permissioned rerun still misses the gate, instead of touching NEW_VIEW,
+  rebroadcast semantics, or recovery/FSM logic pre-emptively.
+
+Latest sync (2026-03-28 repo-shared SORA Taira standalone Codex skill):
+this repo now carries a shareable standalone Codex skill for the Taira testnet
+in addition to the installable `plugins/iroha/` bundle.
+
+- `skills/sora-taira-testnet/` now contains the standalone skill definition and
+  UI metadata for the Codex Skills surface;
+- `plugins/iroha/README.md` now documents how teammates can install that skill
+  from a GitHub checkout of this repo with the built-in skill installer;
+- `crates/iroha_torii/docs/mcp_api.md` now points readers to both the plugin
+  and standalone-skill surfaces; and
+- `AGENTS.md` now tells future agents to consult
+  `skills/sora-taira-testnet/SKILL.md` for live Taira/Torii MCP workflows.
+
+Open work for this shareability slice now remains:
+- publish the repo-shared skill from a GitHub remote that teammates can install
+  from directly if this repository path is not already their source of truth;
+- complete the human-run OpenAI support and Developer Forum submission if the
+  goal is eventual inclusion in the `openai/skills` catalog;
+- install `PyYAML` locally if the stock `quick_validate.py` workflow should be
+  part of routine validation for the repo-shared skill; and
+- once public Taira MCP is redeployed and stable, consider tightening the skill
+  text from today's provisional `404` handling to the final operator-facing
+  rollout guidance.
+
 Latest sync (2026-03-28 account alias cleanup / account-domain query removal):
 the universal-account cleanup now pushes one step further into the public query
 surface and alias instructions.

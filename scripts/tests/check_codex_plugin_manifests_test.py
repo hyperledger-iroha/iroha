@@ -84,6 +84,40 @@ def _write_valid_repo(root: Path) -> None:
     (root / "plugins" / "iroha" / "assets" / "iroha-logo.svg").write_text(
         "<svg/>", encoding="utf-8"
     )
+    (root / "skills" / "sora-taira-testnet" / "agents").mkdir(parents=True, exist_ok=True)
+    (
+        root / "skills" / "sora-taira-testnet" / "SKILL.md"
+    ).write_text(
+        "\n".join(
+            [
+                "---",
+                "name: sora-taira-testnet",
+                'description: "Use https://taira.sora.org/v1/mcp and keep authority/private_key runtime-only."',
+                "---",
+                "",
+                "# SORA Taira Testnet",
+                "",
+                "Use https://taira.sora.org/v1/mcp.",
+                "",
+                "- Use iroha.transactions.submit_and_wait.",
+                "- Keep authority and private_key runtime-only.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (
+        root / "skills" / "sora-taira-testnet" / "agents" / "openai.yaml"
+    ).write_text(
+        "\n".join(
+            [
+                "interface:",
+                '  display_name: "SORA Taira Testnet"',
+                '  short_description: "Use Torii MCP on the Taira testnet"',
+                '  default_prompt: "Use $sora-taira-testnet to inspect Taira."',
+            ]
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_validate_repo_accepts_expected_layout(tmp_path: Path) -> None:
@@ -99,4 +133,13 @@ def test_validate_repo_reports_missing_taira_entry(tmp_path: Path) -> None:
 
     errors = MODULE.validate_repo(tmp_path)
     assert any("iroha-taira" in error for error in errors)
+    assert MODULE.main(["--repo-root", str(tmp_path), "--quiet"]) == 1
+
+
+def test_validate_repo_reports_missing_repo_skill(tmp_path: Path) -> None:
+    _write_valid_repo(tmp_path)
+    (tmp_path / "skills" / "sora-taira-testnet" / "SKILL.md").unlink()
+
+    errors = MODULE.validate_repo(tmp_path)
+    assert any("standalone Taira skill" in error for error in errors)
     assert MODULE.main(["--repo-root", str(tmp_path), "--quiet"]) == 1
