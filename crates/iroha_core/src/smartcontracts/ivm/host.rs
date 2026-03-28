@@ -4736,7 +4736,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_REGISTER_ACCOUNT => {
                 let ptr = vm.register(10);
                 let id: ScopedAccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
-                let isi = Register::account(Account::new(id));
+                let isi = Register::account(Account::from_scoped_id(id));
                 let instr = InstructionBox::from(RegisterBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -7599,8 +7599,9 @@ mod pointer_abi_tests {
         vm.set_register(10, ptr);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ACCOUNT, &mut vm);
-        let expected =
-            InstructionBox::from(Register::account(Account::new(expected_scoped_account)));
+        let expected = InstructionBox::from(Register::account(Account::from_scoped_id(
+            expected_scoped_account,
+        )));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
@@ -8497,7 +8498,7 @@ mod tests {
     }
 
     fn build_fixture_account(id: &AccountId, authority: &AccountId) -> Account {
-        Account::new(id.clone().to_account_id(fixture_domain_id())).build(authority)
+        Account::new_in_domain(id.clone(), fixture_domain_id()).build(authority)
     }
 
     #[test]
@@ -9717,9 +9718,9 @@ mod tests {
         let alias_account_id: AccountId = fixture_account_in_domain("banking", &alias_domain_label);
         let domain = Domain::new(alias_domain.clone()).build(&authority);
         let authority_account =
-            Account::new(authority.clone().to_account_id(alias_domain.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), alias_domain.clone()).build(&authority);
         let aliased_account =
-            Account::new(alias_account_id.clone().to_account_id(alias_domain.clone()))
+            Account::new_in_domain(alias_account_id.clone(), alias_domain.clone())
                 .with_label(Some(AccountLabel::new(
                     alias_domain.clone(),
                     alias_label.clone(),

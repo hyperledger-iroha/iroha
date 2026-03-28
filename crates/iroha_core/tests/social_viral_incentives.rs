@@ -180,30 +180,30 @@ fn social_world_with_owner(
     let sora: Domain = Domain::new(sora_id.clone()).build(&alice);
 
     let alice_account = {
-        let mut builder = Account::new(alice.clone().to_account_id(wonderland_id.clone()));
+        let mut builder = Account::new_in_domain(alice.clone(), wonderland_id.clone());
         if uaid_owner == &alice {
             builder = builder.with_uaid(Some(uaid));
         }
         builder.build(&alice)
     };
     let bob_account = {
-        let mut builder = Account::new(bob.clone().to_account_id(wonderland_id));
+        let mut builder = Account::new_in_domain(bob.clone(), wonderland_id);
         if uaid_owner == &bob {
             builder = builder.with_uaid(Some(uaid));
         }
         builder.build(&bob)
     };
     let provider_account = {
-        let mut builder = Account::new(provider.clone().to_account_id(validators_id));
+        let mut builder = Account::new_in_domain(provider.clone(), validators_id);
         if uaid_owner == provider {
             builder = builder.with_uaid(Some(uaid));
         }
         builder.build(provider)
     };
     let oracle_reward_pool_account =
-        Account::new(oracle_reward_pool.clone().to_account_id(sora_id.clone())).build(&alice);
+        Account::new_in_domain(oracle_reward_pool.clone(), sora_id.clone()).build(&alice);
     let oracle_slash_receiver_account =
-        Account::new(oracle_slash_receiver.clone().to_account_id(sora_id)).build(&alice);
+        Account::new_in_domain(oracle_slash_receiver.clone(), sora_id).build(&alice);
 
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice);
     let oracle_asset_def = AssetDefinition::numeric(oracle_reward_asset.clone()).build(&alice);

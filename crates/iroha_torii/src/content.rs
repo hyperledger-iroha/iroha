@@ -674,7 +674,7 @@ mod tests {
     ) -> std::sync::Arc<iroha_core::state::State> {
         let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
         let domain = Domain::new(domain_id.clone()).build(account_id);
-        let account = Account::new(account_id.to_account_id(domain_id))
+        let account = Account::new_in_domain(account_id.clone(), domain_id)
             .with_uaid(uaid)
             .build(account_id);
         std::sync::Arc::new(iroha_core::state::State::new_for_testing(

@@ -1015,7 +1015,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
     let authority = AccountId::new(kp.public_key().clone());
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
     let domain = Domain::new(domain_id.clone()).build(&authority);
-    let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+    let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
 
     let world = iroha_core::state::World::with([domain], [account], []);
 
@@ -1184,7 +1184,7 @@ fn stark_governance_submit_and_finalize_accept_valid_proofs() {
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account: Account = Account::new_in_domain(ALICE_ID.clone(), domain_id).build(&ALICE_ID);
     let world = World::with([domain], [account], Vec::new());
     let mut state = State::new_for_testing(world, kura, query);
     state.zk.stark.enabled = true;
@@ -1376,7 +1376,7 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account: Account = Account::new_in_domain(ALICE_ID.clone(), domain_id).build(&ALICE_ID);
     let mut state = State::new_for_testing(
         iroha_core::state::World::with([domain], [account], Vec::new()),
         kura,
@@ -1497,7 +1497,7 @@ fn create_election_rejects_stark_tally_vk_with_wrong_vote_circuit_role() {
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account: Account = Account::new_in_domain(ALICE_ID.clone(), domain_id).build(&ALICE_ID);
     let mut state = State::new_for_testing(
         iroha_core::state::World::with([domain], [account], Vec::new()),
         kura,
@@ -1623,7 +1623,7 @@ fn governance_accepts_valid_halo2_and_stark_ballots_in_same_state() {
     let query = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account: Account = Account::new_in_domain(ALICE_ID.clone(), domain_id).build(&ALICE_ID);
     let world = World::with([domain], [account], Vec::new());
     let mut state = State::new_for_testing(world, kura, query);
     state.zk.stark.enabled = true;

@@ -34,13 +34,13 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
 
     let domain = Domain::new(wonderland.clone()).build(&alice_id);
     let alice_account =
-        iroha_data_model::account::Account::new(ALICE_ID.clone().to_account_id(wonderland.clone()))
+        iroha_data_model::account::Account::new_in_domain(ALICE_ID.clone(), wonderland.clone())
             .build(&alice_id);
     let escrow_account =
-        iroha_data_model::account::Account::new(BOB_ID.clone().to_account_id(wonderland.clone()))
+        iroha_data_model::account::Account::new_in_domain(BOB_ID.clone(), wonderland.clone())
             .build(&alice_id);
     let receiver_account =
-        iroha_data_model::account::Account::new(receiver_id.clone().to_account_id(wonderland))
+        iroha_data_model::account::Account::new_in_domain(receiver_id.clone(), wonderland)
             .build(&alice_id);
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(

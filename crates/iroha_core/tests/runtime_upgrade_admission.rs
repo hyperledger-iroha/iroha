@@ -49,7 +49,7 @@ fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
 }
 
 fn new_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> Account {
-    Account::new(account_id.clone().to_account_id(domain_id.clone())).build(account_id)
+    Account::new_in_domain(account_id.clone(), domain_id.clone()).build(account_id)
 }
 
 #[test]

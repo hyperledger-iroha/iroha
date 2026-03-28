@@ -4828,7 +4828,7 @@ mod zk_roots_selector_tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
             iroha_core::state::World::with([domain], [account], [definition]),
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -27252,7 +27252,7 @@ mod app_api_integration_tests {
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let accounts: Vec<Account> = accounts
             .into_iter()
-            .map(|id| Account::new(id.to_account_id(domain_id.clone())).build(&authority))
+            .map(|id| Account::new_in_domain(id.clone(), domain_id.clone()).build(&authority))
             .collect();
         let asset_definitions: Vec<AssetDefinition> = asset_definitions
             .into_iter()
@@ -27917,7 +27917,7 @@ mod app_api_integration_tests {
         let domain_alpha = Domain::new(alpha.clone()).build(&alice_id);
         let domain_omega = Domain::new(omega).build(&alice_id);
         let domain_gamma = Domain::new(gamma).build(&alice_id);
-        let account = Account::new(alice_id.to_account_id(alpha)).build(&alice_id);
+        let account = Account::new_in_domain(alice_id.clone(), alpha).build(&alice_id);
         let world = World::with(
             [domain_alpha, domain_omega, domain_gamma],
             [account],
@@ -28608,7 +28608,7 @@ mod app_api_integration_tests {
         };
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
+        let account = Account::new_in_domain(alice_id.clone(), domain_id).build(&alice_id);
         let asset_def = AssetDefinition::numeric(AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -28894,8 +28894,8 @@ mod app_api_integration_tests {
         ];
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let alice_account =
-            Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-        let bob_account = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
+            Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
+        let bob_account = Account::new_in_domain(bob_id.clone(), domain_id).build(&alice_id);
         let world = World::with_assets(
             [domain],
             [alice_account, bob_account],
@@ -28956,7 +28956,7 @@ mod query_endpoint_tests {
 
         // Build a small world with a single asset for Alice.
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
+        let account = Account::new_in_domain(alice_id.clone(), domain_id).build(&alice_id);
         let asset_def_id: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
@@ -38126,13 +38126,15 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     Register::domain(Domain::new("wonderland".parse().unwrap()))
         .execute(&authority_id, &mut stx)
         .unwrap();
-    Register::account(Account::new(
-        initiator_id.to_account_id("wonderland".parse().unwrap()),
+    Register::account(Account::new_in_domain(
+        initiator_id.clone(),
+        "wonderland".parse().unwrap(),
     ))
     .execute(&authority_id, &mut stx)
     .unwrap();
-    Register::account(Account::new(
-        counterparty_id.to_account_id("wonderland".parse().unwrap()),
+    Register::account(Account::new_in_domain(
+        counterparty_id.clone(),
+        "wonderland".parse().unwrap(),
     ))
     .execute(&authority_id, &mut stx)
     .unwrap();
@@ -39891,7 +39893,7 @@ pub async fn handle_v1_accounts_onboard(
 
     let register_builder = match alias_label.domain.clone() {
         Some(domain) => {
-            dm::Account::new(account_id.to_account_id(alias_domain_to_domain_id(domain)))
+            dm::Account::new_in_domain(account_id.clone(), alias_domain_to_domain_id(domain))
         }
         None => dm::Account::new_domainless(account_id.clone()),
     };
@@ -41936,8 +41938,7 @@ mod asset_definitions_query_tests {
         let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: dm::DomainId = "wonderland".parse().expect("valid domain");
         let domain = dm::Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            dm::Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = dm::Account::new_in_domain(authority.clone(), domain_id).build(&authority);
 
         let mut pkr_metadata = dm::Metadata::default();
         pkr_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
@@ -48333,7 +48334,7 @@ mod nexus_dataspaces_summary_tests {
         let authority = ALICE_ID.clone();
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
         let state = Arc::new(CoreState::new_for_testing(
             World::with([domain], [account], []),
             Kura::blank_kura_for_testing(),

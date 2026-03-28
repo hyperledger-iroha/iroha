@@ -10,7 +10,7 @@ use std::{
 };
 
 use iroha_config::client_api::ConfigGetDTO;
-use iroha_crypto::PublicKey;
+use iroha_crypto::{KeyPair, PublicKey};
 use iroha_logger::prelude::*;
 use monitor::Metrics as PeerMetricsSnapshot;
 pub use monitor::Update;
@@ -49,7 +49,7 @@ pub struct PeerConfigDto {
     pub network_tx_gossip_period: Option<ExplorerDurationDto>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct PeerConfigSnapshot {
     pub public_key: Option<PublicKey>,
     pub queue_capacity: Option<u32>,
@@ -136,14 +136,20 @@ pub struct PeerTelemetryService {
     peers: RwLock<BTreeMap<ToriiUrl, PeerState>>,
     propagation: RwLock<PropagationTracker>,
     geo_config: GeoLookupConfig,
+    operator_signer: Option<KeyPair>,
 }
 
 impl PeerTelemetryService {
-    pub fn new(peer_urls: Vec<ToriiUrl>, geo_config: GeoLookupConfig) -> Arc<Self> {
+    pub fn new(
+        peer_urls: Vec<ToriiUrl>,
+        geo_config: GeoLookupConfig,
+        operator_signer: Option<KeyPair>,
+    ) -> Arc<Self> {
         let service = Arc::new(Self {
             peers: RwLock::new(BTreeMap::new()),
             propagation: RwLock::new(PropagationTracker::default()),
             geo_config,
+            operator_signer,
         });
         for url in BTreeSet::from_iter(peer_urls) {
             service.spawn_monitor(url);
@@ -154,8 +160,9 @@ impl PeerTelemetryService {
     fn spawn_monitor(self: &Arc<Self>, url: ToriiUrl) {
         let service = Arc::clone(self);
         let geo_config = service.geo_config.clone();
+        let operator_signer = service.operator_signer.clone();
         tokio::spawn(async move {
-            let (mut rx, fut) = monitor::run(url.clone(), geo_config);
+            let (mut rx, fut) = monitor::run(url.clone(), geo_config, operator_signer);
             tokio::spawn(fut);
             while let Some(update) = rx.recv().await {
                 service.apply_update(url.clone(), update).await;
@@ -518,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn peers_status_reflects_metrics_updates() {
-        let service = PeerTelemetryService::new(Vec::new(), GeoLookupConfig::disabled());
+        let service = PeerTelemetryService::new(Vec::new(), GeoLookupConfig::disabled(), None);
         let url: ToriiUrl = "http://peer.example:8080".parse().expect("torii url");
         service
             .apply_update(
@@ -567,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_returns_info_and_status_views() {
-        let service = PeerTelemetryService::new(Vec::new(), GeoLookupConfig::disabled());
+        let service = PeerTelemetryService::new(Vec::new(), GeoLookupConfig::disabled(), None);
         let url: ToriiUrl = "http://peer.example:8080".parse().expect("torii url");
         service
             .apply_update(
@@ -612,7 +619,7 @@ mod tests {
 
     #[tokio::test]
     async fn peers_status_computes_propagation_from_first_seen_timestamp() {
-        let service = PeerTelemetryService::new(Vec::new(), GeoLookupConfig::disabled());
+        let service = PeerTelemetryService::new(Vec::new(), GeoLookupConfig::disabled(), None);
         let url_a: ToriiUrl = "http://peer-a.example:8080".parse().expect("torii url");
         let url_b: ToriiUrl = "http://peer-b.example:8080".parse().expect("torii url");
 

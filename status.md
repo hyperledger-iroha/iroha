@@ -2,6 +2,138 @@
 
 Last updated: 2026-03-28
 
+## 2026-03-28 Follow-up: Taira deploy docs now cover the real nginx rollout path
+- Expanded the Taira deployment docs so future rollouts do not have to recover
+  the websocket proxy fix from terminal history:
+  - `configs/soranexus/taira/README.md` now documents both the generic Linux
+    edge-host install path and the shared macOS/Homebrew nginx path used on
+    this machine, including the current local Torii upstream port and the
+    reload command difference;
+  - `defaults/kagami/iroha3-taira/README.md` now states explicitly that
+    `/v1/connect/ws` must remain its own exact-match nginx location ahead of
+    generic `/` and `/v1/` proxy blocks; and
+  - `docs/connect_config.md` now includes a reusable reverse-proxy smoke test
+    flow for `POST /v1/connect/session` plus websocket upgrade verification.
+- Verified the documented local deploy path on this machine:
+  - patched `/opt/homebrew/etc/nginx/servers/taira.sora.org.conf` with the
+    dedicated websocket locations for both public hostnames;
+  - `nginx -t` (pass);
+  - `nginx -s reload` (pass);
+  - `curl -sk -X POST https://taira.sora.org/v1/connect/session -H 'content-type: application/json' -H 'accept: application/json' --data '{"sid":"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"}'`
+    returned a valid Connect session payload; and
+  - websocket probes on both `taira.sora.org` and `taira-explorer.sora.org`
+    reached Torii and failed only at Connect token parsing, which confirms the
+    reverse-proxy websocket hop is now functioning.
+
+## 2026-03-28 Follow-up: Torii peer-monitor configuration fetch now authenticates operator-only `/configuration`
+- Fixed the live Taira peer-monitor warning path in `iroha_torii` instead of
+  masking the log noise:
+  - `crates/iroha_torii/src/operator_signatures.rs` now exposes a production
+    `signed_request_headers(...)` helper that builds the same
+    `x-iroha-operator-*` authorization headers as the existing test flow;
+  - `crates/iroha_torii/src/telemetry/peers/{mod.rs,monitor.rs}` now thread an
+    optional operator signer into the peer monitor and sign `GET
+    /configuration` when the node has one available; and
+  - `crates/iroha_torii/src/lib.rs` now gives the telemetry service the live
+    daemon signer so the runtime path can authenticate against operator-only
+    config endpoints.
+- Also hardened `/configuration` payload decoding for mixed-version peers:
+  - the peer monitor now treats operator-auth `401/403` JSON payloads as an
+    intentional "config unavailable without operator credentials" case instead
+    of warning noisily; and
+  - legacy config decoding now falls back whenever current `ConfigGetDTO`
+    parsing fails, not only when the first missing field happens to be
+    `public_key`.
+- Added focused regression coverage for both pieces:
+  - `signed_request_headers_authorize_successfully`
+  - `decode_peer_config_payload_accepts_legacy_without_public_key`
+  - `operator_access_error_payload_is_detected`
+  - `non_operator_error_payload_is_not_treated_as_configless_fallback`
+- Rebuilt `irohad`/`kagami`, re-signed the served
+  `dist/taira-localnet/genesis.signed.nrt` with the current Kagami binary so
+  the updated daemon could boot from the existing live genesis again, and
+  restarted the detached `taira-localnet` screen session.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib --no-run` (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib telemetry::peers::monitor::tests::decode_peer_config_payload_accepts_legacy_without_public_key -- --nocapture`
+    (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib telemetry::peers::monitor::tests::operator_access_error_payload_is_detected -- --nocapture`
+    (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib telemetry::peers::monitor::tests::non_operator_error_payload_is_not_treated_as_configless_fallback -- --nocapture`
+    (pass)
+  - `cargo test -p iroha_torii --features telemetry --lib operator_signatures::tests::signed_request_headers_authorize_successfully -- --nocapture`
+    (pass)
+  - `cargo build -p irohad --release` (pass)
+  - `cargo build -p iroha_kagami --bin kagami --release` (pass)
+  - `rg -n "2026-03-28T12:.*peer_monitor|2026-03-28T12:.*failed to fetch configuration|2026-03-28T12:.*failed to decode /configuration|2026-03-28T12:.*operator_signature_missing" dist/taira-localnet/peer{0,1,2,3}.log`
+    returned no matches after the restarted peers came up at `2026-03-28T12:03`
+  - `curl -s http://127.0.0.1:29080/status` (healthy: `peers=3`,
+    `blocks=9`, `txs_approved=10`)
+
+## 2026-03-28 Taira deploy bundle now forces MCP-enabled rollout
+- Reconciled the Taira public deployment artifacts so `taira.sora.org` is no
+  longer documented as bypassing the shared nginx edge host:
+  `configs/soranexus/taira/dns_records.json` now points both public hostnames
+  at the same edge machine expected by `taira-explorer.nginx.conf`.
+- Added explicit `/v1/mcp` proxy locations to
+  `configs/soranexus/taira/taira-explorer.nginx.conf` on both the public Torii
+  and Explorer virtual hosts so future route edits cannot accidentally bury MCP
+  behind the generic `/` or `/v1/` catch-alls.
+- Added `configs/soranexus/taira/taira-irohad.service`, a sample systemd unit
+  that starts the validator from the shipped
+  `configs/soranexus/taira/{config.toml,genesis.json}` pair under `--sora` so
+  the live process uses the curated `torii.mcp` writer profile instead of an
+  operator-local config drift.
+- Added `configs/soranexus/taira/check_mcp_rollout.sh`, a repo-shipped rollout
+  smoke that fails unless both `GET /v1/mcp` and JSON-RPC `tools/list` return
+  `200`, expose `iroha.*`, and hide raw `torii.*`.
+- Updated `configs/soranexus/taira/README.md` and
+  `defaults/kagami/iroha3-taira/README.md` to make the live rollout order
+  explicit: start the validator from the shipped config, prove loopback MCP,
+  then reload nginx and only declare success once the public MCP smoke passes.
+- Validation for this deploy slice:
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh` (pass)
+  - `python3 -m json.tool configs/soranexus/taira/dns_records.json >/dev/null`
+    (pass)
+  - `git diff --check -- configs/soranexus/taira/dns_records.json configs/soranexus/taira/taira-irohad.service configs/soranexus/taira/check_mcp_rollout.sh configs/soranexus/taira/taira-explorer.nginx.conf configs/soranexus/taira/README.md defaults/kagami/iroha3-taira/README.md status.md roadmap.md`
+    (pass)
+- Live public verification immediately before this update still showed
+  `https://taira.sora.org/v1/mcp` returning `HTTP/2 404`, which is consistent
+  with the running validator still not using the MCP-enabled config yet. The
+  repo now contains the concrete service + edge + smoke bundle needed for the
+  next Taira rollout.
+
+## 2026-03-28 Taira skill/docs gap-closure follow-up
+- Added a repo-root discoverability entry in `README.md` for the Codex-facing
+  Taira surfaces so users can find both `plugins/iroha/` and the standalone
+  `skills/sora-taira-testnet/` skill from the main repository landing page.
+- Tightened the standalone skill install instructions in
+  `plugins/iroha/README.md` to use the portable
+  `${CODEX_HOME:-$HOME/.codex}` path instead of assuming `~/.codex`.
+- Extended `scripts/check_codex_plugin_manifests.py` and its tests to validate
+  the repo-shared `skills/sora-taira-testnet/` skill plus
+  `skills/sora-taira-testnet/agents/openai.yaml`, removing the repo's
+  dependency on external `PyYAML` just to catch obvious skill-shape regressions.
+- Revalidated the focused Torii MCP coverage:
+  - `python3 scripts/check_codex_plugin_manifests.py` (pass)
+  - `python3 -m py_compile scripts/check_codex_plugin_manifests.py scripts/tests/check_codex_plugin_manifests_test.py`
+    (pass)
+  - manual execution of the validator test functions in
+    `scripts/tests/check_codex_plugin_manifests_test.py` (pass)
+  - `git diff --check -- README.md AGENTS.md plugins/iroha/README.md crates/iroha_torii/docs/mcp_api.md scripts/check_codex_plugin_manifests.py scripts/tests/check_codex_plugin_manifests_test.py skills/sora-taira-testnet/SKILL.md skills/sora-taira-testnet/agents/openai.yaml status.md roadmap.md`
+    (pass)
+  - `CARGO_INCREMENTAL=0 cargo test -p iroha_torii --test mcp_endpoints mcp_writer_prefix_policy_ -- --nocapture`
+    (pass; `2 passed`)
+- Live deployment verification after the reported Taira redeploy still shows the
+  public MCP path unavailable:
+  - `curl -i -sS https://taira.sora.org/v1/mcp` returned `HTTP/2 404`
+  - `curl -i -sS -X POST https://taira.sora.org/v1/mcp -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`
+    also returned `HTTP/2 404`
+- Net result: the repo-side skill/docs/validation gaps are closed, but the live
+  Taira MCP rollout is still externally blocked by the public endpoint not
+  serving `/v1/mcp` yet.
+
 ## 2026-03-28 Follow-up: initial PRECOMMIT dissemination now stays sparse until retransmit
 - Restored the ineffective Cut 2 collector constant changes back to the clean
   Cut 1 baseline:
@@ -40,11 +172,59 @@ Last updated: 2026-03-28
   `fallback_to_topology` so soak triage can distinguish sparse first-send
   behavior from later widening.
 - Verification status for this slice:
-  - focused `iroha_core` compile/test validation is in progress in an isolated
-    target directory;
-  - the requested release build and fresh preserved-peer permissioned/NPoS
-    soaks have not completed yet in this slice, so there is not yet fresh
-    post-fix soak evidence to compare against the earlier Cut 1 / Cut 2 logs.
+  - focused `iroha_core` validation now passes in an isolated target
+    directory:
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib commit_vote_targets_collectors_or_topology -- --nocapture`,
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib precommit_vote_targets_collectors_without_broadcast -- --nocapture`,
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib initial_precommit_emit_does_not_consume_redundant_collectors_immediately -- --nocapture`,
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib rebroadcast_precommit_votes_widen_collectors_when_below_quorum -- --nocapture`,
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib plan_with_sent_preserves_remaining_targets -- --nocapture`,
+    and
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib --features iroha-core-tests collector_fanout_floor_respects_quorum_and_bounds -- --nocapture`;
+  - the requested release build now succeeds on the current worktree:
+    `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`;
+  - the build unblock required only a compatibility fix in
+    `crates/iroha_torii/src/routing.rs` so the in-flight account-alias
+    changes pass `DomainId` / `Option<DomainId>` where the current APIs
+    require them;
+  - preserved-peer stable permissioned rerun, using
+    `/tmp/iroha_target_precommitfix/release/{iroha3d,izanami}`, still fails
+    the unchanged gate:
+    log=`/tmp/izanami_permissioned_precommitfix_20260328T113805Z.log`,
+    tmpdir=`/tmp/iroha-soak-permissioned-precommitfix_20260328T113805Z`,
+    permitdir=`/tmp/iroha-permit-permissioned-precommitfix_20260328T113805Z`,
+    final error=`no strict block height progress for 600s (strict min height 186, quorum min height 186, target 2000, tolerated_failures 0)`,
+    summary=`successes=726 failures=50 izanami_ingress_failover_total=184 izanami_ingress_endpoint_unhealthy_total=177`;
+  - the permissioned rerun preserved the recovery-path invariants
+    (`requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`) and showed
+    no `route_unavailable` / `Failed to find asset`, but it still regressed
+    into local liveness/backpressure symptoms:
+    `plan submission failed=49`,
+    `transaction queued for too long=80`,
+    `haven't got tx confirmation within 20s=29`;
+  - preserved-peer stable NPoS rerun also fails the unchanged gate:
+    log=`/tmp/izanami_npos_precommitfix_20260328T115208Z.log`,
+    tmpdir=`/tmp/iroha-soak-npos-precommitfix_20260328T115208Z`,
+    permitdir=`/tmp/iroha-permit-npos-precommitfix_20260328T115208Z`,
+    final error=`no strict block height progress for 600s (strict min height 878, quorum min height 878, target 2000, tolerated_failures 0)`,
+    summary=`successes=4786 failures=151 izanami_ingress_failover_total=138 izanami_ingress_endpoint_unhealthy_total=184`;
+  - the NPoS rerun likewise kept the old recovery markers at zero and also
+    kept `Failed to find asset=0`, but it produced persistent Nexus ingress
+    routing failures before the stall:
+    `route_unavailable=1480` and `plan submission failed=151`;
+  - derived from the logged `interval_ms=` progress samples, both reruns also
+    miss the latency gate even before considering the strict-progress failure:
+    permissioned `interval_p95_ms ~= 1251`, NPoS `interval_p95_ms ~= 2001`;
+    and
+  - net result: the sparse initial `PRECOMMIT` fix corrected the intended
+    dissemination semantics and appears to let NPoS run much farther than the
+    permissioned rerun, but it does not satisfy the acceptance criteria on its
+    own. The remaining dominant failures are now
+    permissioned liveness/backpressure at low height and Nexus authoritative
+    route availability under NPoS, not the old block-repair / fallback-anchor
+    path.
 
 ## 2026-03-28 Repo-shared SORA Taira standalone Codex skill and agent guidance
 - Added a repo-shared standalone Codex skill under

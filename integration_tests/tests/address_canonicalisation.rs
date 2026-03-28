@@ -399,8 +399,9 @@ fn with_offline_allowance_genesis(
     required_accounts.insert(certificate.operator.clone());
     for account in required_accounts {
         if account != *SAMPLE_GENESIS_ACCOUNT_ID && account != *ALICE_ID && account != *BOB_ID {
-            builder = builder.with_genesis_instruction(Register::account(Account::new(
-                account.to_account_id(wonderland_domain.clone()),
+            builder = builder.with_genesis_instruction(Register::account(Account::new_in_domain(
+                account.clone(),
+                wonderland_domain.clone(),
             )));
         }
     }
@@ -2109,7 +2110,7 @@ async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Resul
     let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
-    let account = Account::new(account_id.clone().to_account_id(domain_id.clone()))
+    let account = Account::new_in_domain(account_id.clone(), domain_id.clone())
         .with_label(Some(label.clone()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)

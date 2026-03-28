@@ -39,7 +39,7 @@ use iroha_data_model::{
 use iroha_logger::{debug, error, warn};
 use norito::json::{self, Map, Number, Value};
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarWriter, FilePlan,
+    CarBuildPlan, CarChunk, CarWriter, FileEntry, FilePlan,
     fetch_plan::chunk_fetch_specs_to_json,
     por_json::sample_to_map,
     verifier::{CarVerifier, CarVerifyError},
@@ -92,6 +92,10 @@ use crate::{
             PinRegistrySnapshot, RegistryAlias, RegistryError, RegistryManifest,
             RegistryReplicationOrder, collect_pin_registry, collect_snapshot, lineage_to_json,
             record_pin_registry_metrics,
+        },
+        site::{
+            content_type_for_path, find_site_binding, load_site_bindings_from_env,
+            path_components_for_request, should_use_spa_fallback,
         },
     },
     utils::extractors::{ExtractAccept, JsonOnly, NoritoJson},
@@ -1380,10 +1384,24 @@ pub struct StoragePinRequestDto {
     pub manifest_b64: String,
     /// Base64-encoded payload matching the manifest contents.
     pub payload_b64: String,
+    /// Optional file descriptors for directory-style payloads.
+    pub files: Option<Vec<StorageFileEntryDto>>,
     /// Optional erasure-layout metadata to persist alongside the manifest.
     pub stripe_layout: Option<DaStripeLayout>,
     /// Optional per-chunk role annotations (data/parity + group id).
     pub chunk_roles: Option<Vec<ChunkRoleDto>>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, PartialEq, Eq,
+)]
+/// File entry describing how a logical dataset file maps into the concatenated payload.
+pub struct StorageFileEntryDto {
+    /// Relative path components from the dataset root.
+    pub path: Vec<String>,
+    /// File size in bytes.
+    pub size: u64,
 }
 
 #[cfg(feature = "app_api")]
@@ -1596,6 +1614,24 @@ pub struct StorageManifestResponseDto {
     pub chunk_profile_handle: String,
     /// Timestamp (seconds since UNIX epoch) when the manifest was stored.
     pub stored_at_unix_secs: u64,
+    /// Stored file layout descriptors for directory payloads.
+    pub files: Vec<StorageStoredFileDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// File layout descriptor returned for stored manifests.
+pub struct StorageStoredFileDto {
+    /// Relative path components from the dataset root.
+    pub path: Vec<String>,
+    /// Byte offset within the concatenated payload.
+    pub offset: u64,
+    /// File size in bytes.
+    pub size: u64,
+    /// First chunk index covering the file.
+    pub first_chunk: u64,
+    /// Number of chunks covering the file.
+    pub chunk_count: u64,
 }
 
 const DEFAULT_LIST_LIMIT: usize = 50;
@@ -2109,6 +2145,17 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
         chunk_count: stored.chunk_count() as u64,
         chunk_profile_handle: stored.chunk_profile_handle().to_owned(),
         stored_at_unix_secs: stored.stored_at_unix_secs(),
+        files: stored
+            .files()
+            .iter()
+            .map(|file| StorageStoredFileDto {
+                path: file.path.clone(),
+                offset: file.offset,
+                size: file.size,
+                first_chunk: file.first_chunk as u64,
+                chunk_count: file.chunk_count as u64,
+            })
+            .collect(),
     };
 
     let value = match norito::json::to_value(&response) {
@@ -2196,6 +2243,27 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
     plan_map.insert(
         "chunk_profile_handle".into(),
         Value::String(stored.chunk_profile_handle().to_owned()),
+    );
+    plan_map.insert(
+        "files".into(),
+        Value::Array(
+            stored
+                .files()
+                .iter()
+                .map(|file| {
+                    let mut obj = Map::new();
+                    obj.insert(
+                        "path".into(),
+                        Value::Array(file.path.iter().cloned().map(Value::String).collect()),
+                    );
+                    obj.insert("offset".into(), Value::from(file.offset));
+                    obj.insert("size".into(), Value::from(file.size));
+                    obj.insert("first_chunk".into(), Value::from(file.first_chunk as u64));
+                    obj.insert("chunk_count".into(), Value::from(file.chunk_count as u64));
+                    Value::Object(obj)
+                })
+                .collect(),
+        ),
     );
     plan_map.insert("chunk_digests_blake3".into(), Value::Array(chunk_digests));
     plan_map.insert("chunks".into(), chunks_value);
@@ -2697,6 +2765,235 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
     crate::utils::respond_value_with_format(response, format)
 }
 
+fn build_plan_for_storage_pin_request(
+    payload: &[u8],
+    profile: ChunkProfile,
+    files: Option<&[StorageFileEntryDto]>,
+) -> Result<CarBuildPlan, String> {
+    let Some(files) = files else {
+        return CarBuildPlan::single_file_with_profile(payload, profile)
+            .map_err(|err| format!("failed to derive chunk plan: {err}"));
+    };
+
+    if files.is_empty() {
+        return Err("files must not be empty when provided".to_string());
+    }
+
+    let mut cursor = 0usize;
+    let mut entries = Vec::with_capacity(files.len());
+    for file in files {
+        let size = usize::try_from(file.size)
+            .map_err(|_| format!("file `{}` exceeds host limits", file.path.join("/")))?;
+        let end = cursor
+            .checked_add(size)
+            .ok_or_else(|| format!("file `{}` overflows payload bounds", file.path.join("/")))?;
+        if end > payload.len() {
+            return Err(format!(
+                "file `{}` exceeds payload length",
+                file.path.join("/")
+            ));
+        }
+        entries.push(FileEntry {
+            path: file.path.clone(),
+            data: payload[cursor..end].to_vec(),
+        });
+        cursor = end;
+    }
+
+    if cursor != payload.len() {
+        return Err(format!(
+            "file sizes total {} but payload length is {}",
+            cursor,
+            payload.len()
+        ));
+    }
+
+    let (plan, rebuilt_payload) = CarBuildPlan::from_files_with_profile(entries, profile)
+        .map_err(|err| format!("failed to derive chunk plan: {err}"))?;
+    debug_assert_eq!(rebuilt_payload, payload);
+    Ok(plan)
+}
+
+fn resolve_bound_site_manifest(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+) -> Result<(crate::sorafs::site::SiteBinding, StoredManifest), Response> {
+    if !state.sorafs_node.is_enabled() {
+        return Err(storage_disabled_response());
+    }
+
+    let bindings = match load_site_bindings_from_env() {
+        Ok(Some(document)) => document,
+        Ok(None) => return Err(StatusCode::NOT_FOUND.into_response()),
+        Err(err) => return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, err)),
+    };
+
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Err(json_error(StatusCode::BAD_REQUEST, "missing Host header"));
+    };
+
+    let Some(binding) = find_site_binding(&bindings, host).cloned() else {
+        return Err(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let manifest_digest =
+        match parse_hex_fixed::<32>(&binding.manifest_digest_hex, "manifest_digest_hex") {
+            Ok(value) => value,
+            Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
+        };
+
+    let stored = match state
+        .sorafs_node
+        .manifest_metadata_by_digest(&manifest_digest)
+    {
+        Ok(manifest) => manifest,
+        Err(err) => return Err(node_storage_error_response(err)),
+    };
+
+    Ok((binding, stored))
+}
+
+fn build_site_file_response(
+    state: &SharedAppState,
+    stored: &StoredManifest,
+    path: &[String],
+) -> Response {
+    let Some(file) = stored.file_by_path(path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let Ok(length) = usize::try_from(file.size) else {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "stored file exceeds supported response size",
+        );
+    };
+
+    let bytes =
+        match state
+            .sorafs_node
+            .read_payload_range(stored.manifest_id(), file.offset, length)
+        {
+            Ok(value) => value,
+            Err(err) => return node_storage_error_response(err),
+        };
+
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(content_type_for_path(path)),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&file.size.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    response
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_site_manifest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let (binding, stored) = match resolve_bound_site_manifest(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let manifest_bytes = match fs::read(stored.manifest_path()) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            error!(
+                ?err,
+                "failed to read stored manifest bytes for site binding"
+            );
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to read stored manifest bytes",
+            );
+        }
+    };
+
+    let value = json_object(vec![
+        json_entry("hostname", Value::from(binding.hostname.clone())),
+        json_entry(
+            "manifest_digest_hex",
+            Value::from(hex::encode(stored.manifest_digest())),
+        ),
+        json_entry(
+            "manifest_id_hex",
+            Value::from(stored.manifest_id().to_owned()),
+        ),
+        json_entry(
+            "manifest_b64",
+            Value::from(BASE64_STANDARD.encode(manifest_bytes)),
+        ),
+        json_entry(
+            "index_document",
+            Value::from(binding.index_document().to_owned()),
+        ),
+        json_entry("spa_fallback", Value::from(binding.spa_fallback_enabled())),
+        json_entry(
+            "files",
+            Value::Array(
+                stored
+                    .files()
+                    .iter()
+                    .map(|file| {
+                        let mut obj = Map::new();
+                        obj.insert(
+                            "path".into(),
+                            Value::Array(file.path.iter().cloned().map(Value::String).collect()),
+                        );
+                        obj.insert("offset".into(), Value::from(file.offset));
+                        obj.insert("size".into(), Value::from(file.size));
+                        obj.insert("first_chunk".into(), Value::from(file.first_chunk as u64));
+                        obj.insert("chunk_count".into(), Value::from(file.chunk_count as u64));
+                        Value::Object(obj)
+                    })
+                    .collect(),
+            ),
+        ),
+    ]);
+    JsonBody(value).into_response()
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_site_root(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    handle_get_sorafs_site_path(State(state), headers, Path(String::new())).await
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_site_path(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(raw_path): Path<String>,
+) -> Response {
+    let (binding, stored) = match resolve_bound_site_manifest(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let Some(mut path) = path_components_for_request(&raw_path, binding.index_document()) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    if stored.file_by_path(&path).is_none() && should_use_spa_fallback(&raw_path, &binding) {
+        path = path_components_for_request(binding.index_document(), binding.index_document())
+            .unwrap_or_else(|| vec![binding.index_document().to_owned()]);
+    }
+
+    build_site_file_response(&state, &stored, &path)
+}
+
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_pin(
     State(state): State<SharedAppState>,
@@ -2771,13 +3068,10 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
         Err(err) => return err.into_response(),
     };
 
-    let plan = match CarBuildPlan::single_file_with_profile(&payload, profile) {
+    let plan = match build_plan_for_storage_pin_request(&payload, profile, req.files.as_deref()) {
         Ok(plan) => plan,
         Err(err) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to derive chunk plan: {err}"),
-            );
+            return json_error(StatusCode::BAD_REQUEST, err);
         }
     };
 
@@ -8316,6 +8610,23 @@ mod advert_tests {
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
     }
 
+    struct SiteBindingsOverrideGuard;
+
+    impl SiteBindingsOverrideGuard {
+        fn set(path: &std::path::Path) -> Self {
+            crate::sorafs::site::set_site_bindings_file_override_for_tests(Some(
+                path.to_path_buf(),
+            ));
+            Self
+        }
+    }
+
+    impl Drop for SiteBindingsOverrideGuard {
+        fn drop(&mut self) {
+            crate::sorafs::site::set_site_bindings_file_override_for_tests(None);
+        }
+    }
+
     fn stream_token_issuer_for_tests(dir: &TempDir) -> StreamTokenIssuer {
         use std::fs;
 
@@ -9530,6 +9841,120 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn site_binding_serves_manifest_and_spa_fallback() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let index_bytes = b"<!doctype html><title>Taira</title>";
+        let asset_bytes = b"console.log('taira');";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "app.js".to_owned()],
+                    data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: index_bytes.to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xD4, &payload);
+        let manifest_digest_hex =
+            hex::encode(manifest.digest().expect("manifest digest").as_bytes());
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest site payload");
+
+        let bindings_file = NamedTempFile::new().expect("site bindings file");
+        fs::write(
+            bindings_file.path(),
+            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
+                version: Some(1),
+                sites: vec![crate::sorafs::site::SiteBinding {
+                    hostname: "taira.sora.org".to_owned(),
+                    manifest_digest_hex,
+                    index_document: None,
+                    spa_fallback: Some(true),
+                }],
+            })
+            .expect("encode site bindings"),
+        )
+        .expect("write site bindings");
+        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let mut root_headers = HeaderMap::new();
+        root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        assert_eq!(root_response.status(), StatusCode::OK);
+        assert_eq!(
+            root_response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/html; charset=utf-8"))
+        );
+        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
+            .await
+            .expect("read root body");
+        assert_eq!(root_body, &index_bytes[..]);
+
+        let mut manifest_headers = HeaderMap::new();
+        manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let manifest_response =
+            handle_get_sorafs_site_manifest(State(state.clone()), manifest_headers).await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read manifest body");
+        let manifest_value: Value =
+            norito::json::from_slice(&manifest_body).expect("decode manifest response");
+        assert_eq!(
+            manifest_value.get("hostname").and_then(Value::as_str),
+            Some("taira.sora.org")
+        );
+        assert_eq!(
+            manifest_value
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+
+        let mut spa_headers = HeaderMap::new();
+        spa_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let spa_response =
+            handle_get_sorafs_site_path(State(state.clone()), spa_headers, Path("swap".to_owned()))
+                .await;
+        assert_eq!(spa_response.status(), StatusCode::OK);
+        let spa_body = body::to_bytes(spa_response.into_body(), usize::MAX)
+            .await
+            .expect("read spa body");
+        assert_eq!(spa_body, &index_bytes[..]);
+
+        let mut asset_headers = HeaderMap::new();
+        asset_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let asset_response = handle_get_sorafs_site_path(
+            State(state),
+            asset_headers,
+            Path("assets/app.js".to_owned()),
+        )
+        .await;
+        assert_eq!(asset_response.status(), StatusCode::OK);
+        assert_eq!(
+            asset_response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/javascript; charset=utf-8"))
+        );
+        let asset_body = body::to_bytes(asset_response.into_body(), usize::MAX)
+            .await
+            .expect("read asset body");
+        assert_eq!(asset_body, &asset_bytes[..]);
+    }
+
+    #[tokio::test]
     async fn storage_plan_endpoint_returns_chunk_plan() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
@@ -10365,6 +10790,7 @@ mod advert_tests {
         let pin_request = StoragePinRequestDto {
             manifest_b64,
             payload_b64,
+            files: None,
             stripe_layout: Some(stripe_layout),
             chunk_roles: Some(chunk_roles.clone()),
         };
@@ -10423,6 +10849,7 @@ mod advert_tests {
         let pin_request = StoragePinRequestDto {
             manifest_b64,
             payload_b64,
+            files: None,
             stripe_layout: Some(DaStripeLayout {
                 total_stripes: 1,
                 shards_per_stripe: 1,

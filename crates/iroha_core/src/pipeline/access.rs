@@ -1029,7 +1029,7 @@ where
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(&mut set, &r.object.id().clone()),
             RegisterBox::Account(r) => {
-                if let Some(domain_id) = r.object.domain() {
+                for domain_id in r.object.linked_domains() {
                     add_domain_r(&mut set, domain_id);
                 }
                 add_account_rw(&mut set, r.object.id());
@@ -1490,7 +1490,7 @@ mod tests {
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone().to_account_id(wonderland_domain_id()))
+        Account::new_in_domain(account_id.clone(), wonderland_domain_id())
     }
 
     fn build_wonderland_account(account_id: &AccountId) -> Account {

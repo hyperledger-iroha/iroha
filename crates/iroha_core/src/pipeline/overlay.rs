@@ -1341,10 +1341,9 @@ mod tests_overlay_manifest {
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
-        iroha_data_model::account::Account::new(
-            authority
-                .clone()
-                .to_account_id("wonderland".parse().expect("static domain id")),
+        iroha_data_model::account::Account::new_in_domain(
+            authority.clone(),
+            "wonderland".parse().expect("static domain id"),
         )
         .build(authority)
     }
@@ -1484,10 +1483,9 @@ mod tests {
     use super::*;
 
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
-        iroha_data_model::account::Account::new(
-            authority
-                .clone()
-                .to_account_id("wonderland".parse().expect("static domain id")),
+        iroha_data_model::account::Account::new_in_domain(
+            authority.clone(),
+            "wonderland".parse().expect("static domain id"),
         )
         .build(authority)
     }

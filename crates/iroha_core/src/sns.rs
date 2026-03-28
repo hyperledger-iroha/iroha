@@ -1306,7 +1306,7 @@ mod tests {
             .with_instructions([
                 InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
                 InstructionBox::from(Register::account(
-                    Account::new(account_id.to_account_id(domain_id.clone()))
+                    Account::new_in_domain(account_id.clone(), domain_id.clone())
                         .with_label(Some(label.clone())),
                 )),
                 InstructionBox::from(SetPrimaryAccountAlias {

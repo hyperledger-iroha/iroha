@@ -13712,7 +13712,7 @@ mod tests {
             let mut stx = state_block.transaction();
             Register::domain(Domain::new(wonderland.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-            Register::account(Account::new(ALICE_ID.clone().to_account_id(wonderland)))
+            Register::account(Account::new_in_domain(ALICE_ID.clone(), wonderland))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Grant::account_permission(
                 Permission::new("CanManageSoracloud".into(), Json::new(())),

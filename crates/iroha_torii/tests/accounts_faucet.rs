@@ -77,11 +77,11 @@ fn build_faucet_test_context_with_selector(
 
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account =
-        Account::new(authority_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
+        Account::new_in_domain(authority_id.clone(), domain_id.clone()).build(&authority_id);
     let user_account =
-        Account::new(user_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
+        Account::new_in_domain(user_id.clone(), domain_id.clone()).build(&authority_id);
     let other_user_account =
-        Account::new(other_user_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
+        Account::new_in_domain(other_user_id.clone(), domain_id.clone()).build(&authority_id);
     let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
         .with_name("XOR".to_owned())
         .build(&authority_id);

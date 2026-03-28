@@ -39,7 +39,7 @@ To install that skill from a GitHub checkout of this repo, use the built-in
 installer script from your local Codex environment:
 
 ```bash
-python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/install-skill-from-github.py \
   --repo <owner>/<repo> \
   --path skills/sora-taira-testnet
 ```

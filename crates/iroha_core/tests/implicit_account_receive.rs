@@ -51,7 +51,7 @@ fn build_account_in_domain(
     domain_id: DomainId,
     authority: &AccountId,
 ) -> Account {
-    Account::new(account_id.to_account_id(domain_id)).build(authority)
+    Account::new_in_domain(account_id.clone(), domain_id).build(authority)
 }
 
 fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {

@@ -67,8 +67,8 @@ fn run_block_and_events(
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let acc_a = Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
-    let acc_b = Account::new(bob_id.to_account_id(domain_id)).build(&alice_id);
+    let acc_a = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
+    let acc_b = Account::new_in_domain(bob_id.clone(), domain_id).build(&alice_id);
     // Seed initial balances: Alice 60, Bob 10
     let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
     let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());

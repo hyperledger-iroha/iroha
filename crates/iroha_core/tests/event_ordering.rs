@@ -14,7 +14,7 @@ fn data_events_follow_instruction_order_in_tx() {
     let (authority_id, kp) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let acc = Account::new(authority_id.clone().to_account_id(domain_id)).build(&authority_id);
+    let acc = Account::new_in_domain(authority_id.clone(), domain_id).build(&authority_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),

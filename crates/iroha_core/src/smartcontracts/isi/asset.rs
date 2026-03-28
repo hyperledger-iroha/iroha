@@ -1950,7 +1950,7 @@ pub mod query {
         };
 
         fn build_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> Account {
-            Account::new(account_id.clone().to_account_id(domain_id.clone())).build(account_id)
+            Account::new_in_domain(account_id.clone(), domain_id.clone()).build(account_id)
         }
 
         fn build_numeric_asset_definition(
@@ -3404,9 +3404,8 @@ pub mod query {
             let mut block = state.block(header);
             let mut stx = block.transaction();
             stx.world
-                .link_account_subject_domain(&ALICE_ID.clone().to_account_id(domain_id.clone()));
-            stx.world
-                .link_account_subject_domain(&BOB_ID.clone().to_account_id(domain_id));
+                .link_account_subject_domain(&ALICE_ID, &domain_id.clone());
+            stx.world.link_account_subject_domain(&BOB_ID, &domain_id);
 
             let err = Transfer::asset_numeric(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)

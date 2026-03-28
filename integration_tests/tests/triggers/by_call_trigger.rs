@@ -641,7 +641,8 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
             let alice_account_id = ALICE_ID.clone();
             let rabbit_keys = KeyPair::random();
             let rabbit_account_id = AccountId::new(rabbit_keys.public_key().clone());
-            let rabbit_account = Account::new(rabbit_account_id.to_account_id(domain_id.clone()));
+            let rabbit_account =
+                Account::new_in_domain(rabbit_account_id.clone(), domain_id.clone());
 
             let rabbit_client = {
                 let mut client = test_client.clone();
