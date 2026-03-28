@@ -132,6 +132,15 @@ pub enum ToriiProxyRequestKindV1 {
         /// Response encoding negotiated by the ingress node.
         response_format: ToriiProxyResponseFormatV1,
     },
+    /// Execute an ingress-verified query request on the authoritative peer.
+    VerifiedQuery {
+        /// Norito-encoded verified query payload forwarded by the ingress node.
+        request_bytes: Vec<u8>,
+        /// Route resolved by the ingress node.
+        expected_route: ToriiRouteHintV1,
+        /// Response encoding negotiated by the ingress node.
+        response_format: ToriiProxyResponseFormatV1,
+    },
     /// Execute a routed Torii read endpoint on the authoritative peer.
     Read(ToriiReadProxyRequestV1),
 }

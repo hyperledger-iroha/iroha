@@ -61,6 +61,7 @@ const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
 const TOTAL_PEERS: usize = 4;
 const VALIDATOR_STAKE_PER_LANE: u64 = 2_000;
+const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
@@ -81,6 +82,12 @@ fn stake_asset_definition_id() -> AssetDefinitionId {
 
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
+}
+
+fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
+    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse()
+        .expect("default nexus fee asset id")
 }
 
 enum RouteProbeOutcome {
@@ -215,6 +222,7 @@ fn localnet_builder() -> NetworkBuilder {
             layer
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
+                .write(["norito", "allow_gpu_compression"], false)
                 .write(
                     ["nexus", "lane_catalog"],
                     TomlValue::Array(vec![
@@ -282,12 +290,15 @@ fn npos_multilane_genesis_post_topology_transactions(
     );
 
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+    let universal_domain: DomainId = "universal".parse().expect("universal domain");
     let ds1_domain: DomainId = "ds1".parse().expect("ds1 domain");
     let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
+    let fee_asset_id = nexus_fee_asset_definition_id();
 
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
+        Register::domain(Domain::new(universal_domain)).into(),
         Register::domain(Domain::new(ds1_domain)).into(),
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
@@ -295,6 +306,22 @@ fn npos_multilane_genesis_post_topology_transactions(
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         })
+        .into(),
+        Register::asset_definition({
+            let __asset_definition_id = fee_asset_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
+        Mint::asset_numeric(
+            NEXUS_FEE_SEED_AMOUNT,
+            AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
+        )
+        .into(),
+        Mint::asset_numeric(
+            NEXUS_FEE_SEED_AMOUNT,
+            AssetId::new(fee_asset_id.clone(), BOB_ID.clone()),
+        )
         .into(),
     ];
 
@@ -315,6 +342,13 @@ fn npos_multilane_genesis_post_topology_transactions(
             Mint::asset_numeric(
                 mint_amount,
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+            )
+            .into(),
+        );
+        bootstrap_tx.push(
+            Mint::asset_numeric(
+                NEXUS_FEE_SEED_AMOUNT,
+                AssetId::new(fee_asset_id.clone(), validator_id.clone()),
             )
             .into(),
         );

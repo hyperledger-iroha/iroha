@@ -1,47 +1,124 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-27
+Last updated: 2026-03-28
 
-Latest sync (2026-03-27 Nexus cross-dataspace Torii ingress proxying):
-`crates/iroha_core/src/{lib.rs,queue.rs,queue/router.rs,torii_proxy.rs}`
+Latest sync (2026-03-28 Nexus localnet fee bootstrap + Norito GPU-startup hardening):
+`integration_tests/tests/nexus/{cross_dataspace_localnet.rs,cross_dataspace_zk_stark_localnet.rs}`
+now explicitly seed the Nexus fee asset in their custom multilane genesis and
+disable Norito GPU compression for those localnets.
+
+- both tests opt out of the default NPoS bootstrap, so they now register the
+  configured fee asset definition themselves, include the `universal` domain,
+  and mint fee balances for Alice, Bob, and validator accounts;
+- this closes the earlier setup-grant rejection path where the first routed tx
+  failed with `Failed to find asset definition: 5PeSrQmLNwwKtruJvDZrbrm9RuMw`;
+- both localnet builders now set `norito.allow_gpu_compression = false`, which
+  avoids the observed macOS startup hang where one peer blocked in
+  `libgpuzstd_metal` before binding P2P/Torii; and
+- the cheap genesis smoke passes again with the fixed custom bootstrap.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test mod cross_dataspace_localnet_genesis_preexecution_smoke -- --nocapture`
+- `cargo test -p integration_tests --test mod cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture --test-threads=1`
+  (pass on a fresh post-patch run; total `41.929s`)
+
+Open work for this localnet stabilization slice now remains:
+- keep the wrong-dataspace routed-read assertions in place as the stable
+  regression for this ingress-routing work; and
+- if similar macOS startup hangs appear in other large localnets, decide
+  whether `iroha_test_network` should default `norito.allow_gpu_compression`
+  off for multi-peer test networks instead of patching individual suites.
+
+Latest sync (2026-03-28 Nexus routed-read localnet coverage):
+`integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+now checks routed read responses through wrong-dataspace Nexus ingress instead
+of limiting integration coverage to tx submission plus low-level balance
+queries.
+
+- the localnet regression now performs raw app-API GETs through Nexus-lane
+  submitters for public-lane validators, account assets, asset-definition
+  lookup, and dataspace account summary;
+- the new helper preserves `x-iroha-routed-by` and route headers so the test
+  can assert the ingress behavior that the Rust client helpers currently drop;
+- the full 12-peer atomic-swap regression is green again on this host after
+  the localnet fee bootstrap and CPU-only Norito startup hardening.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test mod cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture --test-threads=1`
+  (pass; total `41.929s`)
+
+Open work for this routed-read integration slice now remains:
+- add similar header-aware wrong-dataspace coverage for any remaining routed
+  endpoints that still only have unit coverage; and
+- keep pushing toward proof-backed routed reads once the underlying committed
+  state inclusion-proof plumbing exists.
+
+Latest sync (2026-03-28 `irohad` relay / Torii proxy exhaustiveness):
+`crates/irohad/src/main.rs`
+now keeps the generic relay aligned with Torii’s dedicated control-plane
+subscriber for proxy request/response traffic.
+
+- `NetworkMessage::ToriiProxyRequest` and `ToriiProxyResponse` are now
+  explicitly classified as relay-ignored dedicated-subscriber messages
+  alongside the existing Soracloud proxy / genesis / health / connect frames;
+- a focused relay regression now covers both Torii proxy variants so future
+  control-plane enum additions fail in tests before they break `irohad`
+  compilation again; and
+- targeted `irohad` formatting, check, and unit-test validation now pass for
+  this slice.
+
+Validation:
+- `cargo fmt --all`
+- `cargo check -p irohad --message-format short`
+- `cargo test -p irohad dedicated_subscriber_message_set_includes_torii_proxy_frames -- --nocapture`
+
+Open work for this relay-control-plane slice now remains:
+- keep `irohad`’s dedicated-subscriber ignore set synchronized with the actual
+  Torii control-plane subscriber whenever new `NetworkMessage` control variants
+  are added, so enum evolution does not regress back into relay exhaustiveness
+  failures.
+
+Latest sync (2026-03-27 Nexus cross-dataspace Torii routed reads):
+`crates/iroha_core/src/torii_proxy.rs`
 and
 `crates/iroha_torii/src/{lib.rs,routing.rs}`
 and
 `integration_tests/tests/nexus/cross_dataspace_localnet.rs`
-now cover the first authoritative-forwarding slice for Nexus ingress routing.
+now cover the broader routed-read slice for Nexus ingress, not just
+authoritative tx / signed-query forwarding.
 
-- Torii now has versioned P2P proxy envelopes for signed transactions and
-  signed queries, local-peer attribution for ingress routing decisions, and a
-  control-plane subscriber that can dispatch Torii proxy requests/responses
-  alongside the existing Soracloud proxy traffic;
-- `POST /transaction` now resolves the Nexus lane/dataspace at ingress and
-  forwards to an authoritative peer when the local node is outside the target
-  lane, while preserving route headers plus `x-iroha-routed-by`;
-- signed `POST /query` requests now resolve the same authority-based routing
-  policy and proxy to an authoritative peer when the ingress node is not
-  authoritative, and the cross-dataspace localnet regression now submits/query
-  checks through Nexus-lane peers instead of leader-targeting the destination
-  dataspace directly; and
-- the focused verification path is unblocked from an unrelated macOS cfg issue
-  in `fastpq_prover`, but targeted `iroha_torii` compilation is still blocked
-  by existing `routing.rs`/`ivm` baseline errors outside this slice.
+- Torii now routes dataspace-backed app and Nexus reads through the same
+  control-plane proxy layer across account, asset-definition, domain, NFT,
+  RWA, portfolio, and Nexus summary endpoints;
+- multi-dataspace list / aggregate reads now fan out across dataspaces and
+  merge deterministically at ingress, while singleton fan-out reads return a
+  deterministic conflict instead of silently choosing one dataspace reply;
+- the earlier `iroha_torii` baseline compile blockers are fixed, targeted
+  routed-read tests pass, and the Nexus integration test harness compiles and
+  still passes the cheap genesis pre-execution smoke; but
+- full `cargo test -p iroha_torii --lib` remains red in this branch because of
+  unrelated pre-existing failures outside the Nexus routing slice.
 
 Validation:
 - `cargo fmt --all`
-- `cargo test -p iroha_core resolve_query_routing_decision --lib --message-format short`
+- `cargo test -p iroha_torii torii_routed_read_tests --lib --message-format short`
+- `cargo test -p integration_tests --test mod --no-run --message-format short`
+- `cargo test -p integration_tests --test mod cross_dataspace_localnet_genesis_preexecution_smoke -- --nocapture`
 
 Open work for this Nexus ingress-routing slice now remains:
-- extend the same proxy path beyond signed `POST /query` into the remaining
-  dataspace-aware Torii convenience reads that still answer from local state
+- add proof-backed routed reads if the project still wants ingress to verify
+  returned state against committed roots instead of trusting authoritative peer
+  responses;
+- extend the normalized routed-read layer to any remaining dataspace-backed
+  singleton/convenience endpoints that are still answered from local state
   only;
-- implement the planned fan-out/merge behavior for multi-dataspace reads where
-  a single authoritative dataspace cannot be inferred deterministically from
-  the request authority/selectors;
-- add focused Torii unit coverage for proxy request/response handling once the
-  existing baseline `crates/iroha_torii/src/routing.rs` compile failures are
-  repaired upstream; and
-- rerun the targeted Torii and `integration_tests/tests/nexus/cross_dataspace_localnet.rs`
-  verification once those pre-existing Torii compile blockers are cleared.
+- stabilize the end-to-end multi-peer integration coverage that now exercises
+  routed reads through wrong-dataspace ingress nodes, since the current
+  full-scenario validation is blocked by an unrelated peer-startup flake; and
+- return to a whole-crate green `cargo test -p iroha_torii --lib` baseline so
+  future routing regressions can be validated without unrelated test noise.
 
 Latest sync (2026-03-27 universal-account / alias-model clarification for reverse alias lookup):
 `AGENTS.md`,
