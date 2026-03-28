@@ -2,6 +2,30 @@
 
 Last updated: 2026-03-28
 
+Latest sync (2026-03-28 repo-shared SORA Taira standalone Codex skill):
+this repo now carries a shareable standalone Codex skill for the Taira testnet
+in addition to the installable `plugins/iroha/` bundle.
+
+- `skills/sora-taira-testnet/` now contains the standalone skill definition and
+  UI metadata for the Codex Skills surface;
+- `plugins/iroha/README.md` now documents how teammates can install that skill
+  from a GitHub checkout of this repo with the built-in skill installer;
+- `crates/iroha_torii/docs/mcp_api.md` now points readers to both the plugin
+  and standalone-skill surfaces; and
+- `AGENTS.md` now tells future agents to consult
+  `skills/sora-taira-testnet/SKILL.md` for live Taira/Torii MCP workflows.
+
+Open work for this shareability slice now remains:
+- publish the repo-shared skill from a GitHub remote that teammates can install
+  from directly if this repository path is not already their source of truth;
+- complete the human-run OpenAI support and Developer Forum submission if the
+  goal is eventual inclusion in the `openai/skills` catalog;
+- install `PyYAML` locally if the stock `quick_validate.py` workflow should be
+  part of routine validation for the repo-shared skill; and
+- once public Taira MCP is redeployed and stable, consider tightening the skill
+  text from today's provisional `404` handling to the final operator-facing
+  rollout guidance.
+
 Latest sync (2026-03-28 account alias cleanup / account-domain query removal):
 the universal-account cleanup now pushes one step further into the public query
 surface and alias instructions.

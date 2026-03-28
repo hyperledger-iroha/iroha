@@ -2,6 +2,33 @@
 
 Last updated: 2026-03-28
 
+## 2026-03-28 Repo-shared SORA Taira standalone Codex skill and agent guidance
+- Added a repo-shared standalone Codex skill under
+  `skills/sora-taira-testnet/` with both `SKILL.md` and
+  `agents/openai.yaml` so the Taira testnet guidance can be distributed from
+  this repository rather than only from a developer-local `~/.codex/skills/`
+  install.
+- Updated `plugins/iroha/README.md` with the standalone skill install flow so
+  teammates can install `skills/sora-taira-testnet/` from a GitHub checkout of
+  this repo using Codex's built-in GitHub skill installer.
+- Updated `crates/iroha_torii/docs/mcp_api.md` so the Torii MCP reference now
+  points readers to both the installable `plugins/iroha/` bundle and the
+  standalone `skills/sora-taira-testnet/` skill path for the Codex Skills
+  surface.
+- Updated `AGENTS.md` so repository agents explicitly consult
+  `skills/sora-taira-testnet/SKILL.md` for live Taira/Torii MCP work and treat
+  `authority`, `private_key`, bearer tokens, and forwarded auth headers as
+  runtime-only secrets.
+- Validation:
+  - Ruby YAML parse of `skills/sora-taira-testnet/SKILL.md` (pass)
+  - stdlib sanity checks for the standalone skill metadata and Taira endpoint
+    references (pass)
+  - `quick_validate.py` remains unavailable in this environment because the
+    bundled validator depends on `PyYAML`, which is not installed locally
+- External follow-up remains open: I cannot submit an OpenAI support/catalog
+  request on the user's behalf from this environment, so any `openai/skills`
+  catalog inclusion still requires a human-run support/forum submission.
+
 ## 2026-03-28 Follow-up: account alias cleanup drops public account-domain singular queries
 - Continued the alias-led universal-account cleanup across the live
   data-model/runtime path so account identity is exposed more consistently as
