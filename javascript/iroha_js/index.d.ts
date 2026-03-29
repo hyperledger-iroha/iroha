@@ -1137,6 +1137,57 @@ export interface ToriiExplorerAccountQrSnapshot {
   svg: string;
 }
 
+export interface ToriiVpnProfile {
+  available: boolean;
+  relayEndpoint: string;
+  supportedExitClasses: ReadonlyArray<string>;
+  defaultExitClass: string;
+  leaseSecs: number;
+  dnsPushIntervalSecs: number;
+  meterFamily: string;
+  routePushes: ReadonlyArray<string>;
+  excludedRoutes: ReadonlyArray<string>;
+  dnsServers: ReadonlyArray<string>;
+  tunnelAddresses: ReadonlyArray<string>;
+  mtuBytes: number;
+  displayBillingLabel: string;
+}
+
+export interface ToriiVpnSession {
+  sessionId: string;
+  accountId: string;
+  exitClass: string;
+  relayEndpoint: string;
+  leaseSecs: number;
+  expiresAtMs: number;
+  connectedAtMs: number;
+  meterFamily: string;
+  routePushes: ReadonlyArray<string>;
+  excludedRoutes: ReadonlyArray<string>;
+  dnsServers: ReadonlyArray<string>;
+  tunnelAddresses: ReadonlyArray<string>;
+  mtuBytes: number;
+  helperTicketHex: string;
+  bytesIn: number;
+  bytesOut: number;
+  status: string;
+}
+
+export interface ToriiVpnReceipt {
+  sessionId: string;
+  accountId: string;
+  exitClass: string;
+  relayEndpoint: string;
+  meterFamily: string;
+  connectedAtMs: number;
+  disconnectedAtMs: number;
+  durationMs: number;
+  bytesIn: number;
+  bytesOut: number;
+  status: string;
+  receiptSource: string;
+}
+
 export type SnsNameStatus =
   | { status: "Active" }
   | { status: "GracePeriod" }
@@ -6778,6 +6829,32 @@ export declare class ToriiClient {
       signal?: AbortSignal;
     },
   ): Promise<ToriiExplorerAccountQrSnapshot>;
+  getVpnProfile(options?: { signal?: AbortSignal }): Promise<ToriiVpnProfile | null>;
+  createVpnSession(
+    request?: { exitClass?: string },
+    options?: {
+      signal?: AbortSignal;
+      canonicalAuth: CanonicalRequestAuth;
+    },
+  ): Promise<ToriiVpnSession>;
+  getVpnSession(
+    sessionId: string,
+    options: {
+      signal?: AbortSignal;
+      canonicalAuth: CanonicalRequestAuth;
+    },
+  ): Promise<ToriiVpnSession | null>;
+  deleteVpnSession(
+    sessionId: string,
+    options?: {
+      signal?: AbortSignal;
+      canonicalAuth: CanonicalRequestAuth;
+    },
+  ): Promise<ToriiVpnReceipt | null>;
+  listVpnReceipts(options: {
+    signal?: AbortSignal;
+    canonicalAuth: CanonicalRequestAuth;
+  }): Promise<ReadonlyArray<ToriiVpnReceipt>>;
   getSnsPolicy(suffixId: number, options?: { signal?: AbortSignal }): Promise<SnsSuffixPolicy>;
   getSnsRegistration(
     selector: string,

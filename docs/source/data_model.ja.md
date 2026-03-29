@@ -50,13 +50,13 @@ translation_last_reviewed: 2026-03-28
 - `ScopedAccountId { account: AccountId, domain: DomainId }` は、スコープ付きビューが必要な場合にのみ明示的なドメイン コンテキストを伝えます。
 - `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` は、キー再生成レコードで使用されるオプションの安定したエイリアスです。`uaid` は、オプションの Nexus 全体の [ユニバーサル アカウント ID](./universal_accounts_guide.md) を保持します。`linked_domains` は、インデックスの一部ではなく派生インデックス状態です。正規のアイデンティティ。
 - ビルダー:
-  - `Account::new(scoped_id)` 経由の `NewAccount` は明示的なドメインリンク登録を具体化するため、`ScopedAccountId` が必要です。
-  - `NewAccount` (`Account::new_domainless(id)` 経由) は、リンクされたドメインを持たないユニバーサル アカウントのサブジェクトのみを登録します。
+  - `Account::new_in_domain(id, domain)` 経由の `NewAccount` は明示的なドメインリンク登録を具体化するため、`ScopedAccountId` が必要です。
+  - `NewAccount` (`Account::new(id)` 経由) は、リンクされたドメインを持たないユニバーサル アカウントのサブジェクトのみを登録します。
 - エイリアスモデル:
   - 正規アカウント ID には、ドメインまたはデータスペース セグメントが含まれることはありません。
   - アカウント エイリアスは、`AccountId` の上に重ねられた個別の SNS/アカウント ラベル バインディングです。
   - `merchant@hbl.sbp` などのドメイン修飾エイリアスは、エイリアス バインディングでドメインとデータスペースの両方を保持します。
-  - `merchant@sbp` などのデータスペース ルート エイリアスはデータスペースのみを保持するため、`Account::new_domainless(...)` と自然にペアになります。
+  - `merchant@sbp` などのデータスペース ルート エイリアスはデータスペースのみを保持するため、`Account::new(...)` と自然にペアになります。
   - テストとフィクスチャでは、最初にユニバーサル `AccountId` をシードし、次にドメインの仮定をアカウント ID 自体にエンコードするのではなく、ドメイン リンク、エイリアス リース、エイリアスのアクセス許可を個別に追加する必要があります。
 
 ### Asset Definitions and Assets

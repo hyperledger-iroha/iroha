@@ -127,6 +127,81 @@ pub fn normalize_host_header(raw: &str) -> Option<String> {
     )
 }
 
+/// Encode a raw CID byte sequence using lowercase multibase base32.
+#[must_use]
+pub fn encode_content_cid(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    if bytes.is_empty() {
+        return "b".to_string();
+    }
+
+    let mut acc = 0u32;
+    let mut bits = 0u32;
+    let mut out = Vec::with_capacity((bytes.len() * 8).div_ceil(5) + 1);
+    out.push(b'b');
+
+    for byte in bytes {
+        acc = (acc << 8) | (*byte as u32);
+        bits += 8;
+        while bits >= 5 {
+            let index = ((acc >> (bits - 5)) & 0x1f) as usize;
+            out.push(ALPHABET[index]);
+            bits -= 5;
+        }
+    }
+
+    if bits > 0 {
+        let index = ((acc << (5 - bits)) & 0x1f) as usize;
+        out.push(ALPHABET[index]);
+    }
+
+    String::from_utf8(out).expect("CID alphabet is valid UTF-8")
+}
+
+/// Decode a lowercase multibase base32 CID into raw bytes.
+#[must_use]
+pub fn decode_content_cid(raw: &str) -> Option<Vec<u8>> {
+    let trimmed = raw.trim();
+    let encoded = trimmed
+        .strip_prefix('b')
+        .or_else(|| trimmed.strip_prefix('B'))?;
+    if encoded.is_empty() {
+        return None;
+    }
+
+    let mut acc = 0u32;
+    let mut bits = 0u32;
+    let mut out = Vec::with_capacity((encoded.len() * 5) / 8);
+
+    for ch in encoded.chars() {
+        let value = match ch {
+            'a'..='z' => (ch as u8 - b'a') as u32,
+            '2'..='7' => 26 + (ch as u8 - b'2') as u32,
+            _ => return None,
+        };
+
+        acc = (acc << 5) | value;
+        bits += 5;
+        while bits >= 8 {
+            out.push(((acc >> (bits - 8)) & 0xff) as u8);
+            bits -= 8;
+        }
+    }
+
+    if bits > 0 {
+        let mask = (1u32 << bits) - 1;
+        if (acc & mask) != 0 {
+            return None;
+        }
+    }
+
+    if out.is_empty() {
+        return None;
+    }
+
+    Some(out)
+}
+
 /// Resolve the binding matching the provided host.
 #[must_use]
 pub fn find_site_binding<'a>(
@@ -243,5 +318,15 @@ mod tests {
         };
         assert!(should_use_spa_fallback("/swap", &binding));
         assert!(!should_use_spa_fallback("/assets/app.js", &binding));
+    }
+
+    #[test]
+    fn cid_roundtrip_uses_lowercase_multibase_base32() {
+        let encoded = encode_content_cid(&[0x01, 0x71, 0x1f, 0x20, 0xf3, 0x09, 0x6a, 0xe2]);
+        assert_eq!(encoded, "bafyr6ihtbfvoe");
+        assert_eq!(
+            decode_content_cid(&encoded),
+            Some(vec![0x01, 0x71, 0x1f, 0x20, 0xf3, 0x09, 0x6a, 0xe2])
+        );
     }
 }

@@ -971,7 +971,11 @@ mod prefetch_tests {
         let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
         let alice_scoped = alice.to_account_id(wonderland.clone());
         let domain = Domain::new(wonderland.clone()).build(&alice);
-        let account = Account::from_scoped_id(alice_scoped).build(&alice);
+        let account = Account::new_in_domain(
+            alice_scoped.account().clone(),
+            alice_scoped.domain().clone(),
+        )
+        .build(&alice);
         let world = World::with([domain], [account], []);
         let world_view = world.view();
 
@@ -1013,8 +1017,16 @@ mod prefetch_tests {
         let world = World::with(
             [alpha_domain, beta_domain],
             [
-                Account::from_scoped_id(alpha_account.clone()).build(alpha_account.account()),
-                Account::from_scoped_id(beta_account).build(alpha_account.account()),
+                Account::new_in_domain(
+                    alpha_account.account().clone(),
+                    alpha_account.domain().clone(),
+                )
+                .build(alpha_account.account()),
+                Account::new_in_domain(
+                    beta_account.account().clone(),
+                    beta_account.domain().clone(),
+                )
+                .build(alpha_account.account()),
             ],
             [],
         );
@@ -1041,9 +1053,11 @@ mod prefetch_tests {
         );
         let world = World::with(
             [Domain::new(domain_id.clone()).build(account_id.account())],
-            [Account::from_scoped_id(account_id.clone())
-                .with_label(Some(alias))
-                .build(account_id.account())],
+            [
+                Account::new_in_domain(account_id.account().clone(), account_id.domain().clone())
+                    .with_label(Some(alias))
+                    .build(account_id.account()),
+            ],
             [],
         );
         let world_view = world.view();
@@ -1069,7 +1083,7 @@ mod prefetch_tests {
         );
         let world = World::with(
             [],
-            [Account::new_domainless(account_id.account().clone())
+            [Account::new(account_id.account().clone())
                 .with_label(Some(alias))
                 .build(account_id.account())],
             [],
@@ -15839,9 +15853,7 @@ mod tests {
 
         let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
             .with_instructions([
-                InstructionBox::from(Register::account(Account::new_domainless(
-                    authority.clone(),
-                ))),
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
                 InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
             ])
             .sign(keypair.private_key());

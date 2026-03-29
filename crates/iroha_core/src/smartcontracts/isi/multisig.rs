@@ -1294,7 +1294,7 @@ fn execute_register(
             home_domain,
         )
     } else {
-        iroha_data_model::account::NewAccount::new_domainless(multisig_account_id.clone())
+        iroha_data_model::account::NewAccount::new(multisig_account_id.clone())
     };
     Register::account(register_account)
         .execute(authority, state_transaction)
@@ -1829,7 +1829,7 @@ fn ensure_signatory_account_exists(
             let register_account = if let Some(home_domain) = home_domain.cloned() {
                 iroha_data_model::account::NewAccount::new_in_domain(signatory.clone(), home_domain)
             } else {
-                iroha_data_model::account::NewAccount::new_domainless(signatory.clone())
+                iroha_data_model::account::NewAccount::new(signatory.clone())
             };
             Register::account(register_account.with_metadata(metadata))
                 .execute(authority, state_transaction)
@@ -4067,11 +4067,9 @@ mod tests {
         let mut state_transaction = block.transaction();
 
         let owner_id = new_account_id(&KeyPair::random());
-        Register::account(iroha_data_model::account::NewAccount::new_domainless(
-            owner_id.clone(),
-        ))
-        .execute(&owner_id, &mut state_transaction)
-        .expect("register domainless owner");
+        Register::account(iroha_data_model::account::NewAccount::new(owner_id.clone()))
+            .execute(&owner_id, &mut state_transaction)
+            .expect("register domainless owner");
 
         let signer = new_account_id(&KeyPair::random());
         let spec = MultisigSpec {

@@ -17089,6 +17089,16 @@ impl SorafsGatewayRateLimit {
 pub struct SorafsGatewayDenylist {
     /// Optional filesystem path to a JSON denylist definition.
     pub path: Option<PathBuf>,
+    /// Optional filesystem path to a pack-catalog JSON definition.
+    pub catalog_path: Option<PathBuf>,
+    /// Pack identifiers explicitly disabled on this node.
+    #[config(default)]
+    pub opt_out_packs: Vec<String>,
+    /// Additional pack identifiers explicitly enabled on this node.
+    #[config(default)]
+    pub extra_packs: Vec<String>,
+    /// Optional jurisdiction code used to auto-enable matching regional packs.
+    pub jurisdiction: Option<String>,
     /// Maximum TTL applied to standard entries when `expires_at` is omitted.
     #[config(default = "defaults::sorafs::gateway::denylist::STANDARD_TTL")]
     pub standard_ttl: Duration,
@@ -17107,6 +17117,10 @@ impl Default for SorafsGatewayDenylist {
     fn default() -> Self {
         Self {
             path: defaults::sorafs::gateway::denylist::path(),
+            catalog_path: None,
+            opt_out_packs: Vec::new(),
+            extra_packs: Vec::new(),
+            jurisdiction: None,
             standard_ttl: defaults::sorafs::gateway::denylist::STANDARD_TTL,
             emergency_ttl: defaults::sorafs::gateway::denylist::EMERGENCY_TTL,
             emergency_review_window: defaults::sorafs::gateway::denylist::EMERGENCY_REVIEW_WINDOW,
@@ -17120,6 +17134,13 @@ impl SorafsGatewayDenylist {
     fn parse(self) -> actual::SorafsGatewayDenylist {
         actual::SorafsGatewayDenylist {
             path: self.path,
+            catalog_path: self.catalog_path,
+            opt_out_packs: self.opt_out_packs,
+            extra_packs: self.extra_packs,
+            jurisdiction: self
+                .jurisdiction
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
             standard_ttl: self.standard_ttl,
             emergency_ttl: self.emergency_ttl,
             emergency_review_window: self.emergency_review_window,

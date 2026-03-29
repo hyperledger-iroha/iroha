@@ -1,6 +1,434 @@
 # Status
 
-Last updated: 2026-03-28
+Last updated: 2026-03-29
+
+## 2026-03-29 Follow-up: Torii ingress now uses bounded multi-hop proxying and latency-aware admission
+- Implemented the remaining ingress-layer fixes directly in the server path
+  instead of widening Sumeragi scope:
+  - `crates/iroha_core/src/torii_proxy.rs` now carries an internal V2 Torii
+    proxy envelope with explicit `hop_count`, `max_hops`, and
+    `visited_peer_ids` for bounded multi-hop forwarding;
+  - `crates/iroha_torii/src/lib.rs` now re-forwards non-authoritative incoming
+    Torii proxy requests instead of hard-failing after one hop, excludes the
+    local peer / immediate sender / visited peers from candidate selection, and
+    logs hop/candidate/fallback/loop-prevention telemetry;
+  - `crates/iroha_core/src/queue.rs` now exposes `QueuePressureSnapshot`,
+    tracks local enqueue residence time per transaction, and marks
+    backpressure saturated on either count or oldest-tracked age using the
+    derived `clamp(3 * block_time, 2000ms, 5000ms)` budget; and
+  - `crates/iroha_torii/src/lib.rs` now early-sheds local `POST /transaction`
+    admission on either `high_load_tx_threshold` or age saturation while
+    reusing the existing queue-full / retry response envelope.
+- Updated the internal Torii proxy message consumers in
+  `crates/iroha_core/src/lib.rs` and `crates/irohad/src/main.rs` to use the new
+  V2 envelope without changing the public HTTP API.
+- Added focused regression coverage for the new ingress behavior:
+  - multi-hop forwarding can reach an authoritative peer through an
+    intermediate peer;
+  - forwarding excludes the immediate sender and `visited_peer_ids`, preserves
+    authoritative-first candidate order, and returns `route_unavailable` when
+    hops are exhausted; and
+  - queue-pressure age tracking now saturates admission even below raw queue
+    capacity, while the existing count-based early-shed path still remains in
+    place.
+- Verification:
+  - `cargo test -p iroha_core --lib queue_pressure_snapshot_tracks_oldest_age_across_enqueue_and_dequeue -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib queue_pressure_snapshot_clears_oldest_age_after_expiry -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib backpressure_state_saturates_on_oldest_queue_age -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib torii_proxy_control_message_classification_covers_shared_proxy_variants -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib handler_post_transaction_early_sheds_when_queue_age_saturates -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib forward_incoming_torii_proxy_request_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib torii_proxy_candidate_peers_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib execute_torii_proxy_request_across_candidates_retries_route_unavailable -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib torii_proxy_network_message_dispatch_resolves_pending_response -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib authoritative_lane_peer_ids_ -- --nocapture` (pass)
+  - `cargo test -p irohad --bin irohad torii_proxy_frames_are_not_low_priority -- --nocapture` (pass)
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami` (pass)
+- Remaining verification gap:
+  - the full preserved-peer stable permissioned / NPoS soaks have not yet been
+    rerun on this exact patch set.
+
+## 2026-03-29 Follow-up: removed the scoped-id account builder shim across the repo
+- Converted the remaining scoped-id account-builder fixture/setup sites in
+  `iroha_core`, `iroha_torii`, `integration_tests`, and `mochi-core` to the
+  explicit `Account::new_in_domain(account, domain)` path, so the repo no
+  longer routes account registration through the old scoped-id convenience
+  constructors.
+- Removed the old scoped-id account builder constructors and the dead
+  `scoped_id()` compatibility view from `crates/iroha_data_model/src/account.rs`
+  now that no in-repo code still depends on them.
+- Updated the active account-model guidance in `AGENTS.md`,
+  `docs/source/data_model.md`, `status.md`, and `roadmap.md` to describe
+  `new_in_domain(...)` as the only explicit scoped-registration builder.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_data_model` (pass)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_core --tests` (pass; same pre-existing `iroha_core` warnings remain)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_torii --tests` (pass)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p integration_tests --test sumeragi_vote_qc_commit` (pass)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p mochi-core` (pass; same transitive `iroha_core` warnings remain)
+
+## 2026-03-29 Rerun: full preserved-peer stable soaks still fail on the Torii ingress slice
+- Re-ran both full preserved-peer stable envelopes against
+  `/tmp/iroha_target_torii_ingressfix_iso/release/{iroha3d,izanami}` after
+  the Torii transparent-ingress + early-shed slice. The earlier clean
+  permissioned target-height run on this same binary set did not reproduce.
+- Fresh permissioned rerun:
+  - log=`/tmp/izanami_permissioned_torii_ingressfix_rerun_20260329T081619Z.log`
+  - elapsed=`936.284s` (~15m 36s)
+  - failed with
+    `no strict block height progress for 600s (strict min height 499, quorum min height 499, target 2000, tolerated_failures 0)`
+  - summary=`successes=1817 failures=59 izanami_ingress_failover_total=181 izanami_ingress_endpoint_unhealthy_total=162`
+  - the old repair markers stayed clean:
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `route_unavailable=0`,
+    `Failed to find asset=0`
+  - but the old ingress starvation symptoms returned:
+    `plan submission failed=54`,
+    `transaction queued for too long=78`,
+    `haven't got tx confirmation within 20s=35`
+- Fresh NPoS rerun:
+  - log=`/tmp/izanami_npos_torii_ingressfix_rerun_20260329T083305Z.log`
+  - elapsed=`916.223s` (~15m 16s)
+  - failed with
+    `no strict block height progress for 600s (strict min height 320, quorum min height 320, target 2000, tolerated_failures 0)`
+  - summary=`successes=1908 failures=144 izanami_ingress_failover_total=474 izanami_ingress_endpoint_unhealthy_total=404`
+  - the old repair markers again stayed clean:
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `transaction queued for too long=0`,
+    `haven't got tx confirmation within 20s=0`,
+    `Failed to find asset=0`
+  - but the NPoS authoritative-routing failure still dominated:
+    `route_unavailable=758`,
+    `plan submission failed=143`,
+    `strict block height is stalled with no lagging peers=60`,
+    with repeated `route_unavailable: no reachable authoritative peers are available for lane 1 dataspace 1`
+- Net:
+  - this Torii slice is not yet an acceptance candidate;
+  - permissioned remains load-sensitive / non-deterministic under the stable
+    preserved-peer soak; and
+  - NPoS still fails on authoritative-route visibility / proxying rather than
+    nomination cost.
+
+## 2026-03-29 Follow-up: Taira deploy bundle now renders validator configs from a shared roster
+- Added `scripts/render_taira_validator_bundle.py` plus focused tests in
+  `scripts/tests/render_taira_validator_bundle_test.py` so operators can render
+  one `config.toml` per validator from a user-local public roster plus a
+  separate secrets file instead of cloning the checked-in peer-1 baseline by
+  hand.
+- Added `configs/soranexus/taira/validator_roster.example.toml` and
+  `configs/soranexus/taira/validator_secrets.example.toml` alongside
+  `configs/soranexus/taira/taira-irohad.env.example` and
+  `configs/soranexus/taira/taira-canary-client.example.toml`, updated
+  `taira-irohad.service` to accept `IROHA_TAIRA_CONFIG` /
+  `IROHA_TAIRA_GENESIS` overrides through `/etc/default/taira-irohad`, and
+  documented the generated-config path in the Taira deploy docs, plugin README,
+  standalone skill, root README, and `AGENTS.md`.
+- Tightened `configs/soranexus/taira/check_mcp_rollout.sh` again so Taira
+  rollout now fails unless `/status` reports at least 4 validators in the
+  commit QC set, route-unavailable write-canary failures point operators at the
+  shared-roster renderer before they debug MCP/plugin behavior, and signed
+  canaries can now auto-use a repo-built CLI or `cargo run` when `iroha` is not
+  installed on `PATH`.
+- Verification:
+  - `python3 -m py_compile scripts/render_taira_validator_bundle.py scripts/tests/render_taira_validator_bundle_test.py` (pass)
+  - `python3 scripts/render_taira_validator_bundle.py --base-config configs/soranexus/taira/config.toml --roster configs/soranexus/taira/validator_roster.example.toml --secrets configs/soranexus/taira/validator_secrets.example.toml --output-dir /tmp/taira-render-test` (pass)
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh` (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --skip-write-canary` against `https://taira.sora.org/v1/mcp` (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --write-config <temp taira-chain client.toml>` via the new CLI auto-discovery path (pass)
+
+## 2026-03-29 Follow-up: Torii transparent ingress + early-shed fixes the old permissioned failure class, but the stable latency gate still fails
+- Implemented the combined server-side slice in
+  `crates/iroha_torii/src/lib.rs`:
+  - local execution authority remains owned by
+    `authoritative_lane_peer_ids(...)` /
+    `is_local_authoritative_for_route(...)`, while a new proxy-candidate
+    helper feeds `execute_torii_proxy_request_with_fallback(...)` with
+    authoritative peers first and then other online peers, logging
+    `proxy_candidate_count`, `authoritative_candidate_count`, and
+    `fallback_used`;
+  - the local `POST /transaction` path now early-sheds before enqueue when
+    `queue.active_len() >= high_load_tx_threshold`, using the existing
+    queue-full rejection envelope and headers instead of silently
+    over-admitting work that cannot clear inside the confirmation budget; and
+  - focused Torii coverage now locks in the retry / ordering / admission
+    semantics:
+    `handler_post_transaction_early_sheds_before_local_enqueue`,
+    `torii_proxy_candidate_peers_prioritize_authoritative_before_fallback`,
+    `torii_proxy_candidate_peers_include_online_fallback_for_npos_non_core_routes`,
+    and
+    `execute_torii_proxy_request_across_candidates_retries_route_unavailable`.
+- Build and focused verification on the current tree:
+  - `cargo fmt --all -- crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo test -p iroha_torii handler_post_transaction_ -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo test -p iroha_torii --lib torii_proxy_candidate_peers_ -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo test -p iroha_torii --lib execute_torii_proxy_request_across_candidates_retries_route_unavailable -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo test -p iroha_torii --lib authoritative_lane_peer_ids_ -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami` (pass)
+- Full preserved-peer stable permissioned rerun on the new binaries:
+  - log=`/tmp/izanami_permissioned_torii_ingressfix_20260329T072628Z.log`
+  - tmpdir=`/tmp/iroha-soak-permissioned-torii_ingressfix_20260329T072628Z`
+  - permitdir=`/tmp/iroha-permit-permissioned-torii_ingressfix_20260329T072628Z.UavOPQ`
+  - the run now reaches the target height instead of stalling:
+    `quorum_min_height=2003 strict_min_height=2003 target_blocks=2000`
+  - elapsed=`2750.631789625s` (~45m 51s)
+  - final gate failure moved entirely to latency:
+    `interval_p95_ms=2501` and `strict_interval_p95_ms=2501`
+    exceeded the `1000ms` threshold at `checkpoint target_reached`
+  - summary=`successes=13741 failures=12 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`
+  - the old repair / ingress-failure markers stayed clean in this run:
+    `no strict block height progress=0`,
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `route_unavailable=0`,
+    `plan submission failed=0`,
+    `transaction queued for too long=0`,
+    `haven't got tx confirmation within 20s=0`,
+    `Failed to find asset=0`
+  - target-height phase snapshot at failure:
+    `phase_collect_da_ms=406`,
+    `phase_collect_precommit_ms=1026`,
+    `phase_pipeline_total_ms=1433`,
+    `phase_pipeline_total_ema_ms=1193`
+- Gated verification result:
+  - because permissioned did not reach the target *cleanly* under the
+    unchanged acceptance criteria, the plan's gating rule blocked the full
+    preserved-peer stable NPoS rerun on this slice.
+- Net:
+  - the Torii early-shed change appears to have removed the old
+    permissioned over-admission / confirmation-starvation failure mode, and
+    the tree no longer reproduces the earlier low-height permissioned stall;
+    but
+  - the remaining end-to-end blocker is now steady-state block cadence
+    (`~1.4s-2.5s` with periodic `3.3s-5.0s` spikes), so this slice fixes
+    ingress behavior without yet restoring acceptable preserved-peer stable
+    throughput.
+
+## 2026-03-29 Follow-up: IVM account-target TLVs and opaque asset registration now match the current canonical surfaces
+- Continued the universal-account cleanup across the active IVM/mock-host
+  path instead of leaving the stale scoped-account assumptions in tests and
+  runtime shims:
+  - `crates/ivm/src/mock_wsv.rs` now treats account-target permissions and
+    unregister flows as canonical `AccountId` subjects, while
+    `REGISTER_ACCOUNT` still accepts the explicit scoped registration payload;
+  - the mock asset-definition registration path no longer rejects canonical
+    opaque `AssetDefinitionId` values just because their synthetic `aid`
+    domain is not a first-class domain row, matching the current core host
+    behavior;
+  - the focused IVM TLV tests were updated to send canonical account TLVs for
+    account-target syscalls, scoped TLVs only for account registration, and to
+    drop one stale negative case that relied on the old domain-bearing asset-id
+    model; and
+  - `crates/iroha_core/src/smartcontracts/ivm/host.rs`,
+    `crates/ivm/src/core_host.rs`, and `crates/ivm/src/host.rs` now use the
+    explicit `Account::new_in_domain(account, domain)` transitional path for
+    `REGISTER_ACCOUNT`, parse `GET_AUTHORITY` as a canonical `AccountId`, and
+    describe account-target pointer ABI comments in terms of `AccountId`.
+  - `crates/iroha_cli/src/main_shared.rs` test scaffolding no longer routes
+    domain-linked account fixtures through the removed scoped-id builder shim;
+    the remaining CLI harnesses now build those fixtures through the explicit
+    `Account::new_in_domain(account, domain)` path instead.
+- Fixed the syscall doc generator drift uncovered while revalidating the ABI
+  docs:
+  - `crates/ivm/src/bin/gen_syscalls_doc.rs` now renders markdown from the same
+    normalized spec data used for Rust codegen, unescapes TOML string literals
+    correctly, escapes generated Rust strings correctly, and no longer leaves
+    `--check` stuck on a newline-only diff.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo run -p ivm --bin gen_syscalls_doc -- --write` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo run -p ivm --bin gen_syscalls_doc -- --check` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo test -p ivm generated_syscalls_section_is_up_to_date --test syscalls_doc_sync -- --exact --nocapture` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo test -p ivm register_asset_definition_does_not_require_domain_row_for_opaque_id --lib -- --nocapture` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo test -p ivm --test wsv_host_account_admin --test wsv_host_grant_revoke_tlv --test wsv_host_unregister_tlv --test wsv_host_unregister_neg_cases --test wsv_host_nft_unregister_positive --test wsv_host_nft_tlv --test wsv_host_pointer_tlv --test wsv_host_role_admin_tlv --test wsv_host_role_admin_neg --test wsv_host_role_vs_direct_perm --test wsv_host_register_account_asset_tlv` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo test -p iroha_core register_account_syscall_queues_instruction --lib -- --nocapture` (pass; same pre-existing `iroha_core` warnings remain)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p ivm` (pass)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_cli --tests` (pass; lowering build parallelism avoided transient scratch-space pressure during the test-target compile)
+  - `git diff --check` (pass)
+- Remaining gap:
+  - the repo is still not `AccountId`-only: `ScopedAccountId`, stored
+    `linked_domains`, the scoped `REGISTER_ACCOUNT` ABI surface, and many
+    CLI/bridge/test helpers still remain.
+
+## 2026-03-29 Follow-up: docs lint and universal-account compile fallout closed in Torii, Python, and MOCHI
+- Added the missing crate-level inner doc comment to
+  `crates/iroha_torii_shared/examples/connect_dump_open.rs`, so the example no
+  longer fails the workspace `-D missing-docs` lint.
+- Fixed the Python binding/account-model follow-up in
+  `python/iroha_python/iroha_python_rs/src/lib.rs` by:
+  - making the RWA registration assertion parse an explicit `DomainId`; and
+  - switching `Instruction::register_account(...)` to
+    `Account::new_in_domain(...)` so the default linked domain is preserved
+    without passing a `ScopedAccountId` into the canonical-account builder.
+- Fixed the matching MOCHI universal-account fallout by:
+  - changing `InstructionDraft::RegisterAccount` in
+    `mochi/mochi-core/src/compose.rs` to use
+    `Account::new_in_domain(account, domain)`;
+  - updating the stale test scaffolding in `mochi/mochi-core/src/state.rs` to
+    `AccountBuilder::new_in_domain(...)`; and
+  - adding focused regression coverage in both the MOCHI composer and Python
+    binding tests to assert that scoped/default domain links are retained.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_torii_shared --example connect_dump_open` (pass)
+  - `cargo test -p mochi-core register_account_instruction_preserves_scoped_domain -- --nocapture`
+    (pass; pre-existing `iroha_core` `private_interfaces` / dead-code warnings remain)
+  - `cargo test -p iroha_python_rs register_account_instruction_classmethod_uses_default_linked_domain -- --nocapture`
+    (pass; same pre-existing `iroha_core` warnings remain)
+
+## 2026-03-29 Follow-up: Taira MCP rollout gate now requires a real public write canary
+- Tightened the Taira rollout smoke in
+  `configs/soranexus/taira/check_mcp_rollout.sh` so public MCP rollout can no
+  longer pass on discovery alone:
+  - the script now verifies required curated tools such as
+    `iroha.status`, `iroha.sumeragi.status`, and the transaction submit aliases;
+  - it also checks the native `/status` snapshot for basic Torii/Sumeragi
+    health before trusting the MCP surface; and
+  - final public validation now requires a runtime-only canary signer config
+    via `--write-config ...`, which runs a signed `iroha ledger transaction ping`
+    against the checked endpoint unless the operator explicitly opts into
+    read-only mode with `--skip-write-canary`.
+- Updated operator and agent-facing docs to match the stronger contract:
+  - `configs/soranexus/taira/README.md` now documents the signed canary path
+    and treats `route_unavailable` as an ingress or authoritative-peer routing
+    failure;
+  - `plugins/iroha/README.md`, `skills/sora-taira-testnet/SKILL.md`, and
+    `AGENTS.md` now direct humans and agents to rerun the rollout script with a
+    runtime-only canary signer rather than debugging the plugin surface first.
+- Verification:
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh` (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --skip-write-canary`
+    against `https://taira.sora.org/v1/mcp` (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local`
+    without `--write-config` now fails immediately with the expected operator
+    error (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --write-config <temp client.toml>`
+    now fails with the improved `route_unavailable` write-canary diagnosis
+    against the live public Taira host (expected failure; proves the stronger
+    gate catches the current deployment issue)
+- Remaining gap:
+  - as of 2026-03-29, live public Taira still rejects signed lane-0 writes with
+    `503 route_unavailable`, so the deployment is still not end-to-end healthy
+    for Codex/public write flows even though MCP discovery and read-only checks
+    succeed.
+
+## 2026-03-28 Full preserved-peer stable soak rerun on the repeatable-trigger repin cut
+- Rebuilt the release soak binaries with
+  `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/tmp/iroha_target_fullsoak_20260328 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`.
+- Full preserved-peer stable permissioned rerun:
+  - log=`/tmp/izanami_permissioned_routefix_20260328T192634Z.log`
+  - tmpdir=`/tmp/iroha-soak-permissioned-routefix_20260328T192634Z`
+  - permitdir=`/tmp/iroha-permit-permissioned-routefix_20260328T192634Z`
+  - final error=`no strict block height progress for 600s (strict min height 385, quorum min height 385, target 2000, tolerated_failures 0)`
+  - summary=`successes=1337 failures=64 izanami_ingress_failover_total=172 izanami_ingress_endpoint_unhealthy_total=137`
+  - acceptance markers stayed clean:
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `route_unavailable=0`,
+    `Failed to find asset=0`
+  - dominant failure signature remains ingress/backpressure starvation, not
+    consensus recovery:
+    `plan submission failed=63`,
+    `transaction queued for too long=78`,
+    `haven't got tx confirmation within 20s=42`
+  - weighted block-interval gate from the logged progress samples:
+    quorum/strict `interval_p95_ms=843`
+  - net: this cut materially improved the permissioned stall height from `186`
+    to `385`, but it still misses the primary liveness gate.
+- Full preserved-peer stable NPoS rerun:
+  - log=`/tmp/izanami_npos_routefix_20260328T194201Z.log`
+  - tmpdir=`/tmp/iroha-soak-npos-routefix_20260328T194201Z`
+  - permitdir=`/tmp/iroha-permit-npos-routefix_20260328T194201Z`
+  - final error=`no strict block height progress for 600s (strict min height 1847, quorum min height 1847, target 2000, tolerated_failures 0)`
+  - summary=`successes=12221 failures=70 izanami_ingress_failover_total=1904 izanami_ingress_endpoint_unhealthy_total=1017`
+  - acceptance markers stayed clean on the old recovery-path axes:
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `Failed to find asset=0`
+  - the repeatable-trigger repin cut clearly improved early survival:
+    the run advanced from the old `878` plateau to `1847`, and
+    `plan submission failed` stayed at `0` until the late stall window
+  - but the authoritative-route layer is still fundamentally unhealthy:
+    `route_unavailable=7340`
+  - once late-stage routing scarcity exhausted the repin budget, the run
+    regressed into submission failures rooted in repeatable-trigger
+    confirmation/status checks:
+    `plan submission failed=54`
+  - weighted block-interval gate from the logged progress samples:
+    quorum/strict `interval_p95_ms=2501`
+  - net: the client-side repin fix mitigated the original pinned-endpoint
+    pathology, but it did not fix the underlying authoritative-route
+    availability/proxy problem. NPoS still fails both liveness and latency.
+- Critique:
+  - permissioned and NPoS are still not behaviorally equivalent under this
+    soak envelope, so the implementation is still wrong even though the client
+    repin change helps;
+  - the NPoS gap no longer looks like nomination/election compute cost;
+    it looks like route resolution or proxy availability collapsing under load;
+    and
+  - the next slice should stay out of consensus and fix Nexus/Torii
+    authoritative-route behavior so any ingress peer can actually forward to
+    the current lane authority, while permissioned ingress/backpressure remains
+    separate work.
+
+## 2026-03-28 Follow-up: `NewAccount` callers rebuilt after the domain accessor change
+- Fixed the `new_account_json_roundtrip_defaults` regression in
+  `crates/iroha_data_model/src/account.rs` by cloning the expected
+  `DomainId` before calling `AccountId::to_account_id(...)`, so the test keeps
+  ownership of the value it later asserts against.
+- Updated the stale `NewAccount` call sites in
+  `crates/iroha_kagami/src/genesis/sign.rs` and
+  `crates/iroha_kagami/src/localnet.rs` to use `register.object.domain()`
+  instead of the removed `domain` field, and simplified the localnet filter to
+  check the registration directly.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model new_account_json_roundtrip_defaults -- --nocapture`
+    (pass)
+  - `cargo check -p iroha_kagami --tests` (pass; pre-existing `iroha_core`
+    `private_interfaces` / dead-code warnings remain)
+
+
+## 2026-03-28 Follow-up: repeatable-trigger ingress now repins on `route_unavailable`
+- Fixed the NPoS/Nexus ingress-authority bug in
+  `crates/izanami/src/chaos.rs` instead of widening the consensus-side change
+  surface:
+  - repeatable-trigger plans still pin to a single ingress endpoint on the
+    happy path;
+  - but if that pinned endpoint returns `route_unavailable`, the
+    query/submit/reconcile path now repins and retries on an alternate ingress
+    endpoint instead of repeatedly hammering the same non-authoritative peer;
+    and
+  - the alternate-endpoint helper explicitly excludes the endpoint that just
+    failed the route check, so the workload driver no longer self-loops on a
+    stale pin.
+- Added focused regression coverage in `crates/izanami/src/chaos.rs` for:
+  - successful pin reuse on the happy path;
+  - alternate-endpoint failover that explicitly skips the pinned endpoint
+    after `route_unavailable`; and
+  - detection of `route_unavailable` errors so only that routing failure class
+    triggers repinning.
+- Verification status:
+  - `cargo fmt --all -- crates/izanami/src/chaos.rs` completed successfully;
+  - focused regression tests now pass in a fresh isolated target dir:
+    `CARGO_TARGET_DIR=/tmp/iroha_target_izanami_routefix2 cargo test -p izanami route_unavailable_error_is_detected -- --nocapture`
+    and
+    `CARGO_TARGET_DIR=/tmp/iroha_target_izanami_routefix2 cargo test -p izanami endpoint_pool_failover_excluding_skips_pinned_endpoint -- --nocapture`;
+  - the `izanami` crate also builds successfully with the same isolated target
+    dir via
+    `CARGO_TARGET_DIR=/tmp/iroha_target_izanami_routefix2 cargo build -p izanami`;
+  - earlier verification attempts in other target dirs were blocked by
+    temporary disk-space pressure and a transient Cargo target-tree rebuild
+    failure; those environment issues no longer block this slice; and
+  - unrelated warnings remain in `iroha_core`, but there is no remaining build
+    or test failure in the `izanami` repeatable-trigger repin slice.
 
 ## 2026-03-28 Follow-up: Taira localnet now seeds Kaigi relay data on restart
 - Set up Kaigi relay visibility on the served local Taira deployment by adding
@@ -449,24 +877,33 @@ Last updated: 2026-03-28
   - the wrong-dataspace routed-read integration slice is now green end to end
     in the full 12-peer localnet regression on this host.
 
-## 2026-03-28 Follow-up: `irohad` relay now treats Torii proxy frames as dedicated-subscriber traffic
-- Updated `crates/irohad/src/main.rs` so the generic network relay explicitly
-  ignores `NetworkMessage::ToriiProxyRequest` and
-  `NetworkMessage::ToriiProxyResponse` in the same branch as the existing
-  Soracloud proxy / genesis / health / connect control-plane messages,
-  matching the dedicated Torii subscriber path in `crates/iroha_torii/src/lib.rs`.
-- Added a small `NetworkRelayShared::is_handled_by_dedicated_subscriber(...)`
-  helper plus a focused `network_relay_tests` regression so future Torii proxy
-  enum growth is checked explicitly instead of falling back to another
-  non-exhaustive `match` failure in `irohad`.
+## 2026-03-28 Follow-up: `irohad` relay and Torii now share proxy-plane message classification
+- Updated `crates/iroha_core/src/lib.rs`,
+  `crates/irohad/src/main.rs`,
+  and
+  `crates/iroha_torii/src/lib.rs`
+  so the Torii/Soracloud proxy-plane message set now lives in
+  `NetworkMessage::is_torii_proxy_control_message()` instead of being
+  duplicated ad hoc in `irohad`.
+- `irohad` now consumes that shared classification when deciding which control
+  frames bypass the generic relay, while Torii routes the same classified
+  messages through a dedicated proxy-plane dispatcher helper before invoking
+  the concrete Torii/Soracloud request/response handlers.
+- Added focused regressions for both sides of the fix:
+  - `iroha_core` now tests that the shared classifier covers both Soracloud and
+    Torii proxy request/response variants; and
+  - `iroha_torii` now tests that the subscriber-facing proxy dispatcher
+    actually resolves a pending `ToriiProxyResponse` instead of only asserting
+    a predicate in `irohad`.
 - Validation:
   - `cargo fmt --all` (pass)
-  - `cargo check -p irohad --message-format short` (pass)
-  - `cargo test -p irohad dedicated_subscriber_message_set_includes_torii_proxy_frames -- --nocapture` (pass)
+  - `cargo test -p iroha_core torii_proxy_control_message_classification_covers_shared_proxy_variants --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_torii torii_proxy_network_message_dispatch_resolves_pending_response --lib -- --nocapture` (pass)
+  - `cargo check -p irohad --message-format short` previously passed before this follow-up refactor; a fresh rerun after the refactor is currently blocked by an unrelated already-running repository `cargo test` process holding the shared artifact lock.
 - Residual note:
-  - this follow-up validated the touched `irohad` slice only; the repository’s
-    full `cargo test --workspace` pass was not rerun because it remains a
-    multi-hour validation path in this workspace.
+  - this follow-up validated the touched proxy-plane slices only; the
+    repository’s full `cargo test --workspace` pass was not rerun because it
+    remains a multi-hour validation path in this workspace.
 
 ## 2026-03-28 Follow-up: account alias cleanup drops public account-domain singular queries
 - Continued the alias-led universal-account cleanup across the live
@@ -655,6 +1092,84 @@ Last updated: 2026-03-28
     status, and routed reads are currently trust-by-authoritative-peer rather
     than state-root-proof-verified responses.
 
+## 2026-03-28 C# SDK slice now builds, signs, submits, and polls canonical asset transactions
+- Extended the preview `.NET 8` SDK under `csharp/` with the first managed ledger path:
+  - added managed Norito/hash primitives under
+    `csharp/src/Hyperledger.Iroha.Sdk/Norito/`, including CRC64, BLAKE2b-256,
+    and Iroha transaction-hash helpers;
+  - added `TransactionBuilder`, `SignedTransactionEnvelope`,
+    `LedgerClient`, and pipeline-status types under
+    `csharp/src/Hyperledger.Iroha.Sdk/Transactions/`;
+  - `IrohaClient` now exposes `Ledger` alongside `Torii`;
+  - `ToriiClient` now supports raw signed transaction submission to
+    `POST /transaction` and typed reads from
+    `/v1/pipeline/transactions/status`; and
+  - the public Torii DTO surface no longer exposes raw `JsonElement`
+    placeholders for permissions, manifest bodies, identifier policy
+    parameters, or identifier signature payloads.
+- The shipped managed ledger slice currently covers:
+  - canonical managed encoding for asset `Transfer`, `Mint`, and `Burn`
+    transactions;
+  - deterministic Ed25519 signing over the Iroha transaction payload hash;
+  - deterministic transaction-hash derivation from the signed transaction
+    entrypoint;
+  - low-level Torii submit support plus higher-level `LedgerClient`
+    `SubmitAsync(...)`, `WaitForAsync(...)`, and `SubmitAndWaitAsync(...)`; and
+  - byte-level regression tests that pin the current managed outputs, verify
+    signature structure, and poll pipeline status through the new facade.
+- Validation:
+  - `cd csharp && dotnet build Hyperledger.Iroha.Sdk.sln -c Release`
+  - `cd csharp && dotnet test Hyperledger.Iroha.Sdk.sln -c Release`
+- Residual note:
+  - signed query envelopes, richer instruction families, transaction streaming,
+    and the larger Connect/offline/Nexus/SoraFS parity families remain open.
+
+## 2026-03-28 C# SDK slice now adds identifier-policy and explorer-QR reads
+- Added a new `.NET 8` preview SDK tree under `csharp/` with:
+  - single-package library project `Hyperledger.Iroha.Sdk`
+  - fixture-backed unit tests
+  - integration-test project with an opt-in public Taira smoke
+  - sample console app
+  - central package management, local `global.json`, and
+    `.github/workflows/pr_csharp.yml`
+- The shipped managed implementation in this first slice covers:
+  - canonical I105 account-address parsing and rendering, including multisig
+    round-trip support against the shared fixture bundle
+  - Norm v1 domain normalization helper logic for SDK boundary validation
+  - Ed25519 signing/verification wrappers for managed canonical-request signing
+  - canonical Torii app-request header construction
+  - `IrohaClient` plus a typed `ToriiClient` surface for node capabilities,
+    runtime ABI/hash/metrics, account pages, explorer QR snapshots, account
+    asset balances, account transaction summaries, direct account permission
+    reads, identifier policy listing, typed identifier resolution, reverse
+    alias lookup by canonical account id, account/asset/contract alias
+    resolution, alias-index resolution, UAID portfolio reads, space-directory
+    bindings and manifest inventory reads, account faucet puzzle/claim
+    helpers, and JSON onboarding helpers including multisig onboarding
+  - managed `scrypt-leading-zero-bits-v1` faucet PoW challenge solving, with
+    deterministic challenge/digest helpers and `ToriiClient` convenience
+    methods that can fetch the live puzzle and build or submit a faucet claim
+    request for a caller-supplied account literal
+  - `ToriiApiException`, which now preserves status code, request URI, and
+    response body instead of surfacing only generic `HttpRequestException`; and
+  - source-generated JSON request serialization for the typed Torii request
+    models rather than falling back to reflection or raw dictionaries
+- Validation:
+  - `cd csharp && dotnet build Hyperledger.Iroha.Sdk.sln -c Release`
+  - `cd csharp && dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build`
+  - `cd csharp && dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build`
+  - `cd csharp && IROHA_CSHARP_RUN_LIVE_TESTS=1 IROHA_CSHARP_TORII_BASE_URL=https://taira.sora.org dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.IntegrationTests.csproj -c Release`
+- Residual note:
+  - the C# SDK still stops well short of full parity; transaction/Norito
+    builders, signed Torii transaction/query envelopes, and the broader
+    Connect/offline/Nexus/SoraFS feature families remain follow-up work, and
+    the live Taira lane is still opt-in rather than part of default CI even
+    though it now covers `/v1/explorer/accounts/{account_id}/qr`,
+    `/v1/identifier-policies`, `/v1/accounts/faucet/puzzle`,
+    `/v1/space-directory/uaids/{uaid}`,
+    `/v1/space-directory/uaids/{uaid}/manifests`, and alias round-tripping
+    when the selected account page exposes aliases.
+
 ## 2026-03-27 Full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but the NPoS missing-asset storm is still present
 - Rebuilt `iroha3d` and `izanami` and reran the full 4-peer preserved-peer
   stable envelopes on the current tree:
@@ -748,29 +1263,22 @@ Last updated: 2026-03-28
     reads are still open follow-up work once the existing Torii baseline
     compile blockers are cleared.
 
-## 2026-03-27 Follow-up: reverse alias lookup docs and mirrored references now pin the universal-account model explicitly
-- Clarified the contributor and public account-model docs after catching a test
+## 2026-03-27 Follow-up: reverse alias lookup docs now pin the universal-account model explicitly
+- Clarified the contributor and public data-model docs after catching a test
   fixture regression that briefly treated domain context as if it were part of
-  canonical account identity, and propagated that clarification across the
-  mirrored documentation families instead of leaving it English-only.
+  canonical account identity.
 - The documented rule is now explicit in:
   - `AGENTS.md`
   - `docs/source/data_model.md`
   - `docs/source/universal_accounts_guide.md`
-  - `docs/account_structure.md`
-- The mirrored doc families now carry the same clarification:
-  - `docs/source/data_model.*.md`
-  - `docs/source/universal_accounts_guide.*.md`
-  - `docs/account_structure*.md`
+  - `docs/account_structure.hy.md`
 - The shipped clarification now states:
   - `AccountId` is always the canonical domainless account subject;
   - `ScopedAccountId { account, domain }` is only explicit domain context for
     registrations/views that require a linked domain;
   - account aliases are a separate SNS/account-label layer, so both
     `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` resolve
-    to the same canonical `AccountId`;
-  - `Account::new_domainless(...)` is the correct registration path for
-    dataspace-root aliases; and
+    to the same canonical `AccountId`; and
   - `linked_domains` is derived index state, not part of canonical identity.
 - Tightened the reverse-alias query coverage in
   `crates/iroha_core/src/smartcontracts/isi/account.rs` with a dedicated
@@ -778,7 +1286,6 @@ Last updated: 2026-03-28
   `FindAliasesByAccountId` now has focused coverage for both
   `merchant@hbl.sbp` and `merchant@sbp`.
 - Validation:
-  - `python3 scripts/translate_i18n_google.py --refresh-mode stale --path-glob 'docs/source/data_model.*.md' --path-glob 'docs/source/universal_accounts_guide.*.md'` (pass; `translated=40`, `failed=0`)
   - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/.cache/cargo-target-alias-core cargo test -p iroha_core find_aliases_by_account_id --lib --quiet` (pass)
 
 ## 2026-03-27 Follow-up: FASTPQ CUDA bench now records BN254 FFT/LDE evidence

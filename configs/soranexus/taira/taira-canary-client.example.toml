@@ -1,0 +1,13 @@
+# Copy this file to a runtime-only path such as
+# `/run/secrets/taira-canary-client.toml`, replace the placeholder key material,
+# and keep the populated file out of the repo.
+#
+# `check_mcp_rollout.sh` rewrites `torii_url` to the chosen local/public target,
+# so only `chain`, `basic_auth` (optional), and `[account]` are required here.
+
+chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+
+[account]
+domain = "wonderland"
+public_key = "REPLACE_WITH_CANARY_PUBLIC_KEY"
+private_key = "REPLACE_WITH_CANARY_PRIVATE_KEY"

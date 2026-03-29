@@ -983,9 +983,10 @@ impl InstructionDraft {
             InstructionDraft::RegisterDomain { domain } => {
                 Register::domain(Domain::new(domain.clone())).into()
             }
-            InstructionDraft::RegisterAccount { account } => {
-                Register::account(Account::new(account.clone())).into()
-            }
+            InstructionDraft::RegisterAccount { account } => Register::account(
+                Account::new_in_domain(account.account().clone(), account.domain().clone()),
+            )
+            .into(),
             InstructionDraft::RegisterAssetDefinition {
                 definition,
                 mintable,
@@ -1781,6 +1782,30 @@ mod tests {
         for (expected, actual) in drafts.iter().zip(parsed.iter()) {
             assert_eq!(expected.summary(), actual.summary());
         }
+    }
+
+    #[test]
+    fn register_account_instruction_preserves_scoped_domain() {
+        let account = account_literal(&ALICE_ID);
+        let scoped_account = format!("{account}@wonderland");
+        let expected: ScopedAccountId = scoped_account.parse().expect("scoped account");
+        let draft =
+            InstructionDraft::register_account_from_input(&scoped_account).expect("account draft");
+
+        let instruction = draft.instruction();
+        let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction;
+        let Some(register_box) = instruction_ref
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+        else {
+            panic!("expected RegisterBox instruction");
+        };
+        let iroha_data_model::isi::RegisterBox::Account(register) = register_box else {
+            panic!("expected Register<Account> instruction");
+        };
+
+        assert_eq!(register.object.id, ALICE_ID.clone());
+        assert_eq!(register.object.domain(), Some(expected.domain()));
     }
 
     #[test]

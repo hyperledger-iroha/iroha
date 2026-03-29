@@ -2329,7 +2329,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     /// Apply queued ISIs via the executor while preserving an optional
     /// contract runtime context for nested contract execution.
-    pub fn apply_queued_with_contract_runtime_context(
+    pub(crate) fn apply_queued_with_contract_runtime_context(
         &mut self,
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -4736,7 +4736,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_REGISTER_ACCOUNT => {
                 let ptr = vm.register(10);
                 let id: ScopedAccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
-                let isi = Register::account(Account::from_scoped_id(id));
+                let isi = Register::account(Account::new_in_domain(id.account, id.domain));
                 let instr = InstructionBox::from(RegisterBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -7599,8 +7599,9 @@ mod pointer_abi_tests {
         vm.set_register(10, ptr);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ACCOUNT, &mut vm);
-        let expected = InstructionBox::from(Register::account(Account::from_scoped_id(
-            expected_scoped_account,
+        let expected = InstructionBox::from(Register::account(Account::new_in_domain(
+            expected_scoped_account.account,
+            expected_scoped_account.domain,
         )));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));

@@ -10,9 +10,12 @@ User=iroha
 Group=iroha
 WorkingDirectory=/opt/iroha
 Environment=RUST_LOG=info
+Environment=IROHA_TAIRA_CONFIG=/opt/iroha/configs/soranexus/taira/config.toml
+Environment=IROHA_TAIRA_GENESIS=/opt/iroha/configs/soranexus/taira/genesis.json
+EnvironmentFile=-/etc/default/taira-irohad
 # Keep the shipped Taira config and genesis explicit so public Torii also
 # exposes the curated MCP surface at /v1/mcp.
-ExecStart=/usr/local/bin/irohad --sora --config /opt/iroha/configs/soranexus/taira/config.toml --genesis /opt/iroha/configs/soranexus/taira/genesis.json
+ExecStart=/usr/local/bin/irohad --sora --config ${IROHA_TAIRA_CONFIG} --genesis ${IROHA_TAIRA_GENESIS}
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536

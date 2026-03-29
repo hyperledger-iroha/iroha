@@ -49,13 +49,13 @@ Bu sənəd `iroha_data_model` qutusunda həyata keçirilən və iş sahəsində 
 - `ScopedAccountId { account: AccountId, domain: DomainId }` yalnız əhatəli görünüş tələb olunduqda açıq domen kontekstini daşıyır.
 - `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` yenidən açar qeydlər tərəfindən istifadə edilən isteğe bağlı sabit ləqəbdir, `uaid` isteğe bağlı Nexus geniş [Universal Hesab ID-si](Kotodama) (Kotodama) daşıyır və `iroha_ffi`10001018 kanonik eyniliyin bir hissəsi deyil, əldə edilmiş indeks vəziyyəti.
 - İnşaatçılar:
-  - `NewAccount` vasitəsilə `Account::new(scoped_id)` açıq domenlə əlaqəli qeydiyyatı həyata keçirir və buna görə də `ScopedAccountId` tələb edir.
-  - `NewAccount` `Account::new_domainless(id)` vasitəsilə yalnız heç bir əlaqəli domeni olmayan universal hesab mövzusunu qeyd edir.
+  - `NewAccount` vasitəsilə `Account::new_in_domain(id, domain)` açıq domenlə əlaqəli qeydiyyatı həyata keçirir və buna görə də `ScopedAccountId` tələb edir.
+  - `NewAccount` `Account::new(id)` vasitəsilə yalnız heç bir əlaqəli domeni olmayan universal hesab mövzusunu qeyd edir.
 - Alias modeli:
   - Canonical hesab identifikasiyası heç vaxt domen və ya verilənlər məkanı seqmentini ehtiva etmir.
   - Hesab ləqəbləri `AccountId`-in üstünə qoyulmuş ayrı SNS/hesab etiketi bağlamalarıdır.
   - `merchant@hbl.sbp` kimi domenə uyğun ləqəblər həm domen, həm də ləqəb bağlamasında məlumat məkanını daşıyır.
-  - `merchant@sbp` kimi verilənlər məkanı-kök ləqəbləri yalnız məlumat məkanını daşıyır və buna görə də təbii olaraq `Account::new_domainless(...)` ilə cütləşir.
+  - `merchant@sbp` kimi verilənlər məkanı-kök ləqəbləri yalnız məlumat məkanını daşıyır və buna görə də təbii olaraq `Account::new(...)` ilə cütləşir.
   - Testlər və qurğular əvvəlcə universal `AccountId`-ni əkməli, sonra hesab şəxsiyyətinin özünə domen fərziyyələrini kodlaşdırmaq əvəzinə ayrıca domen keçidləri, ləqəb icarələri və ləqəb icazələrini əlavə etməlidir.
 
 ### Aktiv anlayışları və aktivlər

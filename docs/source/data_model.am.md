@@ -49,13 +49,13 @@ translator: machine-google-reviewed
 - `ScopedAccountId { account: AccountId, domain: DomainId }` ሰፋ ያለ እይታ በሚያስፈልግበት ጊዜ ብቻ ግልጽ የጎራ አውድ ይይዛል።
 - `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` አማራጭ የተረጋጋ ተለዋጭ ስም ነው በሬኪ መዝገቦች ጥቅም ላይ የዋለ፣ `uaid` አማራጭ Nexus-ሰፊ [ዩኒቨርሳል መለያ መታወቂያ](Kotodama) ነው ከቀኖናዊ ማንነት አካል ይልቅ የተገኘ መረጃ ጠቋሚ ሁኔታ።
 - ግንበኞች;
-  - `NewAccount` በ`Account::new(scoped_id)` በኩል ከጎራ ጋር የተገናኘ ግልጽ ምዝገባን ስለሚያደርግ `ScopedAccountId` ያስፈልገዋል።
-  - `NewAccount` በ `Account::new_domainless(id)` በኩል ምንም የተገናኘ ጎራ የሌለው ሁለንተናዊ መለያ ርዕሰ ጉዳይ ብቻ ይመዘግባል።
+  - `NewAccount` በ`Account::new_in_domain(id, domain)` በኩል ከጎራ ጋር የተገናኘ ግልጽ ምዝገባን ስለሚያደርግ `ScopedAccountId` ያስፈልገዋል።
+  - `NewAccount` በ `Account::new(id)` በኩል ምንም የተገናኘ ጎራ የሌለው ሁለንተናዊ መለያ ርዕሰ ጉዳይ ብቻ ይመዘግባል።
 - ተለዋጭ ሞዴል;
   - ቀኖናዊ መለያ ማንነት ጎራ ወይም የውሂብ ቦታ ክፍልን በጭራሽ አያካትትም።
   - የመለያ ቅጽል ስሞች በ`AccountId` ላይ የተደረደሩ የተለያዩ የኤስኤንኤስ/የመለያ መለያ ማሰሪያዎች ናቸው።
   - እንደ `merchant@hbl.sbp` ያሉ በጎራ ብቃት ያላቸው ተለዋጭ ስሞች ሁለቱንም ጎራ እና የውሂብ ቦታን በቅጥያ ማሰሪያ ውስጥ ይይዛሉ።
-  - እንደ `merchant@sbp` ያሉ የዳታ ስፔስ-ስር ተለዋጭ ስሞች የውሂብ ቦታን ብቻ ይይዛሉ እና ስለዚህ በተፈጥሮ ከ `Account::new_domainless(...)` ጋር ያጣምራሉ ።
+  - እንደ `merchant@sbp` ያሉ የዳታ ስፔስ-ስር ተለዋጭ ስሞች የውሂብ ቦታን ብቻ ይይዛሉ እና ስለዚህ በተፈጥሮ ከ `Account::new(...)` ጋር ያጣምራሉ ።
   - ሙከራዎች እና የቤት እቃዎች መጀመሪያ ሁለንተናዊውን `AccountId` ዘርተው ከዛም የጎራ ግምቶችን ወደ መለያው ማንነት ከማስቀመጥ ይልቅ ለየብቻ የጎራ ማገናኛዎችን፣ ተለዋጭ ስምምነቶችን እና ተለዋጭ ፍቃዶችን ይጨምሩ።
 
 ### የንብረት መግለጫዎች እና ንብረቶች

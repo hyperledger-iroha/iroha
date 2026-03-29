@@ -34,8 +34,20 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
 }
 
 fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let buf = to_bytes(account).expect("encode account into Norito");
-    make_tlv(PointerType::AccountId as u16, &buf)
+    let account = ivm::mock_wsv::AccountId::from(account).to_string();
+    make_tlv(PointerType::AccountId as u16, account.as_bytes())
+}
+
+fn make_scoped_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let payload = to_bytes(account).expect("encode scoped account into Norito");
+    let mut out = Vec::with_capacity(7 + payload.len() + 32);
+    out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload.as_ref());
+    let h: [u8; 32] = Hash::new(&payload).into();
+    out.extend_from_slice(&h);
+    out
 }
 
 fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
@@ -87,7 +99,7 @@ fn register_account_and_asset_then_mint() {
             .parse()
             .unwrap();
     let bob = test_account(bob_domain, bob_pk);
-    let acc = make_account_tlv(&bob);
+    let acc = make_scoped_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -149,16 +161,6 @@ fn register_asset_accepts_name_pointer_scoped_to_caller_domain() {
     );
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
-
-    // Register caller domain so Name-scoped asset registration can succeed.
-    let caller_dom = make_tlv(PointerType::DomainId as u16, b"domain");
-    vm.memory
-        .preload_input(0, &caller_dom)
-        .expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    let prog_caller_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
-    vm.load_program(&prog_caller_dom).unwrap();
-    vm.run().expect("register caller domain");
 
     // Register an additional domain to mirror mixed-domain test setups.
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");

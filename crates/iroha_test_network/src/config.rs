@@ -1464,8 +1464,7 @@ mod tests {
         let genesis_account_entry =
             Account::new_in_domain(genesis_account.clone(), genesis_domain_id.clone())
                 .build(&genesis_account);
-        let controller_account_entry =
-            Account::new_domainless(controller.clone()).build(&controller);
+        let controller_account_entry = Account::new(controller.clone()).build(&controller);
         let domains = vec![Domain::new(genesis_domain_id).build(&genesis_account)];
         let mut asset_definition =
             AssetDefinition::new(asset_definition_id, NumericSpec::fractional(asset_scale))

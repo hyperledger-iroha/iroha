@@ -26,6 +26,19 @@ MCP entry that points at that URL.
 If the endpoint returns `404`, report that native Torii MCP is not enabled on
 the deployment yet and stop before attempting live-network actions.
 
+If reads work but live writes fail with `route_unavailable`, report that the
+public ingress still cannot reach authoritative peers for the target lane and
+point operators at
+`configs/soranexus/taira/check_mcp_rollout.sh --write-config <runtime-only client.toml>`.
+For that runtime-only signer config, prefer
+`configs/soranexus/taira/taira-canary-client.example.toml`; the generic
+`defaults/client.toml` targets the zero chain id and is not valid for Taira.
+If the rollout is still using hand-edited validator configs, point them at
+`configs/soranexus/taira/validator_roster.example.toml`,
+`configs/soranexus/taira/validator_secrets.example.toml`, and
+`python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`
+so every validator shares the same `trusted_peers` / `trusted_peers_pop` roster.
+
 ## Working Rules
 
 1. Prefer `iroha.*` aliases. They are the intended agent-facing surface for
@@ -81,6 +94,9 @@ the deployment yet and stop before attempting live-network actions.
    returned status, not just the request payload.
 4. When a write tool fails, surface the server error and say whether the issue
    looks like auth, validation, missing tool exposure, or endpoint availability.
+5. Treat `route_unavailable` as deployment health, not user input failure:
+   the public Torii node is up but the write route still cannot reach an
+   authoritative peer.
 
 ## Safety
 

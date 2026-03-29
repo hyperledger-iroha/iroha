@@ -28206,9 +28206,12 @@ mod tests {
         Register::domain(Domain::new(recipient_domain.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::from_scoped_id(recipient.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new_in_domain(
+            recipient.account().clone(),
+            recipient.domain().clone(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {

@@ -49,13 +49,13 @@ Ushbu hujjat `iroha_data_model` kassasida tatbiq etilgan va ish maydoni bo'ylab 
 - `ScopedAccountId { account: AccountId, domain: DomainId }` aniq domen kontekstini faqat ko'lamli ko'rinish zarur bo'lganda olib boradi.
 - `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` qayta kalit yozuvlar tomonidan ishlatiladigan ixtiyoriy barqaror taxallusdir, `uaid` keng miqyosda ixtiyoriy Nexus [Universal hisob identifikatori](Kotodama) (Norito) va kanonik identifikatsiyaning bir qismi emas, balki olingan indeks holati.
 - Quruvchilar:
-  - `NewAccount` orqali `Account::new(scoped_id)` aniq domen bilan bog'langan ro'yxatdan o'tishni amalga oshiradi va shuning uchun `ScopedAccountId` talab qiladi.
-  - `NewAccount` `Account::new_domainless(id)` orqali faqat bog'langan domensiz universal hisob mavzusini ro'yxatdan o'tkazadi.
+  - `NewAccount` orqali `Account::new_in_domain(id, domain)` aniq domen bilan bog'langan ro'yxatdan o'tishni amalga oshiradi va shuning uchun `ScopedAccountId` talab qiladi.
+  - `NewAccount` `Account::new(id)` orqali faqat bog'langan domensiz universal hisob mavzusini ro'yxatdan o'tkazadi.
 - Taxallus modeli:
   - Kanonik hisob identifikatori hech qachon domen yoki ma'lumotlar maydoni segmentini o'z ichiga olmaydi.
   - Hisob taxalluslari - `AccountId` tepasida joylashgan alohida SNS/hisob yorlig'i bog'lashlari.
   - `merchant@hbl.sbp` kabi domenga mos taxalluslar taxallusni bog'lashda ham domenni, ham ma'lumotlar maydonini olib yuradi.
-  - `merchant@sbp` kabi ma'lumotlar maydoni-root taxalluslari faqat ma'lumotlar maydonini tashiydi va shuning uchun tabiiy ravishda `Account::new_domainless(...)` bilan bog'lanadi.
+  - `merchant@sbp` kabi ma'lumotlar maydoni-root taxalluslari faqat ma'lumotlar maydonini tashiydi va shuning uchun tabiiy ravishda `Account::new(...)` bilan bog'lanadi.
   - Sinovlar va moslamalar avval universal `AccountId` ni ekishi kerak, so‘ngra hisob identifikatoriga domen taxminlarini kodlash o‘rniga domen havolalari, taxallus ijarasi va taxallus ruxsatlarini alohida qo‘shishi kerak.
 
 ### Aktiv ta'riflari va aktivlar

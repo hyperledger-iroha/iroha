@@ -3261,11 +3261,9 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_account_alias_lease(&mut tx, &authority, &account_label);
-        Register::account(
-            Account::new_domainless(account_id.clone()).with_label(Some(account_label.clone())),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register domainless account");
+        Register::account(Account::new(account_id.clone()).with_label(Some(account_label.clone())))
+            .execute(&authority, &mut tx)
+            .expect("register domainless account");
 
         let account = tx.world.account(&account_id).expect("account should exist");
         assert!(account.linked_domains.is_empty());
@@ -3323,8 +3321,8 @@ mod tests {
 
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
         let linked_domains = BTreeSet::from([first_domain.clone(), second_domain.clone()]);
-        let new_account = NewAccount::new_domainless(account_id.clone())
-            .with_linked_domains(linked_domains.clone());
+        let new_account =
+            NewAccount::new(account_id.clone()).with_linked_domains(linked_domains.clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -3412,7 +3410,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(Account::new_domainless(account_id.clone()))
+        Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register domainless account");
         seed_account_alias_lease(&mut tx, &authority, &label);

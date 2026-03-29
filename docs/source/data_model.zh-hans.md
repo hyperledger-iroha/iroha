@@ -49,13 +49,13 @@ translator: machine-google-reviewed
 - `ScopedAccountId { account: AccountId, domain: DomainId }` 仅在需要范围视图时才携带显式域上下文。
 - `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` 是密钥更新记录使用的可选稳定别名，`uaid` 携带可选的 Nexus 范围 [通用帐户 ID](./universal_accounts_guide.md)，`linked_domains` 是派生索引状态而不是索引状态的一部分规范身份。
 - 建设者：
-  - `NewAccount` 通过 `Account::new(scoped_id)` 实现显式域链接注册，因此需要 `ScopedAccountId`。
-  - `NewAccount` 通过 `Account::new_domainless(id)` 仅注册没有链接域的通用帐户主题。
+  - `NewAccount` 通过 `Account::new_in_domain(id, domain)` 实现显式域链接注册，因此需要 `ScopedAccountId`。
+  - `NewAccount` 通过 `Account::new(id)` 仅注册没有链接域的通用帐户主题。
 - 别名模型：
   - 规范帐户身份从不包含域或数据空间段。
   - 帐户别名是位于 `AccountId` 之上的单独 SNS/帐户标签绑定。
   - 域限定别名（例如 `merchant@hbl.sbp`）在别名绑定中同时携带域和数据空间。
-  - 数据空间根别名（例如 `merchant@sbp`）仅包含数据空间，因此与 `Account::new_domainless(...)` 自然配对。
+  - 数据空间根别名（例如 `merchant@sbp`）仅包含数据空间，因此与 `Account::new(...)` 自然配对。
   - 测试和固定装置应首先播种通用 `AccountId`，然后分别添加域链接、别名租用和别名权限，而不是将域假设编码到帐户身份本身中。
 
 ### 资产定义和资产

@@ -27,7 +27,8 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let buf = to_bytes(account).expect("encode account into Norito");
+    let buf =
+        to_bytes(&ivm::mock_wsv::AccountId::from(account)).expect("encode account into Norito");
     make_tlv(PointerType::AccountId as u16, &buf)
 }
 

@@ -39,7 +39,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 18,
-        args: "r10=&DomainId, r11=&ScopedAccountId",
+        args: "r10=&DomainId, r11=&AccountId",
         ret: "u64=0",
         gas: "asset:gas/G_xfer_domain@ivm.core/v2",
     },
@@ -51,7 +51,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 20,
-        args: "r10=&ScopedAccountId",
+        args: "r10=&AccountId",
         ret: "u64=0",
         gas: "asset:gas/G_unreg_acct@ivm.core/v2",
     },
@@ -69,25 +69,25 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 23,
-        args: "r10=&ScopedAccountId, r11=&Json",
+        args: "r10=&AccountId, r11=&Json",
         ret: "u64=0",
         gas: "asset:gas/G_add_sig@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 24,
-        args: "r10=&ScopedAccountId, r11=&Json",
+        args: "r10=&AccountId, r11=&Json",
         ret: "u64=0",
         gas: "asset:gas/G_rm_sig@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 25,
-        args: "r10=&ScopedAccountId, r11=quorum:u64",
+        args: "r10=&AccountId, r11=quorum:u64",
         ret: "u64=0",
         gas: "asset:gas/G_set_quorum@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 26,
-        args: "r10=&ScopedAccountId, r11=&Name, r12=&Json",
+        args: "r10=&AccountId, r11=&Name, r12=&Json",
         ret: "u64=0",
         gas: "asset:gas/G_set_detail@ivm.core/v2 + bytes(val)",
     },
@@ -105,31 +105,31 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 34,
-        args: "r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)",
+        args: "r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)",
         ret: "u64=0",
         gas: "asset:gas/G_mint@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 35,
-        args: "r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)",
+        args: "r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)",
         ret: "u64=0",
         gas: "asset:gas/G_burn@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 36,
-        args: "r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)",
+        args: "r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)",
         ret: "u64=0",
         gas: "asset:gas/G_transfer@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 37,
-        args: "r10=&NftId, r11=&ScopedAccountId(owner)",
+        args: "r10=&NftId, r11=&AccountId(owner)",
         ret: "u64=0",
         gas: "asset:gas/G_nft_mint_asset@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 38,
-        args: "r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to)",
+        args: "r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)",
         ret: "u64=0",
         gas: "asset:gas/G_nft_transfer_asset@ivm.core/v2",
     },
@@ -177,25 +177,25 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 50,
-        args: "r10=&ScopedAccountId, r11=&Name",
+        args: "r10=&AccountId, r11=&Name",
         ret: "u64=0",
         gas: "asset:gas/G_grant_role@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 51,
-        args: "r10=&ScopedAccountId, r11=&Name",
+        args: "r10=&AccountId, r11=&Name",
         ret: "u64=0",
         gas: "asset:gas/G_revoke_role@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 52,
-        args: "r10=&ScopedAccountId, r11=&Name",
+        args: "r10=&AccountId, r11=&Name",
         ret: "u64=0",
         gas: "asset:gas/G_grant_perm@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
         number: 53,
-        args: "r10=&ScopedAccountId, r11=&Name",
+        args: "r10=&AccountId, r11=&Name",
         ret: "u64=0",
         gas: "asset:gas/G_revoke_perm@ivm.core/v2",
     },
@@ -536,6 +536,12 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
         gas: "-",
     },
     crate::syscalls::SyscallDoc {
+        number: 128,
+        args: "-",
+        ret: "u64=0",
+        gas: "-",
+    },
+    crate::syscalls::SyscallDoc {
         number: 144,
         args: "r10=&Blob(message)",
         ret: "r10=ptr (&Blob(digest))",
@@ -610,7 +616,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc {
         number: 164,
         args: "-",
-        ret: "ptr (ScopedAccountId in INPUT)",
+        ret: "ptr (AccountId in INPUT)",
         gas: "asset:gas/G_get_auth@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
@@ -627,9 +633,15 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 167,
-        args: "r10=&Name(label), r11=&DomainId(domain)",
-        ret: "ptr (&ScopedAccountId in INPUT)",
+        args: "r10=&Blob(alias literal)",
+        ret: "ptr (&AccountId in INPUT)",
         gas: "asset:gas/G_alias_resolve@ivm.core/v2",
+    },
+    crate::syscalls::SyscallDoc {
+        number: 168,
+        args: "-",
+        ret: "u64=0",
+        gas: "-",
     },
     crate::syscalls::SyscallDoc {
         number: 176,
@@ -710,6 +722,18 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
         gas: "-",
     },
     crate::syscalls::SyscallDoc {
+        number: 200,
+        args: "r10=&SoracloudRequest(ReadConfig)",
+        ret: "r10=&SoracloudResponse(ReadConfig)",
+        gas: "-",
+    },
+    crate::syscalls::SyscallDoc {
+        number: 201,
+        args: "r10=&SoracloudRequest(ReadSecretEnvelope)",
+        ret: "r10=&SoracloudResponse(ReadSecretEnvelope)",
+        gas: "-",
+    },
+    crate::syscalls::SyscallDoc {
         number: 224,
         args: "r10=&Blob(TLV)",
         ret: "ptr (r10)",
@@ -753,7 +777,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 249,
-        args: "r10=&ScopedAccountId, r11=&AssetDefinitionId",
+        args: "r10=&AccountId, r11=&AssetDefinitionId",
         ret: "ptr (&NoritoBytes(Numeric))",
         gas: "asset:gas/G_get_bal@ivm.core/v2",
     },

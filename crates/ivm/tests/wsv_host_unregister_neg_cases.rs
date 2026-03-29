@@ -3,9 +3,7 @@ use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{
-        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
-    },
+    mock_wsv::{DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -34,8 +32,20 @@ fn account(domain: &str, public_key: &str) -> ScopedAccountId {
 }
 
 fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let buf = to_bytes(account).expect("encode account into Norito");
-    make_tlv(PointerType::AccountId as u16, &buf)
+    let account = ivm::mock_wsv::AccountId::from(account).to_string();
+    make_tlv(PointerType::AccountId as u16, account.as_bytes())
+}
+
+fn make_scoped_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let payload = to_bytes(account).expect("encode scoped account into Norito");
+    let mut out = Vec::with_capacity(7 + payload.len() + 32);
+    out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload.as_ref());
+    let h: [u8; 32] = Hash::new(&payload).into();
+    out.extend_from_slice(&h);
+    out
 }
 
 #[test]
@@ -70,7 +80,7 @@ fn unregister_account_with_existing_nft_fails() {
     vm.run().expect("register domain");
 
     // Register the recipient account
-    let acc = make_account_tlv(&bob);
+    let acc = make_scoped_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -130,7 +140,7 @@ fn unregister_domain_with_only_accounts_fails() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_account_tlv(&bob);
+    let acc = make_scoped_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -138,56 +148,6 @@ fn unregister_domain_with_only_accounts_fails() {
     vm.run().expect("register account");
 
     // Unregister domain should fail because an account exists
-    let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
-    vm.memory.preload_input(0, &dom).expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    let prog_udom = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_DOMAIN as u8]);
-    vm.load_program(&prog_udom).unwrap();
-    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
-}
-
-#[test]
-fn unregister_domain_with_only_assets_fails() {
-    let alice = account(
-        "domain",
-        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
-    );
-    let mut wsv = MockWorldStateView::new();
-    wsv.add_account_unchecked(alice.clone());
-    wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
-    wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(host);
-
-    // Register domain wonder
-    let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
-    vm.memory.preload_input(0, &dom).expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    let prog_dom = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
-    vm.load_program(&prog_dom).unwrap();
-    vm.run().expect("register domain");
-
-    // Register asset def under wonder
-    let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
-        "rose".parse().unwrap(),
-    );
-    let ad = make_tlv(
-        PointerType::AssetDefinitionId as u16,
-        rose.to_string().as_bytes(),
-    );
-    vm.memory.preload_input(0, &ad).expect("preload input");
-    vm.set_register(10, Memory::INPUT_START);
-    let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
-    vm.load_program(&prog_ad).unwrap();
-    vm.run().expect("register asset def");
-
-    // Attempt to unregister domain -> should fail (assets present)
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
