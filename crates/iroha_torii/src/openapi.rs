@@ -1532,8 +1532,8 @@ fn transaction_paths() -> Map {
         "/transaction".to_owned(),
         Value::Object(binary_post_operation(
             "Transactions",
-            "Submit a signed transaction.",
-            "Submit a SignedTransaction encoded as Norito bytes.",
+            "Submit a versioned signed transaction.",
+            "Submit a versioned SignedTransaction encoded as Norito bytes. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
             "#/components/schemas/JsonValue",
         )),
     );

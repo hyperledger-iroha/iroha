@@ -160,6 +160,7 @@ criterion = { workspace = true }
 tower = "0.5.2"
 hyper = "1.7.0"
 ivm = { path = "../ivm" }
+iroha = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_core = { workspace = true, features = ["iroha-core-tests"] }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }

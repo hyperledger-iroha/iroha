@@ -2,6 +2,41 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 Torii public SignedTransaction ingress correction + full preserved-peer stable reruns):
+the public `/transaction` API boundary is now corrected for release 1, and
+the old soak-killing ingress decode failure is gone. Both full envelopes now
+fail later on a different post-ingress liveness/backpressure class.
+
+- `crates/iroha_torii/src/lib.rs` now treats public transaction ingress as a
+  versioned `SignedTransaction` only, derives the public submission identity
+  from that external transaction, and converts to
+  `TransactionEntrypoint::External(...)` only after the HTTP boundary;
+- `crates/iroha/src/client.rs` still posts versioned `SignedTransaction`
+  bytes, and the client request test now locks in that the real submit path is
+  decodable as `SignedTransaction` and not as `TransactionEntrypoint`; and
+- Torii ingress coverage now includes a positive public-ingress test, a
+  negative `TransactionEntrypoint` rejection test, and an end-to-end
+  client-to-Torii submit test, while the OpenAPI/MCP docs now describe the
+  public/internal split explicitly.
+
+Open work for this slice now remains:
+- diagnose the permissioned post-fix stall visible in
+  `/tmp/izanami_permissioned_signedtx_20260329T190922Z.log`, where the run now
+  gets through public ingress and commits into the mid-teens before collapsing
+  at `strict_min_height=16` behind repeated height-17 `missing_qc` view
+  changes, `insufficient online peers for commit quorum` proposal deferrals,
+  `PRTRY:QUEUE_FULL`, and ingress-endpoint loss;
+- diagnose the NPoS post-fix stall visible in
+  `/tmp/izanami_npos_signedtx_20260329T192111Z.log`, where the run now gets
+  through public ingress and commits through height `10` before collapsing at
+  `strict_min_height=8` behind the same queue-full / endpoint-loss pattern
+  plus repeated `Torii ingress proxy attempt failed ... timed out` warnings;
+- determine whether the NPoS Torii proxy timeout family is a primary authority
+  routing problem or only secondary fallout once the low-height consensus /
+  endpoint-loss stall begins; and
+- rerun both preserved-peer stable full envelopes only after those residual
+  post-ingress liveness failures are addressed.
+
 Latest sync (2026-03-29 Taira testnet prefix/config rollout):
 the served Taira localnet now boots cleanly with Taira-prefixed account
 literals after moving the generator/live overrides to `[gov]` and explicitly

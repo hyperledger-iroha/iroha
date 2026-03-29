@@ -2,6 +2,70 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Torii public SignedTransaction ingress contract correction + full preserved-peer stable reruns
+- Corrected the first-release public Torii transaction-ingress contract so
+  `POST /transaction` now accepts only a versioned `SignedTransaction` on the
+  HTTP boundary, while `TransactionEntrypoint` stays internal:
+  - `crates/iroha_torii/src/lib.rs` now decodes
+    `NoritoVersioned<SignedTransaction>`, derives the public submission hash
+    and rate-limit key from that external transaction, and wraps it once into
+    `TransactionEntrypoint::External(...)` before the existing internal
+    admission/routing path;
+  - `crates/iroha/src/client.rs` keeps posting versioned
+    `SignedTransaction` bytes to `/transaction`, and the client-side request
+    test now proves the real submit path is decodable as a versioned
+    `SignedTransaction` but not as a versioned `TransactionEntrypoint`; and
+  - `crates/iroha_torii/src/openapi.rs`, `crates/iroha_torii/src/mcp.rs`,
+    `docs/portal/static/openapi/torii.json`, and
+    `docs/portal/static/openapi/versions/current/torii.json` now document the
+    public/public-internal split explicitly.
+- Added Torii ingress coverage for the corrected boundary:
+  - `crates/iroha_torii/tests/norito_ingress.rs` now checks that a versioned
+    `SignedTransaction` sent to `/transaction` still returns `202 Accepted`
+    plus the submission receipt;
+  - the same suite now rejects a versioned
+    `TransactionEntrypoint::External(...)` payload on that public route; and
+  - the new end-to-end client-to-Torii test exercises a real
+    `iroha::client::Client` against a Torii router so public-ingress drift is
+    caught before soak.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha --lib submit_transaction -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test norito_ingress -- --nocapture` (pass)
+  - `cargo test -p iroha_torii torii_proxy -- --nocapture` (pass)
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami` (pass)
+- Full preserved-peer stable reruns on March 29, 2026 closed the old
+  `invalid magic header` regression but exposed a later failure mode instead:
+  - permissioned log:
+    `/tmp/izanami_permissioned_signedtx_20260329T190922Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-permissioned-signedtx_20260329T190922Z/irohad_test_network_Xgpl1p`;
+    the run advanced past the old height-1 decode failure and reached
+    `strict_reference_height=18`, but then stalled at
+    `strict_min_height=16` / `quorum_min_height=16` and failed the 600s
+    strict-progress timeout with `successes=46`, `failures=296`,
+    `izanami_ingress_failover_total=179`, and
+    `izanami_ingress_endpoint_unhealthy_total=411`; peer logs show commit
+    quorums completing through heights `16` and `17`, followed by repeated
+    `missing_qc` view changes at height `17` with empty vote/payload backlogs
+    and repeated `deferring proposal: insufficient online peers for commit
+    quorum (within grace)` messages while ingress collapses into
+    `PRTRY:QUEUE_FULL` plus `no ingress endpoints available`; and
+  - NPoS log:
+    `/tmp/izanami_npos_signedtx_20260329T192111Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-npos-signedtx_20260329T192111Z/irohad_test_network_y4B0DC`;
+    this run also advanced past the old decode failure, reached
+    `strict_reference_height=10`, then stalled at `strict_min_height=8` /
+    `quorum_min_height=8` and failed the same 600s timeout with
+    `successes=32`, `failures=122`,
+    `izanami_ingress_failover_total=78`, and
+    `izanami_ingress_endpoint_unhealthy_total=199`; peer logs show early
+    commit quorums through height `10`, the same `insufficient online peers
+    for commit quorum` proposal deferrals, and repeated `Torii ingress proxy
+    attempt failed ... timed out` warnings during the stall window on top of
+    the same `PRTRY:QUEUE_FULL` / `no ingress endpoints available` pressure.
+
 ## 2026-03-29 Taira testnet prefix/config rollout fixed
 - Fixed Taira’s served/testnet account-literal rollout so the generated and
   live configs no longer mix Sora-prefixed defaults into a Taira

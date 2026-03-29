@@ -3868,7 +3868,7 @@
     },
     "/transaction": {
       "post": {
-        "description": "Submit a SignedTransaction encoded as Norito bytes.",
+        "description": "Submit a versioned SignedTransaction encoded as Norito bytes. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
         "requestBody": {
           "content": {
             "application/octet-stream": {

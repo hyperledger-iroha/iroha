@@ -12336,7 +12336,7 @@ fn iroha_blocks_get_tool() -> ToolSpec {
 fn iroha_transactions_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit".to_owned(),
-        description: "Submit a signed transaction encoded as Norito bytes (`signed_tx_base64`/`tx_base64`/hex shortcuts supported).".to_owned(),
+        description: "Submit a versioned SignedTransaction encoded as Norito bytes (`signed_tx_base64`/`tx_base64`/hex shortcuts supported).".to_owned(),
         method: Method::POST,
         path_template: "/transaction".to_owned(),
         input_schema: norito::json!({
@@ -12345,7 +12345,7 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
             "properties": {
                 "body_base64": {
                     "type": "string",
-                    "description": "Base64/base64url encoded SignedTransaction bytes."
+                    "description": "Base64/base64url encoded versioned SignedTransaction bytes."
                 },
                 "signed_tx_base64": {
                     "type": "string",
@@ -12357,7 +12357,7 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
                 },
                 "body_hex": {
                     "type": "string",
-                    "description": "Hex-encoded SignedTransaction bytes."
+                    "description": "Hex-encoded versioned SignedTransaction bytes."
                 },
                 "signed_tx_hex": {
                     "type": "string",
@@ -12368,7 +12368,7 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
                     "description": "Alias for `body_hex`."
                 },
                 "body": {
-                    "description": "Optional JSON request body; use only when submitting JSON transaction envelopes."
+                    "description": "Optional JSON request body; use only when submitting JSON SignedTransaction envelopes."
                 },
                 "content_type": {
                     "type": "string",
@@ -12387,7 +12387,7 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
 fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit_and_wait".to_owned(),
-        description: "Submit a signed transaction and poll pipeline status until a terminal state (`Committed`/`Applied`/`Rejected`/`Expired` by default).".to_owned(),
+        description: "Submit a versioned SignedTransaction and poll pipeline status until a terminal state (`Committed`/`Applied`/`Rejected`/`Expired` by default).".to_owned(),
         method: Method::POST,
         path_template: "/transaction".to_owned(),
         input_schema: norito::json!({
@@ -12396,7 +12396,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
             "properties": {
                 "body_base64": {
                     "type": "string",
-                    "description": "Base64/base64url encoded SignedTransaction bytes."
+                    "description": "Base64/base64url encoded versioned SignedTransaction bytes."
                 },
                 "signed_tx_base64": {
                     "type": "string",
@@ -12408,7 +12408,7 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
                 },
                 "body_hex": {
                     "type": "string",
-                    "description": "Hex-encoded SignedTransaction bytes."
+                    "description": "Hex-encoded versioned SignedTransaction bytes."
                 },
                 "signed_tx_hex": {
                     "type": "string",
