@@ -45,6 +45,32 @@ Open work for this slice now remains:
   `1000ms` threshold while the same recovered malformed payload churn
   continues under comparatively light ingress pressure.
 
+Latest sync (2026-03-29 mandatory genesis `chain_discriminant` + fresh Taira reset):
+the genesis JSON path now requires an explicit `chain_discriminant`, and the
+served Taira localnet has been regenerated from fresh genesis on top of that
+mandatory manifest field.
+
+- `crates/iroha_genesis/src/lib.rs` now persists the manifest discriminant,
+  requires it during JSON decode, and scopes transaction decode under the
+  declared network prefix instead of whatever ambient default happened to be
+  active;
+- `crates/iroha_kagami/src/localnet.rs` now writes that field into generated
+  genesis manifests, while
+  `crates/iroha_kagami/examples/taira_kaigi_localnet.rs` now uses the manifest
+  discriminant when producing Taira overlay account literals and re-signing
+  the overlaid genesis; and
+- the served Taira localnet was rebuilt and restarted from a newly generated
+  fresh genesis, with the explorer rebuilt alongside it, and the public
+  faucet/MCP/Kaigi/explorer checks are healthy again.
+
+Open work for this slice now remains:
+- teach `kagami localnet` itself to emit `launchd-run.sh` again so the Taira
+  bootstrap does not need to regenerate that helper after each fresh bundle
+  generation; and
+- sweep the remaining checked-in sample manifests whose account literals still
+  reflect older Sora-prefixed content so their declared `chain_discriminant`
+  and human-facing sample semantics stay aligned everywhere.
+
 Latest sync (2026-03-29 Torii public SignedTransaction ingress correction + full preserved-peer stable reruns):
 the public `/transaction` API boundary is now corrected for release 1, and
 the old soak-killing ingress decode failure is gone. Both full envelopes now

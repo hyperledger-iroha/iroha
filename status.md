@@ -123,6 +123,45 @@ Last updated: 2026-03-30
   `LengthMismatch` decode churn or proposer deferral on low online-peer
   snapshots.
 
+## 2026-03-29 Mandatory genesis `chain_discriminant` + fresh Taira reset
+- Made `chain_discriminant` mandatory in the JSON genesis manifest path so a
+  genesis bundle always declares the network prefix that its account literals
+  must decode under.
+- `crates/iroha_genesis/src/lib.rs` now carries `chain_discriminant` through
+  `RawGenesisTransaction` and `NormalizedGenesis`, emits it on
+  `to_json_value()`, requires it on `from_json_value()`, and enters the
+  matching `ChainDiscriminantGuard` before decoding the embedded genesis
+  transactions. `GenesisBuilder::build_raw()` now stamps the manifest with the
+  currently active chain discriminant instead of relying on ambient defaults.
+- `crates/iroha_kagami/src/localnet.rs` now writes the generated genesis JSON
+  with the explicit chain discriminant embedded, and
+  `crates/iroha_kagami/examples/taira_kaigi_localnet.rs` now scopes its Taira
+  overlay/account-literal generation to the manifest discriminant before
+  re-signing the overlayed genesis.
+- Updated the checked-in genesis manifests under `defaults/`,
+  `defaults/kagami/`, `configs/soranexus/`, and `wizard-output/` so the
+  loader-compatible `chain_discriminant` field is present everywhere.
+- Hardened `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` so the Taira
+  bootstrap recreates `launchd-run.sh` automatically if a newly generated
+  localnet bundle does not emit it.
+- Rebuilt `irohad`, `kagami`, and the explorer; regenerated the served
+  `dist/taira-localnet` from fresh genesis; re-applied the live faucet/Kaigi
+  overlay; and restarted the detached `taira-localnet` session. Public checks
+  now pass again:
+  - `https://taira.sora.org/status`
+  - `https://taira.sora.org/v1/accounts/faucet/puzzle`
+  - `https://taira.sora.org/v1/mcp`
+  - `https://taira.sora.org/v1/kaigi/relays`
+  - `https://taira-explorer.sora.org/`
+- Focused verification completed:
+  - `cargo test -p iroha_genesis raw_genesis_requires_chain_discriminant -- --nocapture` (pass)
+  - `cargo test -p iroha_genesis raw_genesis_roundtrip_uses_manifest_chain_discriminant_for_account_literals -- --nocapture` (pass)
+  - `cargo build -p irohad -p iroha_kagami --bin kagami --example taira_kaigi_localnet --release` (pass)
+  - `cargo test -p iroha_kagami --example taira_kaigi_localnet -- --nocapture` (pass)
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh` (pass)
+  - live loopback/public `curl` checks for Taira `/status`, faucet puzzle,
+    MCP, Kaigi relays, and explorer root (pass)
+
 ## 2026-03-29 Torii public SignedTransaction ingress contract correction + full preserved-peer stable reruns
 - Corrected the first-release public Torii transaction-ingress contract so
   `POST /transaction` now accepts only a versioned `SignedTransaction` on the
