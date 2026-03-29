@@ -2,6 +2,34 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: SoraFS storage-pin integration tests match the current client API again
+- Updated the two direct single-file SoraFS pin callsites in
+  `integration_tests/tests/soranet_web_deploy.rs` and
+  `integration_tests/tests/sorafs_reconciliation.rs` to pass `None` for the
+  new optional `files` argument on
+  `Client::post_sorafs_storage_pin(...)`.
+- This closes the immediate `error[E0061]` compile break on the affected
+  integration-test targets without changing the manifest or payload bytes that
+  those tests submit.
+- Verification:
+  - `cargo check -p integration_tests --test soranet_web_deploy --test sorafs_reconciliation --message-format short` (pass)
+  - `cargo fmt --all` (pass)
+
+## 2026-03-29 Follow-up: `iroha_core`/`iroha_torii` compile hygiene for contract-runtime visibility and SoraFS manifest helpers
+- Removed the last dead contiguous-frontier phase from
+  `crates/iroha_core/src/sumeragi/main_loop.rs` by dropping the unused
+  `AwaitVotes` state and updating the active frontier-owner predicates to only
+  reference runtime phases that are still reachable on the current path.
+- Cleaned up one remaining `iroha_torii` test-helper warning in
+  `crates/iroha_torii/src/sorafs/api.rs` by marking the unused
+  `manifest_digest` parameter intentionally unused.
+- Revalidated the previously reported contract-runtime visibility warnings and
+  SoraFS manifest compile errors on the current tree: the targeted crate check
+  is now clean.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_core -p iroha_torii --all-targets` (pass)
+
 ## 2026-03-29 Follow-up: Torii ingress now uses bounded multi-hop proxying and latency-aware admission
 - Implemented the remaining ingress-layer fixes directly in the server path
   instead of widening Sumeragi scope:
@@ -429,6 +457,41 @@ Last updated: 2026-03-29
     failure; those environment issues no longer block this slice; and
   - unrelated warnings remain in `iroha_core`, but there is no remaining build
     or test failure in the `izanami` repeatable-trigger repin slice.
+
+## 2026-03-28 Follow-up: Taira localnet now seeds Kaigi relay data on restart
+- Set up Kaigi relay visibility on the served local Taira deployment by adding
+  a repo-owned bootstrap path that re-signs the live localnet genesis with
+  seeded relay registration and relay-health metadata, then restarts the
+  detached `taira-localnet` screen session from clean storage.
+- Added the helper example
+  `crates/iroha_kagami/examples/taira_kaigi_localnet.rs`, which overlays
+  `kaigi_relay__*` and `kaigi_relay_feedback__*` domain metadata onto the
+  existing Taira genesis manifest and signs the resulting `.nrt` with the
+  deterministic `taira-localgenesis` key.
+- Added `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` to automate the
+  local rollout. The script now validates helper binaries before reusing them,
+  so it skips `cargo test --example ...` harnesses that do not expose the
+  `--genesis` CLI.
+- Updated `configs/soranexus/taira/README.md` with the local Kaigi bootstrap
+  flow, the `IROHA_TAIRA_KAIGI_HELPER_BIN` override for non-default build
+  directories, and the note that the health snapshot can report
+  `registrations_total = 0` even while the relay list itself is populated.
+- Validation:
+  - `cargo test -p iroha_kagami --example taira_kaigi_localnet -- --nocapture`
+    (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha_taira_kaigi_helper cargo build -p iroha_kagami --example taira_kaigi_localnet`
+    (pass)
+  - `IROHA_TAIRA_KAIGI_HELPER_BIN=/tmp/iroha_taira_kaigi_helper/debug/examples/taira_kaigi_localnet bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+    (pass; rotated local storage, re-signed the served genesis, and restarted
+    the live localnet)
+  - `curl -sk https://taira.sora.org/v1/kaigi/relays | jq .`
+    (pass; `total = 3`, all relays `Healthy`)
+  - `curl -sk https://taira.sora.org/v1/kaigi/relays/health | jq .`
+    (pass; `healthy_total = 3`)
+  - `curl -sk https://taira-explorer.sora.org/v1/kaigi/relays | jq .`
+    (pass; explorer proxy sees the same `total = 3` data)
+  - `curl -sk https://taira.sora.org/status | jq '{peers, blocks, txs_approved, txs_rejected}'`
+    (pass; network remained healthy after the restart)
 
 ## 2026-03-28 Follow-up: Taira Sorafs upload path no longer fails at nginx body-size limits
 - Investigated the static-site publish blocker reported by the Sorafs deploy

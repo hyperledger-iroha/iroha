@@ -5605,6 +5605,21 @@ fn parse_domain_id(raw: &str) -> Result<DomainId, Error> {
 }
 
 #[cfg(feature = "app_api")]
+fn parse_kaigi_call_id(raw: &str) -> Result<iroha_data_model::kaigi::KaigiId, Error> {
+    let trimmed = raw.trim();
+    let (domain_raw, call_name_raw) = trimmed
+        .split_once(':')
+        .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let domain_id = domain_raw
+        .parse::<DomainId>()
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let call_name = call_name_raw
+        .parse::<Name>()
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    Ok(iroha_data_model::kaigi::KaigiId::new(domain_id, call_name))
+}
+
+#[cfg(feature = "app_api")]
 fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitionId, Error> {
     let trimmed = raw.trim();
     let world = app.state.world_view();
@@ -10460,6 +10475,12 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
             let commit_topology: Vec<_> = state_view.commit_topology().iter().cloned().collect();
             if commit_topology.is_empty() {
                 authoritative_peer_ids.extend(state_view.world().peers().iter().cloned());
+                if authoritative_peer_ids.is_empty() {
+                    if let Some(local_peer_id) = app.local_peer_id.as_ref() {
+                        authoritative_peer_ids.insert(local_peer_id.clone());
+                    }
+                    authoritative_peer_ids.extend(online_peer_ids.iter().cloned());
+                }
             } else {
                 authoritative_peer_ids.extend(commit_topology);
             }
@@ -13984,6 +14005,97 @@ async fn handler_kaigi_relays(
     )
     .await
     .map(axum::response::IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_kaigi_call(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(call_raw): AxPath<String>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/kaigi/calls/{call_id}").await?;
+    }
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    routing::handle_v1_kaigi_call(app.state.clone(), call_id).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_kaigi_call_signals(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(call_raw): AxPath<String>,
+    AxQuery(params): AxQuery<routing::KaigiCallSignalsParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/kaigi/calls/{call_id}/signals",
+        )
+        .await?;
+    }
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    routing::handle_v1_kaigi_call_signals(app.state.clone(), call_id, AxQuery(params)).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_kaigi_call_events_sse(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(call_raw): AxPath<String>,
+    AxQuery(params): AxQuery<routing::KaigiCallEventsParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return Ok(routing::handle_v1_kaigi_call_events_sse(
+            app.events.clone(),
+            call_id,
+            AxQuery(params),
+        )
+        .into_response());
+    }
+
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/kaigi/calls/{call_id}/events",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+
+    Ok(
+        routing::handle_v1_kaigi_call_events_sse(app.events.clone(), call_id, AxQuery(params))
+            .into_response(),
+    )
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -23127,6 +23239,17 @@ impl Torii {
                     get(handler_explorer_instruction_contract_view),
                 );
 
+            let router = router
+                .route("/v1/kaigi/calls/{call_id}", get(handler_kaigi_call))
+                .route(
+                    "/v1/kaigi/calls/{call_id}/signals",
+                    get(handler_kaigi_call_signals),
+                )
+                .route(
+                    "/v1/kaigi/calls/{call_id}/events",
+                    get(handler_kaigi_call_events_sse),
+                );
+
             #[cfg(feature = "telemetry")]
             let router = router
                 .route("/v1/kaigi/relays", get(handler_kaigi_relays))
@@ -30337,6 +30460,81 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             super::is_local_authoritative_for_route(app.as_ref(), route),
             "NPoS core-lane ingress should treat committed topology peers as authoritative during bootstrap"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn authoritative_lane_peer_ids_fall_back_to_online_peers_for_npos_core_lane_when_state_is_empty()
+     {
+        let local_keypair = KeyPair::random();
+        let remote_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            let local_peer = Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_keypair.public_key().clone(),
+            );
+            let remote_peer = Peer::new(
+                "127.0.0.1:10002".parse().expect("valid remote address"),
+                remote_keypair.public_key().clone(),
+            );
+            online_tx
+                .send(HashSet::from([local_peer, remote_peer]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.commit();
+        }
+
+        {
+            let header = BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = app.state.block(header);
+            block
+                .world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                ));
+            let mut peers = block.world.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.apply();
+            block.commit().expect("commit empty npos peer roster");
+        }
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+
+        assert!(
+            authoritative.contains(&local_peer_id),
+            "local NPoS core-lane ingress should fall back to the local connected peer when state snapshots are empty"
+        );
+        assert!(
+            authoritative.contains(&remote_peer_id),
+            "remote connected peers should keep NPoS core-lane ingress routable when state snapshots are empty"
+        );
+        assert!(
+            super::is_local_authoritative_for_route(app.as_ref(), route),
+            "NPoS core-lane ingress should remain locally authoritative under the connected-peer fallback"
         );
     }
 

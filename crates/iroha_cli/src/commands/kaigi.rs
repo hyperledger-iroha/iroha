@@ -4,13 +4,15 @@
 
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
     metadata::Metadata,
     prelude::{
         DomainId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-        KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRoomPolicy, NewKaigi,
+        KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy,
+        NewKaigi,
     },
 };
 use iroha_crypto::Hash;
@@ -28,6 +30,10 @@ pub enum Command {
     Create(CreateArgs),
     /// Bootstrap a Kaigi session for demos and shareable testing metadata.
     Quickstart(QuickstartArgs),
+    /// Register or update a Kaigi relay descriptor.
+    RegisterRelay(RegisterRelayArgs),
+    /// Replace or clear the relay manifest for an existing Kaigi session.
+    SetRelayManifest(SetRelayManifestArgs),
     /// Join a Kaigi session.
     Join(JoinArgs),
     /// Leave a Kaigi session.
@@ -45,6 +51,8 @@ impl Run for Command {
         match self {
             Command::Create(args) => args.run(context),
             Command::Quickstart(args) => args.run(context),
+            Command::RegisterRelay(args) => args.run(context),
+            Command::SetRelayManifest(args) => args.run(context),
             Command::Join(args) => args.run(context),
             Command::Leave(args) => args.run(context),
             Command::End(args) => args.run(context),
@@ -329,6 +337,80 @@ fn resolve_call_label(value: Option<String>) -> Result<String> {
         .wrap_err("system clock is before UNIX_EPOCH")?
         .as_secs();
     Ok(format!("kaigi_demo_{uptime:x}"))
+}
+
+#[derive(Args, Debug)]
+pub struct RegisterRelayArgs {
+    /// Relay account identifier advertising relay capabilities (canonical I105 account literal).
+    #[arg(long, value_name = "ACCOUNT-ID")]
+    pub relay: String,
+    /// HPKE public key bytes advertised by the relay (base64-encoded raw bytes).
+    #[arg(long, value_name = "BASE64")]
+    pub hpke_public_key_b64: String,
+    /// Relative bandwidth class advertised by the relay.
+    #[arg(long, value_name = "U8")]
+    pub bandwidth_class: u8,
+}
+
+impl Run for RegisterRelayArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        if self.bandwidth_class == 0 {
+            eyre::bail!("relay bandwidth class must be non-zero");
+        }
+        let relay_id = crate::resolve_account_id(context, &self.relay)
+            .wrap_err("failed to resolve relay account")?;
+        let hpke_public_key = BASE64_STANDARD
+            .decode(self.hpke_public_key_b64.trim())
+            .wrap_err("invalid relay HPKE public key base64")?;
+        let relay = KaigiRelayRegistration {
+            relay_id,
+            hpke_public_key,
+            bandwidth_class: self.bandwidth_class,
+        };
+
+        context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
+            Box::new(iroha::data_model::isi::kaigi::RegisterKaigiRelay { relay }),
+        )])
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct SetRelayManifestArgs {
+    /// Domain identifier hosting the call.
+    #[arg(long, value_name = "DOMAIN-ID")]
+    pub domain: String,
+    /// Call name within the domain.
+    #[arg(long, value_name = "NAME")]
+    pub call_name: String,
+    /// Path to a JSON file describing the relay manifest.
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "clear",
+        required_unless_present = "clear"
+    )]
+    pub relay_manifest: Option<String>,
+    /// Clear the stored relay manifest entirely.
+    #[arg(long, conflicts_with = "relay_manifest")]
+    pub clear: bool,
+}
+
+impl Run for SetRelayManifestArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let call_id = parse_call_id(&self.domain, &self.call_name)?;
+        let relay_manifest = match (self.clear, self.relay_manifest) {
+            (true, None) => None,
+            (false, Some(path)) => Some(read_manifest(&path)?),
+            _ => eyre::bail!("provide either --relay-manifest <PATH> or --clear"),
+        };
+
+        context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
+            Box::new(iroha::data_model::isi::kaigi::SetKaigiRelayManifest {
+                call_id,
+                relay_manifest,
+            }),
+        )])
+    }
 }
 
 #[derive(Args, Debug)]
@@ -756,6 +838,49 @@ mod tests {
                 assert_eq!(args.proof_hex.as_deref(), Some("aa55"));
             }
             other => panic!("expected create command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_register_relay() {
+        match parse_command(&[
+            "register-relay",
+            "--relay",
+            PARTICIPANT_ACCOUNT,
+            "--hpke-public-key-b64",
+            "qrvM3e7/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBk=",
+            "--bandwidth-class",
+            "7",
+        ]) {
+            Command::RegisterRelay(args) => {
+                assert_eq!(args.relay, PARTICIPANT_ACCOUNT);
+                assert_eq!(
+                    args.hpke_public_key_b64,
+                    "qrvM3e7/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBk="
+                );
+                assert_eq!(args.bandwidth_class, 7);
+            }
+            other => panic!("expected register-relay command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_set_relay_manifest_with_clear() {
+        match parse_command(&[
+            "set-relay-manifest",
+            "--domain",
+            "kaigi",
+            "--call-name",
+            "daily",
+            "--clear",
+        ]) {
+            Command::SetRelayManifest(args) => {
+                assert_eq!(args.domain, "kaigi");
+                assert_eq!(args.call_name, "daily");
+                assert!(args.clear);
+                assert!(args.relay_manifest.is_none());
+            }
+            other => panic!("expected set-relay-manifest command, got {other:?}"),
         }
     }
 

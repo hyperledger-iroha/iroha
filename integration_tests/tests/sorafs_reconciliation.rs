@@ -130,7 +130,7 @@ async fn sorafs_reconciliation_reports_detect_divergence() -> Result<()> {
     let (manifest, _plan) = build_manifest(payload)?;
     let manifest_bytes = manifest.encode()?;
     let client = network.client();
-    let response = client.post_sorafs_storage_pin(&manifest_bytes, payload)?;
+    let response = client.post_sorafs_storage_pin(&manifest_bytes, payload, None)?;
     assert!(
         response.status().is_success(),
         "storage pin rejected: {}",

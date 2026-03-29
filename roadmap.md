@@ -2,6 +2,23 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 SoraFS storage-pin integration-test callers):
+the two direct single-file SoraFS pin integration tests now match the current
+three-argument `Client::post_sorafs_storage_pin(...)` API again, so the
+reported `error[E0061]` compile break on those targets is closed.
+
+- updated `integration_tests/tests/soranet_web_deploy.rs` and
+  `integration_tests/tests/sorafs_reconciliation.rs` to pass `None` for the
+  new optional `files` parameter without changing the submitted
+  manifest/payload bytes; and
+- revalidated the affected targets with
+  `cargo check -p integration_tests --test soranet_web_deploy --test sorafs_reconciliation --message-format short`.
+
+Open work for this slice now remains:
+- rerun a broader `integration_tests` or workspace validation pass when the
+  next compile window is available; this fix only revalidated the two affected
+  targets.
+
 Latest sync (2026-03-29 Torii multi-hop ingress + latency-aware admission implementation):
 the remaining ingress fixes are now implemented in the Torii/queue layer:
 NPoS routing now has bounded transparent multi-hop forwarding, and
@@ -218,6 +235,29 @@ Open work from this slice:
 - decide whether future call sites that need to retain a caller-owned
   `DomainId` should prefer helpers such as `NewAccount::new_in_domain(...)`
   over materializing a temporary `ScopedAccountId`.
+
+Latest sync (2026-03-28 Taira Kaigi local bootstrap landed and is live):
+the served Taira localnet on this machine now exposes real Kaigi relay data
+again after restarts.
+
+- `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` now re-signs the live
+  `dist/taira-localnet` genesis with seeded relay registration plus
+  relay-health metadata, rotates storage, and restarts the detached
+  `taira-localnet` session in one step;
+- `crates/iroha_kagami/examples/taira_kaigi_localnet.rs` now provides the
+  repo-owned helper that builds that signed overlay; and
+- the public relay APIs are live again:
+  `https://taira.sora.org/v1/kaigi/relays` and
+  `https://taira-explorer.sora.org/v1/kaigi/relays` now both return three
+  healthy relays.
+
+Open work for this slice now remains:
+- restore a working live public-lane write path on the local Taira deployment
+  so Kaigi relays can be registered through Torii after resets instead of being
+  seeded via a genesis overlay; and
+- if this Kaigi state should survive future `kagami localnet` resets without a
+  second bootstrap command, fold the seeded relay metadata into the same
+  reproducible local generation path as the other Taira live-only overlays.
 
 Latest sync (2026-03-28 Taira Sorafs upload proxy fix):
 the public edge on this machine no longer rejects larger Sorafs uploads with

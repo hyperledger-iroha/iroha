@@ -1442,6 +1442,174 @@ pub struct KaigiRelayHealthSnapshotDto {
 
 #[cfg(feature = "app_api")]
 #[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Call-level Kaigi view returned by the app-facing Torii API.
+pub struct KaigiCallViewDto {
+    /// Full Kaigi call identifier.
+    pub call_id: String,
+    /// Domain component of the call identifier.
+    pub domain: String,
+    /// Call-name component of the call identifier.
+    pub call_name: String,
+    /// Host authority currently recorded on-chain.
+    pub host_account_id: String,
+    /// Optional billing authority used for settlement.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub billing_account_id: Option<String>,
+    /// Optional title assigned by the host.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Optional description assigned by the host.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Maximum allowed participants excluding the host.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub max_participants: Option<u32>,
+    /// Host-selected gas rate for the call.
+    pub gas_rate_per_minute: u64,
+    /// Arbitrary host metadata stored with the call.
+    pub metadata: IrohaJson,
+    /// Optional scheduled start timestamp in milliseconds.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub scheduled_start_ms: Option<u64>,
+    /// Simplified privacy label used by app clients.
+    pub privacy_mode: String,
+    /// Simplified room-policy label used by app clients.
+    pub room_policy: String,
+    /// Optional relay manifest snapshot.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub relay_manifest: Option<IrohaJson>,
+    /// Current roster Merkle root in hex form.
+    pub roster_root_hex: String,
+    /// Number of visible participants currently attached to the call.
+    pub participant_count: u32,
+    /// Number of roster commitments recorded for the call.
+    pub commitment_count: u32,
+    /// Number of nullifiers recorded for the call.
+    pub nullifier_count: u32,
+    /// Number of usage commitments recorded for the call.
+    pub usage_commitment_count: u32,
+    /// Lifecycle status label.
+    pub status: String,
+    /// Creation timestamp in milliseconds.
+    pub created_at_ms: u64,
+    /// Optional ended timestamp in milliseconds.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+    /// Total recorded call duration in milliseconds.
+    pub total_duration_ms: u64,
+    /// Total gas billed across all usage segments.
+    pub total_billed_gas: u64,
+    /// Number of usage segments recorded so far.
+    pub segments_recorded: u32,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// App-facing Kaigi signaling record derived from committed transaction metadata.
+pub struct KaigiCallSignalDto {
+    /// Entrypoint hash of the transaction carrying the signal.
+    pub entrypoint_hash: String,
+    /// Authority that submitted the signal transaction.
+    pub authority: String,
+    /// Optional transaction creation timestamp.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub timestamp_ms: Option<u64>,
+    /// Full Kaigi call identifier.
+    pub call_id: String,
+    /// Normalized signal kind.
+    pub signal_kind: String,
+    /// Optional host account id advertised by the signal envelope.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub host_account_id: Option<String>,
+    /// Optional participant account id advertised by the signal envelope.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub participant_account_id: Option<String>,
+    /// Signal creation timestamp supplied in metadata.
+    pub created_at_ms: u64,
+    /// Parsed signal metadata payload.
+    pub metadata: IrohaJson,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Paginated list of call-level Kaigi signaling records.
+pub struct KaigiCallSignalListDto {
+    /// Total number of matching signals before pagination.
+    pub total: u64,
+    /// Current result page.
+    pub items: Vec<KaigiCallSignalDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// SSE payload reference for a Kaigi call.
+pub struct KaigiCallEventCallRefDto {
+    /// Full Kaigi call identifier.
+    pub call_id: String,
+    /// Domain component of the call identifier.
+    pub domain: String,
+    /// Call-name component of the call identifier.
+    pub call_name: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
+/// Optional query parameters for Kaigi call-signal listing.
+pub struct KaigiCallSignalsParams {
+    /// Only include signals whose metadata timestamp is at or after this value.
+    #[norito(default)]
+    pub after_timestamp_ms: Option<u64>,
+    /// Maximum number of signals to return.
+    #[norito(default)]
+    pub limit: Option<u64>,
+    /// Number of matching signals to skip.
+    #[norito(default)]
+    pub offset: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
+/// Optional query parameters for Kaigi call SSE streams.
+pub struct KaigiCallEventsParams {
+    /// Restrict events to a comma-separated list of kinds (`roster_updated`, `ended`).
+    #[norito(default)]
+    pub kind: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
     Default, Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
 /// Optional query parameters for the Kaigi relay SSE stream.
@@ -1531,6 +1699,158 @@ fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Er
         }
     }
     Ok(out)
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_privacy_mode_label(mode: iroha_data_model::kaigi::KaigiPrivacyMode) -> &'static str {
+    match mode {
+        iroha_data_model::kaigi::KaigiPrivacyMode::Transparent => "transparent",
+        iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1 => "private",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_room_policy_label(policy: iroha_data_model::kaigi::KaigiRoomPolicy) -> &'static str {
+    match policy {
+        iroha_data_model::kaigi::KaigiRoomPolicy::Public => "public",
+        iroha_data_model::kaigi::KaigiRoomPolicy::Authenticated => "authenticated",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_status_label(status: iroha_data_model::kaigi::KaigiStatus) -> &'static str {
+    match status {
+        iroha_data_model::kaigi::KaigiStatus::Active => "active",
+        iroha_data_model::kaigi::KaigiStatus::Ended => "ended",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_call_event_ref(call_id: &KaigiId) -> KaigiCallEventCallRefDto {
+    KaigiCallEventCallRefDto {
+        call_id: call_id.to_string(),
+        domain: call_id.domain_id.to_string(),
+        call_name: call_id.call_name.to_string(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn load_kaigi_record(
+    state: &CoreState,
+    call_id: &KaigiId,
+) -> Result<iroha_data_model::kaigi::KaigiRecord, Error> {
+    let world = state.world_view();
+    let domain = world
+        .domain(&call_id.domain_id)
+        .map_err(|_| explorer_not_found())?;
+    let key = iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name)
+        .map_err(|err| conversion_error(format!("invalid kaigi call id: {err}")))?;
+    let Some(raw) = domain.metadata().get(&key) else {
+        return Err(explorer_not_found());
+    };
+    raw.clone()
+        .try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>()
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                err.to_string(),
+            ))
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_call_view_from_record(record: &iroha_data_model::kaigi::KaigiRecord) -> KaigiCallViewDto {
+    KaigiCallViewDto {
+        call_id: record.id.to_string(),
+        domain: record.id.domain_id.to_string(),
+        call_name: record.id.call_name.to_string(),
+        host_account_id: crate::account_literal::display_literal(&record.host),
+        billing_account_id: record
+            .billing_account
+            .as_ref()
+            .map(crate::account_literal::display_literal),
+        title: record.title.clone(),
+        description: record.description.clone(),
+        max_participants: record.max_participants,
+        gas_rate_per_minute: record.gas_rate_per_minute,
+        metadata: IrohaJson::from(metadata_to_json(&record.metadata)),
+        scheduled_start_ms: record.scheduled_start_ms,
+        privacy_mode: kaigi_privacy_mode_label(record.privacy_mode).to_owned(),
+        room_policy: kaigi_room_policy_label(record.room_policy).to_owned(),
+        relay_manifest: record
+            .relay_manifest
+            .as_ref()
+            .map(|manifest| IrohaJson::from(json_value(manifest))),
+        roster_root_hex: hex::encode(<[u8; 32]>::from(record.roster_root)),
+        participant_count: u32::try_from(record.participants.len()).unwrap_or(u32::MAX),
+        commitment_count: u32::try_from(record.roster_commitments.len()).unwrap_or(u32::MAX),
+        nullifier_count: u32::try_from(record.nullifier_log.len()).unwrap_or(u32::MAX),
+        usage_commitment_count: u32::try_from(record.usage_commitments.len()).unwrap_or(u32::MAX),
+        status: kaigi_status_label(record.status).to_owned(),
+        created_at_ms: record.created_at_ms,
+        ended_at_ms: record.ended_at_ms,
+        total_duration_ms: record.total_duration_ms,
+        total_billed_gas: record.total_billed_gas,
+        segments_recorded: record.segments_recorded,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_metadata_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value
+        .as_object()
+        .and_then(|record| record.get(key))
+        .or_else(|| value.get(key))
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_metadata_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        kaigi_metadata_value(value, key)?
+            .as_str()
+            .map(ToOwned::to_owned)
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_metadata_u64(value: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| kaigi_metadata_value(value, key)?.as_u64())
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_signal_from_transaction(
+    tx: &iroha_data_model::query::CommittedTransaction,
+) -> Option<KaigiCallSignalDto> {
+    let TransactionEntrypoint::External(signed) = tx.entrypoint() else {
+        return None;
+    };
+    let key: Name = "kaigi_signal".parse().ok()?;
+    let signal_json = signed
+        .metadata()
+        .get(&key)?
+        .try_into_any_norito::<Value>()
+        .ok()?;
+    let call_id = kaigi_metadata_string(&signal_json, &["callId", "call_id"])?;
+    let signal_kind = kaigi_metadata_string(&signal_json, &["signalKind", "signal_kind"])
+        .unwrap_or_else(|| "signal".to_owned())
+        .to_ascii_lowercase();
+    let created_at_ms = kaigi_metadata_u64(&signal_json, &["createdAtMs", "created_at_ms"])?;
+    let timestamp_ms = u64::try_from(signed.creation_time().as_millis()).ok();
+
+    Some(KaigiCallSignalDto {
+        entrypoint_hash: tx.entrypoint_hash().to_string(),
+        authority: crate::account_literal::display_literal(signed.authority()),
+        timestamp_ms,
+        call_id,
+        signal_kind,
+        host_account_id: kaigi_metadata_string(&signal_json, &["hostAccountId", "host_account_id"]),
+        participant_account_id: kaigi_metadata_string(
+            &signal_json,
+            &["participantAccountId", "participant_account_id"],
+        ),
+        created_at_ms,
+        metadata: IrohaJson::from(signal_json),
+    })
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -24299,6 +24619,120 @@ mod tx_query_filter_tests {
     }
 
     #[test]
+    fn kaigi_signal_from_transaction_extracts_metadata() {
+        let (authority, keypair) = account_with_key();
+        let mut metadata = dm::Metadata::default();
+        metadata.insert(
+            "kaigi_signal".parse().expect("metadata key"),
+            Json::new(crate::json_object(vec![
+                crate::json_entry("schema", "iroha-demo-kaigi-chain-signal/v1"),
+                crate::json_entry("callId", "kaigi:weekly-sync"),
+                crate::json_entry("signalKind", "answer"),
+                crate::json_entry("hostAccountId", authority.to_string()),
+                crate::json_entry("participantAccountId", authority.to_string()),
+                crate::json_entry("createdAtMs", 1_700_000_000_000_u64),
+                crate::json_entry(
+                    "encryptedSignal",
+                    crate::json_object(vec![crate::json_entry(
+                        "schema",
+                        "iroha-demo-kaigi-sealed-box/v1",
+                    )]),
+                ),
+            ])),
+        );
+
+        let tx = make_external_tx_with_metadata(
+            &authority,
+            &keypair,
+            1_700_000_000_100,
+            None,
+            true,
+            metadata,
+        );
+
+        let signal = kaigi_signal_from_transaction(&tx).expect("signal should parse");
+        assert_eq!(signal.call_id, "kaigi:weekly-sync");
+        assert_eq!(signal.signal_kind, "answer");
+        assert_eq!(signal.created_at_ms, 1_700_000_000_000);
+        assert_eq!(signal.timestamp_ms, Some(1_700_000_000_100));
+    }
+
+    #[test]
+    fn convert_kaigi_call_event_maps_roster_and_end_updates() {
+        use iroha_data_model::events::data::prelude::{DomainEvent, KaigiRosterSummary};
+
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            "kaigi".parse().expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let roster_event = EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Domain(DomainEvent::KaigiRosterSummary(
+                KaigiRosterSummary::new(
+                    call_id.clone(),
+                    iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1,
+                    1,
+                    1,
+                    0,
+                    Some(Hash::prehashed([0x44; Hash::LENGTH]).into()),
+                ),
+            )),
+        ));
+        let (kind, payload) =
+            convert_kaigi_call_event(&roster_event, &call_id).expect("roster event");
+        assert_eq!(kind, "roster_updated");
+        assert_eq!(
+            payload.get("kind").and_then(Value::as_str),
+            Some("roster_updated"),
+        );
+        assert_eq!(
+            payload.get("privacy_mode").and_then(Value::as_str),
+            Some("private"),
+        );
+
+        let (host, _) = account_with_key();
+        let record = iroha_data_model::kaigi::KaigiRecord {
+            id: call_id.clone(),
+            host,
+            billing_account: None,
+            title: None,
+            description: None,
+            max_participants: None,
+            gas_rate_per_minute: 0,
+            metadata: dm::Metadata::default(),
+            scheduled_start_ms: None,
+            privacy_mode: iroha_data_model::kaigi::KaigiPrivacyMode::Transparent,
+            room_policy: iroha_data_model::kaigi::KaigiRoomPolicy::Authenticated,
+            relay_manifest: None,
+            roster_root: Hash::prehashed([0x55; Hash::LENGTH]).into(),
+            roster_commitments: Vec::new(),
+            nullifier_log: Vec::new(),
+            usage_commitments: Vec::new(),
+            status: iroha_data_model::kaigi::KaigiStatus::Ended,
+            created_at_ms: 1,
+            ended_at_ms: Some(2),
+            total_duration_ms: 0,
+            total_billed_gas: 0,
+            segments_recorded: 0,
+            participants: Vec::new(),
+            participant_metadata: std::collections::BTreeMap::new(),
+        };
+        let ended_event = EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Domain(DomainEvent::MetadataInserted(
+                iroha_data_model::events::data::prelude::MetadataChanged {
+                    target: call_id.domain_id.clone(),
+                    key: iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name)
+                        .expect("call key"),
+                    value: Json::new(record),
+                },
+            )),
+        ));
+        let (kind, payload) =
+            convert_kaigi_call_event(&ended_event, &call_id).expect("ended event");
+        assert_eq!(kind, "ended");
+        assert_eq!(payload.get("ended_at_ms").and_then(Value::as_u64), Some(2));
+    }
+
+    #[test]
     fn explorer_pagination_window_matches_paginate_semantics() {
         assert_eq!(explorer_pagination_window(0, 0), (1, 0, 1));
         assert_eq!(explorer_pagination_window(1, 5), (5, 0, 5));
@@ -30444,6 +30878,56 @@ pub async fn handle_v1_kaigi_relays_health(
 }
 
 #[cfg(feature = "app_api")]
+/// GET `/v1/kaigi/calls/{call_id}` — return the current stored Kaigi call record.
+pub async fn handle_v1_kaigi_call(
+    state: Arc<CoreState>,
+    call_id: KaigiId,
+) -> Result<AxResponse, Error> {
+    let record = load_kaigi_record(state.as_ref(), &call_id)?;
+    Ok(JsonBody(kaigi_call_view_from_record(&record)).into_response())
+}
+
+#[cfg(feature = "app_api")]
+/// GET `/v1/kaigi/calls/{call_id}/signals` — list committed signal metadata for a call.
+pub async fn handle_v1_kaigi_call_signals(
+    state: Arc<CoreState>,
+    call_id: KaigiId,
+    crate::NoritoQuery(params): crate::NoritoQuery<KaigiCallSignalsParams>,
+) -> Result<AxResponse, Error> {
+    let _ = load_kaigi_record(state.as_ref(), &call_id)?;
+    let after_timestamp_ms = params.after_timestamp_ms;
+    let limit = params
+        .limit
+        .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
+        .unwrap_or(50)
+        .max(1);
+    let offset = params
+        .offset
+        .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
+        .unwrap_or(0);
+
+    let call_literal = call_id.to_string();
+    let mut items = committed_transactions_snapshot(state.as_ref())
+        .into_iter()
+        .filter_map(|tx| kaigi_signal_from_transaction(&tx))
+        .filter(|signal| signal.call_id == call_literal)
+        .filter(|signal| {
+            after_timestamp_ms.is_none_or(|minimum| {
+                signal.created_at_ms >= minimum
+                    || signal
+                        .timestamp_ms
+                        .is_some_and(|timestamp| timestamp >= minimum)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    items.sort_unstable_by(|left, right| left.created_at_ms.cmp(&right.created_at_ms));
+    let total = items.len() as u64;
+    let items = items.into_iter().skip(offset).take(limit).collect();
+    Ok(JsonBody(KaigiCallSignalListDto { total, items }).into_response())
+}
+
+#[cfg(feature = "app_api")]
 fn parse_kaigi_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
     let raw = kind?.trim();
     if raw.is_empty() {
@@ -30453,6 +30937,20 @@ fn parse_kaigi_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
         .split(',')
         .map(|entry| entry.trim().to_ascii_lowercase())
         .filter(|entry| !entry.is_empty())
+        .collect();
+    if set.is_empty() { None } else { Some(set) }
+}
+
+#[cfg(feature = "app_api")]
+fn parse_kaigi_call_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
+    let raw = kind?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let set: BTreeSet<String> = raw
+        .split(',')
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .filter(|entry| matches!(entry.as_str(), "roster_updated" | "ended"))
         .collect();
     if set.is_empty() { None } else { Some(set) }
 }
@@ -30503,6 +31001,114 @@ fn convert_kaigi_event(
         }
         _ => None,
     }
+}
+
+#[cfg(feature = "app_api")]
+fn convert_kaigi_call_event(event_box: &EventBox, call_id: &KaigiId) -> Option<(String, Value)> {
+    use iroha_data_model::events::data::{DataEvent, prelude::DomainEvent};
+
+    let EventBox::Data(data_event) = event_box else {
+        return None;
+    };
+    match data_event.as_ref() {
+        DataEvent::Domain(DomainEvent::KaigiRosterSummary(summary)) if &summary.call == call_id => {
+            let mut entries = vec![
+                json_entry("kind", "roster_updated"),
+                json_entry("call", json_value(&kaigi_call_event_ref(call_id))),
+                json_entry(
+                    "privacy_mode",
+                    kaigi_privacy_mode_label(summary.privacy_mode),
+                ),
+                json_entry("participant_count", summary.participant_count),
+                json_entry("commitment_count", summary.commitment_count),
+                json_entry("nullifier_count", summary.nullifier_count),
+            ];
+            if let Some(root) = summary.roster_root {
+                entries.push(json_entry(
+                    "roster_root_hex",
+                    hex::encode(<[u8; 32]>::from(root)),
+                ));
+            }
+            Some(("roster_updated".to_owned(), json_object(entries)))
+        }
+        DataEvent::Domain(DomainEvent::MetadataInserted(change))
+            if change.target() == &call_id.domain_id =>
+        {
+            let expected_key =
+                iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name).ok()?;
+            if change.key() != &expected_key {
+                return None;
+            }
+            let record = change
+                .value()
+                .try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>()
+                .ok()?;
+            if record.id != *call_id || record.status != iroha_data_model::kaigi::KaigiStatus::Ended
+            {
+                return None;
+            }
+            Some((
+                "ended".to_owned(),
+                json_object(vec![
+                    json_entry("kind", "ended"),
+                    json_entry("call", json_value(&kaigi_call_event_ref(call_id))),
+                    json_entry("status", kaigi_status_label(record.status)),
+                    json_entry(
+                        "ended_at_ms",
+                        record.ended_at_ms.unwrap_or(record.created_at_ms),
+                    ),
+                ]),
+            ))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+/// GET `/v1/kaigi/calls/{call_id}/events` — SSE stream of Kaigi call lifecycle updates.
+pub fn handle_v1_kaigi_call_events_sse(
+    events: EventsSender,
+    call_id: KaigiId,
+    crate::NoritoQuery(params): crate::NoritoQuery<KaigiCallEventsParams>,
+) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
+    let kind_filter = parse_kaigi_call_kind_filter(params.kind.as_deref());
+
+    let stream = stream::unfold(
+        (events.subscribe(), kind_filter),
+        move |(mut rx, kind_filter)| {
+            let call_id = call_id.clone();
+            async move {
+                use tokio::sync::broadcast::error::RecvError;
+                match rx.recv().await {
+                    Ok(event_box) => {
+                        let Some((kind, payload)) = convert_kaigi_call_event(&event_box, &call_id)
+                        else {
+                            return Some((
+                                Ok(SseEvent::default().comment("ignored")),
+                                (rx, kind_filter),
+                            ));
+                        };
+                        let matches_kind =
+                            kind_filter.as_ref().map_or(true, |set| set.contains(&kind));
+                        let event = if matches_kind {
+                            let body = norito::json::to_json(&payload)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            SseEvent::default().event("kaigi.call").data(body)
+                        } else {
+                            SseEvent::default().comment("filtered")
+                        };
+                        Some((Ok(event), (rx, kind_filter)))
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        Some((Ok(SseEvent::default().comment("lagged")), (rx, kind_filter)))
+                    }
+                    Err(RecvError::Closed) => None,
+                }
+            }
+        },
+    );
+
+    Sse::new(stream)
 }
 
 #[cfg(feature = "app_api")]
