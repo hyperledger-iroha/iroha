@@ -139,6 +139,13 @@ use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
 };
 use iroha_primitives::json::Json as IrohaJson;
+use iroha_sccp::{
+    BurnPayloadV1, GovernancePayloadV1, NexusBridgeFinalityProofV1, NexusCommitQcV1,
+    NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentSignatureV1,
+    NexusSccpBurnProofV1, NexusSccpGovernanceProofV1, SccpHubCommitmentV1, SccpHubMessageKind,
+    SccpMerkleProofV1, burn_message_id, commitment_leaf_hash, parliament_certificate_hash,
+    payload_hash,
+};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
 #[cfg(feature = "telemetry")]
@@ -149,6 +156,7 @@ use norito::{
     json::{self, Map, Value},
     to_bytes,
 };
+use parity_scale_codec::Encode as ScaleEncode;
 #[cfg(feature = "telemetry")]
 use prometheus::core::Collector;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
@@ -1831,26 +1839,28 @@ fn kaigi_signal_from_transaction(
     tx: &iroha_data_model::query::CommittedTransaction,
     reveal_authorities: bool,
 ) -> Option<KaigiCallSignalDto> {
-    let TransactionEntrypoint::External(signed) = tx.entrypoint() else {
-        return None;
+    let (metadata, authority, timestamp_ms) = match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => (
+            signed.metadata(),
+            reveal_authorities.then(|| crate::account_literal::display_literal(signed.authority())),
+            u64::try_from(signed.creation_time().as_millis()).ok(),
+        ),
+        TransactionEntrypoint::PrivateKaigi(private) => {
+            (&private.metadata, None, Some(private.creation_time_ms))
+        }
+        TransactionEntrypoint::Time(_) => return None,
     };
     let key: Name = "kaigi_signal".parse().ok()?;
-    let signal_json = signed
-        .metadata()
-        .get(&key)?
-        .try_into_any_norito::<Value>()
-        .ok()?;
+    let signal_json = metadata.get(&key)?.try_into_any_norito::<Value>().ok()?;
     let call_id = kaigi_metadata_string(&signal_json, &["callId", "call_id"])?;
     let signal_kind = kaigi_metadata_string(&signal_json, &["signalKind", "signal_kind"])
         .unwrap_or_else(|| "signal".to_owned())
         .to_ascii_lowercase();
     let created_at_ms = kaigi_metadata_u64(&signal_json, &["createdAtMs", "created_at_ms"])?;
-    let timestamp_ms = u64::try_from(signed.creation_time().as_millis()).ok();
 
     Some(KaigiCallSignalDto {
         entrypoint_hash: tx.entrypoint_hash().to_string(),
-        authority: reveal_authorities
-            .then(|| crate::account_literal::display_literal(signed.authority())),
+        authority,
         timestamp_ms,
         call_id,
         signal_kind,
@@ -4383,6 +4393,328 @@ pub async fn handle_v1_bridge_finality_bundle(
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+static SCCP_BURN_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpBurnProofV1>>> =
+    LazyLock::new(|| RwLock::new(BTreeMap::new()));
+static SCCP_GOVERNANCE_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpGovernanceProofV1>>> =
+    LazyLock::new(|| RwLock::new(BTreeMap::new()));
+
+fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Error {
+    match err {
+        iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
+        | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
+        | iroha_core::bridge::BridgeFinalityError::QcNotFound(_) => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        }
+        iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. }
+        | iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. } => Error::Query(
+            iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
+        ),
+    }
+}
+
+fn sccp_bad_request(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
+    ))
+}
+
+fn sccp_not_found() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+    ))
+}
+
+fn sccp_internal_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::InternalError(
+        message.into(),
+    ))
+}
+
+fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
+    let trimmed = value.trim_start_matches("0x");
+    let bytes = hex::decode(trimmed)
+        .map_err(|err| sccp_bad_request(format!("invalid message_id: {err}")))?;
+    if bytes.len() != 32 {
+        return Err(sccp_bad_request("message_id must be 32 bytes"));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
+where
+    T: ScaleEncode + serde::Serialize,
+{
+    let accepts_scale = accept
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.contains("application/octet-stream")
+                || value.contains("application/x-parity-scale")
+        });
+
+    if accepts_scale {
+        let mut resp = Response::new(Body::from(ScaleEncode::encode(bundle)));
+        resp.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static("application/x-parity-scale"),
+        );
+        return Ok(resp);
+    }
+
+    let body = serde_json::to_vec_pretty(bundle).map_err(|err| {
+        sccp_internal_error(format!("failed to serialize SCCP bundle JSON: {err}"))
+    })?;
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+fn sccp_governance_message_kind(payload: &GovernancePayloadV1) -> SccpHubMessageKind {
+    match payload {
+        GovernancePayloadV1::Add(_) => SccpHubMessageKind::TokenAdd,
+        GovernancePayloadV1::Pause(_) => SccpHubMessageKind::TokenPause,
+        GovernancePayloadV1::Resume(_) => SccpHubMessageKind::TokenResume,
+    }
+}
+
+fn hash_of_to_h256<T>(hash: &iroha_crypto::HashOf<T>) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hash.as_ref().as_ref());
+    out
+}
+
+fn sccp_consensus_phase(
+    phase: iroha_data_model::block::consensus::CertPhase,
+) -> NexusConsensusPhaseV1 {
+    match phase {
+        iroha_data_model::block::consensus::CertPhase::Prepare => NexusConsensusPhaseV1::Prepare,
+        iroha_data_model::block::consensus::CertPhase::Commit => NexusConsensusPhaseV1::Commit,
+        iroha_data_model::block::consensus::CertPhase::NewView => NexusConsensusPhaseV1::NewView,
+    }
+}
+
+fn build_sccp_finality_proof_bytes(
+    finality_proof: &iroha_data_model::bridge::BridgeFinalityProof,
+    commitment_root: [u8; 32],
+) -> Vec<u8> {
+    ScaleEncode::encode(&NexusBridgeFinalityProofV1 {
+        version: 1,
+        chain_id: finality_proof.chain_id.as_str().to_owned(),
+        height: finality_proof.height,
+        block_hash: hash_of_to_h256(&finality_proof.block_hash),
+        commitment_root,
+        commit_qc: NexusCommitQcV1 {
+            version: 1,
+            phase: sccp_consensus_phase(finality_proof.commit_qc.phase),
+            height: finality_proof.commit_qc.height,
+            view: finality_proof.commit_qc.view,
+            epoch: finality_proof.commit_qc.epoch,
+            mode_tag: finality_proof.commit_qc.mode_tag.clone(),
+            subject_block_hash: hash_of_to_h256(&finality_proof.commit_qc.subject_block_hash),
+            validator_set_hash_version: finality_proof.commit_qc.validator_set_hash_version,
+            validator_public_keys: finality_proof
+                .commit_qc
+                .validator_set
+                .iter()
+                .map(|peer| peer.public_key().to_string())
+                .collect(),
+            validator_set_pops: finality_proof.validator_set_pops.clone(),
+            signers_bitmap: finality_proof.commit_qc.aggregate.signers_bitmap.clone(),
+            bls_aggregate_signature: finality_proof
+                .commit_qc
+                .aggregate
+                .bls_aggregate_signature
+                .clone(),
+        },
+    })
+}
+
+fn validate_parliament_certificate(
+    certificate: &iroha_data_model::governance::types::ParliamentEnactmentCertificate,
+    payload: &GovernancePayloadV1,
+    height: u64,
+) -> Result<Vec<u8>> {
+    if certificate.payload.at_window.lower > certificate.payload.at_window.upper {
+        return Err(sccp_bad_request(
+            "parliament certificate has an invalid enactment window",
+        ));
+    }
+    if height < certificate.payload.at_window.lower || height > certificate.payload.at_window.upper
+    {
+        return Err(sccp_bad_request(
+            "requested proof height is outside the parliament enactment window",
+        ));
+    }
+
+    let expected_preimage_hash = payload_hash(&ScaleEncode::encode(payload));
+    if certificate.payload.preimage_hash != expected_preimage_hash {
+        return Err(sccp_bad_request(
+            "parliament certificate preimage_hash does not match the SCCP governance payload",
+        ));
+    }
+
+    if certificate.signatures.signatures.is_empty() {
+        return Err(sccp_bad_request(
+            "parliament certificate must include at least one signature",
+        ));
+    }
+
+    let mut seen_signers = BTreeSet::new();
+    for signature in &certificate.signatures.signatures {
+        if !seen_signers.insert(signature.signer.clone()) {
+            return Err(sccp_bad_request(
+                "parliament certificate contains duplicate signers",
+            ));
+        }
+        signature
+            .signature
+            .verify(&signature.public_key, &certificate.payload)
+            .map_err(|err| {
+                sccp_bad_request(format!(
+                    "parliament certificate contains an invalid signature: {err}"
+                ))
+            })?;
+    }
+
+    let payload_bytes = to_bytes(&certificate.payload).map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode parliament enactment payload for SCCP bundle: {err}"
+        ))
+    })?;
+
+    Ok(ScaleEncode::encode(&NexusParliamentCertificateV1 {
+        version: 1,
+        preimage_hash: certificate.payload.preimage_hash,
+        enactment_window_start: certificate.payload.at_window.lower,
+        enactment_window_end: certificate.payload.at_window.upper,
+        payload_bytes,
+        signatures: certificate
+            .signatures
+            .signatures
+            .iter()
+            .map(|signature| NexusParliamentSignatureV1 {
+                public_key: signature.public_key.to_string(),
+                signature: signature.signature.payload().to_vec(),
+            })
+            .collect(),
+    }))
+}
+
+pub fn publish_sccp_burn_bundle(
+    state: &CoreState,
+    height: u64,
+    payload: BurnPayloadV1,
+) -> Result<NexusSccpBurnProofV1> {
+    let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
+        .map_err(map_bridge_finality_error)?;
+    let commitment = SccpHubCommitmentV1 {
+        version: 1,
+        kind: SccpHubMessageKind::Burn,
+        target_domain: payload.dest_domain,
+        message_id: burn_message_id(&payload),
+        payload_hash: payload_hash(&ScaleEncode::encode(&payload)),
+        parliament_certificate_hash: None,
+    };
+    let commitment_root = commitment_leaf_hash(&commitment);
+    let bundle = NexusSccpBurnProofV1 {
+        version: 1,
+        commitment_root,
+        commitment,
+        merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
+        payload,
+        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root),
+    };
+    SCCP_BURN_BUNDLES
+        .write()
+        .expect("SCCP burn bundle registry poisoned")
+        .insert(bundle.commitment.message_id, bundle.clone());
+    Ok(bundle)
+}
+
+pub fn publish_sccp_governance_bundle(
+    state: &CoreState,
+    height: u64,
+    payload: GovernancePayloadV1,
+    certificate: iroha_data_model::governance::types::ParliamentEnactmentCertificate,
+) -> Result<NexusSccpGovernanceProofV1> {
+    let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
+        .map_err(map_bridge_finality_error)?;
+    let parliament_certificate = validate_parliament_certificate(&certificate, &payload, height)?;
+    let commitment = SccpHubCommitmentV1 {
+        version: 1,
+        kind: sccp_governance_message_kind(&payload),
+        target_domain: iroha_sccp::governance_target_domain(&payload),
+        message_id: iroha_sccp::governance_message_id(&payload),
+        payload_hash: payload_hash(&ScaleEncode::encode(&payload)),
+        parliament_certificate_hash: Some(parliament_certificate_hash(&parliament_certificate)),
+    };
+    let commitment_root = commitment_leaf_hash(&commitment);
+    let bundle = NexusSccpGovernanceProofV1 {
+        version: 1,
+        commitment_root,
+        commitment,
+        merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
+        payload,
+        parliament_certificate,
+        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root),
+    };
+    SCCP_GOVERNANCE_BUNDLES
+        .write()
+        .expect("SCCP governance bundle registry poisoned")
+        .insert(bundle.commitment.message_id, bundle.clone());
+    Ok(bundle)
+}
+
+#[cfg(test)]
+pub(crate) fn clear_sccp_bundles_for_tests() {
+    SCCP_BURN_BUNDLES
+        .write()
+        .expect("SCCP burn bundle registry poisoned")
+        .clear();
+    SCCP_GOVERNANCE_BUNDLES
+        .write()
+        .expect("SCCP governance bundle registry poisoned")
+        .clear();
+}
+
+/// GET /v1/sccp/proofs/burn/{message_id} — Nexus SCCP burn bundle keyed by canonical message id.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_burn_bundle(
+    message_id_hex: String,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = SCCP_BURN_BUNDLES
+        .read()
+        .expect("SCCP burn bundle registry poisoned")
+        .get(&message_id)
+        .cloned()
+        .ok_or_else(sccp_not_found)?;
+    sccp_bundle_response(&bundle, accept.as_ref())
+}
+
+/// GET /v1/sccp/proofs/governance/{message_id} — Nexus SCCP governance bundle keyed by canonical message id.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_governance_bundle(
+    message_id_hex: String,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = SCCP_GOVERNANCE_BUNDLES
+        .read()
+        .expect("SCCP governance bundle registry poisoned")
+        .get(&message_id)
+        .cloned()
+        .ok_or_else(sccp_not_found)?;
+    sccp_bundle_response(&bundle, accept.as_ref())
 }
 
 /// GET /v1/sumeragi/validator-sets — Bounded history of validator-set snapshots (newest first)
@@ -20413,6 +20745,7 @@ pub async fn handle_p2p_ws(
 struct TxProjection {
     authority: Option<String>,
     timestamp_ms: Option<u64>,
+    entrypoint_kind: String,
     entrypoint_hash: String,
     result_ok: bool,
 }
@@ -20423,6 +20756,17 @@ fn tx_field_value(
     field: &str,
 ) -> Option<String> {
     match field {
+        "entrypoint_kind" => Some(match tx.entrypoint() {
+            iroha_data_model::transaction::signed::TransactionEntrypoint::External(_) => {
+                "external".to_owned()
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
+                "private_kaigi".to_owned()
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::Time(_) => {
+                "time".to_owned()
+            }
+        }),
         // authority account id string if External entrypoint
         "authority" => match &tx.entrypoint() {
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
@@ -20430,6 +20774,7 @@ fn tx_field_value(
                 // transparent_api feature. The response projection still controls visibility.
                 Some(signed.payload().authority.to_string())
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => None,
             _ => None,
         },
         // creation timestamp if External entrypoint
@@ -20437,6 +20782,9 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                 // Use API method to avoid relying on internal payload field names
                 Some(format!("{}", signed.creation_time().as_millis()))
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+                Some(tx.creation_time_ms.to_string())
             }
             _ => None,
         },
@@ -20457,6 +20805,9 @@ fn tx_field_value(
             match &tx.entrypoint() {
                 iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                     signed.metadata().get(&name).map(|json| json.get().clone())
+                }
+                iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+                    tx.metadata.get(&name).map(|json| json.get().clone())
                 }
                 _ => None,
             }
@@ -20797,10 +21148,12 @@ fn tx_references_account_id(
             signed.authority() == expected
                 || executable_contains_account_id(signed.instructions(), expected)
         }
+        TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(entry) => entry
             .instructions
             .iter()
             .any(|instruction| instruction_matches_account_id(instruction, expected)),
+        TransactionEntrypoint::PrivateKaigi(_) => false,
     }
 }
 
@@ -20813,10 +21166,22 @@ fn tx_references_domain_id(
         TransactionEntrypoint::External(signed) => {
             executable_contains_domain_id(signed.instructions(), expected)
         }
+        TransactionEntrypoint::PrivateKaigi(private) => match &private.action {
+            iroha_data_model::transaction::PrivateKaigiAction::Create(create) => {
+                create.call.id.domain_id == *expected
+            }
+            iroha_data_model::transaction::PrivateKaigiAction::Join(join) => {
+                join.call_id.domain_id == *expected
+            }
+            iroha_data_model::transaction::PrivateKaigiAction::End(end) => {
+                end.call_id.domain_id == *expected
+            }
+        },
         TransactionEntrypoint::Time(entry) => entry
             .instructions
             .iter()
             .any(|instruction| instruction_matches_domain_id(instruction, expected)),
+        TransactionEntrypoint::PrivateKaigi(_) => false,
     }
 }
 
@@ -20967,11 +21332,13 @@ fn tx_collect_asset_ids(
                 }
             }
         }
+        TransactionEntrypoint::PrivateKaigi(_) => {}
         TransactionEntrypoint::Time(entry) => {
             for instr in entry.instructions.iter() {
                 visit_instruction(instr);
             }
         }
+        TransactionEntrypoint::PrivateKaigi(_) => {}
     }
 
     out
@@ -21185,11 +21552,17 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
             Some(format!("{}", signed.authority())),
             Some(signed.authority().clone()),
         ),
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
+            (None, None)
+        }
         _ => (None, None),
     };
     let ts_ms_opt: Option<i128> = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.creation_time().as_millis() as i128)
+        }
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+            Some(i128::from(tx.creation_time_ms))
         }
         _ => None,
     };
@@ -21208,6 +21581,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                     _ => false,
                 }
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => false,
             _ => false,
         };
         if default_ok {
@@ -21235,6 +21609,9 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
     let metadata_map = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.metadata())
+        }
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+            Some(&tx.metadata)
         }
         _ => None,
     };
@@ -21546,7 +21923,9 @@ fn tx_matches_account_history_subject(
         TransactionEntrypoint::External(signed) => {
             signed.authority().controller() == account_id.controller()
         }
+        TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(_) => false,
+        TransactionEntrypoint::PrivateKaigi(_) => false,
     }
 }
 
@@ -21581,6 +21960,8 @@ fn project_tx(
     // Use shared extractor to ensure parity with other filter/projection logic
     let authority = tx_field_value(tx, "authority");
     let timestamp_ms = tx_field_value(tx, "timestamp_ms").and_then(|s| s.parse::<u64>().ok());
+    let entrypoint_kind =
+        tx_field_value(tx, "entrypoint_kind").unwrap_or_else(|| "unknown".to_owned());
     let entry_hash = format!("{}", tx.entrypoint_hash());
     let result_ok = {
         let default_ok = match tx.entrypoint() {
@@ -21592,6 +21973,7 @@ fn project_tx(
                     _ => false,
                 }
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => false,
             _ => false,
         };
         if default_ok {
@@ -21608,8 +21990,12 @@ fn project_tx(
             match fp.0.as_str() {
                 "authority" => proj.authority.clone_from(&authority),
                 "timestamp_ms" => proj.timestamp_ms = timestamp_ms,
+                "entrypoint_kind" => proj.entrypoint_kind.clone_from(&entrypoint_kind),
                 _ => {}
             }
+        }
+        if proj.entrypoint_kind.is_empty() {
+            proj.entrypoint_kind = entrypoint_kind;
         }
         proj.entrypoint_hash = entry_hash;
         proj.result_ok = result_ok;
@@ -21618,6 +22004,7 @@ fn project_tx(
         TxProjection {
             authority,
             timestamp_ms,
+            entrypoint_kind,
             entrypoint_hash: entry_hash,
             result_ok,
         }

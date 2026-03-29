@@ -10,6 +10,7 @@
 use core::fmt;
 #[cfg(feature = "json")]
 use core::fmt::Write as FmtWrite;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use blake3;
 use iroha_schema::IntoSchema;
@@ -25,9 +26,25 @@ pub const VPN_CELL_LEN: usize = 1_024;
 pub const VPN_HELPER_TICKET_MAGIC: &[u8; 8] = b"SVPNHT1\0";
 /// Fixed byte length of a helper-authenticated VPN ticket.
 pub const VPN_HELPER_TICKET_LEN: usize = 64;
+/// Default MTU advertised to Sora VPN clients and local tunnel helpers.
+pub const VPN_DEFAULT_TUNNEL_MTU_BYTES: u16 = 1_280;
 
 /// Header serialization length (bytes).
 const VPN_HEADER_LEN: usize = 42;
+const VPN_SESSION_IPV4_BASE: u32 = u32::from_be_bytes([10, 208, 0, 0]);
+const VPN_SESSION_IPV4_SUBNET_COUNT: u32 = 1 << 18;
+const VPN_SESSION_IPV6_BASE: u128 = 0xfd53_7261_6574_0000_0000_0000_0000_0000u128;
+
+/// Deterministic per-session address plan shared by Torii, relays, and local tunnel helpers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VpnSessionAddressPlanV1 {
+    /// Tunnel addresses assigned to the exit/backend side of the point-to-point link.
+    pub server_tunnel_addresses: Vec<String>,
+    /// Tunnel addresses assigned to the client/helper side of the point-to-point link.
+    pub client_tunnel_addresses: Vec<String>,
+    /// Session-local subnet routes that should point at the tunnel interface on the backend.
+    pub session_routes: Vec<String>,
+}
 
 /// Enumeration of supported cell classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -665,6 +682,38 @@ pub struct VpnRouteV1 {
     pub metric: Option<u16>,
 }
 
+/// Derive the deterministic point-to-point address plan for a VPN session.
+#[must_use]
+pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAddressPlanV1 {
+    let digest = blake3::hash(&session_id);
+    let digest_bytes = digest.as_bytes();
+
+    let v4_index = u32::from_be_bytes([
+        digest_bytes[0],
+        digest_bytes[1],
+        digest_bytes[2],
+        digest_bytes[3],
+    ]) % VPN_SESSION_IPV4_SUBNET_COUNT;
+    let v4_network = VPN_SESSION_IPV4_BASE + (v4_index << 2);
+    let v4_route = format!("{}/30", Ipv4Addr::from(v4_network));
+    let v4_server = format!("{}/30", Ipv4Addr::from(v4_network + 1));
+    let v4_client = format!("{}/30", Ipv4Addr::from(v4_network + 2));
+
+    let mut low = [0u8; 8];
+    low.copy_from_slice(&digest_bytes[8..16]);
+    let v6_subnet = (u64::from_be_bytes(low) >> 2) as u128;
+    let v6_network = VPN_SESSION_IPV6_BASE | (v6_subnet << 2);
+    let v6_route = format!("{}/126", Ipv6Addr::from(v6_network));
+    let v6_server = format!("{}/126", Ipv6Addr::from(v6_network | 1));
+    let v6_client = format!("{}/126", Ipv6Addr::from(v6_network | 2));
+
+    VpnSessionAddressPlanV1 {
+        server_tunnel_addresses: vec![v4_server, v6_server],
+        client_tunnel_addresses: vec![v4_client, v6_client],
+        session_routes: vec![v4_route, v6_route],
+    }
+}
+
 /// Billing and telemetry receipt emitted by an exit gateway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
 pub struct VpnSessionReceiptV1 {
@@ -1083,6 +1132,33 @@ mod tests {
             },
             err
         );
+    }
+
+    #[test]
+    fn session_address_plan_is_deterministic_and_split_by_role() {
+        let session_id = [0xA5; 16];
+        let first = derive_vpn_session_address_plan_v1(session_id);
+        let second = derive_vpn_session_address_plan_v1(session_id);
+        assert_eq!(first, second);
+        assert_eq!(first.server_tunnel_addresses.len(), 2);
+        assert_eq!(first.client_tunnel_addresses.len(), 2);
+        assert_eq!(first.session_routes.len(), 2);
+        assert_ne!(first.server_tunnel_addresses, first.client_tunnel_addresses);
+        assert!(first.server_tunnel_addresses[0].ends_with("/30"));
+        assert!(first.client_tunnel_addresses[1].ends_with("/126"));
+        assert!(first.session_routes[0].ends_with("/30"));
+        assert!(first.session_routes[1].ends_with("/126"));
+    }
+
+    #[test]
+    fn session_address_plan_changes_with_session_id() {
+        let first = derive_vpn_session_address_plan_v1([0x01; 16]);
+        let second = derive_vpn_session_address_plan_v1([0x02; 16]);
+        assert_ne!(
+            first.client_tunnel_addresses,
+            second.client_tunnel_addresses
+        );
+        assert_ne!(first.session_routes, second.session_routes);
     }
 
     #[test]

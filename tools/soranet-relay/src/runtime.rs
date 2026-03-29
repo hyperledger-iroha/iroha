@@ -40,7 +40,10 @@ use iroha_data_model::{
             SoranetPowFailureReasonV1, SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1,
             SoranetPrivacyThrottleScopeV1,
         },
-        vpn::{VpnCellClassV1, VpnFlowLabelV1, VpnHelperTicketError, VpnHelperTicketV1},
+        vpn::{
+            VPN_DEFAULT_TUNNEL_MTU_BYTES, VpnCellClassV1, VpnFlowLabelV1, VpnHelperTicketError,
+            VpnHelperTicketV1, derive_vpn_session_address_plan_v1,
+        },
     },
 };
 use iroha_primitives::json::Json;
@@ -50,6 +53,7 @@ use norito::{
 use quinn::{ClosedStream, Connection, Endpoint, Incoming, RecvStream, SendStream, VarInt};
 use rand::{SeedableRng, rngs::StdRng};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -140,6 +144,8 @@ const DEFAULT_HANDSHAKE_SUITES: [HandshakeSuite; 2] = [
     HandshakeSuite::Nk2Hybrid,
     HandshakeSuite::Nk3PqForwardSecure,
 ];
+const VPN_BACKEND_BOOTSTRAP_MAGIC: &[u8; 8] = b"SVPNBE1\0";
+const VPN_BACKEND_STATUS_READY: u8 = 1;
 
 /// Shared context required by `monitor_circuit`.
 #[derive(Clone)]
@@ -651,6 +657,16 @@ enum VpnBackendBridgeError {
     Vpn(#[from] VpnFrameIoError),
     #[error("backend io error: {0}")]
     BackendIo(#[from] std::io::Error),
+    #[error("backend control error: {0}")]
+    BackendControl(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct VpnBackendBootstrap {
+    session_id_hex: String,
+    server_tunnel_addresses: Vec<String>,
+    session_routes: Vec<String>,
+    mtu_bytes: u16,
 }
 
 impl<'a> HandshakeByteGuard<'a> {
@@ -706,6 +722,58 @@ fn vpn_flow_label_from_session_id(session_id: [u8; 16]) -> VpnFlowLabelV1 {
         | (u32::from(session_id[1]) << 8)
         | u32::from(session_id[2]);
     VpnFlowLabelV1::from_u32(value).expect("three-byte flow label should always fit")
+}
+
+fn build_vpn_backend_bootstrap(session_id: [u8; 16]) -> VpnBackendBootstrap {
+    let address_plan = derive_vpn_session_address_plan_v1(session_id);
+    VpnBackendBootstrap {
+        session_id_hex: hex::encode(session_id),
+        server_tunnel_addresses: address_plan.server_tunnel_addresses,
+        session_routes: address_plan.session_routes,
+        mtu_bytes: VPN_DEFAULT_TUNNEL_MTU_BYTES,
+    }
+}
+
+async fn write_vpn_backend_bootstrap<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    bootstrap: &VpnBackendBootstrap,
+) -> Result<(), VpnBackendBridgeError> {
+    let payload = serde_json::to_vec(bootstrap)
+        .map_err(|error| VpnBackendBridgeError::BackendControl(error.to_string()))?;
+    let len = u16::try_from(payload.len()).map_err(|_| {
+        VpnBackendBridgeError::BackendControl(format!(
+            "vpn backend bootstrap payload {} exceeds u16 length prefix",
+            payload.len()
+        ))
+    })?;
+    writer.write_all(VPN_BACKEND_BOOTSTRAP_MAGIC).await?;
+    writer.write_all(&len.to_be_bytes()).await?;
+    writer.write_all(&payload).await?;
+    Ok(())
+}
+
+async fn read_vpn_backend_status<R: AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<(), VpnBackendBridgeError> {
+    let mut status = [0u8; 1];
+    reader.read_exact(&mut status).await?;
+    let mut len = [0u8; 2];
+    reader.read_exact(&mut len).await?;
+    let len = usize::from(u16::from_be_bytes(len));
+    let mut payload = vec![0u8; len];
+    reader.read_exact(&mut payload).await?;
+    let message = String::from_utf8_lossy(&payload).into_owned();
+    if status[0] == VPN_BACKEND_STATUS_READY {
+        Ok(())
+    } else {
+        Err(VpnBackendBridgeError::BackendControl(
+            if message.is_empty() {
+                "vpn backend rejected session bootstrap".to_owned()
+            } else {
+                message
+            },
+        ))
+    }
 }
 
 fn record_route_open_ingress_metrics(
@@ -2327,6 +2395,7 @@ impl RelayRuntime {
         let bridge = VpnBridge::new(adapter.clone(), helper_ticket.session_id, flow_label);
         let mtu = bridge.max_payload_len();
         let (mut backend_read, mut backend_write) = tokio::io::split(backend);
+        let bootstrap = build_vpn_backend_bootstrap(helper_ticket.session_id);
 
         info!(
             remote = %remote,
@@ -2335,6 +2404,28 @@ impl RelayRuntime {
             expires_at_ms = helper_ticket.expires_at_ms,
             "bridging helper-authenticated vpn tunnel to relay backend"
         );
+        if let Err(error) = write_vpn_backend_bootstrap(&mut backend_write, &bootstrap).await {
+            warn!(
+                remote = %remote,
+                backend = %backend_addr,
+                session_id = %hex::encode(helper_ticket.session_id),
+                %error,
+                "failed to send vpn backend bootstrap"
+            );
+            connection.close(0u32.into(), b"vpn backend bootstrap failed");
+            return;
+        }
+        if let Err(error) = read_vpn_backend_status(&mut backend_read).await {
+            warn!(
+                remote = %remote,
+                backend = %backend_addr,
+                session_id = %hex::encode(helper_ticket.session_id),
+                %error,
+                "vpn backend failed session bootstrap"
+            );
+            connection.close(0u32.into(), b"vpn backend bootstrap rejected");
+            return;
+        }
         if let Err(error) = Self::bridge_vpn_backend_streams(
             &mut send,
             &mut recv,
@@ -4113,6 +4204,42 @@ mod tests {
         assert_eq!(128, snapshot.handshake_bytes);
         assert_eq!(0, snapshot.vpn_bytes);
         assert_eq!(0, snapshot.vpn_ingress_bytes);
+    }
+
+    #[tokio::test]
+    async fn vpn_backend_bootstrap_encodes_session_address_plan() {
+        let bootstrap = build_vpn_backend_bootstrap([0x5A; 16]);
+        let (mut writer, mut reader) = duplex(4096);
+        write_vpn_backend_bootstrap(&mut writer, &bootstrap)
+            .await
+            .expect("bootstrap write");
+
+        let mut magic = [0u8; 8];
+        reader.read_exact(&mut magic).await.expect("magic");
+        assert_eq!(&magic, VPN_BACKEND_BOOTSTRAP_MAGIC);
+
+        let mut len = [0u8; 2];
+        reader.read_exact(&mut len).await.expect("len");
+        let len = usize::from(u16::from_be_bytes(len));
+        let mut payload = vec![0u8; len];
+        reader.read_exact(&mut payload).await.expect("payload");
+        let decoded: VpnBackendBootstrap =
+            serde_json::from_slice(&payload).expect("bootstrap json");
+        assert_eq!(decoded, bootstrap);
+        assert_eq!(decoded.server_tunnel_addresses.len(), 2);
+        assert_eq!(decoded.session_routes.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn vpn_backend_status_reports_rejection_message() {
+        let (mut writer, mut reader) = duplex(256);
+        writer.write_all(&[0u8]).await.expect("status");
+        writer.write_all(&4u16.to_be_bytes()).await.expect("len");
+        writer.write_all(b"fail").await.expect("payload");
+        let error = read_vpn_backend_status(&mut reader)
+            .await
+            .expect_err("status must reject");
+        assert!(error.to_string().contains("fail"));
     }
 
     #[tokio::test]
