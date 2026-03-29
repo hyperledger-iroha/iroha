@@ -5894,7 +5894,23 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             format!("CreateKaigi.call parse error: {err}"),
                         )
                     })?;
-                    let instruction = CreateKaigi { call };
+                    let commitment =
+                        parse_optional_commitment(create_fields.remove("commitment"), "CreateKaigi")?;
+                    let nullifier =
+                        parse_optional_nullifier(create_fields.remove("nullifier"), "CreateKaigi")?;
+                    let roster_root = parse_optional_hash(
+                        create_fields.remove("roster_root"),
+                        "CreateKaigi.roster_root",
+                    )?;
+                    let proof =
+                        parse_optional_base64(create_fields.remove("proof"), "CreateKaigi.proof")?;
+                    let instruction = CreateKaigi {
+                        call,
+                        commitment,
+                        nullifier,
+                        roster_root,
+                        proof,
+                    };
                     return Ok(Box::new(instruction).into_instruction_box());
                 }
                 if let Some(json::Value::Object(mut join_fields)) = kaigi_map.remove("JoinKaigi") {
@@ -5979,13 +5995,27 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     })?;
                     let call_id: KaigiId =
                         json::from_value(call_id_value).map_err(norito_to_napi)?;
-                    let ended_at = end_fields
-                        .remove("ended_at_ms")
-                        .map(|value| json::from_value(value).map_err(norito_to_napi))
-                        .transpose()?;
+                    let ended_at = match end_fields.remove("ended_at_ms") {
+                        None | Some(json::Value::Null) => None,
+                        Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                    };
+                    let commitment =
+                        parse_optional_commitment(end_fields.remove("commitment"), "EndKaigi")?;
+                    let nullifier =
+                        parse_optional_nullifier(end_fields.remove("nullifier"), "EndKaigi")?;
+                    let roster_root = parse_optional_hash(
+                        end_fields.remove("roster_root"),
+                        "EndKaigi.roster_root",
+                    )?;
+                    let proof =
+                        parse_optional_base64(end_fields.remove("proof"), "EndKaigi.proof")?;
                     let end = EndKaigi {
                         call_id,
                         ended_at_ms: ended_at,
+                        commitment,
+                        nullifier,
+                        roster_root,
+                        proof,
                     };
                     return Ok(Box::new(end).into_instruction_box());
                 }
@@ -7421,6 +7451,22 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "call".to_owned(),
             json::to_value(create.call()).map_err(norito_to_napi)?,
         );
+        payload.insert(
+            "commitment".to_owned(),
+            optional_commitment_to_json(create.commitment().as_ref()),
+        );
+        payload.insert(
+            "nullifier".to_owned(),
+            optional_nullifier_to_json(create.nullifier().as_ref()),
+        );
+        payload.insert(
+            "roster_root".to_owned(),
+            optional_hash_to_json(create.roster_root().as_ref()),
+        );
+        payload.insert(
+            "proof".to_owned(),
+            optional_proof_to_json(create.proof().as_ref()),
+        );
         return Ok(kaigi_json_value(
             "CreateKaigi",
             json::Value::Object(payload),
@@ -7491,6 +7537,22 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         payload.insert(
             "ended_at_ms".to_owned(),
             json::to_value(end.ended_at_ms()).map_err(norito_to_napi)?,
+        );
+        payload.insert(
+            "commitment".to_owned(),
+            optional_commitment_to_json(end.commitment().as_ref()),
+        );
+        payload.insert(
+            "nullifier".to_owned(),
+            optional_nullifier_to_json(end.nullifier().as_ref()),
+        );
+        payload.insert(
+            "roster_root".to_owned(),
+            optional_hash_to_json(end.roster_root().as_ref()),
+        );
+        payload.insert(
+            "proof".to_owned(),
+            optional_proof_to_json(end.proof().as_ref()),
         );
         return Ok(kaigi_json_value("EndKaigi", json::Value::Object(payload)));
     }
@@ -9634,7 +9696,22 @@ mod tests {
             room_policy: KaigiRoomPolicy::Authenticated,
             relay_manifest: Some(manifest),
         };
-        let instruction: InstructionBox = Box::new(CreateKaigi { call }).into_instruction_box();
+        let commitment = KaigiParticipantCommitment {
+            commitment: Hash::new(b"commitment::host"),
+            alias_tag: Some("host".to_owned()),
+        };
+        let nullifier = KaigiParticipantNullifier {
+            digest: Hash::new(b"nullifier::host"),
+            issued_at_ms: 7,
+        };
+        let instruction: InstructionBox = Box::new(CreateKaigi {
+            call,
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
+            roster_root: Some(Hash::new(b"roster-root")),
+            proof: Some(vec![0xFA, 0xCE]),
+        })
+        .into_instruction_box();
 
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi instruction");
@@ -9776,9 +9853,21 @@ mod tests {
     #[test]
     fn end_kaigi_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
+        let commitment = KaigiParticipantCommitment {
+            commitment: Hash::new(b"commitment::host"),
+            alias_tag: Some("host".to_owned()),
+        };
+        let nullifier = KaigiParticipantNullifier {
+            digest: Hash::new(b"nullifier::end"),
+            issued_at_ms: 99,
+        };
         let end = EndKaigi {
             call_id: call_id.clone(),
             ended_at_ms: Some(1_700_222_000_000),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
+            roster_root: Some(Hash::new(b"roster-root")),
+            proof: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
         };
         let instruction: InstructionBox = Box::new(end).into_instruction_box();
 

@@ -1328,6 +1328,33 @@ function normalizeNewKaigi(options) {
   return call;
 }
 
+function normalizeCreateKaigiInput(options) {
+  const source = assertPlainObject(options, "createKaigi");
+  const callSource =
+    source.call && typeof source.call === "object" && !Array.isArray(source.call)
+      ? source.call
+      : source;
+  return {
+    call: normalizeNewKaigi(callSource),
+    commitment: normalizeKaigiParticipantCommitment(
+      source.commitment,
+      "createKaigi.commitment",
+    ),
+    nullifier: normalizeKaigiParticipantNullifier(
+      source.nullifier,
+      "createKaigi.nullifier",
+    ),
+    roster_root: normalizeOptionalHash(
+      source.roster_root ?? source.rosterRoot,
+      "createKaigi.rosterRoot",
+    ),
+    proof: normalizeOptionalBase64(
+      source.proof,
+      "createKaigi.proof",
+    ),
+  };
+}
+
 function normalizeJoinOrLeaveInput(type, options) {
   const source = assertPlainObject(options, type);
   const callId = source.call_id ?? source.callId ?? source.id;
@@ -1365,6 +1392,19 @@ function normalizeEndKaigiInput(options) {
       endedValue === null || endedValue === undefined
         ? null
         : asNonNegativeInteger(endedValue, "endKaigi.endedAtMs"),
+    commitment: normalizeKaigiParticipantCommitment(
+      source.commitment,
+      "endKaigi.commitment",
+    ),
+    nullifier: normalizeKaigiParticipantNullifier(
+      source.nullifier,
+      "endKaigi.nullifier",
+    ),
+    roster_root: normalizeOptionalHash(
+      source.roster_root ?? source.rosterRoot,
+      "endKaigi.rosterRoot",
+    ),
+    proof: normalizeOptionalBase64(source.proof, "endKaigi.proof"),
   };
 }
 
@@ -2312,12 +2352,10 @@ export function buildProposeMultisigInstruction({
  * @returns {{Kaigi: {CreateKaigi: {call: object}}}}
  */
 export function buildCreateKaigiInstruction(call) {
-  const normalizedCall = normalizeNewKaigi(call);
+  const normalizedCall = normalizeCreateKaigiInput(call);
   return {
     Kaigi: {
-      CreateKaigi: {
-        call: normalizedCall,
-      },
+      CreateKaigi: normalizedCall,
     },
   };
 }
