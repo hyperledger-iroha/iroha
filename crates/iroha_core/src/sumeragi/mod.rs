@@ -11280,6 +11280,9 @@ trait WorkerActor {
     fn poll_rbc_persist_results(&mut self) -> bool {
         false
     }
+    fn prioritize_vote_drain(&self) -> bool {
+        false
+    }
     fn should_bypass_tick_gap(&self) -> bool {
         false
     }
@@ -11331,6 +11334,10 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 
     fn poll_rbc_persist_results(&mut self) -> bool {
         crate::sumeragi::main_loop::Actor::poll_rbc_persist_results_inner(self)
+    }
+
+    fn prioritize_vote_drain(&self) -> bool {
+        crate::sumeragi::main_loop::Actor::quorum_recovery_vote_drain_urgent(self)
     }
 
     fn should_bypass_tick_gap(&self) -> bool {
@@ -11962,6 +11969,7 @@ fn drain_mailbox<A: WorkerActor>(
             && stats.consensus_handled == 0
             && stats.lane_relays_handled == 0
             && stats.background_handled == 0;
+        let force_votes_over_payload = actor.prioritize_vote_drain();
         let prefer_votes = votes_pending && !force_payload_turn && stats.votes_handled < vote_burst;
         let tier = if force_payload_turn {
             payload_turn
@@ -11974,6 +11982,7 @@ fn drain_mailbox<A: WorkerActor>(
                 cfg,
                 prefer_votes,
                 suppress_starved_payload_preemption,
+                force_votes_over_payload,
             )
         };
         let Some(tier) = tier else {
@@ -12351,6 +12360,7 @@ fn select_next_tier(
     cfg: &WorkerLoopConfig,
     prefer_votes: bool,
     suppress_starved_payload_preemption: bool,
+    force_votes_over_payload: bool,
 ) -> Option<PriorityTier> {
     let votes_pending =
         budgets.remaining(PriorityTier::Votes) > 0 && mailbox.has_pending(PriorityTier::Votes);
@@ -12395,10 +12405,16 @@ fn select_next_tier(
             && tier == PriorityTier::BlockPayload
             && votes_pending)
         {
+            if force_votes_over_payload
+                && votes_pending
+                && matches!(tier, PriorityTier::RbcChunks | PriorityTier::BlockPayload)
+            {
+                return Some(PriorityTier::Votes);
+            }
             return Some(tier);
         }
     }
-    if prefer_votes && votes_pending {
+    if (prefer_votes || force_votes_over_payload) && votes_pending {
         return Some(PriorityTier::Votes);
     }
     // After the vote burst, rotate to the oldest pending tier while keeping votes ahead of

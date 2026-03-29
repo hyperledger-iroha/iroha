@@ -13,7 +13,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWriteExt, unix::AsyncFd},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, unix::AsyncFd},
     net::{TcpListener, TcpStream},
     signal::unix::{SignalKind, signal},
 };
@@ -23,6 +23,7 @@ const DEFAULT_INTERFACE_PREFIX: &str = "svpn";
 const DEFAULT_ROUTE_CMD: &str = "ip";
 const PACKET_LEN_PREFIX_BYTES: usize = 2;
 const VPN_BACKEND_BOOTSTRAP_MAGIC: &[u8; 8] = b"SVPNBE1\0";
+const VPN_BACKEND_STATUS_READY: u8 = 1;
 #[cfg(target_os = "linux")]
 const LINUX_IFF_TUN: nix::libc::c_short = 0x0001;
 #[cfg(target_os = "linux")]
@@ -335,8 +336,21 @@ async fn serve_connection(
     shared_network: &Arc<Mutex<SharedNetworkState>>,
 ) -> Result<(), BackendError> {
     let bootstrap = read_vpn_backend_bootstrap(&mut stream).await?;
-    let session_config = SessionRuntimeConfig::from_bootstrap(config, bootstrap)?;
-    let prepared = prepare_tunnel(config, &session_config, shared_network)?;
+    let session_config = match SessionRuntimeConfig::from_bootstrap(config, bootstrap) {
+        Ok(session_config) => session_config,
+        Err(error) => {
+            let _ = write_vpn_backend_status(&mut stream, false, &error.to_string()).await;
+            return Err(error);
+        }
+    };
+    let prepared = match prepare_tunnel(config, &session_config, shared_network) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let _ = write_vpn_backend_status(&mut stream, false, &error.to_string()).await;
+            return Err(error);
+        }
+    };
+    write_vpn_backend_status(&mut stream, true, "ready").await?;
     eprintln!(
         "vpn backend accepted {remote} on interface {}",
         prepared.applied_network.interface_name
@@ -538,6 +552,26 @@ async fn read_vpn_backend_bootstrap<R: AsyncRead + Unpin>(
     reader.read_exact(&mut payload).await?;
     serde_json::from_slice(&payload)
         .map_err(|error| BackendError::InvalidConfig(format!("invalid backend bootstrap: {error}")))
+}
+
+async fn write_vpn_backend_status<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    ready: bool,
+    message: &str,
+) -> Result<(), BackendError> {
+    let payload = message.as_bytes();
+    let len = u16::try_from(payload.len()).map_err(|_| {
+        BackendError::State(format!(
+            "vpn backend status payload {} exceeds u16 length prefix",
+            payload.len()
+        ))
+    })?;
+    writer
+        .write_all(&[if ready { VPN_BACKEND_STATUS_READY } else { 0u8 }])
+        .await?;
+    writer.write_all(&len.to_be_bytes()).await?;
+    writer.write_all(payload).await?;
+    Ok(())
 }
 
 async fn tun_to_socket_loop<W: AsyncWriteExt + Unpin>(
@@ -1103,6 +1137,24 @@ mod tests {
             .await
             .expect("decoded");
         assert_eq!(decoded, bootstrap);
+    }
+
+    #[tokio::test]
+    async fn status_frame_round_trips() {
+        let (mut writer, mut reader) = tokio::io::duplex(256);
+        write_vpn_backend_status(&mut writer, true, "ready")
+            .await
+            .expect("status write");
+
+        let mut status = [0u8; 1];
+        reader.read_exact(&mut status).await.expect("status");
+        assert_eq!(status[0], VPN_BACKEND_STATUS_READY);
+        let mut len = [0u8; 2];
+        reader.read_exact(&mut len).await.expect("len");
+        let len = usize::from(u16::from_be_bytes(len));
+        let mut payload = vec![0u8; len];
+        reader.read_exact(&mut payload).await.expect("payload");
+        assert_eq!(payload, b"ready");
     }
 
     #[test]

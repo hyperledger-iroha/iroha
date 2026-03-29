@@ -145,6 +145,7 @@ const DEFAULT_HANDSHAKE_SUITES: [HandshakeSuite; 2] = [
     HandshakeSuite::Nk3PqForwardSecure,
 ];
 const VPN_BACKEND_BOOTSTRAP_MAGIC: &[u8; 8] = b"SVPNBE1\0";
+const VPN_BACKEND_STATUS_READY: u8 = 1;
 
 /// Shared context required by `monitor_circuit`.
 #[derive(Clone)]
@@ -749,6 +750,30 @@ async fn write_vpn_backend_bootstrap<W: AsyncWrite + Unpin>(
     writer.write_all(&len.to_be_bytes()).await?;
     writer.write_all(&payload).await?;
     Ok(())
+}
+
+async fn read_vpn_backend_status<R: AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<(), VpnBackendBridgeError> {
+    let mut status = [0u8; 1];
+    reader.read_exact(&mut status).await?;
+    let mut len = [0u8; 2];
+    reader.read_exact(&mut len).await?;
+    let len = usize::from(u16::from_be_bytes(len));
+    let mut payload = vec![0u8; len];
+    reader.read_exact(&mut payload).await?;
+    let message = String::from_utf8_lossy(&payload).into_owned();
+    if status[0] == VPN_BACKEND_STATUS_READY {
+        Ok(())
+    } else {
+        Err(VpnBackendBridgeError::BackendControl(
+            if message.is_empty() {
+                "vpn backend rejected session bootstrap".to_owned()
+            } else {
+                message
+            },
+        ))
+    }
 }
 
 fn record_route_open_ingress_metrics(
@@ -2388,6 +2413,17 @@ impl RelayRuntime {
                 "failed to send vpn backend bootstrap"
             );
             connection.close(0u32.into(), b"vpn backend bootstrap failed");
+            return;
+        }
+        if let Err(error) = read_vpn_backend_status(&mut backend_read).await {
+            warn!(
+                remote = %remote,
+                backend = %backend_addr,
+                session_id = %hex::encode(helper_ticket.session_id),
+                %error,
+                "vpn backend failed session bootstrap"
+            );
+            connection.close(0u32.into(), b"vpn backend bootstrap rejected");
             return;
         }
         if let Err(error) = Self::bridge_vpn_backend_streams(
@@ -4192,6 +4228,18 @@ mod tests {
         assert_eq!(decoded, bootstrap);
         assert_eq!(decoded.server_tunnel_addresses.len(), 2);
         assert_eq!(decoded.session_routes.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn vpn_backend_status_reports_rejection_message() {
+        let (mut writer, mut reader) = duplex(256);
+        writer.write_all(&[0u8]).await.expect("status");
+        writer.write_all(&4u16.to_be_bytes()).await.expect("len");
+        writer.write_all(b"fail").await.expect("payload");
+        let error = read_vpn_backend_status(&mut reader)
+            .await
+            .expect_err("status must reject");
+        assert!(error.to_string().contains("fail"));
     }
 
     #[tokio::test]
