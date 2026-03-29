@@ -168,8 +168,8 @@ fn run(args: Args) -> Result<()> {
         .iter()
         .map(|raw| RelaySpec::parse(raw))
         .collect::<Result<Vec<_>>>()?;
-    let host_public_key = PublicKey::from_str(&args.host_public_key)
-        .wrap_err("failed to parse host public key")?;
+    let host_public_key =
+        PublicKey::from_str(&args.host_public_key).wrap_err("failed to parse host public key")?;
     let host = AccountId::new(host_public_key);
     let relay_domain = DomainId::from_str(&args.relay_domain).wrap_err("invalid relay domain")?;
     let call_id = KaigiId::new(
@@ -219,10 +219,12 @@ mod tests {
 
     #[test]
     fn relay_spec_parses_expected_fields() {
-        let raw =
-            "ea0130B99B89AD5D2F51D17AB69D32BC3A44C2CC5FF65E28590022B972148AD4DF00712FEC4EFF5BC6B3AEF33ABCF18F5CAD5B:K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ=:3";
+        let raw = "ea0130B99B89AD5D2F51D17AB69D32BC3A44C2CC5FF65E28590022B972148AD4DF00712FEC4EFF5BC6B3AEF33ABCF18F5CAD5B:K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ=:3";
         let parsed = RelaySpec::parse(raw).expect("relay spec should parse");
-        assert_eq!(parsed.hpke_public_key_b64, "K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ=");
+        assert_eq!(
+            parsed.hpke_public_key_b64,
+            "K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ="
+        );
         assert_eq!(parsed.bandwidth_class, 3);
         assert_eq!(
             parsed.public_key.to_string(),
@@ -243,9 +245,7 @@ mod tests {
             "kaigi_relay__ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249"
         );
         assert_eq!(
-            feedback_key(&public_key)
-                .expect("feedback key")
-                .to_string(),
+            feedback_key(&public_key).expect("feedback key").to_string(),
             "kaigi_relay_feedback__ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249"
         );
     }

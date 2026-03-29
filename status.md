@@ -2,6 +2,19 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: SoraFS storage-pin integration tests match the current client API again
+- Updated the two direct single-file SoraFS pin callsites in
+  `integration_tests/tests/soranet_web_deploy.rs` and
+  `integration_tests/tests/sorafs_reconciliation.rs` to pass `None` for the
+  new optional `files` argument on
+  `Client::post_sorafs_storage_pin(...)`.
+- This closes the immediate `error[E0061]` compile break on the affected
+  integration-test targets without changing the manifest or payload bytes that
+  those tests submit.
+- Verification:
+  - `cargo check -p integration_tests --test soranet_web_deploy --test sorafs_reconciliation --message-format short` (pass)
+  - `cargo fmt --all` (pass)
+
 ## 2026-03-29 Follow-up: `iroha_core`/`iroha_torii` compile hygiene for contract-runtime visibility and SoraFS manifest helpers
 - Removed the last dead contiguous-frontier phase from
   `crates/iroha_core/src/sumeragi/main_loop.rs` by dropping the unused
