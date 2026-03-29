@@ -1474,7 +1474,7 @@ pub struct KaigiCallViewDto {
     /// Host-selected gas rate for the call.
     pub gas_rate_per_minute: u64,
     /// Arbitrary host metadata stored with the call.
-    pub metadata: Value,
+    pub metadata: IrohaJson,
     /// Optional scheduled start timestamp in milliseconds.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub scheduled_start_ms: Option<u64>,
@@ -1484,7 +1484,7 @@ pub struct KaigiCallViewDto {
     pub room_policy: String,
     /// Optional relay manifest snapshot.
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub relay_manifest: Option<Value>,
+    pub relay_manifest: Option<IrohaJson>,
     /// Current roster Merkle root in hex form.
     pub roster_root_hex: String,
     /// Number of visible participants currently attached to the call.
@@ -1541,7 +1541,7 @@ pub struct KaigiCallSignalDto {
     /// Signal creation timestamp supplied in metadata.
     pub created_at_ms: u64,
     /// Parsed signal metadata payload.
-    pub metadata: Value,
+    pub metadata: IrohaJson,
 }
 
 #[cfg(feature = "app_api")]
@@ -1582,11 +1582,7 @@ pub struct KaigiCallEventCallRefDto {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Clone,
-    Debug,
-    Default,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
 /// Optional query parameters for Kaigi call-signal listing.
 pub struct KaigiCallSignalsParams {
@@ -1603,11 +1599,7 @@ pub struct KaigiCallSignalsParams {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Clone,
-    Debug,
-    Default,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
 /// Optional query parameters for Kaigi call SSE streams.
 pub struct KaigiCallEventsParams {
@@ -1743,17 +1735,26 @@ fn kaigi_call_event_ref(call_id: &KaigiId) -> KaigiCallEventCallRefDto {
 }
 
 #[cfg(feature = "app_api")]
-fn load_kaigi_record(state: &CoreState, call_id: &KaigiId) -> Result<iroha_data_model::kaigi::KaigiRecord, Error> {
+fn load_kaigi_record(
+    state: &CoreState,
+    call_id: &KaigiId,
+) -> Result<iroha_data_model::kaigi::KaigiRecord, Error> {
     let world = state.world_view();
-    let domain = world.domain(&call_id.domain_id).map_err(|_| explorer_not_found())?;
+    let domain = world
+        .domain(&call_id.domain_id)
+        .map_err(|_| explorer_not_found())?;
     let key = iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name)
         .map_err(|err| conversion_error(format!("invalid kaigi call id: {err}")))?;
     let Some(raw) = domain.metadata().get(&key) else {
         return Err(explorer_not_found());
     };
-    raw.clone().try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>().map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(err.to_string()))
-    })
+    raw.clone()
+        .try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>()
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                err.to_string(),
+            ))
+        })
 }
 
 #[cfg(feature = "app_api")]
@@ -1771,11 +1772,14 @@ fn kaigi_call_view_from_record(record: &iroha_data_model::kaigi::KaigiRecord) ->
         description: record.description.clone(),
         max_participants: record.max_participants,
         gas_rate_per_minute: record.gas_rate_per_minute,
-        metadata: metadata_to_json(&record.metadata),
+        metadata: IrohaJson::from(metadata_to_json(&record.metadata)),
         scheduled_start_ms: record.scheduled_start_ms,
         privacy_mode: kaigi_privacy_mode_label(record.privacy_mode).to_owned(),
         room_policy: kaigi_room_policy_label(record.room_policy).to_owned(),
-        relay_manifest: record.relay_manifest.as_ref().map(json_value),
+        relay_manifest: record
+            .relay_manifest
+            .as_ref()
+            .map(|manifest| IrohaJson::from(json_value(manifest))),
         roster_root_hex: hex::encode(<[u8; 32]>::from(record.roster_root)),
         participant_count: u32::try_from(record.participants.len()).unwrap_or(u32::MAX),
         commitment_count: u32::try_from(record.roster_commitments.len()).unwrap_or(u32::MAX),
@@ -1800,8 +1804,11 @@ fn kaigi_metadata_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
 
 #[cfg(feature = "app_api")]
 fn kaigi_metadata_string(value: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| kaigi_metadata_value(value, key)?.as_str().map(ToOwned::to_owned))
+    keys.iter().find_map(|key| {
+        kaigi_metadata_value(value, key)?
+            .as_str()
+            .map(ToOwned::to_owned)
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -1818,7 +1825,11 @@ fn kaigi_signal_from_transaction(
         return None;
     };
     let key: Name = "kaigi_signal".parse().ok()?;
-    let signal_json = signed.metadata().get(&key)?.try_into_any_norito::<Value>().ok()?;
+    let signal_json = signed
+        .metadata()
+        .get(&key)?
+        .try_into_any_norito::<Value>()
+        .ok()?;
     let call_id = kaigi_metadata_string(&signal_json, &["callId", "call_id"])?;
     let signal_kind = kaigi_metadata_string(&signal_json, &["signalKind", "signal_kind"])
         .unwrap_or_else(|| "signal".to_owned())
@@ -1838,7 +1849,7 @@ fn kaigi_signal_from_transaction(
             &["participantAccountId", "participant_account_id"],
         ),
         created_at_ms,
-        metadata: signal_json,
+        metadata: IrohaJson::from(signal_json),
     })
 }
 
@@ -24613,17 +24624,21 @@ mod tx_query_filter_tests {
         let mut metadata = dm::Metadata::default();
         metadata.insert(
             "kaigi_signal".parse().expect("metadata key"),
-            Json::new(norito::json!({
-                "schema": "iroha-demo-kaigi-chain-signal/v1",
-                "callId": "kaigi:weekly-sync",
-                "signalKind": "answer",
-                "hostAccountId": authority.to_string(),
-                "participantAccountId": authority.to_string(),
-                "createdAtMs": 1_700_000_000_000_u64,
-                "encryptedSignal": {
-                    "schema": "iroha-demo-kaigi-sealed-box/v1"
-                }
-            })),
+            Json::new(crate::json_object(vec![
+                crate::json_entry("schema", "iroha-demo-kaigi-chain-signal/v1"),
+                crate::json_entry("callId", "kaigi:weekly-sync"),
+                crate::json_entry("signalKind", "answer"),
+                crate::json_entry("hostAccountId", authority.to_string()),
+                crate::json_entry("participantAccountId", authority.to_string()),
+                crate::json_entry("createdAtMs", 1_700_000_000_000_u64),
+                crate::json_entry(
+                    "encryptedSignal",
+                    crate::json_object(vec![crate::json_entry(
+                        "schema",
+                        "iroha-demo-kaigi-sealed-box/v1",
+                    )]),
+                ),
+            ])),
         );
 
         let tx = make_external_tx_with_metadata(
@@ -24703,7 +24718,7 @@ mod tx_query_filter_tests {
         };
         let ended_event = EventBox::Data(SharedDataEvent::from(
             iroha_data_model::events::data::DataEvent::Domain(DomainEvent::MetadataInserted(
-                iroha_data_model::events::data::MetadataChanged {
+                iroha_data_model::events::data::prelude::MetadataChanged {
                     target: call_id.domain_id.clone(),
                     key: iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name)
                         .expect("call key"),
@@ -30899,7 +30914,9 @@ pub async fn handle_v1_kaigi_call_signals(
         .filter(|signal| {
             after_timestamp_ms.is_none_or(|minimum| {
                 signal.created_at_ms >= minimum
-                    || signal.timestamp_ms.is_some_and(|timestamp| timestamp >= minimum)
+                    || signal
+                        .timestamp_ms
+                        .is_some_and(|timestamp| timestamp >= minimum)
             })
         })
         .collect::<Vec<_>>();
@@ -31017,7 +31034,8 @@ fn convert_kaigi_call_event(event_box: &EventBox, call_id: &KaigiId) -> Option<(
         DataEvent::Domain(DomainEvent::MetadataInserted(change))
             if change.target() == &call_id.domain_id =>
         {
-            let expected_key = iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name).ok()?;
+            let expected_key =
+                iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name).ok()?;
             if change.key() != &expected_key {
                 return None;
             }
@@ -31025,7 +31043,8 @@ fn convert_kaigi_call_event(event_box: &EventBox, call_id: &KaigiId) -> Option<(
                 .value()
                 .try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>()
                 .ok()?;
-            if record.id != *call_id || record.status != iroha_data_model::kaigi::KaigiStatus::Ended {
+            if record.id != *call_id || record.status != iroha_data_model::kaigi::KaigiStatus::Ended
+            {
                 return None;
             }
             Some((
@@ -31034,7 +31053,10 @@ fn convert_kaigi_call_event(event_box: &EventBox, call_id: &KaigiId) -> Option<(
                     json_entry("kind", "ended"),
                     json_entry("call", json_value(&kaigi_call_event_ref(call_id))),
                     json_entry("status", kaigi_status_label(record.status)),
-                    json_entry("ended_at_ms", record.ended_at_ms.unwrap_or(record.created_at_ms)),
+                    json_entry(
+                        "ended_at_ms",
+                        record.ended_at_ms.unwrap_or(record.created_at_ms),
+                    ),
                 ]),
             ))
         }
@@ -31051,35 +31073,40 @@ pub fn handle_v1_kaigi_call_events_sse(
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let kind_filter = parse_kaigi_call_kind_filter(params.kind.as_deref());
 
-    let stream = stream::unfold((events.subscribe(), kind_filter), move |(mut rx, kind_filter)| {
-        let call_id = call_id.clone();
-        async move {
-            use tokio::sync::broadcast::error::RecvError;
-            match rx.recv().await {
-                Ok(event_box) => {
-                    let Some((kind, payload)) = convert_kaigi_call_event(&event_box, &call_id)
-                    else {
-                        return Some((Ok(SseEvent::default().comment("ignored")), (rx, kind_filter)));
-                    };
-                    let matches_kind = kind_filter
-                        .as_ref()
-                        .map_or(true, |set| set.contains(&kind));
-                    let event = if matches_kind {
-                        let body =
-                            norito::json::to_json(&payload).unwrap_or_else(|_| "{}".to_string());
-                        SseEvent::default().event("kaigi.call").data(body)
-                    } else {
-                        SseEvent::default().comment("filtered")
-                    };
-                    Some((Ok(event), (rx, kind_filter)))
+    let stream = stream::unfold(
+        (events.subscribe(), kind_filter),
+        move |(mut rx, kind_filter)| {
+            let call_id = call_id.clone();
+            async move {
+                use tokio::sync::broadcast::error::RecvError;
+                match rx.recv().await {
+                    Ok(event_box) => {
+                        let Some((kind, payload)) = convert_kaigi_call_event(&event_box, &call_id)
+                        else {
+                            return Some((
+                                Ok(SseEvent::default().comment("ignored")),
+                                (rx, kind_filter),
+                            ));
+                        };
+                        let matches_kind =
+                            kind_filter.as_ref().map_or(true, |set| set.contains(&kind));
+                        let event = if matches_kind {
+                            let body = norito::json::to_json(&payload)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            SseEvent::default().event("kaigi.call").data(body)
+                        } else {
+                            SseEvent::default().comment("filtered")
+                        };
+                        Some((Ok(event), (rx, kind_filter)))
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        Some((Ok(SseEvent::default().comment("lagged")), (rx, kind_filter)))
+                    }
+                    Err(RecvError::Closed) => None,
                 }
-                Err(RecvError::Lagged(_)) => {
-                    Some((Ok(SseEvent::default().comment("lagged")), (rx, kind_filter)))
-                }
-                Err(RecvError::Closed) => None,
             }
-        }
-    });
+        },
+    );
 
     Sse::new(stream)
 }

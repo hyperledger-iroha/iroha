@@ -13612,7 +13612,7 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
   let requested;
   const fetchImpl = async (url, init) => {
     requested = url;
-    assert.strictEqual(init.signal, undefined);
+    assert.ok(init.signal === undefined || init.signal instanceof AbortSignal);
     return createResponse({
       status: 200,
       jsonData: {

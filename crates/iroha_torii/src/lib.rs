@@ -5605,8 +5605,17 @@ fn parse_domain_id(raw: &str) -> Result<DomainId, Error> {
 
 #[cfg(feature = "app_api")]
 fn parse_kaigi_call_id(raw: &str) -> Result<iroha_data_model::kaigi::KaigiId, Error> {
-    raw.parse::<iroha_data_model::kaigi::KaigiId>()
-        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
+    let trimmed = raw.trim();
+    let (domain_raw, call_name_raw) = trimmed
+        .split_once(':')
+        .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let domain_id = domain_raw
+        .parse::<DomainId>()
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let call_name = call_name_raw
+        .parse::<Name>()
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    Ok(iroha_data_model::kaigi::KaigiId::new(domain_id, call_name))
 }
 
 #[cfg(feature = "app_api")]
@@ -13997,14 +14006,12 @@ async fn handler_kaigi_call_events_sse(
     let remote_ip = remote.ip();
     let call_id = parse_kaigi_call_id(&call_raw)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        return Ok(
-            routing::handle_v1_kaigi_call_events_sse(
-                app.events.clone(),
-                call_id,
-                AxQuery(params),
-            )
-            .into_response(),
-        );
+        return Ok(routing::handle_v1_kaigi_call_events_sse(
+            app.events.clone(),
+            call_id,
+            AxQuery(params),
+        )
+        .into_response());
     }
 
     let token_hdr = headers
@@ -14034,12 +14041,10 @@ async fn handler_kaigi_call_events_sse(
         )));
     }
 
-    Ok(routing::handle_v1_kaigi_call_events_sse(
-        app.events.clone(),
-        call_id,
-        AxQuery(params),
+    Ok(
+        routing::handle_v1_kaigi_call_events_sse(app.events.clone(), call_id, AxQuery(params))
+            .into_response(),
     )
-    .into_response())
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -23171,7 +23176,10 @@ impl Torii {
                     "/v1/kaigi/calls/{call_id}/signals",
                     get(handler_kaigi_call_signals),
                 )
-                .route("/v1/kaigi/calls/{call_id}/events", get(handler_kaigi_call_events_sse));
+                .route(
+                    "/v1/kaigi/calls/{call_id}/events",
+                    get(handler_kaigi_call_events_sse),
+                );
 
             #[cfg(feature = "telemetry")]
             let router = router
