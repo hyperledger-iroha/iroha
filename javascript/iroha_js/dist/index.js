@@ -47,6 +47,7 @@ export {
   signSm2,
   verifySm2,
   sm2PublicKeyMultihash,
+  buildKaigiRosterJoinProof,
   SM2_PRIVATE_KEY_LENGTH,
   SM2_PUBLIC_KEY_LENGTH,
   SM2_SIGNATURE_LENGTH,

@@ -8315,6 +8315,8 @@ pub struct SoranetVpn {
     /// Meter family identifier.
     #[config(default = "defaults::soranet::vpn::METER_FAMILY.to_string()")]
     pub meter_family: String,
+    /// Optional 32-byte shared secret (hex) used to mint helper-authenticated VPN tickets.
+    pub helper_ticket_secret_hex: Option<String>,
 }
 
 impl Default for SoranetVpn {
@@ -8333,6 +8335,7 @@ impl Default for SoranetVpn {
             dns_push_interval_secs: defaults::soranet::vpn::dns_push_interval_secs_u64(),
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
+            helper_ticket_secret_hex: None,
         }
     }
 }
@@ -8353,6 +8356,7 @@ impl SoranetVpn {
             dns_push_interval_secs,
             exit_class,
             meter_family,
+            helper_ticket_secret_hex,
         } = self;
 
         let default_cell_size = defaults::soranet::vpn::CELL_SIZE_BYTES;
@@ -8377,6 +8381,19 @@ impl SoranetVpn {
             .expect("network.soranet_vpn.exit_class must be standard|low-latency|high-security")
             .as_label()
             .to_string();
+        let helper_ticket_secret = helper_ticket_secret_hex
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                let normalized = value.trim_start_matches("0x").trim_start_matches("0X");
+                let decoded = hex::decode(normalized).unwrap_or_else(|err| {
+                    panic!("network.soranet_vpn.helper_ticket_secret_hex must be valid hex: {err}")
+                });
+                let bytes: [u8; 32] = decoded.try_into().unwrap_or_else(|_| {
+                    panic!("network.soranet_vpn.helper_ticket_secret_hex must decode to 32 bytes")
+                });
+                bytes
+            });
 
         actual::SoranetVpn {
             enabled,
@@ -8392,6 +8409,7 @@ impl SoranetVpn {
             dns_push_interval,
             exit_class,
             meter_family,
+            helper_ticket_secret,
         }
     }
 }
@@ -8443,10 +8461,30 @@ mod soranet_vpn_tests {
     }
 
     #[test]
+    fn soranet_vpn_accepts_helper_ticket_secret_hex() {
+        let cfg = SoranetVpn {
+            helper_ticket_secret_hex: Some("ab".repeat(32)),
+            ..SoranetVpn::default()
+        };
+        let parsed = cfg.parse();
+        assert_eq!(Some([0xAB; 32]), parsed.helper_ticket_secret);
+    }
+
+    #[test]
     #[should_panic(expected = "lease_secs exceeds u32")]
     fn soranet_vpn_rejects_overflowing_lease_secs() {
         let cfg = SoranetVpn {
             lease_secs: u64::from(u32::MAX) + 1,
+            ..SoranetVpn::default()
+        };
+        let _ = cfg.parse();
+    }
+
+    #[test]
+    #[should_panic(expected = "helper_ticket_secret_hex must decode to 32 bytes")]
+    fn soranet_vpn_rejects_short_helper_ticket_secret_hex() {
+        let cfg = SoranetVpn {
+            helper_ticket_secret_hex: Some("ab".repeat(16)),
             ..SoranetVpn::default()
         };
         let _ = cfg.parse();
@@ -17089,6 +17127,16 @@ impl SorafsGatewayRateLimit {
 pub struct SorafsGatewayDenylist {
     /// Optional filesystem path to a JSON denylist definition.
     pub path: Option<PathBuf>,
+    /// Optional filesystem path to a pack-catalog JSON definition.
+    pub catalog_path: Option<PathBuf>,
+    /// Pack identifiers explicitly disabled on this node.
+    #[config(default)]
+    pub opt_out_packs: Vec<String>,
+    /// Additional pack identifiers explicitly enabled on this node.
+    #[config(default)]
+    pub extra_packs: Vec<String>,
+    /// Optional jurisdiction code used to auto-enable matching regional packs.
+    pub jurisdiction: Option<String>,
     /// Maximum TTL applied to standard entries when `expires_at` is omitted.
     #[config(default = "defaults::sorafs::gateway::denylist::STANDARD_TTL")]
     pub standard_ttl: Duration,
@@ -17107,6 +17155,10 @@ impl Default for SorafsGatewayDenylist {
     fn default() -> Self {
         Self {
             path: defaults::sorafs::gateway::denylist::path(),
+            catalog_path: None,
+            opt_out_packs: Vec::new(),
+            extra_packs: Vec::new(),
+            jurisdiction: None,
             standard_ttl: defaults::sorafs::gateway::denylist::STANDARD_TTL,
             emergency_ttl: defaults::sorafs::gateway::denylist::EMERGENCY_TTL,
             emergency_review_window: defaults::sorafs::gateway::denylist::EMERGENCY_REVIEW_WINDOW,
@@ -17120,6 +17172,13 @@ impl SorafsGatewayDenylist {
     fn parse(self) -> actual::SorafsGatewayDenylist {
         actual::SorafsGatewayDenylist {
             path: self.path,
+            catalog_path: self.catalog_path,
+            opt_out_packs: self.opt_out_packs,
+            extra_packs: self.extra_packs,
+            jurisdiction: self
+                .jurisdiction
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
             standard_ttl: self.standard_ttl,
             emergency_ttl: self.emergency_ttl,
             emergency_review_window: self.emergency_review_window,

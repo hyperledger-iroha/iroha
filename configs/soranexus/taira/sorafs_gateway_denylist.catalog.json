@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "packs": [
+    {
+      "pack_id": "global-core",
+      "version": "2026.03.29",
+      "path": "sorafs_gateway_denylist.global-core.json",
+      "default_enabled": true,
+      "policy_tier": "standard",
+      "review_reference": "docs/examples/ministry/agenda_proposal_example.json"
+    },
+    {
+      "pack_id": "global-emergency",
+      "version": "2026.03.29",
+      "path": "sorafs_gateway_denylist.global-emergency.json",
+      "default_enabled": true,
+      "policy_tier": "emergency",
+      "review_reference": "docs/examples/ministry/referendum_packet_example.json"
+    }
+  ]
+}

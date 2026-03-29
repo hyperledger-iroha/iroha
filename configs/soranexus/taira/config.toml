@@ -1,6 +1,10 @@
 # Sora Taira (testnet) validator configuration
 # Network prefix: `taira`
 # Start with: `irohad --sora --config configs/soranexus/taira/config.toml`
+# This is the checked-in peer-1 baseline. For real multi-validator deploys,
+# render per-validator configs from `validator_roster.example.toml` plus
+# `validator_secrets.example.toml` with
+# `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`.
 
 chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
 chain_discriminant = 369
@@ -26,6 +30,7 @@ max_frame_bytes_tx_gossip = 1048576
 [torii]
 address = "0.0.0.0:18080"
 public_address = "https://taira.sora.org"
+max_content_len = 64_000_000
 
 [torii.mcp]
 enabled = true
@@ -57,6 +62,11 @@ pow_vrf_seed_enabled = true
 discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch"]
 admission_envelopes_dir = "configs/soranexus/taira/sorafs_admission"
+
+[sorafs.gateway.denylist]
+catalog_path = "configs/soranexus/taira/sorafs_gateway_denylist.catalog.json"
+opt_out_packs = []
+extra_packs = []
 
 [sorafs.repair]
 enabled = false

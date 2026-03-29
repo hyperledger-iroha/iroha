@@ -295,6 +295,8 @@ members = [
     "xtask",
     "tools/soranet-handshake-harness",
     "tools/soranet-puzzle-service",
+    "tools/sora-vpn-helper",
+    "tools/sora-vpn-backend",
     "tools/soranet-relay",
     "tools/norito_codegen_exporter",
     "tools/soradns-resolver",

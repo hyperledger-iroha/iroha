@@ -193,6 +193,15 @@ function ensureSm2Native(native) {
   return native;
 }
 
+function ensureKaigiRosterNative(native) {
+  if (!native || typeof native.buildKaigiRosterJoinProof !== "function") {
+    throw new Error(
+      "Kaigi roster proof helper unavailable; build iroha_js_host with `npm run build:native` before using private Kaigi joins",
+    );
+  }
+  return native;
+}
+
 export function generateSm2KeyPair(options = {}) {
   const native = ensureSm2Native(resolveNativeBinding());
   const effectiveDistid = normalizeSm2Distid(options.distid, native);
@@ -291,6 +300,46 @@ export function verifySm2(message, signature, publicKey, distid) {
   return Boolean(
     native.sm2Verify(publicKeyBuffer, messageBuffer, signatureBuffer, effectiveDistid),
   );
+}
+
+/**
+ * Build the proof artefacts required for a `Kaigi::JoinKaigi` `ZkRosterV1` join.
+ * @param {{seed: ArrayBufferView | ArrayBuffer | Buffer, rosterRootHex?: string | null}} options
+ * @returns {{commitment: Buffer, nullifier: Buffer, rosterRoot: Buffer, proof: Buffer, commitmentHex: string, nullifierHex: string, rosterRootHex: string, proofBase64: string}}
+ */
+export function buildKaigiRosterJoinProof(options) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("buildKaigiRosterJoinProof options must be an object");
+  }
+  const seed = toBuffer(options.seed, "seed");
+  if (seed.length === 0) {
+    throw new Error("seed must not be empty");
+  }
+  const native = ensureKaigiRosterNative(resolveNativeBinding());
+  const result = native.buildKaigiRosterJoinProof(
+    seed,
+    options.rosterRootHex ?? options.roster_root_hex ?? null,
+  );
+  const commitment = Buffer.from(result.commitment);
+  const nullifier = Buffer.from(result.nullifier);
+  const rosterRoot = Buffer.from(result.rosterRoot ?? result.roster_root);
+  const proof = Buffer.from(result.proof);
+  if (commitment.length !== 32 || nullifier.length !== 32 || rosterRoot.length !== 32) {
+    throw new Error("native Kaigi roster proof helper returned invalid digest lengths");
+  }
+  if (proof.length === 0) {
+    throw new Error("native Kaigi roster proof helper returned an empty proof");
+  }
+  return {
+    commitment,
+    nullifier,
+    rosterRoot,
+    proof,
+    commitmentHex: commitment.toString("hex"),
+    nullifierHex: nullifier.toString("hex"),
+    rosterRootHex: rosterRoot.toString("hex"),
+    proofBase64: proof.toString("base64"),
+  };
 }
 
 /**

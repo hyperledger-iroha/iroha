@@ -8,6 +8,205 @@ use std::{fs, path::PathBuf};
 const BEGIN: &str = "<!-- BEGIN GENERATED SYSCALLS -->";
 const END: &str = "<!-- END GENERATED SYSCALLS -->";
 
+fn guess_defaults(n: u32) -> (String, String, String) {
+    let name = ivm::syscalls::syscall_name(n).unwrap_or("");
+    // Baseline defaults
+    let mut args = String::from("-");
+    let mut ret = String::from("-");
+    let mut gas = String::from("-");
+
+    let up = name;
+    // Heuristics for common patterns; conservative and non-binding
+    if up.contains("ZK_VERIFY_BATCH") || n == 0x68 {
+        args = "r10=&NoritoBytes(Vec<OpenVerifyEnvelope>)".into();
+        ret = "r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64".into();
+        gas = "G_verify".into();
+    } else if up.contains("VRF_VERIFY_BATCH") || n == 0x67 {
+        args = "r10=&NoritoBytes(VrfVerifyBatchRequest)".into();
+        ret = "r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64".into();
+        gas = "G_verify".into();
+    } else if up.contains("VRF_VERIFY") || n == 0x66 {
+        args = "r10=&NoritoBytes(VrfVerifyRequest)".into();
+        ret = "r10=ptr (&Blob(32-byte output)), r11=status:u64".into();
+        gas = "G_verify".into();
+    } else if up.contains("ROOTS_GET") || n == 0x64 {
+        args = "r10=&NoritoBytes(RootsGetRequest)".into();
+        ret = "ptr (NoritoBytes in INPUT)".into();
+        gas = "G_roots_get".into();
+    } else if up.contains("VOTE_GET_TALLY") || n == 0x65 {
+        args = "r10=&NoritoBytes(VoteGetTallyRequest)".into();
+        ret = "ptr (NoritoBytes in INPUT)".into();
+        gas = "G_vote_get".into();
+    } else if up.contains("JSON_ENCODE") || n == 0x57 {
+        args = "r10=&Json".into();
+        ret = "ptr (&NoritoBytes)".into();
+        gas = "G_json_encode".into();
+    } else if up.contains("JSON_DECODE") || n == 0x58 {
+        args = "r10=&NoritoBytes(JSON bytes)".into();
+        ret = "ptr (&Json)".into();
+        gas = "G_json_decode".into();
+    } else if up.contains("SCHEMA_ENCODE") || n == 0x59 {
+        args = "r10=&Name(schema), r11=&Json".into();
+        ret = "ptr (&NoritoBytes)".into();
+    } else if up.contains("SCHEMA_DECODE") || n == 0x5A {
+        args = "r10=&Name(schema), r11=&NoritoBytes".into();
+        ret = "ptr (&Json)".into();
+    } else if up.contains("SCHEMA_INFO") || n == 0x5B {
+        args = "r10=&Name(schema)".into();
+        ret = "ptr (&Json{\"id\":...,\"version\":...})".into();
+    } else if up.contains("GET_ACCOUNT_BALANCE") || n == 0xF9 {
+        args = "r10=&AccountId, r11=&AssetDefinitionId".into();
+        ret = "ptr (&NoritoBytes(Numeric))".into();
+        gas = "G_get_bal".into();
+    } else if up.contains("NAME_DECODE") || n == 0x5C {
+        args = "r10=&NoritoBytes(UTF-8 string)".into();
+        ret = "ptr (&Name)".into();
+        gas = "G_name_decode".into();
+    } else if up.contains("POINTER_TO_NORITO") || n == 0x5D {
+        args = "r10=&PointerType<T>".into();
+        ret = "ptr (&NoritoBytes(TLV envelope))".into();
+    } else if up.contains("POINTER_FROM_NORITO") || n == 0x5E {
+        args = "r10=&NoritoBytes(TLV envelope), r11=expected?:u16".into();
+        ret = "ptr (&PointerType<T>)".into();
+    } else if up.contains("VERIFY") {
+        ret = "u64=0/1".into();
+        gas = "G_verify".into();
+    } else if up.contains("ALLOC") || n == 0xF0 {
+        args = "r10=bytes:u64".into();
+        ret = "ptr (r10)".into();
+        gas = "G_alloc + bytes".into();
+    } else if up.contains("GROW_HEAP") || n == 0xF5 {
+        args = "r10=bytes:u64".into();
+        ret = "u64=new_limit".into();
+        gas = "G_grow_heap per page".into();
+    } else if up.contains("GET_PRIVATE_INPUT") || n == 0xFD {
+        args = "r10=&Name".into();
+        ret = "ptr (r10)".into();
+        gas = "G_get_priv".into();
+    } else if up.contains("GET_PUBLIC_INPUT") || n == 0xF1 {
+        args = "r10=&Name".into();
+        ret = "ptr (r10)".into();
+        gas = "G_get_pub".into();
+    } else if up.contains("GET_AUTHORITY") || n == 0xA4 {
+        ret = "ptr (AccountId in INPUT)".into();
+        gas = "G_get_auth".into();
+    } else if up.contains("RESOLVE_ACCOUNT_ALIAS") || n == 0xA7 {
+        args = "r10=&Blob(alias literal)".into();
+        ret = "ptr (&AccountId in INPUT)".into();
+        gas = "G_alias_resolve".into();
+    } else if up.contains("INPUT_PUBLISH_TLV") || n == 0xE0 {
+        args = "r10=&Blob(TLV)".into();
+        ret = "ptr (r10)".into();
+        gas = "G_input_publish".into();
+    } else if up.contains("MERKLE_PATH") || n == 0xF7 {
+        args = "r10=addr:u64, r11=out:u64, r12=root_out?:u64".into();
+        ret = "u64=len".into();
+        gas = "G_mpath + len".into();
+    } else if up.contains("MERKLE_COMPACT") || n == 0xFA || n == 0xFF {
+        args = "r10=addr, r11=out, r12=depth_cap?, r13=root_out?".into();
+        ret = "u64=depth".into();
+        gas = "G_mpath + depth".into();
+    } else if up.contains("EXECUTE_QUERY") || n == 0xA1 {
+        args = "r10=&Json".into();
+        ret = "ptr (r10)".into();
+        gas = "G_scq".into();
+    } else if up.contains("EXECUTE_INSTRUCTION") || n == 0xA0 {
+        args = "r10=&Json".into();
+        ret = "u64=0".into();
+        gas = "G_sci".into();
+    } else if up.contains("COMMIT_OUTPUT") || n == 0xFE {
+        args = "r10=&Json".into();
+        ret = "u64=0".into();
+        gas = "G_commit".into();
+    } else if up.contains("VERIFY_SIGNATURE") || n == 0xFC {
+        args = "r10=&Json".into();
+        ret = "u64=0".into();
+        gas = "G_verify_sig".into();
+    } else if up.is_empty() {
+        // Unknown number without a name: keep dashes
+    } else {
+        // Safe default for side-effect syscalls
+        ret = "u64=0".into();
+    }
+    (args, ret, gas)
+}
+
+fn spec_entry(
+    map: &std::collections::BTreeMap<u32, (String, String, String)>,
+    n: u32,
+) -> (String, String, String) {
+    map.get(&n).cloned().unwrap_or_else(|| guess_defaults(n))
+}
+
+fn rewrite_gas_tokens(gas_raw: &str) -> (String, Vec<String>) {
+    let mut out_gas = String::new();
+    let mut gas_keys = Vec::new();
+    for (i, part) in gas_raw.split('+').map(|s| s.trim()).enumerate() {
+        if i > 0 {
+            out_gas.push_str(" + ");
+        }
+        if let Some(tok) = part.split_whitespace().next()
+            && tok.starts_with('G')
+        {
+            gas_keys.push(tok.to_string());
+            out_gas.push_str(&format!("asset:gas/{tok}@ivm.core/v2"));
+            let tail = part.strip_prefix(tok).unwrap_or("").trim();
+            if !tail.is_empty() {
+                out_gas.push(' ');
+                out_gas.push_str(tail);
+            }
+            continue;
+        }
+        out_gas.push_str(part);
+    }
+    (out_gas, gas_keys)
+}
+
+fn unescape_basic_toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('"') => out.push('"'),
+            Some('\\') => out.push('\\'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
+fn escape_rust_string_literal(value: &str) -> String {
+    value.escape_default().to_string()
+}
+
+fn render_table(map: &std::collections::BTreeMap<u32, (String, String, String)>) -> String {
+    let mut nums: Vec<u32> = ivm::syscalls::abi_syscall_list().to_vec();
+    nums.sort_unstable();
+    let mut out = String::new();
+    out.push_str("| Number | Name | Args | Return | Gas |\n");
+    out.push_str("|---|---|---|---|---|\n");
+    for n in nums {
+        let name = ivm::syscalls::syscall_name(n).unwrap_or("");
+        let (args, ret, gas_raw) = spec_entry(map, n);
+        let (gas, _) = rewrite_gas_tokens(&gas_raw);
+        out.push_str(&format!(
+            "| 0x{n:02X} | {name} | {args} | {ret} | {gas} |\n"
+        ));
+    }
+    out
+}
+
 fn main() {
     let mut write = false;
     let mut check = false;
@@ -43,11 +242,9 @@ fn main() {
             }
             if let Some(eq) = t.find('=') {
                 let key = t[..eq].trim();
-                let mut val = t[eq + 1..].trim();
-                if let Some(v) = val.strip_prefix('"')
-                    && let Some(v2) = v.strip_suffix('"')
-                {
-                    val = v2;
+                let mut val = t[eq + 1..].trim().to_owned();
+                if let Some(v) = val.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                    val = unescape_basic_toml_string(v);
                 }
                 if let Some(tuple) = cur.as_mut() {
                     match key {
@@ -59,9 +256,9 @@ fn main() {
                             };
                             tuple.0 = n;
                         }
-                        "args" => tuple.1 = val.to_string(),
-                        "ret" => tuple.2 = val.to_string(),
-                        "gas" => tuple.3 = val.to_string(),
+                        "args" => tuple.1 = val.clone(),
+                        "ret" => tuple.2 = val.clone(),
+                        "gas" => tuple.3 = val.clone(),
                         _ => {}
                     }
                 }
@@ -86,157 +283,15 @@ fn main() {
         let mut nums: Vec<u32> = ivm::syscalls::abi_syscall_list().to_vec();
         nums.sort_unstable();
         let mut gas_keys: std::collections::BTreeSet<String> = Default::default();
-        // Heuristic defaults for missing spec entries
-        fn guess_defaults(n: u32) -> (String, String, String) {
-            let name = ivm::syscalls::syscall_name(n).unwrap_or("");
-            // Baseline defaults
-            let mut args = String::from("-");
-            let mut ret = String::from("-");
-            let mut gas = String::from("-");
-
-            let up = name;
-            // Heuristics for common patterns; conservative and non-binding
-            if up.contains("ZK_VERIFY_BATCH") || n == 0x68 {
-                args = "r10=&NoritoBytes(Vec<OpenVerifyEnvelope>)".into();
-                ret = "r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64".into();
-                gas = "G_verify".into();
-            } else if up.contains("VRF_VERIFY_BATCH") || n == 0x67 {
-                args = "r10=&NoritoBytes(VrfVerifyBatchRequest)".into();
-                ret = "r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64"
-                    .into();
-                gas = "G_verify".into();
-            } else if up.contains("VRF_VERIFY") || n == 0x66 {
-                args = "r10=&NoritoBytes(VrfVerifyRequest)".into();
-                ret = "r10=ptr (&Blob(32-byte output)), r11=status:u64".into();
-                gas = "G_verify".into();
-            } else if up.contains("ROOTS_GET") || n == 0x64 {
-                args = "r10=&NoritoBytes(RootsGetRequest)".into();
-                ret = "ptr (NoritoBytes in INPUT)".into();
-                gas = "G_roots_get".into();
-            } else if up.contains("VOTE_GET_TALLY") || n == 0x65 {
-                args = "r10=&NoritoBytes(VoteGetTallyRequest)".into();
-                ret = "ptr (NoritoBytes in INPUT)".into();
-                gas = "G_vote_get".into();
-            } else if up.contains("JSON_ENCODE") || n == 0x57 {
-                args = "r10=&Json".into();
-                ret = "ptr (&NoritoBytes)".into();
-                gas = "G_json_encode".into();
-            } else if up.contains("JSON_DECODE") || n == 0x58 {
-                args = "r10=&NoritoBytes(JSON bytes)".into();
-                ret = "ptr (&Json)".into();
-                gas = "G_json_decode".into();
-            } else if up.contains("SCHEMA_ENCODE") || n == 0x59 {
-                args = "r10=&Name(schema), r11=&Json".into();
-                ret = "ptr (&NoritoBytes)".into();
-            } else if up.contains("SCHEMA_DECODE") || n == 0x5A {
-                args = "r10=&Name(schema), r11=&NoritoBytes".into();
-                ret = "ptr (&Json)".into();
-            } else if up.contains("SCHEMA_INFO") || n == 0x5B {
-                args = "r10=&Name(schema)".into();
-                ret = "ptr (&Json{\"id\":...,\"version\":...})".into();
-            } else if up.contains("GET_ACCOUNT_BALANCE") || n == 0xF9 {
-                args = "r10=&AccountId, r11=&AssetDefinitionId".into();
-                ret = "ptr (&NoritoBytes(Numeric))".into();
-                gas = "G_get_bal".into();
-            } else if up.contains("NAME_DECODE") || n == 0x5C {
-                args = "r10=&NoritoBytes(UTF-8 string)".into();
-                ret = "ptr (&Name)".into();
-                gas = "G_name_decode".into();
-            } else if up.contains("POINTER_TO_NORITO") || n == 0x5D {
-                args = "r10=&PointerType<T>".into();
-                ret = "ptr (&NoritoBytes(TLV envelope))".into();
-            } else if up.contains("POINTER_FROM_NORITO") || n == 0x5E {
-                args = "r10=&NoritoBytes(TLV envelope), r11=expected?:u16".into();
-                ret = "ptr (&PointerType<T>)".into();
-            } else if up.contains("VERIFY") {
-                ret = "u64=0/1".into();
-                gas = "G_verify".into();
-            } else if up.contains("ALLOC") || n == 0xF0 {
-                args = "r10=bytes:u64".into();
-                ret = "ptr (r10)".into();
-                gas = "G_alloc + bytes".into();
-            } else if up.contains("GROW_HEAP") || n == 0xF5 {
-                args = "r10=bytes:u64".into();
-                ret = "u64=new_limit".into();
-                gas = "G_grow_heap per page".into();
-            } else if up.contains("GET_PRIVATE_INPUT") || n == 0xFD {
-                args = "r10=&Name".into();
-                ret = "ptr (r10)".into();
-                gas = "G_get_priv".into();
-            } else if up.contains("GET_PUBLIC_INPUT") || n == 0xF1 {
-                args = "r10=&Name".into();
-                ret = "ptr (r10)".into();
-                gas = "G_get_pub".into();
-            } else if up.contains("GET_AUTHORITY") || n == 0xA4 {
-                ret = "ptr (AccountId in INPUT)".into();
-                gas = "G_get_auth".into();
-            } else if up.contains("RESOLVE_ACCOUNT_ALIAS") || n == 0xA7 {
-                args = "r10=&Blob(alias literal)".into();
-                ret = "ptr (&AccountId in INPUT)".into();
-                gas = "G_alias_resolve".into();
-            } else if up.contains("INPUT_PUBLISH_TLV") || n == 0xE0 {
-                args = "r10=&Blob(TLV)".into();
-                ret = "ptr (r10)".into();
-                gas = "G_input_publish".into();
-            } else if up.contains("MERKLE_PATH") || n == 0xF7 {
-                args = "r10=addr:u64, r11=out:u64, r12=root_out?:u64".into();
-                ret = "u64=len".into();
-                gas = "G_mpath + len".into();
-            } else if up.contains("MERKLE_COMPACT") || n == 0xFA || n == 0xFF {
-                args = "r10=addr, r11=out, r12=depth_cap?, r13=root_out?".into();
-                ret = "u64=depth".into();
-                gas = "G_mpath + depth".into();
-            } else if up.contains("EXECUTE_QUERY") || n == 0xA1 {
-                args = "r10=&Json".into();
-                ret = "ptr (r10)".into();
-                gas = "G_scq".into();
-            } else if up.contains("EXECUTE_INSTRUCTION") || n == 0xA0 {
-                args = "r10=&Json".into();
-                ret = "u64=0".into();
-                gas = "G_sci".into();
-            } else if up.contains("COMMIT_OUTPUT") || n == 0xFE {
-                args = "r10=&Json".into();
-                ret = "u64=0".into();
-                gas = "G_commit".into();
-            } else if up.contains("VERIFY_SIGNATURE") || n == 0xFC {
-                args = "r10=&Json".into();
-                ret = "u64=0".into();
-                gas = "G_verify_sig".into();
-            } else if up.is_empty() {
-                // Unknown number without a name: keep dashes
-            } else {
-                // Safe default for side-effect syscalls
-                ret = "u64=0".into();
-            }
-            (args, ret, gas)
-        }
         for n in nums {
-            let (args, ret, gas_raw) = if let Some((a, r, g)) = map.get(&n).cloned() {
-                (a, r, g)
-            } else {
-                guess_defaults(n)
-            };
-            // Transform gas string: tokens like G_name → asset:gas/G_name@ivm.core/v2
-            let mut out_gas = String::new();
-            for (i, part) in gas_raw.split('+').map(|s| s.trim()).enumerate() {
-                if i > 0 {
-                    out_gas.push_str(" + ");
-                }
-                if let Some(tok) = part.split_whitespace().next()
-                    && tok.starts_with('G')
-                {
-                    gas_keys.insert(tok.to_string());
-                    out_gas.push_str(&format!("asset:gas/{tok}@ivm.core/v2"));
-                    // Append trailing qualifier
-                    let tail = part.strip_prefix(tok).unwrap_or("").trim();
-                    if !tail.is_empty() {
-                        out_gas.push(' ');
-                        out_gas.push_str(tail);
-                    }
-                    continue;
-                }
-                out_gas.push_str(part);
+            let (args, ret, gas_raw) = spec_entry(&map, n);
+            let (out_gas, discovered_gas_keys) = rewrite_gas_tokens(&gas_raw);
+            for gas_key in discovered_gas_keys {
+                gas_keys.insert(gas_key);
             }
+            let args = escape_rust_string_literal(&args);
+            let ret = escape_rust_string_literal(&ret);
+            let out_gas = escape_rust_string_literal(&out_gas);
             buf.push_str(&format!(
                 "    crate::syscalls::SyscallDoc {{ number: {n}, args: \"{args}\", ret: \"{ret}\", gas: \"{out_gas}\" }},\n"
             ));
@@ -321,11 +376,14 @@ fn main() {
     }
 
     // Render docs table: prefer spec-enriched strings via the generated code table
-    let table = ivm::syscalls::render_syscalls_markdown_table();
+    let table = render_table(&map);
     let replacement = format!("{BEGIN}\n{table}{END}\n");
 
     if let (Some(beg), Some(end)) = (text.find(BEGIN), text.find(END)) {
-        let end_ix = end + END.len();
+        let mut end_ix = end + END.len();
+        if text[end_ix..].starts_with('\n') {
+            end_ix += 1;
+        }
         let mut new = String::new();
         new.push_str(&text[..beg]);
         new.push_str(&replacement);

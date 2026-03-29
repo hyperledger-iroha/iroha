@@ -348,6 +348,8 @@ const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: u32 = 536_870_912; // 512
 const LOCALNET_TX_GOSSIP_PERIOD_FAST_MS: u64 = 100;
 /// Transaction gossip resend ticks for 1s localnet pipelines.
 const LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST: u32 = 1;
+/// Tx gossip frame cap for Nexus-enabled localnets so large public transactions still fit.
+const LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS: usize = 1_048_576;
 /// Default listener host for generated P2P and Torii services.
 pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 /// Default advertised host for generated peers and client config.
@@ -1597,6 +1599,15 @@ fn render_peer_config(
         "consensus_ingress_critical_bytes_burst".into(),
         Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST)),
     );
+    if nexus_enabled {
+        network.insert(
+            "max_frame_bytes_tx_gossip".into(),
+            Value::Integer(
+                i64::try_from(LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS)
+                    .expect("LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS fits i64"),
+            ),
+        );
+    }
     if let Some(overrides) = tx_gossip_overrides {
         network.insert(
             "transaction_gossip_period_ms".into(),
@@ -2927,6 +2938,20 @@ mod tests {
         assert_eq!(
             mcp.get("profile").and_then(toml::Value::as_str),
             Some("writer")
+        );
+        let network = peer_cfg
+            .get("network")
+            .and_then(toml::Value::as_table)
+            .expect("network table");
+        assert_eq!(
+            network
+                .get("max_frame_bytes_tx_gossip")
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS)
+                    .expect("LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS fits i64")
+            ),
+            "sora-profile localnet should raise tx gossip frame cap for large public writes"
         );
         assert_eq!(
             mcp.get("expose_operator_routes")
@@ -4864,19 +4889,10 @@ mod tests {
         let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse().expect("ivm domain");
         let ivm_genesis_registrations = manifest
             .instructions()
-            .filter_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<Register<Account>>()
-                    .map(|register| {
-                        (
-                            register.object.id.clone(),
-                            register.object.domain().cloned(),
-                        )
-                    })
-            })
-            .filter(|(account_id, domain)| {
-                account_id == &genesis_account_id && domain.as_ref() == Some(&ivm_domain)
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<Register<Account>>())
+            .filter(|register| {
+                register.object.id == genesis_account_id
+                    && register.object.domain() == Some(&ivm_domain)
             })
             .count();
 

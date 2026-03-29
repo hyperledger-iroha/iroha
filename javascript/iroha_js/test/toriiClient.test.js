@@ -13553,6 +13553,132 @@ test("streamKaigiRelayEvents rejects unsupported options", () => {
   );
 });
 
+test("getKaigiCall returns null on 404 and normalizes call views", async () => {
+  const callId = "kaigi:demo-room";
+  const missingClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 404 }),
+  });
+  const missing = await missingClient.getKaigiCall(callId);
+  assert.equal(missing, null);
+
+  let requested;
+  const fetchImpl = async (url) => {
+    requested = url;
+    return createResponse({
+      status: 200,
+      jsonData: {
+        call_id: callId,
+        domain: "kaigi",
+        call_name: "demo-room",
+        title: "Weekly Sync",
+        gas_rate_per_minute: 0,
+        metadata: {
+          kaigi_call: {
+            schema: "iroha-demo-kaigi-call/v1",
+          },
+        },
+        scheduled_start_ms: "1700000000000",
+        privacy_mode: "private",
+        room_policy: "authenticated",
+        relay_manifest: {
+          expiryMs: 1700000001000,
+        },
+        roster_root_hex: "aa".repeat(32),
+        participant_count: 1,
+        commitment_count: 1,
+        nullifier_count: 0,
+        usage_commitment_count: 0,
+        status: "active",
+        created_at_ms: "1699999999000",
+        total_duration_ms: 0,
+        total_billed_gas: 0,
+        segments_recorded: 0,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const call = await client.getKaigiCall(callId);
+  assert.equal(requested, `${BASE_URL}/v1/kaigi/calls/${encodeURIComponent(callId)}`);
+  assert.equal(call?.call_id, callId);
+  assert.equal(call?.privacy_mode, "private");
+  assert.equal(call?.participant_count, 1);
+  assert.equal(call?.host_account_id, undefined);
+  assert.equal(call?.relay_manifest?.expiryMs, 1700000001000);
+});
+
+test("listKaigiCallSignals encodes filters and normalizes payloads", async () => {
+  const callId = "kaigi:demo-room";
+  let requested;
+  const fetchImpl = async (url, init) => {
+    requested = url;
+    assert.ok(init.signal === undefined || init.signal instanceof AbortSignal);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        total: 1,
+        items: [
+          {
+            entrypoint_hash: "deadbeef",
+            timestamp_ms: "1700000000100",
+            call_id: callId,
+            signal_kind: "answer",
+            created_at_ms: "1700000000000",
+            metadata: {
+              schema: "iroha-demo-kaigi-chain-signal/v1",
+            },
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const signals = await client.listKaigiCallSignals(callId, {
+    afterTimestampMs: 1700000000000,
+    limit: 10,
+    offset: 2,
+  });
+  assert.ok(requested?.includes(`/v1/kaigi/calls/${encodeURIComponent(callId)}/signals`));
+  assert.ok(requested?.includes("after_timestamp_ms=1700000000000"));
+  assert.ok(requested?.includes("limit=10"));
+  assert.ok(requested?.includes("offset=2"));
+  assert.equal(signals.total, 1);
+  assert.equal(signals.items[0].signal_kind, "answer");
+  assert.equal(signals.items[0].authority, undefined);
+  assert.equal(signals.items[0].participant_account_id, undefined);
+  assert.equal(signals.items[0].created_at_ms, 1700000000000);
+});
+
+test("streamKaigiCallEvents encodes filters and normalizes payloads", async () => {
+  const callId = "kaigi:demo-room";
+  let requested;
+  const fetchImpl = async (url, init) => {
+    requested = url;
+    assert.equal(init.headers["Last-Event-ID"], "cursor");
+    return createSseResponse([
+      "event: kaigi.call\n",
+      `data: {"kind":"roster_updated","call":{"call_id":"${callId}","domain":"kaigi","call_name":"demo-room"},"privacy_mode":"private","participant_count":1,"commitment_count":1,"nullifier_count":0,"roster_root_hex":"${"aa".repeat(32)}"}\n`,
+      "\n",
+      "event: kaigi.call\n",
+      `data: {"kind":"ended","call":{"call_id":"${callId}","domain":"kaigi","call_name":"demo-room"},"status":"ended","ended_at_ms":1700000001000}\n`,
+      "\n",
+    ]);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const iterator = client.streamKaigiCallEvents(callId, {
+    kind: ["roster_updated", "ended"],
+    lastEventId: "cursor",
+  });
+  const first = await iterator.next();
+  assert.equal(first.value?.data?.kind, "roster_updated");
+  assert.equal(first.value?.data?.call.call_name, "demo-room");
+  const second = await iterator.next();
+  assert.equal(second.value?.data?.kind, "ended");
+  assert.equal(second.value?.data?.ended_at_ms, 1700000001000);
+  assert.ok(requested?.includes("kind=roster_updated%2Cended"));
+});
+
 test("listKaigiRelays rejects unsupported option keys", async () => {
   const fetchImpl = async () => {
     throw new Error("should not fetch");
@@ -18184,6 +18310,316 @@ test("getExplorerAccountQr rejects unsupported option fields", async () => {
     () => client.getExplorerAccountQr(FIXTURE_ALICE_ID, { legacyFormat: "i105", extra: true }),
     /getExplorerAccountQr options contains unsupported fields: legacyFormat, extra/,
   );
+});
+
+test("getVpnProfile normalizes payloads and tolerates missing control plane", async () => {
+  let callCount = 0;
+  const fetchImpl = async (url, init = {}) => {
+    callCount += 1;
+    assert.equal(url, `${BASE_URL}/v1/vpn/profile`);
+    assert.equal(init.method, "GET");
+    assert.equal(init.headers.Accept, "application/json");
+    if (callCount === 1) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          available: true,
+          relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+          supported_exit_classes: ["standard", "low-latency", "high-security"],
+          default_exit_class: "standard",
+          lease_secs: "600",
+          dns_push_interval_secs: 90,
+          meter_family: "soranet.vpn.standard",
+          route_pushes: ["0.0.0.0/0", "::/0"],
+          excluded_routes: ["127.0.0.0/8"],
+          dns_servers: ["1.1.1.1", "2606:4700:4700::1111"],
+          tunnel_addresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
+          mtu_bytes: 1280,
+          display_billing_label: "standard · soranet.vpn.standard",
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse({
+      status: 404,
+      jsonData: {},
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  const profile = await client.getVpnProfile();
+  assert.deepEqual(profile, {
+    available: true,
+    relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
+    supportedExitClasses: ["standard", "low-latency", "high-security"],
+    defaultExitClass: "standard",
+    leaseSecs: 600,
+    dnsPushIntervalSecs: 90,
+    meterFamily: "soranet.vpn.standard",
+    routePushes: ["0.0.0.0/0", "::/0"],
+    excludedRoutes: ["127.0.0.0/8"],
+    dnsServers: ["1.1.1.1", "2606:4700:4700::1111"],
+    tunnelAddresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
+    mtuBytes: 1280,
+    displayBillingLabel: "standard · soranet.vpn.standard",
+  });
+  const missing = await client.getVpnProfile();
+  assert.equal(missing, null);
+});
+
+test("createVpnSession signs the request and normalizes the response", async () => {
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 7),
+  };
+  const fetchImpl = async (url, init = {}) => {
+    assert.equal(url, `${BASE_URL}/v1/vpn/sessions`);
+    assert.equal(init.method, "POST");
+    assert.equal(init.headers.Accept, "application/json");
+    assert.equal(init.headers["Content-Type"], "application/json");
+    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.ok(typeof init.headers["X-Iroha-Signature"] === "string");
+    assert.deepEqual(JSON.parse(init.body), {
+      exit_class: "low-latency",
+    });
+    return createResponse({
+      status: 201,
+      jsonData: {
+        session_id: "sess_123",
+        account_id: SAMPLE_ACCOUNT_ID,
+        exit_class: "low-latency",
+        relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+        lease_secs: 600,
+        expires_at_ms: 1_700_000_000_000,
+        connected_at_ms: 1_699_999_400_000,
+        meter_family: "soranet.vpn.low-latency",
+        route_pushes: [],
+        excluded_routes: [],
+        dns_servers: ["1.1.1.1"],
+        tunnel_addresses: ["10.208.0.2/32"],
+        mtu_bytes: 1280,
+        helper_ticket_hex: "ab".repeat(32),
+        bytes_in: 123,
+        bytes_out: 456,
+        status: "active",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  const session = await client.createVpnSession(
+    { exitClass: "low-latency" },
+    { canonicalAuth },
+  );
+
+  assert.deepEqual(session, {
+    sessionId: "sess_123",
+    accountId: SAMPLE_ACCOUNT_ID,
+    exitClass: "low-latency",
+    relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
+    leaseSecs: 600,
+    expiresAtMs: 1_700_000_000_000,
+    connectedAtMs: 1_699_999_400_000,
+    meterFamily: "soranet.vpn.low-latency",
+    routePushes: [],
+    excludedRoutes: [],
+    dnsServers: ["1.1.1.1"],
+    tunnelAddresses: ["10.208.0.2/32"],
+    mtuBytes: 1280,
+    helperTicketHex: "ab".repeat(32),
+    bytesIn: 123,
+    bytesOut: 456,
+    status: "active",
+  });
+});
+
+test("createVpnSession requires canonical auth options", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  await assert.rejects(
+    () => client.createVpnSession({ exitClass: "standard" }),
+    /createVpnSession options\.canonicalAuth is required/,
+  );
+});
+
+test("deleteVpnSession returns null when the session is already missing", async () => {
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 9),
+  };
+  const fetchImpl = async (url, init = {}) => {
+    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_123`);
+    assert.equal(init.method, "DELETE");
+    assert.equal(init.headers.Accept, "application/json");
+    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    return createResponse({
+      status: 404,
+      jsonData: {
+        session_id: "sess_123",
+        status: "not_found",
+        disconnected_at_ms: 1_700_000_000_000,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.deleteVpnSession("sess_123", { canonicalAuth });
+  assert.equal(result, null);
+});
+
+test("getVpnSession and listVpnReceipts normalize authenticated responses", async () => {
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 5),
+  };
+  let callCount = 0;
+  const fetchImpl = async (url, init = {}) => {
+    callCount += 1;
+    assert.equal(init.headers.Accept, "application/json");
+    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    if (callCount === 1) {
+      assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_live`);
+      assert.equal(init.method, "GET");
+      return createResponse({
+        status: 200,
+        jsonData: {
+          session_id: "sess_live",
+          account_id: SAMPLE_ACCOUNT_ID,
+          exit_class: "standard",
+          relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+          lease_secs: 600,
+          expires_at_ms: 1_700_000_000_000,
+          connected_at_ms: 1_699_999_800_000,
+          meter_family: "soranet.vpn.standard",
+          route_pushes: ["0.0.0.0/0"],
+          excluded_routes: ["127.0.0.0/8"],
+          dns_servers: ["1.1.1.1"],
+          tunnel_addresses: ["10.208.0.2/32"],
+          mtu_bytes: 1280,
+          helper_ticket_hex: "ab".repeat(32),
+          bytes_in: 11,
+          bytes_out: 22,
+          status: "active",
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/vpn/receipts`);
+    assert.equal(init.method, "GET");
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [
+          {
+            session_id: "sess_live",
+            account_id: SAMPLE_ACCOUNT_ID,
+            exit_class: "standard",
+            relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+            meter_family: "soranet.vpn.standard",
+            connected_at_ms: 1_699_999_800_000,
+            disconnected_at_ms: 1_700_000_100_000,
+            duration_ms: 300000,
+            bytes_in: 11,
+            bytes_out: 22,
+            status: "disconnected",
+            receipt_source: "torii",
+          },
+        ],
+        total: 1,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  const session = await client.getVpnSession("sess_live", { canonicalAuth });
+  assert.deepEqual(session, {
+    sessionId: "sess_live",
+    accountId: SAMPLE_ACCOUNT_ID,
+    exitClass: "standard",
+    relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
+    leaseSecs: 600,
+    expiresAtMs: 1_700_000_000_000,
+    connectedAtMs: 1_699_999_800_000,
+    meterFamily: "soranet.vpn.standard",
+    routePushes: ["0.0.0.0/0"],
+    excludedRoutes: ["127.0.0.0/8"],
+    dnsServers: ["1.1.1.1"],
+    tunnelAddresses: ["10.208.0.2/32"],
+    mtuBytes: 1280,
+    helperTicketHex: "ab".repeat(32),
+    bytesIn: 11,
+    bytesOut: 22,
+    status: "active",
+  });
+
+  const receipts = await client.listVpnReceipts({ canonicalAuth });
+  assert.deepEqual(receipts, [
+    {
+      sessionId: "sess_live",
+      accountId: SAMPLE_ACCOUNT_ID,
+      exitClass: "standard",
+      relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
+      meterFamily: "soranet.vpn.standard",
+      connectedAtMs: 1_699_999_800_000,
+      disconnectedAtMs: 1_700_000_100_000,
+      durationMs: 300000,
+      bytesIn: 11,
+      bytesOut: 22,
+      status: "disconnected",
+      receiptSource: "torii",
+    },
+  ]);
+});
+
+test("deleteVpnSession normalizes canonical receipts", async () => {
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 6),
+  };
+  const fetchImpl = async (url, init = {}) => {
+    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_789`);
+    assert.equal(init.method, "DELETE");
+    return createResponse({
+      status: 200,
+      jsonData: {
+        session_id: "sess_789",
+        account_id: SAMPLE_ACCOUNT_ID,
+        exit_class: "high-security",
+        relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+        meter_family: "soranet.vpn.high-security",
+        connected_at_ms: 1_699_999_700_000,
+        disconnected_at_ms: 1_700_000_000_000,
+        duration_ms: 300000,
+        bytes_in: 99,
+        bytes_out: 33,
+        status: "disconnected",
+        receipt_source: "torii",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const receipt = await client.deleteVpnSession("sess_789", { canonicalAuth });
+  assert.deepEqual(receipt, {
+    sessionId: "sess_789",
+    accountId: SAMPLE_ACCOUNT_ID,
+    exitClass: "high-security",
+    relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
+    meterFamily: "soranet.vpn.high-security",
+    connectedAtMs: 1_699_999_700_000,
+    disconnectedAtMs: 1_700_000_000_000,
+    durationMs: 300000,
+    bytesIn: 99,
+    bytesOut: 33,
+    status: "disconnected",
+    receiptSource: "torii",
+  });
 });
 
 test("registerSnsName posts payload and normalizes response", async () => {

@@ -65,6 +65,7 @@ mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "push")]
 mod push;
+mod vpn;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
     use norito::json::{self, JsonSerialize, Value};
@@ -166,7 +167,7 @@ mod proof_filters;
 use crate::api_version::ApiVersion;
 pub mod sorafs;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     convert::{Infallible, TryInto},
     fmt::Debug,
     fs,
@@ -200,6 +201,8 @@ use base64::engine::general_purpose::{
 use blake3::hash as blake3_hash;
 use dashmap::DashMap;
 use error_stack::{Report, ResultExt};
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use iroha_config::{
     base::{WithOrigin, util::Bytes as ConfigBytes},
     client_api::ConfigUpdateDTO,
@@ -228,8 +231,8 @@ use iroha_core::{
     },
     sumeragi::rbc_store::SoftwareManifest,
     torii_proxy::{
-        TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1, ToriiProxyHttpResponseV1,
-        ToriiProxyRequestKindV1, ToriiProxyRequestV1, ToriiProxyResponseFormatV1,
+        TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1, ToriiProxyHttpResponseV1,
+        ToriiProxyRequestKindV1, ToriiProxyRequestV2, ToriiProxyResponseFormatV1,
         ToriiProxyResponseV1, ToriiReadEndpointV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
     },
 };
@@ -1253,6 +1256,8 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_gateway_denylist: Option<Arc<sorafs::gateway::GatewayDenylist>>,
     #[cfg(feature = "app_api")]
+    sorafs_gateway_denylist_catalog: Option<Arc<GatewayDenylistCatalogSnapshot>>,
+    #[cfg(feature = "app_api")]
     sorafs_gateway_tls_state: Option<Arc<RwLock<sorafs::gateway::TlsStateSnapshot>>>,
     #[cfg(feature = "app_api")]
     sorafs_pin_policy: sorafs::PinSubmissionPolicy,
@@ -1274,13 +1279,19 @@ struct AppState {
     offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_lineage::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
+    vpn_helper_ticket_secret: Option<[u8; 32]>,
+    vpn_sessions: Arc<DashMap<String, vpn::VpnSessionRecord>>,
+    vpn_receipts: Arc<DashMap<String, Vec<vpn::VpnReceiptRecord>>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     #[cfg(feature = "app_api")]
     soracloud_proxy_pending: Arc<tokio::sync::Mutex<BTreeMap<Hash, PendingSoracloudProxyRequest>>>,
     #[cfg(feature = "app_api")]
     soracloud_proxy_sequence: std::sync::atomic::AtomicU64,
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-    torii_proxy_pending: Arc<tokio::sync::Mutex<BTreeMap<Hash, PendingToriiProxyRequest>>>,
+    torii_proxy_pending:
+        Arc<tokio::sync::Mutex<BTreeMap<(Hash, PeerId), PendingToriiProxyRequest>>>,
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    torii_proxy_completed: Arc<tokio::sync::Mutex<BTreeMap<Hash, CompletedToriiProxyRequest>>>,
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     torii_proxy_sequence: std::sync::atomic::AtomicU64,
 }
@@ -1297,7 +1308,12 @@ struct PendingSoracloudProxyRequest {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 struct PendingToriiProxyRequest {
     sender: tokio::sync::oneshot::Sender<ToriiProxyHttpResponseV1>,
-    expected_peer_id: PeerId,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+struct CompletedToriiProxyRequest {
+    completed_at: Instant,
+    late_response_logged: bool,
 }
 
 #[derive(Clone)]
@@ -1324,6 +1340,10 @@ enum PipelineStatusKind {
 const PIPELINE_STATUS_CACHE_CAP: usize = 100_000;
 const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const TORII_PROXY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const TORII_PROXY_COMPLETED_TTL: Duration = Duration::from_secs(30);
 
 impl PipelineStatusKind {
     fn as_str(self) -> &'static str {
@@ -5599,6 +5619,21 @@ fn parse_domain_id(raw: &str) -> Result<DomainId, Error> {
 }
 
 #[cfg(feature = "app_api")]
+fn parse_kaigi_call_id(raw: &str) -> Result<iroha_data_model::kaigi::KaigiId, Error> {
+    let trimmed = raw.trim();
+    let (domain_raw, call_name_raw) = trimmed
+        .split_once(':')
+        .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let domain_id = domain_raw
+        .parse::<DomainId>()
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    let call_name = call_name_raw
+        .parse::<Name>()
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+    Ok(iroha_data_model::kaigi::KaigiId::new(domain_id, call_name))
+}
+
+#[cfg(feature = "app_api")]
 fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitionId, Error> {
     let trimmed = raw.trim();
     let world = app.state.world_view();
@@ -7725,6 +7760,84 @@ async fn handler_get_configuration(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/configuration").await?;
     routing::handle_get_configuration(app.kiso.clone()).await
+}
+
+/// GET /v1/vpn/profile — public Sora VPN profile snapshot for wallet clients.
+async fn handler_get_vpn_profile(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/vpn/profile").await?;
+    vpn::handle_get_vpn_profile(app.kiso.clone()).await
+}
+
+/// POST /v1/vpn/sessions — create a signed Sora VPN session for the active wallet account.
+async fn handler_create_vpn_session(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/vpn/sessions").await?;
+    vpn::handle_create_vpn_session(app, &method, &uri, &headers, body.as_ref()).await
+}
+
+/// DELETE /v1/vpn/sessions/{session_id} — signed session teardown for the wallet account.
+async fn handler_delete_vpn_session(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(session_id): AxPath<String>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/vpn/sessions/{session_id}",
+    )
+    .await?;
+    vpn::handle_delete_vpn_session(app, &method, &uri, &headers, &session_id).await
+}
+
+/// GET /v1/vpn/sessions/{session_id} — signed active-session status for the wallet account.
+async fn handler_get_vpn_session(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(session_id): AxPath<String>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/vpn/sessions/{session_id}",
+    )
+    .await?;
+    vpn::handle_get_vpn_session(app, &method, &uri, &headers, &session_id).await
+}
+
+/// GET /v1/vpn/receipts — signed canonical VPN receipt history for the wallet account.
+async fn handler_list_vpn_receipts(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/vpn/receipts").await?;
+    vpn::handle_list_vpn_receipts(app, &method, &uri, &headers).await
 }
 
 /// POST /v1/configuration — wrapper that enforces Torii access policy, then delegates.
@@ -10292,7 +10405,7 @@ fn routing_resolve_error_to_torii_error(
         source: Box::new(queue::Error::UnresolvedRoute {
             reason: error.to_string(),
         }),
-        backpressure: app.queue.current_backpressure(),
+        backpressure: current_torii_backpressure(app.as_ref()),
     }
 }
 
@@ -10327,6 +10440,9 @@ fn torii_proxy_error_response(
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const TORII_PROXY_DEFAULT_MAX_HOPS: u8 = 3;
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision) -> Vec<PeerId> {
     let online_peer_ids: HashSet<PeerId> = app
         .online_peers
@@ -10352,20 +10468,33 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
     }
 
     // Permissioned deployments do not necessarily materialize public-lane validator records.
-    // When that registry is empty, route against the committed validator roster instead.
+    // Fresh NPoS bootstrap flows can also momentarily miss those records for the default
+    // universal lane even though the committed validator roster is already available. Keep
+    // ingress on the core lane alive in that case instead of hard-failing public writes.
     if authoritative_peer_ids.is_empty() {
         let fallback_mode = if state_view.world().sumeragi_npos_parameters().is_some() {
             iroha_config::parameters::actual::ConsensusMode::Npos
         } else {
             iroha_config::parameters::actual::ConsensusMode::Permissioned
         };
-        if matches!(
-            iroha_core::sumeragi::effective_consensus_mode(&state_view, fallback_mode),
+        let consensus_mode =
+            iroha_core::sumeragi::effective_consensus_mode(&state_view, fallback_mode);
+        let allow_commit_topology_fallback = matches!(
+            consensus_mode,
             iroha_config::parameters::actual::ConsensusMode::Permissioned
-        ) {
+        ) || (routing_decision.lane_id
+            == iroha_data_model::nexus::LaneId::SINGLE
+            && routing_decision.dataspace_id == iroha_data_model::nexus::DataSpaceId::GLOBAL);
+        if allow_commit_topology_fallback {
             let commit_topology: Vec<_> = state_view.commit_topology().iter().cloned().collect();
             if commit_topology.is_empty() {
                 authoritative_peer_ids.extend(state_view.world().peers().iter().cloned());
+                if authoritative_peer_ids.is_empty() {
+                    if let Some(local_peer_id) = app.local_peer_id.as_ref() {
+                        authoritative_peer_ids.insert(local_peer_id.clone());
+                    }
+                    authoritative_peer_ids.extend(online_peer_ids.iter().cloned());
+                }
             } else {
                 authoritative_peer_ids.extend(commit_topology);
             }
@@ -10382,6 +10511,69 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
         }
     }
     online.into_iter().chain(offline).collect()
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[derive(Debug)]
+struct ToriiProxyCandidatePeers {
+    peers: Vec<PeerId>,
+    authoritative_count: usize,
+    fallback_used: bool,
+    loop_prevention_drops: usize,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_candidate_peer_ids(
+    app: &AppState,
+    local_peer_id: &PeerId,
+    routing_decision: RoutingDecision,
+    immediate_sender_peer_id: Option<&PeerId>,
+    visited_peer_ids: &[PeerId],
+) -> ToriiProxyCandidatePeers {
+    let mut loop_prevention_seen = BTreeSet::new();
+    let mut loop_prevention_drops = 0usize;
+    let exclusion_set: BTreeSet<_> = immediate_sender_peer_id
+        .into_iter()
+        .cloned()
+        .chain(visited_peer_ids.iter().cloned())
+        .collect();
+    let mut authoritative = Vec::new();
+    for peer_id in authoritative_lane_peer_ids(app, routing_decision) {
+        if &peer_id == local_peer_id {
+            continue;
+        }
+        if exclusion_set.contains(&peer_id) {
+            if loop_prevention_seen.insert(peer_id.clone()) {
+                loop_prevention_drops = loop_prevention_drops.saturating_add(1);
+            }
+            continue;
+        }
+        authoritative.push(peer_id);
+    }
+    let authoritative_count = authoritative.len();
+    let mut seen: std::collections::BTreeSet<_> = authoritative.iter().cloned().collect();
+    let mut peers = authoritative;
+    let mut fallback_peers = std::collections::BTreeSet::new();
+    for peer in app.online_peers.get() {
+        let peer_id = peer.id().clone();
+        if &peer_id == local_peer_id || !seen.insert(peer_id.clone()) {
+            continue;
+        }
+        if exclusion_set.contains(&peer_id) {
+            if loop_prevention_seen.insert(peer_id.clone()) {
+                loop_prevention_drops = loop_prevention_drops.saturating_add(1);
+            }
+            continue;
+        }
+        fallback_peers.insert(peer_id);
+    }
+    peers.extend(fallback_peers);
+    ToriiProxyCandidatePeers {
+        fallback_used: peers.len() > authoritative_count,
+        peers,
+        authoritative_count,
+        loop_prevention_drops,
+    }
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -10421,7 +10613,7 @@ fn torii_route_for_lane_id(
         source: Box::new(queue::Error::UnresolvedRoute {
             reason: error.to_string(),
         }),
-        backpressure: app.queue.current_backpressure(),
+        backpressure: current_torii_backpressure(app),
     })
 }
 
@@ -10462,6 +10654,118 @@ fn response_format_from_torii_proxy(format: ToriiProxyResponseFormatV1) -> Respo
     }
 }
 
+fn current_torii_queue_pressure(app: &AppState) -> queue::QueuePressureSnapshot {
+    let state_view = app.state.view();
+    let block_time = state_view
+        .world()
+        .parameters()
+        .sumeragi()
+        .effective_block_time();
+    app.queue
+        .refresh_pressure_budget_from_block_time(block_time)
+}
+
+fn current_torii_backpressure(app: &AppState) -> queue::BackpressureState {
+    current_torii_queue_pressure(app).into_backpressure()
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn next_torii_proxy_request_id(app: &AppState, request: &ToriiProxyRequestKindV1) -> Hash {
+    Hash::new(
+        norito::to_bytes(&(
+            "torii:proxy",
+            app.torii_proxy_sequence
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            request.clone(),
+        ))
+        .expect("Torii proxy request id encoding should be infallible"),
+    )
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_hedge_delay(app: &AppState) -> Duration {
+    let state_view = app.state.view();
+    state_view
+        .world()
+        .parameters()
+        .sumeragi()
+        .effective_block_time()
+        .checked_div(2)
+        .unwrap_or(Duration::ZERO)
+        .clamp(Duration::from_millis(50), Duration::from_millis(250))
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn prune_completed_torii_proxy_requests(app: &SharedAppState) {
+    let now = Instant::now();
+    app.torii_proxy_completed.lock().await.retain(|_, entry| {
+        now.saturating_duration_since(entry.completed_at) < TORII_PROXY_COMPLETED_TTL
+    });
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn mark_torii_proxy_request_completed(app: &SharedAppState, request_id: Hash) {
+    {
+        let mut pending = app.torii_proxy_pending.lock().await;
+        pending.retain(|(pending_request_id, _), _| *pending_request_id != request_id);
+    }
+    prune_completed_torii_proxy_requests(app).await;
+    app.torii_proxy_completed.lock().await.insert(
+        request_id,
+        CompletedToriiProxyRequest {
+            completed_at: Instant::now(),
+            late_response_logged: false,
+        },
+    );
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn new_torii_proxy_request(
+    app: &AppState,
+    request: ToriiProxyRequestKindV1,
+) -> Result<ToriiProxyRequestV2, Response> {
+    let Some(local_peer_id) = app.local_peer_id.as_ref() else {
+        return Err(torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            "Torii ingress routing requires a configured local peer id",
+        ));
+    };
+
+    let request_id = next_torii_proxy_request_id(app, &request);
+    Ok(ToriiProxyRequestV2 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        request_id,
+        hop_count: 1,
+        max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
+        visited_peer_ids: vec![local_peer_id.clone()],
+        request,
+    })
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn forwarded_torii_proxy_request(
+    request: &ToriiProxyRequestV2,
+    local_peer_id: &PeerId,
+) -> ToriiProxyRequestV2 {
+    let mut visited_peer_ids = request.visited_peer_ids.clone();
+    if !visited_peer_ids
+        .iter()
+        .any(|peer_id| peer_id == local_peer_id)
+    {
+        visited_peer_ids.push(local_peer_id.clone());
+    }
+
+    ToriiProxyRequestV2 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        request_id: request.request_id.clone(),
+        hop_count: request.hop_count.saturating_add(1),
+        max_hops: request.max_hops,
+        visited_peer_ids,
+        request: request.request.clone(),
+    }
+}
+
 fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
     response.headers_mut().insert(
         HeaderName::from_static("x-iroha-routed-by"),
@@ -10469,8 +10773,58 @@ fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
     );
 }
 
-fn signed_query_requires_fanout(request: &iroha_data_model::query::QueryRequest) -> bool {
-    !matches!(request, iroha_data_model::query::QueryRequest::Continue(_))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SignedQueryScope {
+    LocalReplicated,
+    AuthorityRouted,
+    CrossDataspaceFanout,
+}
+
+fn payload_matches_query<Query>(payload: &[u8]) -> bool
+where
+    Query: norito::codec::Decode,
+{
+    payload.is_empty() || norito::decode_from_bytes::<Query>(payload).is_ok()
+}
+
+fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
+    use iroha_data_model::{
+        query::{
+            QueryItemKind, iter_query_inner,
+            trigger::prelude::{FindActiveTriggerIds, FindTriggers},
+        },
+        trigger::{Trigger, TriggerId},
+    };
+
+    if let Some(query_box) = query.query_box() {
+        if let Some(erased) = iter_query_inner::<Trigger>(query_box) {
+            return payload_matches_query::<FindTriggers>(erased.payload());
+        }
+        if let Some(erased) = iter_query_inner::<TriggerId>(query_box) {
+            return payload_matches_query::<FindActiveTriggerIds>(erased.payload());
+        }
+        return false;
+    }
+
+    query
+        .fast_dsl_parts()
+        .is_some_and(|(item_kind, _, _, payload)| match item_kind {
+            QueryItemKind::Trigger => payload_matches_query::<FindTriggers>(payload),
+            QueryItemKind::TriggerId => payload_matches_query::<FindActiveTriggerIds>(payload),
+            _ => false,
+        })
+}
+
+fn signed_query_scope(request: &iroha_data_model::query::QueryRequest) -> SignedQueryScope {
+    match request {
+        iroha_data_model::query::QueryRequest::Continue(_) => SignedQueryScope::AuthorityRouted,
+        iroha_data_model::query::QueryRequest::Start(query)
+            if is_trigger_inventory_query(query) =>
+        {
+            SignedQueryScope::LocalReplicated
+        }
+        _ => SignedQueryScope::CrossDataspaceFanout,
+    }
 }
 
 fn clone_verified_query_request(
@@ -11052,10 +11406,10 @@ where
     let mut object = norito::json::Map::new();
     if let Some(query_string) = query_string {
         for (key, value) in url::form_urlencoded::parse(query_string.as_bytes()) {
-            let value = value.into_owned();
-            let parsed =
-                norito::json::from_str::<Value>(&value).unwrap_or_else(|_| Value::from(value));
-            object.insert(key.into_owned(), parsed);
+            object.insert(
+                key.into_owned(),
+                torii_proxy_query_scalar_value(value.as_ref()),
+            );
         }
     }
     norito::json::from_value(Value::Object(object)).map_err(|error| {
@@ -11065,6 +11419,28 @@ where
             format!("failed to decode proxied query params: {error}"),
         )
     })
+}
+
+#[cfg(feature = "app_api")]
+fn torii_proxy_query_scalar_value(raw: &str) -> Value {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("null") {
+        Value::Null
+    } else if trimmed.eq_ignore_ascii_case("true") {
+        Value::Bool(true)
+    } else if trimmed.eq_ignore_ascii_case("false") {
+        Value::Bool(false)
+    } else if let Ok(u) = trimmed.parse::<u64>() {
+        Value::Number(norito::json::Number::from(u))
+    } else if let Ok(i) = trimmed.parse::<i64>() {
+        Value::Number(norito::json::Number::from(i))
+    } else if let Ok(f) = trimmed.parse::<f64>() {
+        norito::json::Number::from_f64(f)
+            .map(Value::Number)
+            .unwrap_or_else(|| Value::String(trimmed.to_owned()))
+    } else {
+        Value::String(trimmed.to_owned())
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -11546,6 +11922,27 @@ mod torii_routed_read_tests {
     }
 
     #[test]
+    fn torii_proxy_query_roundtrip_preserves_json_filter_literals_as_strings() {
+        let params = routing::ListFilterParams {
+            filter: Some(r#"{"op":"eq","args":["id","alice.i105.invalid"]}"#.to_owned()),
+            limit: Some(8),
+            offset: 0,
+            sort: Some("id:asc".to_owned()),
+        };
+
+        let encoded = encode_torii_proxy_query(&params)
+            .expect("query encoding should succeed")
+            .expect("non-empty params should produce a query string");
+        let decoded = decode_torii_proxy_query::<routing::ListFilterParams>(Some(&encoded))
+            .expect("query decoding should succeed");
+
+        assert_eq!(decoded.filter, params.filter);
+        assert_eq!(decoded.limit, params.limit);
+        assert_eq!(decoded.offset, params.offset);
+        assert_eq!(decoded.sort, params.sort);
+    }
+
+    #[test]
     fn canonicalize_query_batch_box_deduplicates_and_applies_pagination() {
         let pagination =
             iroha_data_model::query::parameters::Pagination::new(std::num::NonZeroU64::new(2), 1);
@@ -11852,50 +12249,45 @@ fn should_retry_torii_proxy_status(status: StatusCode) -> bool {
 async fn execute_torii_proxy_request_via_peer(
     app: &SharedAppState,
     target_peer_id: PeerId,
-    request: ToriiProxyRequestKindV1,
+    request: ToriiProxyRequestV2,
 ) -> Result<ToriiProxyHttpResponseV1, String> {
     let Some(network) = app.p2p.as_ref() else {
         return Err("Torii ingress routing requires an attached P2P network".to_owned());
     };
 
-    let request_id = Hash::new(
-        norito::to_bytes(&(
-            "torii:proxy",
-            app.torii_proxy_sequence
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            target_peer_id.clone(),
-            request.clone(),
-        ))
-        .expect("Torii proxy request id encoding should be infallible"),
-    );
+    let request_id = request.request_id.clone();
+    let pending_key = (request_id, target_peer_id.clone());
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.torii_proxy_pending.lock().await.insert(
-        request_id,
-        PendingToriiProxyRequest {
-            sender: tx,
-            expected_peer_id: target_peer_id.clone(),
-        },
+    prune_completed_torii_proxy_requests(app).await;
+    app.torii_proxy_pending
+        .lock()
+        .await
+        .insert(pending_key.clone(), PendingToriiProxyRequest { sender: tx });
+    iroha_logger::debug!(
+        request_id = %pending_key.0,
+        peer_id = %target_peer_id,
+        hop_count = request.hop_count,
+        max_hops = request.max_hops,
+        visited_peer_count = request.visited_peer_ids.len(),
+        "sending Torii proxy request to peer"
     );
     network.post(iroha_p2p::Post {
         peer_id: target_peer_id.clone(),
         priority: iroha_p2p::Priority::High,
-        data: iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV1 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
-            request_id,
-            hop_count: 1,
-            request,
-        })),
+        data: iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(request)),
     });
 
-    match tokio::time::timeout(Duration::from_secs(10), rx).await {
+    match tokio::time::timeout(TORII_PROXY_ATTEMPT_TIMEOUT, rx).await {
         Ok(Ok(response)) => Ok(response),
         Ok(Err(_)) => Err(format!(
-            "Torii proxy request `{request_id}` to peer `{target_peer_id}` closed before returning a response"
+            "Torii proxy request `{}` to peer `{target_peer_id}` closed before returning a response",
+            pending_key.0
         )),
         Err(_) => {
-            app.torii_proxy_pending.lock().await.remove(&request_id);
+            app.torii_proxy_pending.lock().await.remove(&pending_key);
             Err(format!(
-                "Torii proxy request `{request_id}` to peer `{target_peer_id}` timed out"
+                "Torii proxy request `{}` to peer `{target_peer_id}` timed out",
+                pending_key.0
             ))
         }
     }
@@ -11907,19 +12299,34 @@ async fn execute_torii_proxy_request_with_fallback(
     routing_decision: RoutingDecision,
     request: ToriiProxyRequestKindV1,
 ) -> Response {
-    let Some(local_peer_id) = app.local_peer_id.as_ref() else {
-        return torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            "Torii ingress routing requires a configured local peer id",
-        );
+    let request = match new_torii_proxy_request(app.as_ref(), request) {
+        Ok(request) => request,
+        Err(response) => return response,
     };
-
-    let candidate_peers: Vec<_> = authoritative_lane_peer_ids(app, routing_decision)
-        .into_iter()
-        .filter(|peer_id| peer_id != local_peer_id)
-        .collect();
-    if candidate_peers.is_empty() {
+    let local_peer_id = app
+        .local_peer_id
+        .as_ref()
+        .expect("new_torii_proxy_request validated local peer id");
+    let candidates = torii_proxy_candidate_peer_ids(
+        app,
+        local_peer_id,
+        routing_decision,
+        None,
+        &request.visited_peer_ids,
+    );
+    iroha_logger::debug!(
+        request_id = %request.request_id,
+        hop_count = request.hop_count,
+        max_hops = request.max_hops,
+        lane = routing_decision.lane_id.as_u32(),
+        dataspace = routing_decision.dataspace_id.as_u64(),
+        proxy_candidate_count = candidates.peers.len(),
+        authoritative_candidate_count = candidates.authoritative_count,
+        fallback_used = candidates.fallback_used,
+        loop_prevention_drops = candidates.loop_prevention_drops,
+        "Torii ingress proxy prepared candidate peers"
+    );
+    if candidates.peers.is_empty() {
         return torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
@@ -11931,9 +12338,151 @@ async fn execute_torii_proxy_request_with_fallback(
         );
     }
 
+    execute_torii_proxy_request_across_candidates(
+        candidates.peers,
+        routing_decision,
+        request,
+        torii_proxy_hedge_delay(app.as_ref()),
+        |peer_id, request| async move {
+            execute_torii_proxy_request_via_peer(app, peer_id, request).await
+        },
+        |request_id| async move {
+            mark_torii_proxy_request_completed(app, request_id).await;
+        },
+    )
+    .await
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn forward_incoming_torii_proxy_request(
+    app: &SharedAppState,
+    immediate_sender_peer_id: &PeerId,
+    routing_decision: RoutingDecision,
+    request: &ToriiProxyRequestV2,
+) -> Response {
+    if request.hop_count >= request.max_hops {
+        iroha_logger::warn!(
+            request_id = %request.request_id,
+            hop_count = request.hop_count,
+            max_hops = request.max_hops,
+            lane = routing_decision.lane_id.as_u32(),
+            dataspace = routing_decision.dataspace_id.as_u64(),
+            "Torii proxy request exhausted hop budget before reaching an authoritative peer"
+        );
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!(
+                "Torii proxy exhausted {} hops for lane {} dataspace {}",
+                request.max_hops,
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64()
+            ),
+        );
+    }
+
+    let Some(local_peer_id) = app.local_peer_id.as_ref() else {
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            "Torii ingress routing requires a configured local peer id",
+        );
+    };
+
+    let forwarded_request = forwarded_torii_proxy_request(request, local_peer_id);
+    let candidates = torii_proxy_candidate_peer_ids(
+        app.as_ref(),
+        local_peer_id,
+        routing_decision,
+        Some(immediate_sender_peer_id),
+        &forwarded_request.visited_peer_ids,
+    );
+    iroha_logger::debug!(
+        request_id = %forwarded_request.request_id,
+        hop_count = forwarded_request.hop_count,
+        max_hops = forwarded_request.max_hops,
+        lane = routing_decision.lane_id.as_u32(),
+        dataspace = routing_decision.dataspace_id.as_u64(),
+        proxy_candidate_count = candidates.peers.len(),
+        authoritative_candidate_count = candidates.authoritative_count,
+        fallback_used = candidates.fallback_used,
+        loop_prevention_drops = candidates.loop_prevention_drops,
+        "Torii proxy receiver prepared re-forward candidates"
+    );
+    if candidates.peers.is_empty() {
+        iroha_logger::warn!(
+            request_id = %forwarded_request.request_id,
+            hop_count = forwarded_request.hop_count,
+            max_hops = forwarded_request.max_hops,
+            lane = routing_decision.lane_id.as_u32(),
+            dataspace = routing_decision.dataspace_id.as_u64(),
+            loop_prevention_drops = candidates.loop_prevention_drops,
+            "Torii proxy receiver ran out of re-forward candidates"
+        );
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!(
+                "no reachable proxy candidates remain for lane {} dataspace {} after {} hops",
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64(),
+                forwarded_request.hop_count
+            ),
+        );
+    }
+
+    execute_torii_proxy_request_across_candidates(
+        candidates.peers,
+        routing_decision,
+        forwarded_request,
+        torii_proxy_hedge_delay(app.as_ref()),
+        |peer_id, request| async move {
+            execute_torii_proxy_request_via_peer(app, peer_id, request).await
+        },
+        |request_id| async move {
+            mark_torii_proxy_request_completed(app, request_id).await;
+        },
+    )
+    .await
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_torii_proxy_request_across_candidates<F, Fut, C, CFut>(
+    candidate_peers: Vec<PeerId>,
+    routing_decision: RoutingDecision,
+    request: ToriiProxyRequestV2,
+    hedge_delay: Duration,
+    mut execute: F,
+    complete_request: C,
+) -> Response
+where
+    F: FnMut(PeerId, ToriiProxyRequestV2) -> Fut,
+    Fut: core::future::Future<Output = Result<ToriiProxyHttpResponseV1, String>>,
+    C: Fn(Hash) -> CFut,
+    CFut: core::future::Future<Output = ()>,
+{
+    let request_id = request.request_id.clone();
     let mut last_retryable: Option<Response> = None;
-    for peer_id in candidate_peers {
-        match execute_torii_proxy_request_via_peer(app, peer_id.clone(), request.clone()).await {
+    let mut inflight = FuturesUnordered::new();
+    for (index, peer_id) in candidate_peers.into_iter().enumerate() {
+        let launch_delay = if index == 0 {
+            Duration::ZERO
+        } else {
+            hedge_delay.saturating_mul(u32::try_from(index).unwrap_or(u32::MAX))
+        };
+        let request = request.clone();
+        let response_fut = execute(peer_id.clone(), request);
+        inflight.push(async move {
+            if launch_delay > Duration::ZERO {
+                tokio::time::sleep(launch_delay).await;
+            }
+            let response = response_fut.await;
+            (peer_id, response)
+        });
+    }
+
+    while let Some((peer_id, outcome)) = inflight.next().await {
+        match outcome {
             Ok(snapshot) => {
                 let status =
                     StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -11942,6 +12491,7 @@ async fn execute_torii_proxy_request_with_fallback(
                     last_retryable = Some(response);
                     continue;
                 }
+                complete_request(request_id.clone()).await;
                 return response;
             }
             Err(error) => {
@@ -11950,6 +12500,7 @@ async fn execute_torii_proxy_request_with_fallback(
         }
     }
 
+    complete_request(request_id).await;
     last_retryable.unwrap_or_else(|| {
         torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -12752,10 +13303,19 @@ async fn process_incoming_torii_proxy_request(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
     peer: Peer,
-    proxy_request: ToriiProxyRequestV1,
+    proxy_request: ToriiProxyRequestV2,
 ) {
     let request_id = proxy_request.request_id.clone();
-    let response = if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V1 {
+    let sender_peer_id = peer.id().clone();
+    iroha_logger::debug!(
+        request_id = %request_id,
+        peer_id = %sender_peer_id,
+        hop_count = proxy_request.hop_count,
+        max_hops = proxy_request.max_hops,
+        visited_peer_count = proxy_request.visited_peer_ids.len(),
+        "received Torii proxy request"
+    );
+    let response = if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V2 {
         torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
             "invalid_proxy_request",
@@ -12764,16 +13324,20 @@ async fn process_incoming_torii_proxy_request(
                 proxy_request.schema_version
             ),
         )
-    } else if proxy_request.hop_count != 1 {
+    } else if proxy_request.hop_count == 0
+        || proxy_request.max_hops == 0
+        || proxy_request.hop_count > proxy_request.max_hops
+    {
         torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
             "invalid_proxy_request",
             format!(
-                "unsupported Torii proxy hop_count `{}`; forwarded requests must not be re-forwarded",
-                proxy_request.hop_count
+                "invalid Torii proxy hop_count `{}` / max_hops `{}`",
+                proxy_request.hop_count, proxy_request.max_hops
             ),
         )
     } else {
+        let proxy_request_context = proxy_request.clone();
         match proxy_request.request {
             ToriiProxyRequestKindV1::SubmitTransaction {
                 transaction,
@@ -12803,15 +13367,13 @@ async fn process_incoming_torii_proxy_request(
                                     )
                                 } else if !is_local_authoritative_for_route(&app, routing_decision)
                                 {
-                                    torii_proxy_error_response(
-                                        StatusCode::SERVICE_UNAVAILABLE,
-                                        "route_unavailable",
-                                        format!(
-                                            "local peer is not authoritative for lane {} dataspace {}",
-                                            routing_decision.lane_id.as_u32(),
-                                            routing_decision.dataspace_id.as_u64()
-                                        ),
+                                    forward_incoming_torii_proxy_request(
+                                        &app,
+                                        &sender_peer_id,
+                                        routing_decision,
+                                        &proxy_request_context,
                                     )
+                                    .await
                                 } else {
                                     match routing::push_accepted_transaction_for_ingress(
                                         app.queue.clone(),
@@ -12856,15 +13418,13 @@ async fn process_incoming_torii_proxy_request(
                                 ),
                             )
                         } else if !is_local_authoritative_for_route(&app, routing_decision) {
-                            torii_proxy_error_response(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "route_unavailable",
-                                format!(
-                                    "local peer is not authoritative for lane {} dataspace {}",
-                                    routing_decision.lane_id.as_u32(),
-                                    routing_decision.dataspace_id.as_u64()
-                                ),
+                            forward_incoming_torii_proxy_request(
+                                &app,
+                                &sender_peer_id,
+                                routing_decision,
+                                &proxy_request_context,
                             )
+                            .await
                         } else {
                             let format = response_format_from_torii_proxy(response_format);
                             match routing::handle_queries_with_opts(
@@ -12912,15 +13472,13 @@ async fn process_incoming_torii_proxy_request(
                     Ok(request) => {
                         let routing_decision: RoutingDecision = expected_route.into();
                         if !is_local_authoritative_for_route(&app, routing_decision) {
-                            torii_proxy_error_response(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "route_unavailable",
-                                format!(
-                                    "local peer is not authoritative for lane {} dataspace {}",
-                                    routing_decision.lane_id.as_u32(),
-                                    routing_decision.dataspace_id.as_u64()
-                                ),
+                            forward_incoming_torii_proxy_request(
+                                &app,
+                                &sender_peer_id,
+                                routing_decision,
+                                &proxy_request_context,
                             )
+                            .await
                         } else {
                             let format = response_format_from_torii_proxy(response_format);
                             match routing::execute_verified_query_with_opts(
@@ -12957,15 +13515,13 @@ async fn process_incoming_torii_proxy_request(
             ToriiProxyRequestKindV1::Read(read_request) => {
                 let routing_decision: RoutingDecision = read_request.expected_route.into();
                 if !is_local_authoritative_for_route(&app, routing_decision) {
-                    torii_proxy_error_response(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "route_unavailable",
-                        format!(
-                            "local peer is not authoritative for lane {} dataspace {}",
-                            routing_decision.lane_id.as_u32(),
-                            routing_decision.dataspace_id.as_u64()
-                        ),
+                    forward_incoming_torii_proxy_request(
+                        &app,
+                        &sender_peer_id,
+                        routing_decision,
+                        &proxy_request_context,
                     )
+                    .await
                 } else {
                     execute_torii_read_request_locally(
                         &app,
@@ -13002,39 +13558,46 @@ async fn process_incoming_torii_proxy_response(
     responder_peer_id: PeerId,
     proxy_response: ToriiProxyResponseV1,
 ) {
-    let mut pending_requests = app.torii_proxy_pending.lock().await;
-    let Some(expected_peer_id) = pending_requests
-        .get(&proxy_response.request_id)
-        .map(|pending| pending.expected_peer_id.clone())
-    else {
-        iroha_logger::warn!(
-            peer_id = %responder_peer_id,
-            request_id = %proxy_response.request_id,
-            "ignoring Torii proxy response without a pending request"
-        );
-        return;
+    let pending_key = (proxy_response.request_id, responder_peer_id.clone());
+    let (pending, has_other_pending) = {
+        let mut pending_requests = app.torii_proxy_pending.lock().await;
+        let pending = pending_requests.remove(&pending_key);
+        let has_other_pending = pending_requests
+            .keys()
+            .any(|(request_id, _)| *request_id == pending_key.0);
+        (pending, has_other_pending)
     };
 
-    if expected_peer_id != responder_peer_id {
-        drop(pending_requests);
-        iroha_logger::warn!(
-            peer_id = %responder_peer_id,
-            expected_peer_id = %expected_peer_id,
-            request_id = %proxy_response.request_id,
-            "ignoring Torii proxy response from an unexpected peer"
-        );
-        return;
-    }
+    let Some(pending) = pending else {
+        let mut completed = app.torii_proxy_completed.lock().await;
+        if let Some(entry) = completed.get_mut(&pending_key.0) {
+            if !entry.late_response_logged {
+                entry.late_response_logged = true;
+                iroha_logger::debug!(
+                    peer_id = %responder_peer_id,
+                    request_id = %pending_key.0,
+                    "ignoring late Torii proxy response after request completion"
+                );
+            }
+            return;
+        }
+        drop(completed);
 
-    let Some(pending) = pending_requests.remove(&proxy_response.request_id) else {
-        iroha_logger::warn!(
-            peer_id = %responder_peer_id,
-            request_id = %proxy_response.request_id,
-            "ignoring Torii proxy response whose pending request disappeared"
-        );
+        if has_other_pending {
+            iroha_logger::warn!(
+                peer_id = %responder_peer_id,
+                request_id = %pending_key.0,
+                "ignoring Torii proxy response from an unexpected peer"
+            );
+        } else {
+            iroha_logger::warn!(
+                peer_id = %responder_peer_id,
+                request_id = %pending_key.0,
+                "ignoring Torii proxy response without a pending request"
+            );
+        }
         return;
     };
-    drop(pending_requests);
 
     if proxy_response.schema_version != TORII_PROXY_RESPONSE_VERSION_V1 {
         let _ = pending.sender.send(ToriiProxyHttpResponseV1 {
@@ -13332,7 +13895,7 @@ async fn handler_soracloud_status(
 
     let failed_admissions = soracloud_failed_admissions_section(&app.telemetry).await;
 
-    let backpressure = app.queue.current_backpressure();
+    let backpressure = current_torii_backpressure(app.as_ref());
     let queue_active = u64::try_from(app.queue.active_len()).unwrap_or(u64::MAX);
     let queue_queued = u64::try_from(backpressure.queued()).unwrap_or(u64::MAX);
     let queue_capacity = u64::try_from(backpressure.capacity().get()).unwrap_or(u64::MAX);
@@ -13577,6 +14140,97 @@ async fn handler_kaigi_relays(
     )
     .await
     .map(axum::response::IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_kaigi_call(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(call_raw): AxPath<String>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/kaigi/calls/{call_id}").await?;
+    }
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    routing::handle_v1_kaigi_call(app.state.clone(), call_id).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_kaigi_call_signals(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(call_raw): AxPath<String>,
+    AxQuery(params): AxQuery<routing::KaigiCallSignalsParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/kaigi/calls/{call_id}/signals",
+        )
+        .await?;
+    }
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    routing::handle_v1_kaigi_call_signals(app.state.clone(), call_id, AxQuery(params)).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_kaigi_call_events_sse(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(call_raw): AxPath<String>,
+    AxQuery(params): AxQuery<routing::KaigiCallEventsParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return Ok(routing::handle_v1_kaigi_call_events_sse(
+            app.events.clone(),
+            call_id,
+            AxQuery(params),
+        )
+        .into_response());
+    }
+
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/kaigi/calls/{call_id}/events",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+
+    Ok(
+        routing::handle_v1_kaigi_call_events_sse(app.events.clone(), call_id, AxQuery(params))
+            .into_response(),
+    )
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -15646,6 +16300,88 @@ async fn handler_bridge_finality_bundle(
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(
         routing::handle_v1_bridge_finality_bundle(app.state.clone(), height, accept)
+            .await?
+            .into_response(),
+    )
+}
+
+async fn handler_sccp_burn_proof(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(message_id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/proofs/burn/{message_id}",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/proofs/burn");
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(routing::handle_v1_sccp_burn_bundle(message_id, accept)
+        .await?
+        .into_response())
+}
+
+async fn handler_sccp_governance_proof(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(message_id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/proofs/governance/{message_id}",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/sccp/proofs/governance",
+        );
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(
+        routing::handle_v1_sccp_governance_bundle(message_id, accept)
             .await?
             .into_response(),
     )
@@ -18643,6 +19379,27 @@ async fn handler_post_transaction(
     if !is_local_authoritative_for_route(app.as_ref(), routing_decision) {
         return Ok(execute_torii_transaction_via_proxy(&app, transaction, routing_decision).await);
     }
+    let queue_depth = app.queue.active_len();
+    let queue_pressure = current_torii_queue_pressure(app.as_ref());
+    if queue_depth >= app.high_load_tx_threshold || queue_pressure.saturated_by_age {
+        iroha_logger::warn!(
+            tx_hash = %tx_hash,
+            lane = routing_decision.lane_id.as_u32(),
+            dataspace = routing_decision.dataspace_id.as_u64(),
+            queue_depth,
+            high_load_tx_threshold = app.high_load_tx_threshold,
+            queued_tx_count = queue_pressure.queued_tx_count,
+            oldest_queued_tx_age_ms = queue_pressure.oldest_queued_tx_age_ms,
+            queue_pressure_saturated_by_count = queue_pressure.saturated_by_count,
+            queue_pressure_saturated_by_age = queue_pressure.saturated_by_age,
+            backpressure = ?queue_pressure.into_backpressure(),
+            "Torii early-shed rejected local transaction before enqueue"
+        );
+        return Err(Error::PushIntoQueue {
+            source: Box::new(queue::Error::Full),
+            backpressure: queue_pressure.into_backpressure(),
+        });
+    }
     let routing_decision = routing::push_accepted_transaction_for_ingress(
         app.queue.clone(),
         app.state.clone(),
@@ -19201,19 +19958,26 @@ async fn handler_signed_query(
         }
     }
 
+    let query_scope = signed_query_scope(query_request.request());
+
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-    if signed_query_requires_fanout(query_request.request())
+    if matches!(query_scope, SignedQueryScope::CrossDataspaceFanout)
         && torii_all_dataspace_routes(app.as_ref()).len() > 1
     {
         let verified_query = routing::verify_signed_query_request(&query_request)?;
         return Ok(execute_torii_query_via_fanout(&app, verified_query, format).await);
     }
 
-    let routing_decision = match resolve_signed_query_routing(app.as_ref(), &query_request) {
-        Ok(decision) => Some(decision),
-        Err(error) => {
-            iroha_logger::warn!(%error, "failed to resolve signed query routing at ingress");
-            None
+    let routing_decision = match query_scope {
+        SignedQueryScope::LocalReplicated => None,
+        SignedQueryScope::AuthorityRouted | SignedQueryScope::CrossDataspaceFanout => {
+            match resolve_signed_query_routing(app.as_ref(), &query_request) {
+                Ok(decision) => Some(decision),
+                Err(error) => {
+                    iroha_logger::warn!(%error, "failed to resolve signed query routing at ingress");
+                    None
+                }
+            }
         }
     };
 
@@ -21258,6 +22022,7 @@ pub struct Torii {
     offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_lineage::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
+    vpn_helper_ticket_secret: Option<[u8; 32]>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
 }
 
@@ -21268,6 +22033,7 @@ pub struct ToriiRuntimeDeps {
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
+    vpn_helper_ticket_secret: Option<[u8; 32]>,
 }
 
 impl ToriiRuntimeDeps {
@@ -21279,6 +22045,7 @@ impl ToriiRuntimeDeps {
             soracloud_runtime: None,
             sorafs_node: None,
             sorafs_cache: None,
+            vpn_helper_ticket_secret: None,
         }
     }
 
@@ -21303,6 +22070,13 @@ impl ToriiRuntimeDeps {
         sorafs_cache: Arc<RwLock<sorafs::ProviderAdvertCache>>,
     ) -> Self {
         self.sorafs_cache = Some(sorafs_cache);
+        self
+    }
+
+    /// Attach the shared secret used to mint helper-authenticated VPN tickets.
+    #[must_use]
+    pub fn with_vpn_helper_ticket_secret(mut self, secret: Option<[u8; 32]>) -> Self {
+        self.vpn_helper_ticket_secret = secret;
         self
     }
 }
@@ -21543,7 +22317,15 @@ impl Torii {
                     "/v1/sumeragi/evidence/count",
                     get(handler_sumeragi_evidence_count),
                 )
-                .route("/v1/sumeragi/evidence", get(handler_sumeragi_evidence));
+                .route("/v1/sumeragi/evidence", get(handler_sumeragi_evidence))
+                .route(
+                    "/v1/sccp/proofs/burn/{message_id}",
+                    get(handler_sccp_burn_proof),
+                )
+                .route(
+                    "/v1/sccp/proofs/governance/{message_id}",
+                    get(handler_sccp_governance_proof),
+                );
 
             #[cfg(feature = "telemetry")]
             let sumeragi = sumeragi
@@ -21647,6 +22429,13 @@ impl Torii {
                 .route(uri::API_VERSIONS, get(handler_api_versions))
                 .route(uri::PEERS, get(handler_peers))
                 .route(uri::HEALTH, get(handler_health))
+                .route("/v1/vpn/profile", get(handler_get_vpn_profile))
+                .route("/v1/vpn/sessions", post(handler_create_vpn_session))
+                .route("/v1/vpn/receipts", get(handler_list_vpn_receipts))
+                .route(
+                    "/v1/vpn/sessions/{session_id}",
+                    get(handler_get_vpn_session).delete(handler_delete_vpn_session),
+                )
                 .route(uri::LEDGER_HEADERS, get(handler_ledger_headers))
                 .route(uri::LEDGER_STATE_ROOT, get(handler_ledger_state_root))
                 .route(uri::LEDGER_STATE_PROOF, get(handler_ledger_state_proof))
@@ -22675,6 +23464,17 @@ impl Torii {
                     get(handler_explorer_instruction_contract_view),
                 );
 
+            let router = router
+                .route("/v1/kaigi/calls/{call_id}", get(handler_kaigi_call))
+                .route(
+                    "/v1/kaigi/calls/{call_id}/signals",
+                    get(handler_kaigi_call_signals),
+                )
+                .route(
+                    "/v1/kaigi/calls/{call_id}/events",
+                    get(handler_kaigi_call_events_sse),
+                );
+
             #[cfg(feature = "telemetry")]
             let router = router
                 .route("/v1/kaigi/relays", get(handler_kaigi_relays))
@@ -22732,6 +23532,12 @@ impl Torii {
 
         if capacity_enabled {
             builder.apply(|router| {
+                let sorafs_body_limit = DefaultBodyLimit::max(
+                    self.transaction_max_content_len
+                        .get()
+                        .try_into()
+                        .expect("should't exceed usize"),
+                );
                 router
                     .route(
                         "/v1/sorafs/capacity/state",
@@ -22756,6 +23562,18 @@ impl Torii {
                     .route(
                         "/v1/sorafs/storage/state",
                         axum::routing::get(sorafs::api::handle_get_sorafs_storage_state),
+                    )
+                    .route(
+                        "/v1/sorafs/cid/{cid}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_cid_lookup),
+                    )
+                    .route(
+                        "/v1/sorafs/denylist/catalog",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_denylist_catalog),
+                    )
+                    .route(
+                        "/v1/sorafs/denylist/packs/{pack_id}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_denylist_pack),
                     )
                     .route(
                         "/v1/sorafs/storage/manifest/{manifest_id}",
@@ -22818,6 +23636,18 @@ impl Torii {
                         axum::routing::get(sorafs::api::handle_get_sorafs_site_manifest),
                     )
                     .route(
+                        "/sorafs/cid/{cid}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_cid_root_redirect),
+                    )
+                    .route(
+                        "/sorafs/cid/{cid}/",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_cid_root),
+                    )
+                    .route(
+                        "/sorafs/cid/{cid}/{*path}",
+                        axum::routing::get(sorafs::api::handle_get_sorafs_cid_path),
+                    )
+                    .route(
                         "/",
                         axum::routing::get(sorafs::api::handle_get_sorafs_site_root),
                     )
@@ -22825,6 +23655,10 @@ impl Torii {
                         "/{*path}",
                         axum::routing::get(sorafs::api::handle_get_sorafs_site_path),
                     )
+                    // Storage pin uploads send the full staged site as JSON (`payload_b64`), so
+                    // the route must honor the configured Torii body budget rather than Axum's
+                    // small default extractor limit.
+                    .layer(sorafs_body_limit)
             });
         }
     }
@@ -23115,6 +23949,7 @@ impl Torii {
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
+        let vpn_helper_ticket_secret = runtime_deps.vpn_helper_ticket_secret;
         routing::debug_match_flag::set_from_config(config.debug_match_filters);
         routing::set_app_query_limits(routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
@@ -23651,6 +24486,7 @@ impl Torii {
             offline_policy_snapshot,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
+            vpn_helper_ticket_secret,
             soracloud_runtime,
         }
     }
@@ -23936,6 +24772,10 @@ impl Torii {
                 .as_ref()
                 .map(|components| Arc::clone(&components.denylist)),
             #[cfg(feature = "app_api")]
+            sorafs_gateway_denylist_catalog: gateway_components
+                .as_ref()
+                .and_then(|components| components.denylist_catalog.clone()),
+            #[cfg(feature = "app_api")]
             sorafs_gateway_tls_state: gateway_components
                 .as_ref()
                 .map(|components| Arc::clone(&components.tls_state)),
@@ -23961,6 +24801,9 @@ impl Torii {
             offline_policy_snapshot: self.offline_policy_snapshot.clone(),
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
+            vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
+            vpn_sessions: Arc::new(DashMap::new()),
+            vpn_receipts: Arc::new(DashMap::new()),
             soracloud_runtime: self.soracloud_runtime.clone(),
             #[cfg(feature = "app_api")]
             soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
@@ -23968,6 +24811,8 @@ impl Torii {
             soracloud_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             torii_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            torii_proxy_completed: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             torii_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
         });
@@ -23979,6 +24824,8 @@ impl Torii {
                 metrics.set_sorafs_gateway_fixture_version(version);
             });
         }
+
+        let _ = current_torii_queue_pressure(app_state.as_ref());
 
         // Touch certain fields to avoid dead-code warnings under feature combinations
         let _ = (&app_state.kiso, &app_state.online_peers);
@@ -24534,6 +25381,7 @@ fn load_cdn_policy(
 struct GatewaySecurityComponents {
     policy: Arc<sorafs::gateway::GatewayPolicy>,
     denylist: Arc<sorafs::gateway::GatewayDenylist>,
+    denylist_catalog: Option<Arc<GatewayDenylistCatalogSnapshot>>,
     tls_state: Arc<RwLock<sorafs::gateway::TlsStateSnapshot>>,
     tls_automation: Option<Arc<sorafs::gateway::TlsAutomationHandle>>,
     blinded_resolver: Option<Arc<sorafs::BlindedCidResolver>>,
@@ -24550,7 +25398,7 @@ fn build_sorafs_gateway_security(
     };
 
     let denylist = Arc::new(GatewayDenylist::new());
-    populate_gateway_denylist(&denylist, &config.denylist);
+    let denylist_catalog = populate_gateway_denylist(&denylist, &config.denylist).map(Arc::new);
     let rate_limit = GatewayRateLimitConfig {
         max_requests: config.rate_limit.max_requests.map(NonZeroU32::get),
         window: config.rate_limit.window,
@@ -24623,10 +25471,40 @@ fn build_sorafs_gateway_security(
     GatewaySecurityComponents {
         policy,
         denylist,
+        denylist_catalog,
         tls_state,
         tls_automation,
         blinded_resolver,
     }
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+pub(crate) struct GatewayDenylistPackSnapshot {
+    pub pack_id: String,
+    pub version: Option<String>,
+    pub default_enabled: bool,
+    pub active: bool,
+    pub policy_tier: Option<String>,
+    pub manifest_cid: Option<String>,
+    pub merkle_root: Option<String>,
+    pub issued_by_proposal_id: Option<String>,
+    pub review_reference: Option<String>,
+    pub jurisdiction: Option<String>,
+    pub issued_at: Option<String>,
+    pub expires_at: Option<String>,
+    pub path: PathBuf,
+    pub entry_count: usize,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+pub(crate) struct GatewayDenylistCatalogSnapshot {
+    pub version: u8,
+    pub jurisdiction: Option<String>,
+    pub opt_out_packs: Vec<String>,
+    pub extra_packs: Vec<String>,
+    pub packs: Vec<GatewayDenylistPackSnapshot>,
 }
 
 #[cfg(feature = "app_api")]
@@ -24651,6 +25529,30 @@ struct GatewayDenylistFileEntry {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone, JsonDeserialize)]
+struct GatewayDenylistCatalogFile {
+    version: Option<u8>,
+    packs: Vec<GatewayDenylistPackFile>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, JsonDeserialize)]
+struct GatewayDenylistPackFile {
+    pack_id: String,
+    version: Option<String>,
+    path: String,
+    default_enabled: Option<bool>,
+    policy_tier: Option<String>,
+    manifest_cid: Option<String>,
+    merkle_root: Option<String>,
+    issued_by_proposal_id: Option<String>,
+    review_reference: Option<String>,
+    jurisdiction: Option<String>,
+    issued_at: Option<String>,
+    expires_at: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
 struct GatewayDenylistPolicyMeta {
     tier: sorafs::gateway::DenylistPolicyTier,
     canon: Option<String>,
@@ -24661,29 +25563,59 @@ struct GatewayDenylistPolicyMeta {
 fn populate_gateway_denylist(
     denylist: &Arc<sorafs::gateway::GatewayDenylist>,
     config: &iroha_config::parameters::actual::SorafsGatewayDenylist,
-) {
-    let Some(path) = &config.path else {
-        return;
-    };
+) -> Option<GatewayDenylistCatalogSnapshot> {
+    if let Some(path) = &config.catalog_path {
+        return load_gateway_denylist_catalog(denylist, config, path);
+    }
 
     let policy = gateway_denylist_policy_from_config(config);
+    let Some(path) = &config.path else {
+        return None;
+    };
 
+    let loaded = load_gateway_denylist_entries_from_path(denylist, &policy, path);
+    iroha_logger::info!(count = loaded, path = ?path, "loaded gateway denylist entries");
+    None
+}
+
+#[cfg(feature = "app_api")]
+fn normalize_gateway_pack_id(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_ascii_lowercase())
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn read_gateway_denylist_entries(path: &Path) -> Option<Vec<GatewayDenylistFileEntry>> {
     let data = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) => {
             iroha_logger::warn!(?err, path = ?path, "failed to read gateway denylist file");
-            return;
+            return None;
         }
     };
 
-    let entries: Vec<GatewayDenylistFileEntry> = match norito::json::from_slice(&data) {
-        Ok(entries) => entries,
+    match norito::json::from_slice(&data) {
+        Ok(entries) => Some(entries),
         Err(err) => {
             iroha_logger::warn!(?err, path = ?path, "failed to parse gateway denylist file");
-            return;
+            None
         }
-    };
+    }
+}
 
+#[cfg(feature = "app_api")]
+fn load_gateway_denylist_entries_from_path(
+    denylist: &Arc<sorafs::gateway::GatewayDenylist>,
+    policy: &sorafs::gateway::DenylistPolicy,
+    path: &Path,
+) -> usize {
+    let Some(entries) = read_gateway_denylist_entries(path) else {
+        return 0;
+    };
     let mut loaded = 0usize;
     for entry in entries {
         let result = match entry.kind.as_str() {
@@ -24719,7 +25651,114 @@ fn populate_gateway_denylist(
         }
     }
 
-    iroha_logger::info!(count = loaded, path = ?path, "loaded gateway denylist entries");
+    loaded
+}
+
+#[cfg(feature = "app_api")]
+fn load_gateway_denylist_catalog(
+    denylist: &Arc<sorafs::gateway::GatewayDenylist>,
+    config: &iroha_config::parameters::actual::SorafsGatewayDenylist,
+    catalog_path: &Path,
+) -> Option<GatewayDenylistCatalogSnapshot> {
+    let data = match fs::read(catalog_path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            iroha_logger::warn!(?err, path = ?catalog_path, "failed to read gateway denylist catalog");
+            return None;
+        }
+    };
+
+    let catalog: GatewayDenylistCatalogFile = match norito::json::from_slice(&data) {
+        Ok(value) => value,
+        Err(err) => {
+            iroha_logger::warn!(
+                ?err,
+                path = ?catalog_path,
+                "failed to parse gateway denylist catalog"
+            );
+            return None;
+        }
+    };
+
+    let policy = gateway_denylist_policy_from_config(config);
+    let opt_out = config
+        .opt_out_packs
+        .iter()
+        .filter_map(|value| normalize_gateway_pack_id(value))
+        .collect::<HashSet<_>>();
+    let extra = config
+        .extra_packs
+        .iter()
+        .filter_map(|value| normalize_gateway_pack_id(value))
+        .collect::<HashSet<_>>();
+
+    let base_dir = catalog_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut packs = Vec::new();
+    let mut total_loaded = 0usize;
+
+    for pack in catalog.packs {
+        let Some(pack_id) = normalize_gateway_pack_id(&pack.pack_id) else {
+            iroha_logger::warn!(path = ?catalog_path, "skipping gateway denylist pack with empty pack_id");
+            continue;
+        };
+
+        let path = {
+            let raw = PathBuf::from(pack.path.trim());
+            if raw.is_absolute() {
+                raw
+            } else {
+                base_dir.join(raw)
+            }
+        };
+
+        let jurisdiction_matches = pack
+            .jurisdiction
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map_or(true, |value| config.jurisdiction.as_deref() == Some(value));
+        let default_enabled = pack.default_enabled.unwrap_or(false);
+        let active = extra.contains(&pack_id)
+            || (default_enabled && jurisdiction_matches && !opt_out.contains(&pack_id));
+        let entry_count = if active {
+            let loaded = load_gateway_denylist_entries_from_path(denylist, &policy, &path);
+            total_loaded += loaded;
+            loaded
+        } else {
+            read_gateway_denylist_entries(&path).map_or(0, |entries| entries.len())
+        };
+
+        packs.push(GatewayDenylistPackSnapshot {
+            pack_id,
+            version: pack.version,
+            default_enabled,
+            active,
+            policy_tier: pack.policy_tier,
+            manifest_cid: pack.manifest_cid,
+            merkle_root: pack.merkle_root,
+            issued_by_proposal_id: pack.issued_by_proposal_id,
+            review_reference: pack.review_reference,
+            jurisdiction: pack.jurisdiction,
+            issued_at: pack.issued_at,
+            expires_at: pack.expires_at,
+            path,
+            entry_count,
+        });
+    }
+
+    iroha_logger::info!(
+        count = total_loaded,
+        path = ?catalog_path,
+        "loaded gateway denylist entries from catalog"
+    );
+
+    Some(GatewayDenylistCatalogSnapshot {
+        version: catalog.version.unwrap_or(1),
+        jurisdiction: config.jurisdiction.clone(),
+        opt_out_packs: config.opt_out_packs.clone(),
+        extra_packs: config.extra_packs.clone(),
+        packs,
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -25134,6 +26173,88 @@ mod gateway_denylist_loader_tests {
         let err = build_account_id_denylist_entry(&entry, &policy)
             .expect_err("non-canonical I105 account_id must be rejected");
         assert!(err.contains("invalid account_id"));
+    }
+
+    #[test]
+    fn gateway_denylist_catalog_activates_default_packs_and_honours_opt_out() {
+        let dir = tempfile::tempdir().expect("catalog tempdir");
+        let core_path = dir.path().join("global-core.json");
+        let emergency_path = dir.path().join("global-emergency.json");
+        let catalog_path = dir.path().join("catalog.json");
+
+        std::fs::write(
+            &core_path,
+            r#"[{"kind":"cid","cid_utf8":"bafycore","reason":"core"}]"#,
+        )
+        .expect("write core pack");
+        std::fs::write(
+            &emergency_path,
+            r#"[{"kind":"cid","cid_utf8":"bafyemergency","reason":"emergency"}]"#,
+        )
+        .expect("write emergency pack");
+        std::fs::write(
+            &catalog_path,
+            format!(
+                r#"{{
+  "version": 1,
+  "packs": [
+    {{
+      "pack_id": "global-core",
+      "version": "2026.03.29",
+      "path": "{}",
+      "default_enabled": true,
+      "policy_tier": "standard"
+    }},
+    {{
+      "pack_id": "global-emergency",
+      "version": "2026.03.29",
+      "path": "{}",
+      "default_enabled": true,
+      "policy_tier": "emergency"
+    }}
+  ]
+}}"#,
+                core_path.display(),
+                emergency_path.display()
+            ),
+        )
+        .expect("write catalog");
+
+        let denylist = Arc::new(sorafs::gateway::GatewayDenylist::new());
+        let mut config = iroha_config::parameters::actual::SorafsGatewayDenylist::default();
+        config.catalog_path = Some(catalog_path);
+        config.opt_out_packs = vec!["global-emergency".to_string()];
+
+        let snapshot =
+            populate_gateway_denylist(&denylist, &config).expect("catalog snapshot should load");
+
+        assert_eq!(snapshot.packs.len(), 2);
+        assert_eq!(
+            snapshot
+                .packs
+                .iter()
+                .find(|pack| pack.pack_id == "global-core")
+                .map(|pack| pack.active),
+            Some(true)
+        );
+        assert_eq!(
+            snapshot
+                .packs
+                .iter()
+                .find(|pack| pack.pack_id == "global-emergency")
+                .map(|pack| pack.active),
+            Some(false)
+        );
+        assert!(
+            denylist.check_cid(b"bafycore", SystemTime::now()).is_some(),
+            "default-enabled pack must populate the live denylist"
+        );
+        assert!(
+            denylist
+                .check_cid(b"bafyemergency", SystemTime::now())
+                .is_none(),
+            "opted-out pack must stay inactive"
+        );
     }
 }
 
@@ -25647,6 +26768,7 @@ pub(crate) mod tests_runtime_handlers {
         level::Level,
         name::Name,
         nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId, UniversalAccountId},
+        parameter::{Parameter, system::SumeragiNposParameters},
         peer::{Peer, PeerId},
         permission::Permission,
         soranet::privacy_metrics::{
@@ -25662,6 +26784,7 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
+    use parity_scale_codec::Encode;
 
     use super::*;
     #[cfg(feature = "telemetry")]
@@ -25728,6 +26851,142 @@ pub(crate) mod tests_runtime_handlers {
         let domain = Domain::new(domain_id.clone()).build(account_id);
         let account = Account::new_in_domain(account_id.clone(), domain_id).build(account_id);
         World::with([domain], [account], [])
+    }
+
+    fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppState) {
+        let secondary_dataspace = DataSpaceId::new(1);
+        let secondary_lane = LaneId::new(1);
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: secondary_lane,
+                    dataspace_id: secondary_dataspace,
+                    alias: "secondary".to_owned(),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: secondary_dataspace,
+                alias: "secondary".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+
+        let app_state = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+        state.set_nexus(nexus.clone()).expect("apply nexus config");
+        let state_view = app_state.state.view();
+        app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    }
+
+    #[derive(Default)]
+    struct CapturingIterableQueryExecutor {
+        query: Mutex<Option<iroha_data_model::query::QueryWithParams>>,
+    }
+
+    impl CapturingIterableQueryExecutor {
+        fn into_query(self) -> iroha_data_model::query::QueryWithParams {
+            self.query
+                .into_inner()
+                .expect("capture mutex should not be poisoned")
+                .expect("query builder should have captured a query")
+        }
+    }
+
+    impl iroha_data_model::query::builder::QueryExecutor for CapturingIterableQueryExecutor {
+        type Cursor = ();
+        type Error = ();
+
+        fn execute_singular_query(
+            &self,
+            _query: iroha_data_model::query::SingularQueryBox,
+        ) -> Result<iroha_data_model::query::SingularQueryOutputBox, Self::Error> {
+            unreachable!("capturing executor should only be used for iterable queries")
+        }
+
+        fn start_query(
+            &self,
+            query: iroha_data_model::query::QueryWithParams,
+        ) -> Result<
+            (
+                iroha_data_model::query::QueryOutputBatchBoxTuple,
+                u64,
+                Option<Self::Cursor>,
+            ),
+            Self::Error,
+        > {
+            *self.query.lock().expect("capture mutex should lock") = Some(query);
+            Err(())
+        }
+
+        fn continue_query(
+            _cursor: Self::Cursor,
+        ) -> Result<
+            (
+                iroha_data_model::query::QueryOutputBatchBoxTuple,
+                u64,
+                Option<Self::Cursor>,
+            ),
+            Self::Error,
+        > {
+            unreachable!("capturing executor should not continue queries")
+        }
+    }
+
+    fn build_find_triggers_query_for_test() -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::query::trigger::prelude::FindTriggers,
+        )
+        .execute();
+        executor.into_query()
+    }
+
+    fn build_find_active_trigger_ids_query_for_test() -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
+        )
+        .execute();
+        executor.into_query()
+    }
+
+    fn signed_find_triggers_query_for_test(
+        authority: AccountId,
+        key_pair: &KeyPair,
+    ) -> iroha_data_model::query::SignedQuery {
+        iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test())
+            .with_authority(authority)
+            .sign(key_pair)
+    }
+
+    fn signed_find_active_trigger_ids_query_for_test(
+        authority: AccountId,
+        key_pair: &KeyPair,
+    ) -> iroha_data_model::query::SignedQuery {
+        iroha_data_model::query::QueryRequest::Start(build_find_active_trigger_ids_query_for_test())
+            .with_authority(authority)
+            .sign(key_pair)
     }
 
     #[cfg(feature = "app_api")]
@@ -26103,6 +27362,8 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             sorafs_gateway_denylist: None,
             #[cfg(feature = "app_api")]
+            sorafs_gateway_denylist_catalog: None,
+            #[cfg(feature = "app_api")]
             sorafs_gateway_tls_state: None,
             #[cfg(feature = "app_api")]
             sorafs_pin_policy: sorafs_pin_policy.clone(),
@@ -26126,6 +27387,9 @@ pub(crate) mod tests_runtime_handlers {
             )),
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
+            vpn_helper_ticket_secret: None,
+            vpn_sessions: Arc::new(DashMap::new()),
+            vpn_receipts: Arc::new(DashMap::new()),
             soracloud_runtime: None,
             #[cfg(feature = "app_api")]
             soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
@@ -26133,6 +27397,8 @@ pub(crate) mod tests_runtime_handlers {
             soracloud_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             torii_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+            torii_proxy_completed: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             torii_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
             rbc_sampling_enabled: false,
@@ -26415,7 +27681,7 @@ pub(crate) mod tests_runtime_handlers {
         let mut app = mk_app_state_for_tests();
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-            app_mut.high_load_tx_threshold = 0;
+            app_mut.high_load_tx_threshold = 1;
             app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         }
 
@@ -26467,6 +27733,262 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
+    #[tokio::test]
+    async fn handler_post_transaction_early_sheds_before_local_enqueue() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = 1;
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "early-shed-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "early-shed-2".to_string())])
+            .sign(keypair.private_key());
+
+        let first = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx1),
+        )
+        .await
+        .expect("first transaction should be accepted")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.active_len(), 1);
+
+        let err = match super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx2),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected early shed"),
+            Err(err) => err,
+        };
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:QUEUE_FULL")
+        );
+        assert_eq!(app.queue.active_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_early_sheds_when_queue_age_saturates() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = usize::MAX;
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "age-shed-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "age-shed-2".to_string())])
+            .sign(keypair.private_key());
+
+        let _ = app
+            .queue
+            .refresh_pressure_budget_from_block_time(Duration::ZERO);
+
+        let first = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx1),
+        )
+        .await
+        .expect("first transaction should be accepted")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.active_len(), 1);
+
+        std::thread::sleep(Duration::from_millis(2_100));
+
+        let err = match super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx2),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected age-based early shed"),
+            Err(err) => err,
+        };
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:QUEUE_FULL")
+        );
+        assert_eq!(app.queue.active_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_old() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = usize::MAX;
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "age-inflight-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "age-inflight-2".to_string())])
+            .sign(keypair.private_key());
+
+        let _ = app
+            .queue
+            .refresh_pressure_budget_from_block_time(Duration::ZERO);
+
+        let first = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx1),
+        )
+        .await
+        .expect("first transaction should be accepted")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let mut guards = Vec::new();
+        app.queue.get_transactions_for_block(
+            &app.state.view(),
+            NonZeroUsize::new(1).expect("nonzero tx count"),
+            &mut guards,
+        );
+        assert_eq!(guards.len(), 1, "queue should expose one in-flight guard");
+        assert_eq!(app.queue.queued_len(), 0, "no queued transactions remain");
+
+        std::thread::sleep(Duration::from_millis(2_100));
+
+        let second = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx2),
+        )
+        .await
+        .expect("second transaction should not be age-shed")
+        .into_response();
+        assert_eq!(second.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            app.queue.queued_len(),
+            1,
+            "second transaction should enqueue"
+        );
+
+        drop(guards);
+    }
+
+    #[test]
+    fn signed_query_scope_classifies_trigger_inventory_queries_as_local_replicated() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+
+        let find_triggers = signed_find_triggers_query_for_test(authority.clone(), &key_pair);
+        assert_eq!(
+            super::signed_query_scope(find_triggers.payload.request()),
+            super::SignedQueryScope::LocalReplicated
+        );
+
+        let find_active_ids = signed_find_active_trigger_ids_query_for_test(authority, &key_pair);
+        assert_eq!(
+            super::signed_query_scope(find_active_ids.payload.request()),
+            super::SignedQueryScope::LocalReplicated
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_signed_query_executes_find_triggers_locally_with_multiple_dataspaces() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_multiple_dataspace_routes_for_test(&mut app);
+        assert!(
+            super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
+            "test requires multiple dataspace routes"
+        );
+
+        let response = super::handler_signed_query(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            NoritoVersioned(signed_find_triggers_query_for_test(authority, &key_pair)),
+        )
+        .await
+        .expect("find triggers query should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers().get("x-iroha-routed-by").is_none(),
+            "local trigger queries should not fan out"
+        );
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "local trigger queries should not publish a routed lane"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_multiple_dataspaces()
+     {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_multiple_dataspace_routes_for_test(&mut app);
+        assert!(
+            super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
+            "test requires multiple dataspace routes"
+        );
+
+        let response = super::handler_signed_query(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            NoritoVersioned(signed_find_active_trigger_ids_query_for_test(
+                authority, &key_pair,
+            )),
+        )
+        .await
+        .expect("find active trigger ids query should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers().get("x-iroha-routed-by").is_none(),
+            "local trigger queries should not fan out"
+        );
+        assert!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .is_none(),
+            "local trigger queries should not publish a routed dataspace"
+        );
+    }
+
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn torii_proxy_snapshot_roundtrips_status_headers_and_body() {
@@ -26501,6 +28023,197 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("body bytes");
         assert_eq!(body.as_ref(), b"proxied-body");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn execute_torii_proxy_request_across_candidates_retries_route_unavailable() {
+        let first_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let second_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let request = ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"torii-proxy-retry"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::VerifiedQuery {
+                request_bytes: Vec::new(),
+                expected_route: ToriiRouteHintV1::from(route),
+                response_format: ToriiProxyResponseFormatV1::Norito,
+            },
+        };
+        let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let attempts_ref = attempts.clone();
+        let first_peer_id_for_closure = first_peer_id.clone();
+
+        let response = super::execute_torii_proxy_request_across_candidates(
+            vec![first_peer_id.clone(), second_peer_id.clone()],
+            route,
+            request,
+            Duration::from_millis(50),
+            move |peer_id, _request| {
+                let attempts = attempts_ref.clone();
+                let first_peer_id = first_peer_id_for_closure.clone();
+                async move {
+                    attempts
+                        .lock()
+                        .expect("attempt tracker should lock")
+                        .push(peer_id.clone());
+                    if peer_id == first_peer_id {
+                        return Ok(ToriiProxyHttpResponseV1 {
+                            status_code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            headers: vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: "x-iroha-reject-code".to_owned(),
+                                value: b"route_unavailable".to_vec(),
+                            }],
+                            body: b"route unavailable".to_vec(),
+                        });
+                    }
+                    Ok(ToriiProxyHttpResponseV1 {
+                        status_code: StatusCode::OK.as_u16(),
+                        headers: Vec::new(),
+                        body: b"proxy-ok".to_vec(),
+                    })
+                }
+            },
+            |_request_id| async move {},
+        )
+        .await;
+
+        assert_eq!(
+            attempts
+                .lock()
+                .expect("attempt tracker should lock")
+                .as_slice(),
+            &[first_peer_id, second_peer_id]
+        );
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        assert_eq!(body.as_ref(), b"proxy-ok");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn execute_torii_proxy_request_across_candidates_returns_first_hedged_success() {
+        let first_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let second_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2));
+        let request = ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"torii-proxy-hedged-success"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::VerifiedQuery {
+                request_bytes: Vec::new(),
+                expected_route: ToriiRouteHintV1::from(route),
+                response_format: ToriiProxyResponseFormatV1::Norito,
+            },
+        };
+        let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let attempts_ref = attempts.clone();
+        let first_peer_id_for_closure = first_peer_id.clone();
+
+        let response = super::execute_torii_proxy_request_across_candidates(
+            vec![first_peer_id.clone(), second_peer_id.clone()],
+            route,
+            request,
+            Duration::from_millis(20),
+            move |peer_id, _request| {
+                let attempts = attempts_ref.clone();
+                let first_peer_id = first_peer_id_for_closure.clone();
+                async move {
+                    attempts
+                        .lock()
+                        .expect("attempt tracker should lock")
+                        .push(peer_id.clone());
+                    if peer_id == first_peer_id {
+                        tokio::time::sleep(Duration::from_millis(80)).await;
+                        return Err("first peer timed out".to_owned());
+                    }
+                    Ok(ToriiProxyHttpResponseV1 {
+                        status_code: StatusCode::OK.as_u16(),
+                        headers: Vec::new(),
+                        body: b"hedged-ok".to_vec(),
+                    })
+                }
+            },
+            |_request_id| async move {},
+        )
+        .await;
+
+        assert_eq!(
+            attempts
+                .lock()
+                .expect("attempt tracker should lock")
+                .as_slice(),
+            &[first_peer_id, second_peer_id]
+        );
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        assert_eq!(body.as_ref(), b"hedged-ok");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn execute_torii_proxy_request_across_candidates_accepts_retryable_then_success() {
+        let first_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let second_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(3));
+        let request = ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"torii-proxy-retryable-then-success"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::VerifiedQuery {
+                request_bytes: Vec::new(),
+                expected_route: ToriiRouteHintV1::from(route),
+                response_format: ToriiProxyResponseFormatV1::Norito,
+            },
+        };
+
+        let response = super::execute_torii_proxy_request_across_candidates(
+            vec![first_peer_id.clone(), second_peer_id.clone()],
+            route,
+            request,
+            Duration::from_millis(20),
+            move |peer_id, _request| {
+                let first_peer_id = first_peer_id.clone();
+                async move {
+                    if peer_id == first_peer_id {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                        return Ok(ToriiProxyHttpResponseV1 {
+                            status_code: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            headers: vec![iroha_core::torii_proxy::ToriiProxyHeaderV1 {
+                                name: "x-iroha-reject-code".to_owned(),
+                                value: b"route_unavailable".to_vec(),
+                            }],
+                            body: b"retry".to_vec(),
+                        });
+                    }
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                    Ok(ToriiProxyHttpResponseV1 {
+                        status_code: StatusCode::OK.as_u16(),
+                        headers: Vec::new(),
+                        body: b"retry-then-ok".to_vec(),
+                    })
+                }
+            },
+            |_request_id| async move {},
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        assert_eq!(body.as_ref(), b"retry-then-ok");
     }
 
     #[cfg(feature = "telemetry")]
@@ -27495,7 +29208,7 @@ pub(crate) mod tests_runtime_handlers {
         height: u64,
         view: u64,
         epoch: u64,
-    ) -> Qc {
+    ) -> (Qc, Vec<u8>) {
         let chain_id: ChainId = "chain".parse().expect("chain id");
         let parent_state_root = iroha_crypto::Hash::prehashed([0x11; 32]);
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -27517,27 +29230,32 @@ pub(crate) mod tests_runtime_handlers {
         let sig_refs = vec![sig_bytes.as_slice()];
         let aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signatures");
+        let validator_pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+            .expect("generate validator pop");
 
         let peer_id = PeerId::from(keypair.public_key().clone());
         let validator_set = vec![peer_id];
-        Qc {
-            phase: Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root,
-            post_state_root,
-            height,
-            view,
-            epoch,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0b0000_0001],
-                bls_aggregate_signature: aggregate_signature,
+        (
+            Qc {
+                phase: Phase::Commit,
+                subject_block_hash: block_hash,
+                parent_state_root,
+                post_state_root,
+                height,
+                view,
+                epoch,
+                mode_tag: PERMISSIONED_TAG.to_string(),
+                highest_qc: None,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set,
+                aggregate: QcAggregate {
+                    signers_bitmap: vec![0b0000_0001],
+                    bls_aggregate_signature: aggregate_signature,
+                },
             },
-        }
+            validator_pop,
+        )
     }
 
     fn record_commit_cert(height: u64) -> Qc {
@@ -27831,7 +29549,7 @@ pub(crate) mod tests_runtime_handlers {
         let block_hash = block.hash();
         store_block(&app, block);
 
-        let qc = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
+        let (qc, _) = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
         let mut app = app;
         let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
         Arc::get_mut(&mut app_mut.state)
@@ -27911,7 +29629,7 @@ pub(crate) mod tests_runtime_handlers {
         let block_hash = block.hash();
         store_block(&app, block);
 
-        let qc = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
+        let (qc, _) = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
         let mut app = Arc::into_inner(app).unwrap_or_else(|| panic!("unique app state for test"));
         let mut state =
             Arc::into_inner(app.state).unwrap_or_else(|| panic!("unique core state for test"));
@@ -27994,6 +29712,171 @@ pub(crate) mod tests_runtime_handlers {
         let proofs: BlockProofs = norito::core::NoritoDeserialize::deserialize(archived);
         assert_eq!(proofs.block_height.get(), 1);
         assert_eq!(proofs.entry_hash, entry_hash);
+    }
+
+    fn app_with_commit_qc_for_test(height: u64) -> SharedAppState {
+        let app = mk_app_state_for_tests();
+        let (mut block, _) = make_signed_block(height, None);
+        let entry_hashes = [block
+            .payload()
+            .transactions
+            .first()
+            .expect("tx")
+            .hash_as_entrypoint()];
+        block.set_transaction_results(
+            Vec::new(),
+            &entry_hashes,
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let expected_root = block
+            .header()
+            .result_merkle_root()
+            .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
+            .expect("result root");
+        let block_hash = block.hash();
+        store_block(&app, block);
+
+        let (qc, validator_pop) = sample_commit_qc(
+            block_hash,
+            expected_root,
+            height,
+            height.saturating_add(1),
+            0,
+        );
+        record_commit_qc(qc.clone());
+        let mut app = app;
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for test");
+        state.world.register_validator_pop_for_testing(
+            qc.validator_set[0].public_key().clone(),
+            validator_pop,
+        );
+        state.insert_commit_qc_for_testing(block_hash, qc);
+        app
+    }
+
+    #[tokio::test]
+    async fn sccp_burn_bundle_endpoint_roundtrips_json_and_scale() {
+        routing::clear_sccp_bundles_for_tests();
+        let app = app_with_commit_qc_for_test(1);
+        let payload = iroha_sccp::BurnPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce: 7,
+            sora_asset_id: [0x11; 32],
+            amount: 42,
+            recipient: [0x22; 32],
+        };
+        let bundle =
+            routing::publish_sccp_burn_bundle(app.state.as_ref(), 1, payload).expect("publish");
+
+        let response =
+            routing::handle_v1_sccp_burn_bundle(hex::encode(bundle.commitment.message_id), None)
+                .await
+                .expect("json response");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded: iroha_sccp::NexusSccpBurnProofV1 =
+            serde_json::from_slice(&bytes).expect("decode json bundle");
+        assert_eq!(decoded, bundle);
+
+        let scale_response = routing::handle_v1_sccp_burn_bundle(
+            hex::encode(bundle.commitment.message_id),
+            Some(HeaderValue::from_static("application/x-parity-scale")),
+        )
+        .await
+        .expect("scale response");
+        assert_eq!(
+            scale_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/x-parity-scale".as_slice())
+        );
+        let scale_bytes = axum::body::to_bytes(scale_response.into_body(), usize::MAX)
+            .await
+            .expect("scale body");
+        let decoded_scale =
+            <iroha_sccp::NexusSccpBurnProofV1 as parity_scale_codec::Decode>::decode(
+                &mut &scale_bytes[..],
+            )
+            .expect("decode scale bundle");
+        assert_eq!(decoded_scale, bundle);
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_governance_bundle_endpoint_roundtrips_json() {
+        routing::clear_sccp_bundles_for_tests();
+        let app = app_with_commit_qc_for_test(1);
+        let payload = iroha_sccp::GovernancePayloadV1::Pause(iroha_sccp::TokenControlPayloadV1 {
+            version: 1,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 9,
+            sora_asset_id: [0x44; 32],
+        });
+        let keypair = iroha_crypto::KeyPair::random();
+        let signer = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+        let enactment = iroha_data_model::governance::types::ParliamentEnactment {
+            preimage_hash: iroha_sccp::payload_hash(&payload.encode()),
+            at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 3 },
+        };
+        let certificate = iroha_data_model::governance::types::ParliamentEnactmentCertificate {
+            payload: enactment.clone(),
+            signatures: iroha_data_model::governance::types::ParliamentEnactmentSignatureSet {
+                scheme:
+                    iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold,
+                signatures: vec![
+                    iroha_data_model::governance::types::ParliamentEnactmentSignature {
+                        signer,
+                        public_key: keypair.public_key().clone(),
+                        signature: iroha_crypto::SignatureOf::new(
+                            keypair.private_key(),
+                            &enactment,
+                        ),
+                    },
+                ],
+            },
+        };
+        let bundle = routing::publish_sccp_governance_bundle(
+            app.state.as_ref(),
+            1,
+            payload.clone(),
+            certificate,
+        )
+        .expect("publish");
+
+        let response = routing::handle_v1_sccp_governance_bundle(
+            hex::encode(bundle.commitment.message_id),
+            None,
+        )
+        .await
+        .expect("json response");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded: iroha_sccp::NexusSccpGovernanceProofV1 =
+            serde_json::from_slice(&bytes).expect("decode json bundle");
+        assert_eq!(decoded, bundle);
+
+        routing::clear_sccp_bundles_for_tests();
     }
 
     fn clone_private_key(
@@ -29027,6 +30910,581 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn authoritative_lane_peer_ids_fall_back_to_commit_topology_for_npos_core_lane() {
+        let local_keypair = KeyPair::random();
+        let remote_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            let local_peer = Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_keypair.public_key().clone(),
+            );
+            let remote_peer = Peer::new(
+                "127.0.0.1:10002".parse().expect("valid remote address"),
+                remote_keypair.public_key().clone(),
+            );
+            online_tx
+                .send(HashSet::from([local_peer, remote_peer]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.push(remote_peer_id.clone());
+            topology.commit();
+        }
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        block
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+        let mut peers = block.world.peers_mut_for_testing().transaction();
+        peers.clear();
+        peers.push(local_peer_id.clone());
+        peers.push(remote_peer_id.clone());
+        peers.apply();
+        block.commit().expect("commit npos peer roster");
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+
+        assert!(
+            authoritative.contains(&local_peer_id),
+            "local NPoS core-lane validator should remain authoritative without public validator records"
+        );
+        assert!(
+            authoritative.contains(&remote_peer_id),
+            "remote NPoS core-lane validator should remain authoritative without public validator records"
+        );
+        assert!(
+            super::is_local_authoritative_for_route(app.as_ref(), route),
+            "NPoS core-lane ingress should treat committed topology peers as authoritative during bootstrap"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn authoritative_lane_peer_ids_fall_back_to_online_peers_for_npos_core_lane_when_state_is_empty()
+     {
+        let local_keypair = KeyPair::random();
+        let remote_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            let local_peer = Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_keypair.public_key().clone(),
+            );
+            let remote_peer = Peer::new(
+                "127.0.0.1:10002".parse().expect("valid remote address"),
+                remote_keypair.public_key().clone(),
+            );
+            online_tx
+                .send(HashSet::from([local_peer, remote_peer]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.commit();
+        }
+
+        {
+            let header = BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = app.state.block(header);
+            block
+                .world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                ));
+            let mut peers = block.world.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.apply();
+            block.commit().expect("commit empty npos peer roster");
+        }
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+
+        assert!(
+            authoritative.contains(&local_peer_id),
+            "local NPoS core-lane ingress should fall back to the local connected peer when state snapshots are empty"
+        );
+        assert!(
+            authoritative.contains(&remote_peer_id),
+            "remote connected peers should keep NPoS core-lane ingress routable when state snapshots are empty"
+        );
+        assert!(
+            super::is_local_authoritative_for_route(app.as_ref(), route),
+            "NPoS core-lane ingress should remain locally authoritative under the connected-peer fallback"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn authoritative_lane_peer_ids_do_not_fall_back_for_npos_non_core_lane() {
+        let local_keypair = KeyPair::random();
+        let remote_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            let local_peer = Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_keypair.public_key().clone(),
+            );
+            let remote_peer = Peer::new(
+                "127.0.0.1:10002".parse().expect("valid remote address"),
+                remote_keypair.public_key().clone(),
+            );
+            online_tx
+                .send(HashSet::from([local_peer, remote_peer]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.push(remote_peer_id.clone());
+            topology.commit();
+        }
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        block
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+        let mut peers = block.world.peers_mut_for_testing().transaction();
+        peers.clear();
+        peers.push(local_peer_id.clone());
+        peers.push(remote_peer_id.clone());
+        peers.apply();
+        block.commit().expect("commit npos peer roster");
+
+        let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+
+        assert!(
+            authoritative.is_empty(),
+            "non-core NPoS routes should still require explicit public validator records"
+        );
+        assert!(
+            !super::is_local_authoritative_for_route(app.as_ref(), route),
+            "non-core NPoS routes should not treat commit topology peers as authoritative"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_candidate_peers_prioritize_authoritative_before_fallback() {
+        let local_keypair = KeyPair::random();
+        let authoritative_keypair = KeyPair::random();
+        let fallback_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
+        let fallback_peer_id = PeerId::from(fallback_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            let local_peer = Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_keypair.public_key().clone(),
+            );
+            let authoritative_peer = Peer::new(
+                "127.0.0.1:10002"
+                    .parse()
+                    .expect("valid authoritative address"),
+                authoritative_keypair.public_key().clone(),
+            );
+            let fallback_peer = Peer::new(
+                "127.0.0.1:10003".parse().expect("valid fallback address"),
+                fallback_keypair.public_key().clone(),
+            );
+            online_tx
+                .send(std::collections::HashSet::from([
+                    local_peer,
+                    authoritative_peer,
+                    fallback_peer,
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.push(authoritative_peer_id.clone());
+            topology.commit();
+        }
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let authoritative_without_local: Vec<_> =
+            super::authoritative_lane_peer_ids(app.as_ref(), route)
+                .into_iter()
+                .filter(|peer_id| peer_id != &local_peer_id)
+                .collect();
+        let candidates =
+            super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
+
+        assert_eq!(
+            candidates.authoritative_count,
+            authoritative_without_local.len()
+        );
+        assert_eq!(
+            &candidates.peers[..candidates.authoritative_count],
+            authoritative_without_local.as_slice()
+        );
+        assert!(candidates.fallback_used);
+        assert_eq!(candidates.peers.last(), Some(&fallback_peer_id));
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_candidate_peers_include_online_fallback_for_npos_non_core_routes() {
+        let local_keypair = KeyPair::random();
+        let fallback_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let fallback_peer_id = PeerId::from(fallback_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            let local_peer = Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_keypair.public_key().clone(),
+            );
+            let fallback_peer = Peer::new(
+                "127.0.0.1:10002".parse().expect("valid fallback address"),
+                fallback_keypair.public_key().clone(),
+            );
+            online_tx
+                .send(std::collections::HashSet::from([local_peer, fallback_peer]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        block
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(
+                SumeragiNposParameters::default().into_custom_parameter(),
+            ));
+        let mut peers = block.world.peers_mut_for_testing().transaction();
+        peers.clear();
+        peers.push(local_peer_id.clone());
+        peers.push(fallback_peer_id.clone());
+        peers.apply();
+        block.commit().expect("commit npos peer roster");
+
+        let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let candidates =
+            super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
+
+        assert!(
+            super::authoritative_lane_peer_ids(app.as_ref(), route).is_empty(),
+            "non-core route should still have no local authoritative view"
+        );
+        assert_eq!(candidates.authoritative_count, 0);
+        assert!(candidates.fallback_used);
+        assert_eq!(candidates.peers, vec![fallback_peer_id]);
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_candidate_peers_exclude_sender_and_visited_peers() {
+        let local_keypair = KeyPair::random();
+        let authoritative_keypair = KeyPair::random();
+        let sender_keypair = KeyPair::random();
+        let visited_keypair = KeyPair::random();
+        let fallback_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
+        let sender_peer_id = PeerId::from(sender_keypair.public_key().clone());
+        let visited_peer_id = PeerId::from(visited_keypair.public_key().clone());
+        let fallback_peer_id = PeerId::from(fallback_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([
+                    Peer::new(
+                        "127.0.0.1:10001".parse().expect("valid local address"),
+                        local_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10002"
+                            .parse()
+                            .expect("valid authoritative address"),
+                        authoritative_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10003".parse().expect("valid sender address"),
+                        sender_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10004".parse().expect("valid visited address"),
+                        visited_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10005".parse().expect("valid fallback address"),
+                        fallback_keypair.public_key().clone(),
+                    ),
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(authoritative_peer_id.clone());
+            topology.commit();
+        }
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let candidates = super::torii_proxy_candidate_peer_ids(
+            app.as_ref(),
+            &local_peer_id,
+            route,
+            Some(&sender_peer_id),
+            std::slice::from_ref(&visited_peer_id),
+        );
+
+        assert_eq!(candidates.authoritative_count, 1);
+        assert_eq!(candidates.peers.first(), Some(&authoritative_peer_id));
+        assert_eq!(candidates.peers.last(), Some(&fallback_peer_id));
+        assert!(!candidates.peers.contains(&sender_peer_id));
+        assert!(!candidates.peers.contains(&visited_peer_id));
+        assert_eq!(candidates.loop_prevention_drops, 2);
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hops_exhausted() {
+        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let sender_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .local_peer_id = Some(local_peer_id.clone());
+
+        let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let response = super::forward_incoming_torii_proxy_request(
+            &app,
+            &sender_peer_id,
+            route,
+            &ToriiProxyRequestV2 {
+                schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+                request_id: Hash::new(b"torii-proxy-hop-exhausted"),
+                hop_count: 1,
+                max_hops: 1,
+                visited_peer_ids: vec![sender_peer_id.clone()],
+                request: ToriiProxyRequestKindV1::VerifiedQuery {
+                    request_bytes: Vec::new(),
+                    expected_route: ToriiRouteHintV1::from(route),
+                    response_format: ToriiProxyResponseFormatV1::Norito,
+                },
+            },
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
+        let local_keypair = KeyPair::random();
+        let authoritative_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
+        let sender_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([
+                    Peer::new(
+                        "127.0.0.1:10001".parse().expect("valid local address"),
+                        local_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10002"
+                            .parse()
+                            .expect("valid authoritative address"),
+                        authoritative_keypair.public_key().clone(),
+                    ),
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+            app_mut.p2p = Some(iroha_core::IrohaNetwork::closed_for_tests());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(authoritative_peer_id.clone());
+            topology.commit();
+        }
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let request_id = Hash::new(b"torii-proxy-forward-success");
+        let app_for_response = app.clone();
+        let authoritative_peer_for_response = authoritative_peer_id.clone();
+        let request_id_for_response = request_id.clone();
+        let response_task = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    let pending = app_for_response.torii_proxy_pending.lock().await;
+                    if pending.contains_key(&(
+                        request_id_for_response,
+                        authoritative_peer_for_response.clone(),
+                    )) {
+                        break;
+                    }
+                    drop(pending);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("forwarded Torii proxy request should become pending");
+
+            super::process_incoming_torii_proxy_response(
+                &app_for_response,
+                authoritative_peer_for_response,
+                ToriiProxyResponseV1 {
+                    schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+                    request_id: request_id_for_response,
+                    response: ToriiProxyHttpResponseV1 {
+                        status_code: StatusCode::OK.as_u16(),
+                        headers: Vec::new(),
+                        body: b"forwarded-ok".to_vec(),
+                    },
+                },
+            )
+            .await;
+        });
+
+        let response = super::forward_incoming_torii_proxy_request(
+            &app,
+            &sender_peer_id,
+            route,
+            &ToriiProxyRequestV2 {
+                schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+                request_id,
+                hop_count: 1,
+                max_hops: 3,
+                visited_peer_ids: vec![sender_peer_id.clone()],
+                request: ToriiProxyRequestKindV1::VerifiedQuery {
+                    request_bytes: Vec::new(),
+                    expected_route: ToriiRouteHintV1::from(route),
+                    response_format: ToriiProxyResponseFormatV1::Norito,
+                },
+            },
+        )
+        .await;
+        response_task
+            .await
+            .expect("proxy response task should complete");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("forwarded response body should be readable");
+        assert_eq!(body.as_ref(), b"forwarded-ok");
+    }
+
     #[tokio::test]
     async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary() {
         let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
@@ -29701,11 +32159,8 @@ pub(crate) mod tests_runtime_handlers {
         };
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.torii_proxy_pending.lock().await.insert(
-            request_id,
-            PendingToriiProxyRequest {
-                sender: tx,
-                expected_peer_id: responder_peer_id,
-            },
+            (request_id, responder_peer_id),
+            PendingToriiProxyRequest { sender: tx },
         );
 
         super::handle_torii_proxy_network_message(
@@ -29729,8 +32184,58 @@ pub(crate) mod tests_runtime_handlers {
             !app.torii_proxy_pending
                 .lock()
                 .await
-                .contains_key(&request_id),
+                .keys()
+                .any(|(pending_request_id, _)| *pending_request_id == request_id),
             "Torii proxy response dispatcher must clear the pending request"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn process_incoming_torii_proxy_response_marks_late_responses_once() {
+        let app = mk_app_state_for_tests();
+        let request_id = Hash::new(b"torii-proxy-late-response");
+        let responder_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        super::mark_torii_proxy_request_completed(&app, request_id).await;
+
+        let response = ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id,
+            response: ToriiProxyHttpResponseV1 {
+                status_code: StatusCode::OK.as_u16(),
+                headers: Vec::new(),
+                body: b"late".to_vec(),
+            },
+        };
+        super::process_incoming_torii_proxy_response(&app, responder_peer_id.clone(), response)
+            .await;
+        {
+            let completed = app.torii_proxy_completed.lock().await;
+            assert!(
+                completed
+                    .get(&request_id)
+                    .is_some_and(|entry| entry.late_response_logged),
+                "first late response should latch the one-time ignore marker"
+            );
+        }
+
+        super::process_incoming_torii_proxy_response(
+            &app,
+            responder_peer_id,
+            ToriiProxyResponseV1 {
+                schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+                request_id,
+                response: ToriiProxyHttpResponseV1 {
+                    status_code: StatusCode::OK.as_u16(),
+                    headers: Vec::new(),
+                    body: b"late-again".to_vec(),
+                },
+            },
+        )
+        .await;
+        assert!(
+            app.torii_proxy_pending.lock().await.is_empty(),
+            "late responses must not recreate pending state after completion"
         );
     }
 
@@ -32933,9 +35438,10 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let account_id = authority.clone().to_account_id(domain_id);
-        let account = Account::new(account_id.clone())
-            .with_label(Some(alias_label))
-            .build(&authority);
+        let account =
+            Account::new_in_domain(account_id.account().clone(), account_id.domain().clone())
+                .with_label(Some(alias_label))
+                .build(&authority);
         let world = World::with([domain], [authority_account, account], []);
         let app = mk_app_state_for_tests_with_world(world);
         let request = routing::AliasResolveRequestDto {

@@ -823,19 +823,19 @@ impl IVMHost for DefaultHost {
             }
             // Basic pointer‑ABI validations to mirror core host behavior in tests
             crate::syscalls::SYSCALL_ADD_SIGNATORY => {
-                // r10=&ScopedAccountId, r11=&Json
+                // r10=&AccountId, r11=&Json
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::Json)?;
                 Ok(0)
             }
             crate::syscalls::SYSCALL_REMOVE_SIGNATORY => {
-                // r10=&ScopedAccountId, r11=&Json
+                // r10=&AccountId, r11=&Json
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::Json)?;
                 Ok(0)
             }
             crate::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
-                // r10=&ScopedAccountId, r11=quorum:u64
+                // r10=&AccountId, r11=quorum:u64
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 let quorum_raw = vm.register(11);
                 let quorum_u16 = u16::try_from(quorum_raw).map_err(|_| VMError::DecodeError)?;
@@ -843,20 +843,20 @@ impl IVMHost for DefaultHost {
                 Ok(0)
             }
             crate::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
-                // r10=&ScopedAccountId, r11=&Name, r12=&Json
+                // r10=&AccountId, r11=&Name, r12=&Json
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::Name)?;
                 Self::expect_tlv(vm, 12, PointerType::Json)?;
                 Ok(0)
             }
             crate::syscalls::SYSCALL_NFT_MINT_ASSET => {
-                // r10=&NftId, r11=&ScopedAccountId
+                // r10=&NftId, r11=&AccountId
                 Self::expect_tlv(vm, 10, PointerType::NftId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Ok(0)
             }
             crate::syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
-                // r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to)
+                // r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::NftId)?;
                 Self::expect_tlv(vm, 12, PointerType::AccountId)?;
@@ -866,7 +866,7 @@ impl IVMHost for DefaultHost {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    // r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)
+                    // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)
                     Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                     Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                     Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;

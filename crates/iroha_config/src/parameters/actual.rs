@@ -1001,6 +1001,8 @@ pub struct SoranetVpn {
     pub exit_class: String,
     /// Meter family identifier for billing receipts.
     pub meter_family: String,
+    /// Optional 32-byte shared secret used to mint helper-authenticated VPN tickets.
+    pub helper_ticket_secret: Option<[u8; 32]>,
 }
 
 impl Default for SoranetVpn {
@@ -1019,6 +1021,7 @@ impl Default for SoranetVpn {
             dns_push_interval: defaults::soranet::vpn::dns_push_interval_secs(),
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
+            helper_ticket_secret: None,
         }
     }
 }
@@ -6524,6 +6527,14 @@ impl SorafsGatewayRateLimit {
 pub struct SorafsGatewayDenylist {
     /// Optional filesystem path to a JSON denylist.
     pub path: Option<PathBuf>,
+    /// Optional filesystem path to a pack-catalog JSON document.
+    pub catalog_path: Option<PathBuf>,
+    /// Pack identifiers explicitly disabled on this node.
+    pub opt_out_packs: Vec<String>,
+    /// Additional pack identifiers explicitly enabled on this node.
+    pub extra_packs: Vec<String>,
+    /// Optional jurisdiction code used to activate matching regional packs.
+    pub jurisdiction: Option<String>,
     /// Maximum TTL applied to standard entries when `expires_at` is omitted.
     pub standard_ttl: Duration,
     /// Maximum TTL applied to emergency entries.
@@ -6538,6 +6549,10 @@ impl Default for SorafsGatewayDenylist {
     fn default() -> Self {
         Self {
             path: defaults::sorafs::gateway::denylist::path(),
+            catalog_path: None,
+            opt_out_packs: Vec::new(),
+            extra_packs: Vec::new(),
+            jurisdiction: None,
             standard_ttl: defaults::sorafs::gateway::denylist::STANDARD_TTL,
             emergency_ttl: defaults::sorafs::gateway::denylist::EMERGENCY_TTL,
             emergency_review_window: defaults::sorafs::gateway::denylist::EMERGENCY_REVIEW_WINDOW,

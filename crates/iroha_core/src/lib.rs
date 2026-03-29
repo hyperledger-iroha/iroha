@@ -252,8 +252,8 @@ pub enum NetworkMessage {
     SoracloudLocalReadProxyRequest(Box<soracloud_runtime::SoracloudLocalReadProxyRequestV1>),
     /// Soracloud local-read proxy response returned to the ingress node.
     SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
-    /// Torii proxy request routed to the authoritative ingress peer.
-    ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV1>),
+    /// Torii proxy request routed across bounded Torii ingress proxy hops.
+    ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV2>),
     /// Torii proxy response returned to the ingress node.
     ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
     /// Norito Streaming control-plane frame.
@@ -558,8 +558,8 @@ mod tests {
             },
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
+            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -668,10 +668,12 @@ mod tests {
                 ),
             },
         ));
-        let torii_request = NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV1 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+        let torii_request = NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
             request_id: Hash::prehashed([0x14; 32]),
-            hop_count: 0,
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
             request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {

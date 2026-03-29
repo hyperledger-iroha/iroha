@@ -37,6 +37,8 @@ struct Args {
     dataspace: String,
     #[arg(long)]
     deploy_nonce: u64,
+    #[arg(long, default_value_t = 753)]
+    chain_discriminant: u16,
 }
 
 fn sign_and_submit(
@@ -58,7 +60,7 @@ fn main() -> Result<()> {
         .map_err(|err| eyre!(err.to_string()))
         .wrap_err_with(|| format!("load config {}", args.config.display()))?;
     let client = Client::new(config);
-    let authority = parse_account_address(&args.authority, None)
+    let authority = parse_account_address(&args.authority, Some(args.chain_discriminant))
         .wrap_err("failed to parse --authority as canonical account address")?
         .address
         .to_account_id()

@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr, sync::Arc};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::{Hash as IrohaHash, Sm3Digest};
 use iroha_data_model::{
-    account::{AccountId, ScopedAccountId},
+    account::AccountId,
     isi::transfer::TransferAssetBatch,
     nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
     prelude::{AssetDefinitionId, Name, NftId},
@@ -1991,26 +1991,26 @@ impl IVMHost for CoreHost {
                 Ok(0)
             }
             syscalls::SYSCALL_TRANSFER_DOMAIN => {
-                // r10 = &DomainId, r11 = &ScopedAccountId(to)
+                // r10 = &DomainId, r11 = &AccountId(to)
                 Self::expect_tlv(vm, 10, PointerType::DomainId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Ok(0)
             }
             syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
-                // r10=&ScopedAccountId, r11=&Name, r12=&Json
+                // r10=&AccountId, r11=&Name, r12=&Json
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::Name)?;
                 Self::expect_tlv(vm, 12, PointerType::Json)?;
                 Ok(0)
             }
             syscalls::SYSCALL_NFT_MINT_ASSET => {
-                // r10=&NftId, r11=&ScopedAccountId
+                // r10=&NftId, r11=&AccountId
                 Self::expect_tlv(vm, 10, PointerType::NftId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Ok(0)
             }
             syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
-                // r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to)
+                // r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::NftId)?;
                 Self::expect_tlv(vm, 12, PointerType::AccountId)?;
@@ -2020,7 +2020,7 @@ impl IVMHost for CoreHost {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    // r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId,
+                    // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId,
                     // r13=&NoritoBytes(Numeric)
                     Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                     Self::expect_tlv(vm, 11, PointerType::AccountId)?;
@@ -2100,9 +2100,9 @@ impl IVMHost for CoreHost {
                 // authority() against AccountId literals and stored AccountId state.
                 const ACCOUNT: &str =
                     "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
-                let account =
-                    ScopedAccountId::parse_encoded(ACCOUNT).map_err(|_| VMError::NoritoInvalid)?;
-                let authority = AccountId::from(&account);
+                let authority = AccountId::parse_encoded(ACCOUNT)
+                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                    .map_err(|_| VMError::NoritoInvalid)?;
                 let payload = to_bytes(&authority).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());

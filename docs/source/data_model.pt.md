@@ -49,13 +49,13 @@ Este documento explica as estruturas, identificadores, características e protoc
 - `ScopedAccountId { account: AccountId, domain: DomainId }` transporta contexto de domínio explícito apenas quando uma visão com escopo definido é necessária.
 - `Account { id, metadata, label?, uaid?, linked_domains? }` - `label` é um alias estável opcional usado por registros de rechave, `uaid` carrega o [ID de conta universal] opcional de todo o Nexus (./universal_accounts_guide.md) e `linked_domains` é um estado de índice derivado em vez de parte do identidade canônica.
 - Construtores:
-  - `NewAccount` via `Account::new(scoped_id)` materializa um registro explícito vinculado ao domínio e, portanto, requer um `ScopedAccountId`.
-  - `NewAccount` via `Account::new_domainless(id)` registra apenas o assunto da conta universal sem domínio vinculado.
+  - `NewAccount` via `Account::new_in_domain(id, domain)` materializa um registro explícito vinculado ao domínio e, portanto, requer um `ScopedAccountId`.
+  - `NewAccount` via `Account::new(id)` registra apenas o assunto da conta universal sem domínio vinculado.
 - Modelo alternativo:
   - A identidade da conta canônica nunca inclui um segmento de domínio ou espaço de dados.
   - Os aliases de conta são ligações separadas de SNS/rótulo de conta, colocadas em camadas sobre `AccountId`.
   - Aliases qualificados de domínio, como `merchant@hbl.sbp`, carregam um domínio e um espaço de dados na ligação de alias.
-  - Aliases de raiz do espaço de dados, como `merchant@sbp`, carregam apenas o espaço de dados e, portanto, emparelham naturalmente com `Account::new_domainless(...)`.
+  - Aliases de raiz do espaço de dados, como `merchant@sbp`, carregam apenas o espaço de dados e, portanto, emparelham naturalmente com `Account::new(...)`.
   - Os testes e acessórios devem propagar primeiro o `AccountId` universal e, em seguida, adicionar links de domínio, concessões de alias e permissões de alias separadamente, em vez de codificar suposições de domínio na própria identidade da conta.
 
 ### Definições de ativos e ativos

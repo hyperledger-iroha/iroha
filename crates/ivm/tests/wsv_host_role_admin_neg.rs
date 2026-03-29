@@ -32,8 +32,20 @@ fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
 }
 
 fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let buf = to_bytes(account).expect("encode account into Norito");
-    make_tlv(PointerType::AccountId as u16, &buf)
+    let account = ivm::mock_wsv::AccountId::from(account).to_string();
+    make_tlv(PointerType::AccountId as u16, account.as_bytes())
+}
+
+fn make_scoped_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
+    let payload = to_bytes(account).expect("encode scoped account into Norito");
+    let mut out = Vec::with_capacity(7 + payload.len() + 32);
+    out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload.as_ref());
+    let h: [u8; 32] = Hash::new(&payload).into();
+    out.extend_from_slice(&h);
+    out
 }
 
 #[test]
@@ -76,7 +88,7 @@ fn delete_role_with_assignees_fails() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_account_tlv(&bob);
+    let acc = make_scoped_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -164,7 +176,7 @@ fn grant_nonexistent_role_fails() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_account_tlv(&bob);
+    let acc = make_scoped_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);

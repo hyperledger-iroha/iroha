@@ -840,13 +840,6 @@ impl Account {
         <Self as Registered>::With::new_in_domain(id, domain)
     }
 
-    /// Construct a registration builder for an account from an explicit scoped identifier.
-    #[inline]
-    #[must_use]
-    pub fn from_scoped_id(id: ScopedAccountId) -> <Self as Registered>::With {
-        <Self as Registered>::With::from_scoped_id(id)
-    }
-
     /// Return a reference to the account signatory, panicking if the controller is not single-key.
     #[inline]
     #[must_use]
@@ -919,12 +912,6 @@ impl NewAccount {
         }
     }
 
-    /// Create a registration builder from an explicit scoped identifier.
-    #[must_use]
-    pub fn from_scoped_id(id: ScopedAccountId) -> Self {
-        Self::new_in_domain(id.account, id.domain)
-    }
-
     /// Create a registration builder from an explicit account/domain pair.
     #[must_use]
     pub fn new_in_domain(id: AccountId, domain: DomainId) -> Self {
@@ -957,14 +944,6 @@ impl NewAccount {
         (self.linked_domains.len() == 1)
             .then(|| self.linked_domains.iter().next())
             .flatten()
-    }
-
-    /// Return the scoped identifier associated with this registration when exactly one link exists.
-    #[must_use]
-    pub fn scoped_id(&self) -> Option<ScopedAccountId> {
-        self.domain()
-            .cloned()
-            .map(|domain| self.id.to_account_id(domain))
     }
 
     /// Replace metadata on this builder.
@@ -1608,12 +1587,11 @@ mod tests {
         let new_account = NewAccount::new(account_id.clone());
         assert!(new_account.linked_domains().is_empty());
         assert_eq!(new_account.domain(), None);
-        assert_eq!(new_account.scoped_id(), None);
         assert_eq!(new_account.to_string(), account_id.to_string());
     }
 
     #[test]
-    fn multi_linked_account_builder_has_no_compat_scoped_id() {
+    fn multi_linked_account_builder_has_no_singular_domain_view() {
         let key_pair = KeyPair::random();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let wonderland: DomainId = "wonderland".parse().expect("domain id");
@@ -1628,7 +1606,6 @@ mod tests {
             &BTreeSet::from([acme, wonderland])
         );
         assert_eq!(new_account.domain(), None);
-        assert_eq!(new_account.scoped_id(), None);
         assert_eq!(&account.linked_domains, new_account.linked_domains());
         assert_eq!(new_account.to_string(), account_id.to_string());
     }

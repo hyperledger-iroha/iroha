@@ -28,7 +28,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   - `AccountId` is the canonical account identity and is always domainless.
   - `ScopedAccountId { account, domain }` is only explicit domain context for operations or views that require a linked domain; it is not the canonical identity.
   - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` bind to the same canonical `AccountId`.
-  - In tests and fixtures, seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately. Use `Account::new(...)` for dataspace-root aliases and `Account::from_scoped_id(...)` only when the behavior under test truly requires a domain-linked registration/materialization.
+  - In tests and fixtures, seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately. Use `Account::new(...)` for dataspace-root aliases and `Account::new_in_domain(account, domain)` only when the behavior under test truly requires a domain-linked registration/materialization.
 
 ## Repository structure
 - `Cargo.toml` at the repository root defines the workspace and lists all member crates.
@@ -147,6 +147,19 @@ Note: First release policy
 - Treat any Taira/runtime signing inputs such as `authority`,
   `private_key`, bearer tokens, or forwarded auth headers as runtime-only
   secrets and never persist them in repo files or committed docs.
+- For Taira rollout/debug work, do not trust MCP discovery alone. Use
+  `configs/soranexus/taira/check_mcp_rollout.sh`, and for final public cutover
+  require the signed canary path with `--write-config <runtime-only client.toml>`.
+  Prefer `configs/soranexus/taira/taira-canary-client.example.toml` as the
+  source template; `defaults/client.toml` uses the generic zero chain id.
+- For multi-validator Taira deploy changes, do not hand-edit
+  `configs/soranexus/taira/config.toml` into separate copies. Render per-host
+  configs from `configs/soranexus/taira/validator_roster.example.toml` plus
+  `configs/soranexus/taira/validator_secrets.example.toml` with
+  `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ...`
+  and point the unit at the generated config path.
+- If a live public Taira write fails with `route_unavailable`, treat it as an
+  ingress or authoritative-peer routing failure first, not a user payload bug.
 
 ## Navigation tips
 - Search code: `rg '<term>'` and list files: `fd <name>`.

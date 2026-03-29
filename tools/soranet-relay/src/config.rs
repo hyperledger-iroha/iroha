@@ -502,6 +502,12 @@ pub struct VpnConfig {
     /// DNS resolver overrides pushed into the VPN client on connect.
     #[norito(default)]
     pub dns_overrides: Vec<String>,
+    /// Optional 32-byte shared secret (hex) used to verify helper-authenticated VPN tickets.
+    #[norito(default)]
+    pub helper_ticket_secret_hex: Option<String>,
+    /// Optional local backend socket used to bridge helper-authenticated VPN traffic.
+    #[norito(default)]
+    pub backend_addr: Option<String>,
     /// Cover traffic generation parameters.
     #[norito(default)]
     pub cover: VpnCoverTrafficConfig,
@@ -523,6 +529,8 @@ impl Default for VpnConfig {
             dns_push_interval_secs: default_vpn_dns_push_interval_secs(),
             route_push: Vec::new(),
             dns_overrides: Vec::new(),
+            helper_ticket_secret_hex: None,
+            backend_addr: None,
             cover: VpnCoverTrafficConfig::default(),
             billing: VpnBillingConfig::default(),
         }
@@ -584,6 +592,8 @@ impl VpnConfig {
         }
         let routes = self.parse_route_push()?;
         let dns_overrides = self.parse_dns_overrides()?;
+        let helper_ticket_secret_hex = self.parse_helper_ticket_secret_hex()?;
+        let backend_addr = self.parse_backend_addr()?;
         self.exit_class = self.exit_class.trim().to_owned();
         if let Err(error) = VpnExitClassV1::try_from_label(&self.exit_class) {
             return Err(ConfigError::Vpn(format!(
@@ -592,6 +602,8 @@ impl VpnConfig {
         }
         self.route_push = routes.into_iter().map(|route| route.cidr.clone()).collect();
         self.dns_overrides = dns_overrides;
+        self.helper_ticket_secret_hex = helper_ticket_secret_hex;
+        self.backend_addr = backend_addr;
         Ok(())
     }
 
@@ -672,6 +684,61 @@ impl VpnConfig {
             parsed.push(addr.to_string());
         }
         Ok(parsed)
+    }
+
+    pub(crate) fn parse_helper_ticket_secret_hex(&self) -> Result<Option<String>, ConfigError> {
+        let Some(secret) = self.helper_ticket_secret_hex.as_ref() else {
+            return Ok(None);
+        };
+        let trimmed = secret
+            .trim()
+            .trim_start_matches("0x")
+            .trim_start_matches("0X");
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let decoded = hex::decode(trimmed).map_err(|err| {
+            ConfigError::Vpn(format!(
+                "vpn.helper_ticket_secret_hex must be valid hex: {err}"
+            ))
+        })?;
+        if decoded.len() != 32 {
+            return Err(ConfigError::Vpn(
+                "vpn.helper_ticket_secret_hex must decode to 32 bytes".to_string(),
+            ));
+        }
+        Ok(Some(trimmed.to_ascii_lowercase()))
+    }
+
+    pub(crate) fn parse_backend_addr(&self) -> Result<Option<String>, ConfigError> {
+        let Some(addr) = self.backend_addr.as_ref() else {
+            return Ok(None);
+        };
+        let trimmed = addr.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let parsed = trimmed.parse::<SocketAddr>().map_err(|err| {
+            ConfigError::Vpn(format!(
+                "vpn.backend_addr must be a valid socket address: {err}"
+            ))
+        })?;
+        Ok(Some(parsed.to_string()))
+    }
+
+    pub fn helper_ticket_secret_bytes(&self) -> Option<[u8; 32]> {
+        let secret = self.helper_ticket_secret_hex.as_ref()?;
+        let decoded =
+            hex::decode(secret).expect("validated vpn.helper_ticket_secret_hex to decode");
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&decoded);
+        Some(bytes)
+    }
+
+    pub fn backend_socket_addr(&self) -> Option<SocketAddr> {
+        self.backend_addr
+            .as_ref()
+            .map(|addr| addr.parse().expect("validated vpn.backend_addr to parse"))
     }
 }
 
@@ -3900,6 +3967,75 @@ mod tests {
 
         cfg.validate().expect("vpn config should validate");
         assert_eq!(cfg.cover.cover_to_data_per_mille, 0);
+    }
+
+    #[test]
+    fn vpn_helper_ticket_secret_normalizes_hex() {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            helper_ticket_secret_hex: Some(format!("0X{}", "AB".repeat(32))),
+            ..VpnConfig::default()
+        };
+        cfg.validate().expect("vpn config should validate");
+        assert_eq!(cfg.helper_ticket_secret_hex, Some("ab".repeat(32)));
+        assert_eq!(cfg.helper_ticket_secret_bytes(), Some([0xAB; 32]));
+    }
+
+    #[test]
+    fn vpn_helper_ticket_secret_rejects_short_hex() {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            helper_ticket_secret_hex: Some("ab".repeat(16)),
+            ..VpnConfig::default()
+        };
+        let err = cfg
+            .validate()
+            .expect_err("expected helper ticket secret validation failure");
+        match err {
+            ConfigError::Vpn(message) => {
+                assert!(
+                    message.contains("helper_ticket_secret_hex"),
+                    "unexpected vpn helper ticket error: {message}"
+                );
+            }
+            other => panic!("unexpected error {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vpn_backend_addr_normalizes_socket_addr() {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            backend_addr: Some(" 127.0.0.1:19090 ".to_string()),
+            ..VpnConfig::default()
+        };
+        cfg.validate().expect("vpn config should validate");
+        assert_eq!(cfg.backend_addr, Some("127.0.0.1:19090".to_string()));
+        assert_eq!(
+            cfg.backend_socket_addr(),
+            Some("127.0.0.1:19090".parse().expect("socket addr"))
+        );
+    }
+
+    #[test]
+    fn vpn_backend_addr_rejects_invalid_socket_addr() {
+        let mut cfg = VpnConfig {
+            enabled: true,
+            backend_addr: Some("not-a-socket".to_string()),
+            ..VpnConfig::default()
+        };
+        let err = cfg
+            .validate()
+            .expect_err("expected backend addr validation failure");
+        match err {
+            ConfigError::Vpn(message) => {
+                assert!(
+                    message.contains("backend_addr"),
+                    "unexpected vpn backend addr error: {message}"
+                );
+            }
+            other => panic!("unexpected error {other:?}"),
+        }
     }
 
     #[test]

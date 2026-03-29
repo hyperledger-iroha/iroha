@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc};
 use base64::Engine as _;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
+    account_address::parse_account_address,
     client::Client,
     data_model::{
         isi::contract_alias::SetContractAlias,
@@ -308,8 +309,13 @@ pub struct DeriveAddressArgs {
 
 impl Run for DeriveAddressArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let authority = crate::resolve_account_id(context, &self.authority)
-            .wrap_err("failed to resolve --authority")?;
+        let authority = parse_account_address(&self.authority, Some(self.chain_discriminant))
+            .map_err(|err| eyre!(err.to_string()))
+            .wrap_err("failed to resolve --authority")?
+            .address
+            .to_account_id()
+            .map_err(|err| eyre!(err.to_string()))
+            .wrap_err("failed to decode --authority")?;
         let dataspace_id = resolve_contract_dataspace_id_hint(&self.dataspace, self.dataspace_id)?;
         let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
             self.chain_discriminant,

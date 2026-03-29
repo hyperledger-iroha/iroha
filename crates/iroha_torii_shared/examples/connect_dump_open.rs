@@ -1,3 +1,8 @@
+//! Example: encode a bare Connect `Open` control frame and print the hex bytes.
+//!
+//! Run:
+//!   cargo run -p `iroha_torii_shared` --example `connect_dump_open`
+
 use iroha_torii_shared::connect::{
     AppMeta, ConnectControlV1, ConnectFrameV1, Constraints, Dir, FrameKind, PermissionsV1,
     encode_connect_frame_bare,

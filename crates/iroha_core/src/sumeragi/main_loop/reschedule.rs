@@ -454,12 +454,19 @@ impl Actor {
                             >= self.rbc_deliver_quorum(&commit_topology);
                         missing_chunks || !ready_quorum
                     });
-            let consensus_queue_backlog = Self::consensus_queue_backlog(queue_depths);
-            let near_quorum_queue_backlog =
-                self.consensus_queue_backlog_blocks_near_quorum_timeout(queue_depths);
-            let near_quorum_slot_ingress_backlog = near_commit_quorum
-                && contiguous_frontier
-                && (queue_depths.block_payload_rx > 0 || queue_depths.block_rx > 0);
+            let consensus_queue_backlog = queue_depths.rbc_chunk_rx > 0
+                || queue_depths.block_payload_rx > 0
+                || queue_depths.block_rx > 0
+                || queue_depths.consensus_rx > 0;
+            let block_payload_threshold =
+                Self::near_quorum_queue_depth_threshold(self.config.queues.block_payload);
+            let rbc_chunk_threshold =
+                Self::near_quorum_queue_depth_threshold(self.config.queues.rbc_chunks);
+            let block_threshold = Self::near_quorum_queue_depth_threshold(self.config.queues.blocks);
+            let near_quorum_queue_backlog = queue_depths.rbc_chunk_rx >= rbc_chunk_threshold
+                || queue_depths.block_payload_rx >= block_payload_threshold
+                || queue_depths.block_rx >= block_threshold
+                || queue_depths.consensus_rx >= NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR;
             let missing_local_data = da_enabled && !payload_available;
             let near_quorum_timeout = near_quorum_payload_timeout(self.rebroadcast_cooldown());
             let near_quorum_fast_timeout_allowed = near_commit_quorum
@@ -527,6 +534,59 @@ impl Actor {
                 .checked_div(2)
                 .unwrap_or(near_quorum_timeout)
                 .max(Duration::from_millis(200));
+            let same_height_dependency_backlog_active = contiguous_frontier
+                && self.frontier_recovery_same_height_dependency_backlog_active(
+                    pending.height,
+                    now,
+                    queue_depths,
+                );
+            let same_height_vote_backed_work_active = contiguous_frontier
+                && self.frontier_recovery_same_slot_vote_backed_work_active(
+                    pending.height,
+                    pending.view,
+                    now,
+                );
+            let same_height_missing_payload_recovery_active = contiguous_frontier
+                && self.frontier_recovery_same_slot_missing_payload_recovery_active(
+                    pending.height,
+                    pending.view,
+                    now,
+                );
+            let same_height_rbc_sender_activity_active = contiguous_frontier
+                && self.frontier_recovery_same_height_rbc_sender_activity_active(
+                    pending.height,
+                    now,
+                );
+            let same_height_fresh_missing_block_request = contiguous_frontier
+                && self
+                    .pending
+                    .missing_block_requests
+                    .get(hash)
+                    .is_some_and(|request| {
+                        request.height == pending.height
+                            && request.view == pending.view
+                            && matches!(
+                                request.phase,
+                                crate::sumeragi::consensus::Phase::Prepare
+                                    | crate::sumeragi::consensus::Phase::Commit
+                            )
+                            && (now.saturating_duration_since(request.last_requested)
+                                < self.frontier_recovery_window().max(Duration::from_millis(1))
+                                || now.saturating_duration_since(request.last_dependency_progress)
+                                    < self.frontier_recovery_window()
+                                        .max(Duration::from_millis(1)))
+                            && self.missing_block_request_has_actionable_dependency(
+                                *hash,
+                                request,
+                                committed_height,
+                                now,
+                            )
+                    });
+            let same_height_actionable_progress_active = same_height_dependency_backlog_active
+                || same_height_vote_backed_work_active
+                || same_height_missing_payload_recovery_active
+                || same_height_rbc_sender_activity_active
+                || same_height_fresh_missing_block_request;
             if near_commit_quorum
                 && missing_local_data
                 && !quorum_reached
@@ -541,18 +601,6 @@ impl Actor {
                 ));
             }
             if missing_quorum_stale(quorum_stall_age, effective_quorum_timeout, quorum_reached) {
-                if vote_queue_backlog {
-                    debug!(
-                        height = pending.height,
-                        view = pending.view,
-                        block = %hash,
-                        pending_age_ms = pending_age.as_millis(),
-                        quorum_timeout_ms = effective_quorum_timeout.as_millis(),
-                        vote_rx_depth = queue_depths.vote_rx,
-                        "deferring quorum reschedule while vote queue is backlogged"
-                    );
-                    continue;
-                }
                 if rbc_session_incomplete && progress_stall_age < availability_timeout {
                     debug!(
                         height = pending.height,
@@ -565,7 +613,11 @@ impl Actor {
                     );
                     continue;
                 }
-                let backlog_extension_active = consensus_queue_backlog || rbc_session_incomplete;
+                let backlog_extension_active = if contiguous_frontier {
+                    same_height_actionable_progress_active || rbc_session_incomplete
+                } else {
+                    consensus_queue_backlog || rbc_session_incomplete
+                };
                 let near_quorum_recent_progress_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 4)
                         .max(Duration::from_millis(200));
@@ -588,13 +640,6 @@ impl Actor {
                     zero_vote_backlog_deadline_base,
                     backlog_extension_active,
                 );
-                let frontier_ownerless_same_height_dependency_backlog_active = contiguous_frontier
-                    && !self.frontier_recovery_exists_at_height(pending.height)
-                    && self.same_height_dependency_backlog_active_in_frontier_window(
-                        pending.height,
-                        now,
-                        queue_depths,
-                    );
                 let vote_backlog_grace =
                     super::saturating_mul_duration(self.rebroadcast_cooldown(), 8)
                         .max(Duration::from_millis(400));
@@ -605,9 +650,8 @@ impl Actor {
                     backlog_extension_active,
                 );
                 if !has_votes
-                    && consensus_queue_backlog
+                    && same_height_actionable_progress_active
                     && progress_stall_age < zero_vote_backlog_deadline
-                    && !frontier_ownerless_same_height_dependency_backlog_active
                 {
                     debug!(
                         height = pending.height,
@@ -623,7 +667,7 @@ impl Actor {
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                         block_rx_depth = queue_depths.block_rx,
                         consensus_rx_depth = queue_depths.consensus_rx,
-                        "deferring quorum reschedule: zero-vote block still has consensus backlog"
+                        "deferring quorum reschedule: zero-vote block still has same-height recovery progress in flight"
                     );
                     continue;
                 }
@@ -665,7 +709,7 @@ impl Actor {
                 }
                 if has_votes
                     && !near_commit_quorum
-                    && consensus_queue_backlog
+                    && same_height_actionable_progress_active
                     && progress_stall_age < vote_backlog_deadline
                 {
                     debug!(
@@ -683,12 +727,12 @@ impl Actor {
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                         block_rx_depth = queue_depths.block_rx,
                         consensus_rx_depth = queue_depths.consensus_rx,
-                        "deferring quorum reschedule: vote-backed block waits behind consensus backlog"
+                        "deferring quorum reschedule: vote-backed block still has same-height recovery progress in flight"
                     );
                     continue;
                 }
                 if near_commit_quorum
-                    && near_quorum_queue_backlog
+                    && same_height_actionable_progress_active
                     && progress_stall_age < vote_backlog_deadline
                 {
                     debug!(
@@ -706,25 +750,7 @@ impl Actor {
                         rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
                         block_rx_depth = queue_depths.block_rx,
                         consensus_rx_depth = queue_depths.consensus_rx,
-                        "deferring quorum reschedule: near quorum while consensus backlog is still progressing"
-                    );
-                    continue;
-                }
-                if near_quorum_slot_ingress_backlog && progress_stall_age < vote_backlog_deadline {
-                    debug!(
-                        height = pending.height,
-                        view = pending.view,
-                        block = %hash,
-                        votes = vote_count,
-                        min_votes = min_votes_for_commit,
-                        progress_stall_age_ms = progress_stall_age.as_millis(),
-                        availability_timeout_ms = availability_timeout.as_millis(),
-                        vote_backlog_grace_ms = vote_backlog_grace.as_millis(),
-                        vote_backlog_deadline_base_ms = vote_backlog_deadline_base.as_millis(),
-                        vote_backlog_deadline_ms = vote_backlog_deadline.as_millis(),
-                        block_payload_rx_depth = queue_depths.block_payload_rx,
-                        block_rx_depth = queue_depths.block_rx,
-                        "deferring quorum reschedule: near quorum while same-slot ingress is still arriving"
+                        "deferring quorum reschedule: near quorum while same-height recovery is still progressing"
                     );
                     continue;
                 }
@@ -787,7 +813,10 @@ impl Actor {
                         now,
                         effective_reschedule_backoff,
                         vote_count,
-                    )
+                    ) || (contiguous_frontier
+                        && pending.last_quorum_reschedule.is_some_and(|last| {
+                            now.saturating_duration_since(last) >= effective_reschedule_backoff
+                        }))
                 } else {
                     pending.reschedule_due(now, effective_reschedule_backoff)
                 };

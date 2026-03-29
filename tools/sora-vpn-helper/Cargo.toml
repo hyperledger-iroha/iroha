@@ -1,0 +1,27 @@
+[package]
+name = "sora-vpn-helper"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+description = "Local Sora VPN controller scaffold for Electron packaging"
+
+[[bin]]
+name = "sora-vpn-controller"
+path = "src/main.rs"
+
+[dependencies]
+blake3 = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+hex = { workspace = true }
+iroha_crypto = { workspace = true }
+iroha_data_model = { workspace = true }
+nix = { version = "0.30.1", features = ["signal"] }
+quinn = { version = "0.11.9", default-features = false, features = ["rustls", "runtime-tokio"] }
+rand = { workspace = true }
+rustls = { workspace = true }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "signal", "time"] }

@@ -659,6 +659,44 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
     hpke_public_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
     weight: 2,
   });
+  assert.equal(created.Kaigi.CreateKaigi.commitment, null);
+});
+
+test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
+  const captures = [];
+  const commitment = Buffer.alloc(32, 0x33);
+  const nullifier = Buffer.alloc(32, 0x44);
+  const proof = Buffer.from([0xfa, 0xce]);
+  withNativeBinding(
+    {
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push({ authority, instructions: instructions.map((payload) => JSON.parse(payload)) });
+        return {
+          signed_transaction: Buffer.from([0x40]),
+          hash: Buffer.alloc(32, 0x55),
+        };
+      },
+    },
+    () =>
+      buildCreateKaigiTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        call: {
+          id: "wonderland:private-room",
+          host: AUTHORITY_ID_INPUT,
+          privacyMode: "ZkRosterV1",
+          commitment: { commitment, aliasTag: "host" },
+          nullifier: { digest: nullifier, issuedAtMs: 12 },
+          proof,
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+  );
+  const [{ instructions }] = captures;
+  const created = instructions[0].Kaigi.CreateKaigi;
+  assert.equal(created.commitment.commitment, normalizedHashHex(commitment));
+  assert.equal(created.nullifier.digest, normalizedHashHex(nullifier));
+  assert.equal(created.proof, proof.toString("base64"));
 });
 
 test("buildJoinKaigiTransaction normalizes binary fields", () => {

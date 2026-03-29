@@ -1508,13 +1508,7 @@ impl CommittedTxFilters {
     /// Helper associated with query processing.
     #[allow(clippy::too_many_lines)]
     pub fn applies(&self, tx: &CommittedTransaction) -> bool {
-        // authority presence and equality set checks (External only)
-        let authority_val = match &tx.entrypoint {
-            crate::transaction::signed::TransactionEntrypoint::External(signed) => {
-                Some(signed.authority().clone())
-            }
-            _ => None,
-        };
+        let authority_val = tx.entrypoint.authority_opt().cloned();
         if let Some(required) = self.authority_exists
             && (required != authority_val.is_some())
         {
@@ -1550,31 +1544,14 @@ impl CommittedTxFilters {
         }
         // timestamp lower bound
         if let Some(ge) = self.ts_ge {
-            let created_ms = match &tx.entrypoint {
-                crate::transaction::signed::TransactionEntrypoint::External(s) => {
-                    match u64::try_from(s.creation_time().as_millis()) {
-                        Ok(v) => v,
-                        Err(_) => return false,
-                    }
-                }
-                crate::transaction::signed::TransactionEntrypoint::Time(_) => {
-                    // Time triggers can be considered to have their step time; we approximate using block time here as zero.
-                    // Treat as not matching lower bound by default.
-                    0
-                }
-            };
+            let created_ms = tx.entrypoint.creation_time_ms().unwrap_or(0);
             if created_ms < ge {
                 return false;
             }
         }
         // timestamp upper bound
         if let Some(le) = self.ts_le {
-            let created_ms = match &tx.entrypoint {
-                crate::transaction::signed::TransactionEntrypoint::External(s) => {
-                    u64::try_from(s.creation_time().as_millis()).unwrap_or(u64::MAX)
-                }
-                crate::transaction::signed::TransactionEntrypoint::Time(_) => u64::MAX,
-            };
+            let created_ms = tx.entrypoint.creation_time_ms().unwrap_or(u64::MAX);
             if created_ms > le {
                 return false;
             }
@@ -3752,11 +3729,92 @@ mod fault_injection_tests {
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use std::num::NonZeroU64;
+    use std::{num::NonZeroU64, str::FromStr};
 
+    use iroha_crypto::{Hash, HashOf, MerkleProof};
     use norito::json;
 
     use super::*;
+    use crate::{
+        AssetDefinitionId,
+        domain::DomainId,
+        kaigi::{
+            KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
+            KaigiRoomPolicy,
+        },
+        name::Name,
+        transaction::{
+            PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
+            PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionEntrypoint,
+            TransactionResult,
+        },
+    };
+
+    fn zero_hash<T>() -> HashOf<T> {
+        let zero = [0u8; 32];
+        HashOf::from_untyped_unchecked(Hash::prehashed(zero))
+    }
+
+    fn private_committed_tx() -> CommittedTransaction {
+        let mut metadata = Metadata::default();
+        metadata.insert(Name::from_str("topic").expect("metadata key"), "private");
+        let entrypoint = TransactionEntrypoint::PrivateKaigi(PrivateKaigiTransaction {
+            chain: "test-chain".parse().expect("chain"),
+            creation_time_ms: 42,
+            nonce: None,
+            metadata,
+            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
+                call: PrivateKaigiTemplate {
+                    id: KaigiId::new(
+                        DomainId::from_str("kaigi").expect("domain"),
+                        Name::from_str("private-room").expect("call"),
+                    ),
+                    title: Some("Private".to_owned()),
+                    description: None,
+                    max_participants: Some(2),
+                    gas_rate_per_minute: 5,
+                    metadata: Metadata::default(),
+                    scheduled_start_ms: None,
+                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
+                    room_policy: KaigiRoomPolicy::Authenticated,
+                    relay_manifest: None,
+                },
+            }),
+            artifacts: PrivateKaigiArtifacts {
+                commitment: KaigiParticipantCommitment {
+                    commitment: Hash::new(b"commitment"),
+                    alias_tag: None,
+                },
+                nullifier: KaigiParticipantNullifier {
+                    digest: Hash::new(b"nullifier"),
+                    issued_at_ms: 42,
+                },
+                roster_root: Hash::new(b"root"),
+                proof: vec![1, 2, 3],
+            },
+            fee_spend: PrivateKaigiFeeSpend {
+                asset_definition_id: AssetDefinitionId::new(
+                    DomainId::from_str("wonderland").expect("domain"),
+                    Name::from_str("xor").expect("name"),
+                ),
+                anchor_root: Hash::new(b"anchor"),
+                nullifiers: vec![[0x11; 32]],
+                output_commitments: vec![[0x22; 32]],
+                encrypted_change_payloads: vec![vec![0x33]],
+                proof: vec![0x44],
+            },
+        });
+        let result = TransactionResult(Ok(crate::trigger::DataTriggerSequence::default()));
+        CommittedTransaction {
+            block_hash: zero_hash(),
+            entrypoint_hash: entrypoint.hash(),
+            entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
+            entrypoint: entrypoint.clone(),
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, vec![]),
+            result,
+        }
+    }
 
     #[test]
     fn query_output_batch_box_json_roundtrip() {
@@ -3801,5 +3859,24 @@ mod tests {
             }
             other => panic!("expected object for iterable response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn committed_tx_filters_treat_private_kaigi_authority_as_absent() {
+        let tx = private_committed_tx();
+
+        let filters = CommittedTxFilters {
+            authority_exists: Some(false),
+            ts_ge: Some(40),
+            ts_le: Some(50),
+            ..CommittedTxFilters::default()
+        };
+        assert!(filters.applies(&tx));
+
+        let authority_required = CommittedTxFilters {
+            authority_exists: Some(true),
+            ..CommittedTxFilters::default()
+        };
+        assert!(!authority_required.applies(&tx));
     }
 }

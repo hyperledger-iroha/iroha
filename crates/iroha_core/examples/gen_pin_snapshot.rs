@@ -172,7 +172,7 @@ fn register_and_approve(
 
     ApprovePinManifest {
         digest,
-        approved_epoch: 7,
+        approved_epoch: 5,
         council_envelope: Some(envelope),
         council_envelope_digest: None,
     }

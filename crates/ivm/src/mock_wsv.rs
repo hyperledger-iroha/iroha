@@ -1339,6 +1339,11 @@ impl MockWorldStateView {
     }
 
     /// Register a new asset definition with given mintability.
+    ///
+    /// The mock matches the core host and accepts canonical opaque asset
+    /// definition identifiers without requiring a first-class domain row for
+    /// `id.domain()`.
+    ///
     /// Returns `true` if the definition was added.
     pub fn register_asset_definition(
         &mut self,
@@ -1346,9 +1351,6 @@ impl MockWorldStateView {
         id: AssetDefinitionId,
         mintable: Mintable,
     ) -> bool {
-        if !self.domains.contains_key(id.domain()) {
-            return false;
-        }
         if !self.has_permission(caller, &PermissionToken::RegisterAssetDefinition) {
             return false;
         }
@@ -2971,24 +2973,24 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
         return Ok(PermissionToken::RegisterAssetDefinition);
     }
     if let Some(rest) = s.strip_prefix("read_assets:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::ReadAccountAssets(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::ReadAccountAssets(id));
     }
     if let Some(rest) = s.strip_prefix("add_signatory:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::AddSignatory(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::AddSignatory(id));
     }
     if let Some(rest) = s.strip_prefix("remove_signatory:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::RemoveSignatory(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::RemoveSignatory(id));
     }
     if let Some(rest) = s.strip_prefix("set_account_quorum:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::SetAccountQuorum(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::SetAccountQuorum(id));
     }
     if let Some(rest) = s.strip_prefix("set_account_detail:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::SetAccountDetail(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::SetAccountDetail(id));
     }
     if let Some(rest) = s.strip_prefix("register_zk_asset:") {
         let id =
@@ -3090,6 +3092,13 @@ fn parse_account_id_literal(raw: &str) -> Result<ScopedAccountId, VMError> {
     ScopedAccountId::parse_encoded(raw).map_err(|_| VMError::NoritoInvalid)
 }
 
+fn parse_account_subject_literal(raw: &str) -> Result<AccountId, VMError> {
+    AccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .or_else(|_| parse_account_id_literal(raw).map(|id| id.subject_id()))
+        .map_err(|_| VMError::NoritoInvalid)
+}
+
 /// Parse a peer identifier from a JSON payload that may be either a raw string or an
 /// object containing a `peer` field.
 fn parse_peer_any(bytes: &[u8]) -> Result<Peer, VMError> {
@@ -3108,12 +3117,12 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
             .ok_or(VMError::NoritoInvalid)?;
         target.parse().map_err(|_| VMError::NoritoInvalid)
     }
-    fn parse_account_target(map: &njson::Map) -> Result<ScopedAccountId, VMError> {
+    fn parse_account_target(map: &njson::Map) -> Result<AccountId, VMError> {
         let target = map
             .get("target")
             .and_then(njson::Value::as_str)
             .ok_or(VMError::NoritoInvalid)?;
-        parse_account_id_literal(target)
+        parse_account_subject_literal(target)
     }
 
     if let Some(name) = value.as_str() {
@@ -3136,23 +3145,23 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
         }
         "read_assets" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::ReadAccountAssets(account.subject_id()))
+            Ok(PermissionToken::ReadAccountAssets(account))
         }
         "add_signatory" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::AddSignatory(account.subject_id()))
+            Ok(PermissionToken::AddSignatory(account))
         }
         "remove_signatory" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::RemoveSignatory(account.subject_id()))
+            Ok(PermissionToken::RemoveSignatory(account))
         }
         "set_account_quorum" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::SetAccountQuorum(account.subject_id()))
+            Ok(PermissionToken::SetAccountQuorum(account))
         }
         "set_account_detail" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::SetAccountDetail(account.subject_id()))
+            Ok(PermissionToken::SetAccountDetail(account))
         }
         "shield" => {
             let id: AssetDefinitionId = parse_target(map)?;
@@ -6652,6 +6661,35 @@ mod tests_zk_asset_bindings {
         );
         assert!(wsv.shield(&caller, &asset, Numeric::from(3_u64), [7u8; 32]));
     }
+
+    #[test]
+    fn register_asset_definition_does_not_require_domain_row_for_opaque_id() {
+        let caller: ScopedAccountId = test_account_id(
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+            "domain",
+        );
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonder".parse().unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
+            &norito::to_bytes(&asset).expect("encode asset definition"),
+        )
+        .expect("decode opaque canonical asset definition");
+
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+
+        assert!(
+            wsv.register_asset_definition(&caller, opaque.clone(), Mintable::Infinitely),
+            "opaque asset definition ids should register without a matching domain row"
+        );
+        assert!(
+            wsv.asset_definitions.contains_key(&opaque),
+            "registered opaque asset definition should be stored"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -6796,7 +6834,10 @@ mod tests_null_decode {
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let asset: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition id");
+        let asset = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain id"),
+            "rose".parse().expect("asset name"),
+        );
         let wsv = MockWorldStateView::with_balances(&[(
             (caller.clone(), asset.clone()),
             Numeric::from(41_u64),

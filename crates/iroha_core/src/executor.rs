@@ -2067,7 +2067,7 @@ impl Executor {
 
     /// Execute [`InstructionBox`] using the runtime profile and an optional
     /// contract execution context for nested contract-originated instructions.
-    pub fn execute_instruction_with_contract_runtime_context(
+    pub(crate) fn execute_instruction_with_contract_runtime_context(
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,

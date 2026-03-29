@@ -43,7 +43,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `ScopedAccountId { account: AccountId, domain: DomainId }` carries explicit domain context only where a scoped view is required.
 - `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md), and `linked_domains` is derived index state rather than part of the canonical identity.
 - Builders:
-  - `NewAccount` via `Account::from_scoped_id(scoped_id)` materializes an explicit domain-linked registration and therefore requires a `ScopedAccountId`.
+  - `NewAccount` via `Account::new_in_domain(id, domain)` materializes an explicit domain-linked registration when a test or operation still needs that scoped context.
   - `NewAccount` via `Account::new(id)` registers only the universal account subject with no linked domain.
 - Alias model:
   - Canonical account identity never includes a domain or dataspace segment.
