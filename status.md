@@ -2,6 +2,21 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: duplicate `external_entrypoints` test fixture fields removed in `iroha_data_model`
+- Fixed `crates/iroha_data_model/src/block/mod.rs` test-only `BlockPayload`
+  literals that initialized `external_entrypoints` twice after the DA-related
+  fields, which was causing `error[E0062]: field \`external_entrypoints\`
+  specified more than once`.
+- Kept the production constructors unchanged; the fix only removes the stale
+  duplicate initializer from the affected signed-block/block-wire regression
+  tests.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model block::tests:: -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model` (fails on 21 pre-existing non-block tests
+    under `account`, `offline::poseidon`, `oracle`, `smart_contract`, and
+    `transaction::signed`; the edited `block::tests` slice passes)
+
 ## 2026-03-29 Follow-up: fault injection now covers private Kaigi committed entrypoints
 - Fixed `crates/iroha_data_model/src/query/mod.rs` so
   `CommittedTransaction::inject_instructions(...)` now handles

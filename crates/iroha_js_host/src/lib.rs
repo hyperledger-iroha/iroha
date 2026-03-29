@@ -42,11 +42,11 @@ use halo2_proofs::{
     },
     transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
 };
-use iroha_core::zk::{hash_vk as hash_verifying_key_box, test_utils::halo2_fixture_envelope};
 use iroha::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
 };
+use iroha_core::zk::{hash_vk as hash_verifying_key_box, test_utils::halo2_fixture_envelope};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
