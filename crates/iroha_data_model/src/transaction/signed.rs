@@ -610,6 +610,56 @@ impl iroha_version::codec::DecodeVersioned for SignedTransaction {
     }
 }
 
+impl iroha_version::Version for TransactionEntrypoint {
+    fn version(&self) -> u8 {
+        1
+    }
+
+    fn supported_versions() -> core::ops::Range<u8> {
+        1..2
+    }
+}
+
+impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {
+    fn encode_versioned(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(1);
+        bytes.push(self.version());
+        bytes.extend(norito::codec::encode_adaptive(self));
+        bytes
+    }
+}
+
+impl iroha_version::codec::DecodeVersioned for TransactionEntrypoint {
+    fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
+        use iroha_version::error::Error;
+
+        let Some((&version, payload)) = input.split_first() else {
+            return Err(Error::NotVersioned);
+        };
+
+        if !Self::supported_versions().contains(&version) {
+            return Err(Error::UnsupportedVersion(Box::new(
+                iroha_version::UnsupportedVersion::new(
+                    version,
+                    iroha_version::RawVersioned::NoritoBytes(input.to_vec()),
+                ),
+            )));
+        }
+
+        let payload_guard = norito::core::PayloadCtxGuard::enter(payload);
+        let mut cursor = payload;
+        let decoded = <Self as DecodeAll>::decode_all(&mut cursor).map_err(Error::from)?;
+        drop(payload_guard);
+        if cursor.is_empty() {
+            Ok(decoded)
+        } else {
+            Err(Error::NoritoCodec(
+                "TransactionEntrypoint payload contains trailing bytes".into(),
+            ))
+        }
+    }
+}
+
 impl<'a> norito::core::DecodeFromSlice<'a> for SignedTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let _guard = norito::core::PayloadCtxGuard::enter(bytes);

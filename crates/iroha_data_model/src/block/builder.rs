@@ -129,6 +129,7 @@ impl BlockBuilder {
         let payload = BlockPayload {
             header: self.header,
             transactions: self.transactions,
+            external_entrypoints: self.external_entrypoints.clone(),
             da_commitments,
             da_proof_policies,
             da_pin_intents,

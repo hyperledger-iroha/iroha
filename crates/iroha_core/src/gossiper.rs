@@ -2328,10 +2328,12 @@ fn partition_gossip_batch(
             continue;
         }
 
-        message.txs.push(GossipTransaction::with_encoded(
-            SignedTransaction::from(entry.tx),
-            entry.payload,
-        ));
+        let Some(signed) = entry.tx.external().cloned() else {
+            continue;
+        };
+        message
+            .txs
+            .push(GossipTransaction::with_encoded(signed, entry.payload));
         message.routes.push(GossipRoute {
             lane_id: routing.lane_id,
             dataspace_id: routing.dataspace_id,
