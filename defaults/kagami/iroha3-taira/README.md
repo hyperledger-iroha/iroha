@@ -30,8 +30,9 @@ Operational note:
 - For the public Taira deployment, prefer the checked-in validator/edge bundle
   under `configs/soranexus/taira/`, including `taira-irohad.service`,
   `taira-explorer.nginx.conf`, `validator_roster.example.toml`,
-  `scripts/render_taira_validator_bundle.py`, and `check_mcp_rollout.sh`, so
-  the public `/v1/mcp` route is proven locally before cutover.
+  `validator_secrets.example.toml`, `scripts/render_taira_validator_bundle.py`,
+  and `check_mcp_rollout.sh`, so the public `/v1/mcp` route is proven locally
+  before cutover.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-taira

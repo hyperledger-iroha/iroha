@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 LOCAL_MCP_URL="${LOCAL_MCP_URL:-http://127.0.0.1:18080/v1/mcp}"
 PUBLIC_MCP_URL="${PUBLIC_MCP_URL:-https://taira.sora.org/v1/mcp}"
 IROHA_BIN="${IROHA_BIN:-}"
@@ -11,6 +13,7 @@ MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
 SKIP_LOCAL=0
 SKIP_PUBLIC=0
 SKIP_WRITE_CANARY=0
+IROHA_RUNNER=()
 
 usage() {
   cat <<'EOF'
@@ -115,8 +118,10 @@ if [[ $SKIP_PUBLIC -eq 0 && -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; t
 fi
 
 if [[ -z "$IROHA_BIN" ]]; then
-  if [[ -x "./target/debug/iroha" ]]; then
-    IROHA_BIN="./target/debug/iroha"
+  if [[ -x "${REPO_ROOT}/target/debug/iroha" ]]; then
+    IROHA_BIN="${REPO_ROOT}/target/debug/iroha"
+  elif [[ -x "${REPO_ROOT}/target/release/iroha" ]]; then
+    IROHA_BIN="${REPO_ROOT}/target/release/iroha"
   else
     IROHA_BIN="iroha"
   fi
@@ -401,11 +406,29 @@ ensure_iroha_bin() {
       echo "iroha binary is not executable: $IROHA_BIN" >&2
       exit 1
     }
+    IROHA_RUNNER=("$IROHA_BIN")
   else
-    command -v "$IROHA_BIN" >/dev/null 2>&1 || {
-      echo "could not find iroha binary on PATH: $IROHA_BIN" >&2
-      exit 1
-    }
+    if command -v "$IROHA_BIN" >/dev/null 2>&1; then
+      IROHA_RUNNER=("$IROHA_BIN")
+      return 0
+    fi
+    if [[ "$IROHA_BIN" == "iroha" ]] && command -v cargo >/dev/null 2>&1; then
+      IROHA_RUNNER=(
+        cargo
+        run
+        --quiet
+        --manifest-path
+        "${REPO_ROOT}/Cargo.toml"
+        -p
+        iroha_cli
+        --bin
+        iroha
+        --
+      )
+      return 0
+    fi
+    echo "could not find iroha binary on PATH: $IROHA_BIN" >&2
+    exit 1
   fi
 }
 
@@ -426,7 +449,7 @@ run_write_canary() {
 
   write_msg="${WRITE_MESSAGE_PREFIX}-$(date -u +%Y%m%dT%H%M%SZ)"
   echo "==> write canary: ${target_url} (message: ${write_msg})"
-  if ! "$IROHA_BIN" --machine -c "$temp_config" ledger transaction ping --msg "$write_msg" \
+  if ! "${IROHA_RUNNER[@]}" --machine -c "$temp_config" ledger transaction ping --msg "$write_msg" \
       >"$output_file" 2>&1; then
     if grep -q 'route_unavailable' "$output_file"; then
       echo "write canary failed: Torii is reachable but no authoritative peers accepted the lane route" >&2

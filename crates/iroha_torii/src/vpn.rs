@@ -14,6 +14,9 @@ use iroha_data_model::{
 use crate::{Error, SharedAppState};
 
 const SUPPORTED_EXIT_CLASSES: [&str; 3] = ["standard", "low-latency", "high-security"];
+const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2/128"];
+const DEFAULT_VPN_MTU_BYTES: u64 = 1280;
+const MAX_RECEIPTS_PER_ACCOUNT: usize = 24;
 
 #[derive(
     Debug,
@@ -36,7 +39,12 @@ pub struct VpnProfileResponseDto {
     #[norito(default)]
     pub route_pushes: Vec<String>,
     #[norito(default)]
+    pub excluded_routes: Vec<String>,
+    #[norito(default)]
     pub dns_servers: Vec<String>,
+    #[norito(default)]
+    pub tunnel_addresses: Vec<String>,
+    pub mtu_bytes: u64,
     pub display_billing_label: String,
 }
 
@@ -72,12 +80,20 @@ pub struct VpnSessionResponseDto {
     pub relay_endpoint: String,
     pub lease_secs: u64,
     pub expires_at_ms: u64,
+    pub connected_at_ms: u64,
     pub meter_family: String,
     #[norito(default)]
     pub route_pushes: Vec<String>,
     #[norito(default)]
+    pub excluded_routes: Vec<String>,
+    #[norito(default)]
     pub dns_servers: Vec<String>,
+    #[norito(default)]
+    pub tunnel_addresses: Vec<String>,
+    pub mtu_bytes: u64,
     pub helper_ticket_hex: String,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
     pub status: String,
 }
 
@@ -91,10 +107,35 @@ pub struct VpnSessionResponseDto {
     PartialEq,
     Eq,
 )]
-pub struct VpnSessionDeleteResponseDto {
+pub struct VpnReceiptResponseDto {
     pub session_id: String,
-    pub status: String,
+    pub account_id: String,
+    pub exit_class: String,
+    pub relay_endpoint: String,
+    pub meter_family: String,
+    pub connected_at_ms: u64,
     pub disconnected_at_ms: u64,
+    pub duration_ms: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub status: String,
+    pub receipt_source: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    PartialEq,
+    Eq,
+)]
+pub struct VpnReceiptListResponseDto {
+    #[norito(default)]
+    pub items: Vec<VpnReceiptResponseDto>,
+    pub total: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -105,10 +146,32 @@ pub(crate) struct VpnSessionRecord {
     pub relay_endpoint: String,
     pub lease_secs: u64,
     pub expires_at_ms: u64,
+    pub connected_at_ms: u64,
     pub meter_family: String,
     pub route_pushes: Vec<String>,
+    pub excluded_routes: Vec<String>,
     pub dns_servers: Vec<String>,
+    pub tunnel_addresses: Vec<String>,
+    pub mtu_bytes: u64,
     pub helper_ticket_hex: String,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct VpnReceiptRecord {
+    pub session_id: String,
+    pub account_id: AccountId,
+    pub exit_class: String,
+    pub relay_endpoint: String,
+    pub meter_family: String,
+    pub connected_at_ms: u64,
+    pub disconnected_at_ms: u64,
+    pub duration_ms: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub status: String,
+    pub receipt_source: String,
 }
 
 fn now_ms() -> u64 {
@@ -145,6 +208,13 @@ fn normalize_exit_class(value: &str, default_value: &str) -> Result<String, Erro
     Ok(parsed.as_label().to_owned())
 }
 
+fn default_tunnel_addresses() -> Vec<String> {
+    DEFAULT_TUNNEL_ADDRESSES
+        .iter()
+        .map(|item| (*item).to_owned())
+        .collect()
+}
+
 fn build_profile(dto: &ConfigGetDTO) -> VpnProfileResponseDto {
     let vpn = &dto.network.soranet_vpn;
     let relay_endpoint = dto.transport.streaming.soranet.exit_multiaddr.clone();
@@ -162,7 +232,10 @@ fn build_profile(dto: &ConfigGetDTO) -> VpnProfileResponseDto {
         dns_push_interval_secs: vpn.dns_push_interval_secs,
         meter_family: vpn.meter_family.clone(),
         route_pushes: Vec::new(),
+        excluded_routes: Vec::new(),
         dns_servers: Vec::new(),
+        tunnel_addresses: default_tunnel_addresses(),
+        mtu_bytes: DEFAULT_VPN_MTU_BYTES,
         display_billing_label: format!("{default_exit_class} · {}", vpn.meter_family),
     }
 }
@@ -194,6 +267,76 @@ fn build_helper_ticket_hex(session_id: &str) -> String {
     hex::encode(blake3::hash(format!("{session_id}:helper").as_bytes()).as_bytes())
 }
 
+fn response_from_record(record: &VpnSessionRecord) -> VpnSessionResponseDto {
+    VpnSessionResponseDto {
+        session_id: record.session_id.clone(),
+        account_id: record.account_id.to_string(),
+        exit_class: record.exit_class.clone(),
+        relay_endpoint: record.relay_endpoint.clone(),
+        lease_secs: record.lease_secs,
+        expires_at_ms: record.expires_at_ms,
+        connected_at_ms: record.connected_at_ms,
+        meter_family: record.meter_family.clone(),
+        route_pushes: record.route_pushes.clone(),
+        excluded_routes: record.excluded_routes.clone(),
+        dns_servers: record.dns_servers.clone(),
+        tunnel_addresses: record.tunnel_addresses.clone(),
+        mtu_bytes: record.mtu_bytes,
+        helper_ticket_hex: record.helper_ticket_hex.clone(),
+        bytes_in: record.bytes_in,
+        bytes_out: record.bytes_out,
+        status: "active".to_owned(),
+    }
+}
+
+fn receipt_response_from_record(record: &VpnReceiptRecord) -> VpnReceiptResponseDto {
+    VpnReceiptResponseDto {
+        session_id: record.session_id.clone(),
+        account_id: record.account_id.to_string(),
+        exit_class: record.exit_class.clone(),
+        relay_endpoint: record.relay_endpoint.clone(),
+        meter_family: record.meter_family.clone(),
+        connected_at_ms: record.connected_at_ms,
+        disconnected_at_ms: record.disconnected_at_ms,
+        duration_ms: record.duration_ms,
+        bytes_in: record.bytes_in,
+        bytes_out: record.bytes_out,
+        status: record.status.clone(),
+        receipt_source: record.receipt_source.clone(),
+    }
+}
+
+fn build_receipt_record(
+    record: &VpnSessionRecord,
+    disconnected_at_ms: u64,
+    status: &str,
+) -> VpnReceiptRecord {
+    let duration_ms = disconnected_at_ms.saturating_sub(record.connected_at_ms);
+    VpnReceiptRecord {
+        session_id: record.session_id.clone(),
+        account_id: record.account_id.clone(),
+        exit_class: record.exit_class.clone(),
+        relay_endpoint: record.relay_endpoint.clone(),
+        meter_family: record.meter_family.clone(),
+        connected_at_ms: record.connected_at_ms,
+        disconnected_at_ms,
+        duration_ms,
+        bytes_in: record.bytes_in,
+        bytes_out: record.bytes_out,
+        status: status.to_owned(),
+        receipt_source: "torii".to_owned(),
+    }
+}
+
+fn store_receipt(app: &SharedAppState, receipt: VpnReceiptRecord) {
+    let key = receipt.account_id.to_string();
+    let mut entry = app.vpn_receipts.entry(key).or_default();
+    entry.insert(0, receipt);
+    if entry.len() > MAX_RECEIPTS_PER_ACCOUNT {
+        entry.truncate(MAX_RECEIPTS_PER_ACCOUNT);
+    }
+}
+
 fn prune_expired_sessions(app: &SharedAppState, current_ms: u64) {
     let stale_ids = app
         .vpn_sessions
@@ -207,11 +350,17 @@ fn prune_expired_sessions(app: &SharedAppState, current_ms: u64) {
         })
         .collect::<Vec<_>>();
     for session_id in stale_ids {
-        let _ = app.vpn_sessions.remove(&session_id);
+        if let Some((_, record)) = app.vpn_sessions.remove(&session_id) {
+            store_receipt(app, build_receipt_record(&record, current_ms, "expired"));
+        }
     }
 }
 
-fn remove_existing_sessions_for_account(app: &SharedAppState, account_id: &AccountId) {
+fn remove_existing_sessions_for_account(
+    app: &SharedAppState,
+    account_id: &AccountId,
+    current_ms: u64,
+) {
     let matching_ids = app
         .vpn_sessions
         .iter()
@@ -224,24 +373,25 @@ fn remove_existing_sessions_for_account(app: &SharedAppState, account_id: &Accou
         })
         .collect::<Vec<_>>();
     for session_id in matching_ids {
-        let _ = app.vpn_sessions.remove(&session_id);
+        if let Some((_, record)) = app.vpn_sessions.remove(&session_id) {
+            store_receipt(app, build_receipt_record(&record, current_ms, "replaced"));
+        }
     }
 }
 
-fn response_from_record(record: &VpnSessionRecord) -> VpnSessionResponseDto {
-    VpnSessionResponseDto {
-        session_id: record.session_id.clone(),
-        account_id: record.account_id.to_string(),
-        exit_class: record.exit_class.clone(),
-        relay_endpoint: record.relay_endpoint.clone(),
-        lease_secs: record.lease_secs,
-        expires_at_ms: record.expires_at_ms,
-        meter_family: record.meter_family.clone(),
-        route_pushes: record.route_pushes.clone(),
-        dns_servers: record.dns_servers.clone(),
-        helper_ticket_hex: record.helper_ticket_hex.clone(),
-        status: "active".to_owned(),
-    }
+fn list_receipts_for_account(
+    app: &SharedAppState,
+    account_id: &AccountId,
+) -> Vec<VpnReceiptResponseDto> {
+    app.vpn_receipts
+        .get(&account_id.to_string())
+        .map(|entry| {
+            entry
+                .iter()
+                .map(receipt_response_from_record)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 pub(crate) async fn handle_get_vpn_profile(kiso: KisoHandle) -> Result<Response, Error> {
@@ -267,7 +417,7 @@ pub(crate) async fn handle_create_vpn_session(
     let exit_class = normalize_exit_class(&request.exit_class, &profile.default_exit_class)?;
     let current_ms = now_ms();
     prune_expired_sessions(&app, current_ms);
-    remove_existing_sessions_for_account(&app, &account_id);
+    remove_existing_sessions_for_account(&app, &account_id, current_ms);
 
     let nonce = headers
         .get(crate::HEADER_NONCE)
@@ -283,14 +433,45 @@ pub(crate) async fn handle_create_vpn_session(
         relay_endpoint: profile.relay_endpoint,
         lease_secs: profile.lease_secs,
         expires_at_ms,
+        connected_at_ms: current_ms,
         meter_family: profile.meter_family,
         route_pushes: profile.route_pushes,
+        excluded_routes: profile.excluded_routes,
         dns_servers: profile.dns_servers,
+        tunnel_addresses: profile.tunnel_addresses,
+        mtu_bytes: profile.mtu_bytes,
         helper_ticket_hex,
+        bytes_in: 0,
+        bytes_out: 0,
     };
     let response = response_from_record(&record);
     app.vpn_sessions.insert(session_id, record);
     Ok((StatusCode::CREATED, crate::utils::JsonBody(response)).into_response())
+}
+
+pub(crate) async fn handle_get_vpn_session(
+    app: SharedAppState,
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    session_id: &str,
+) -> Result<Response, Error> {
+    let account_id = require_signed_request(&app, headers, method, uri, &[])?;
+    let current_ms = now_ms();
+    prune_expired_sessions(&app, current_ms);
+    let normalized_session_id = session_id.trim();
+    if normalized_session_id.is_empty() {
+        return Err(conversion_error("session_id must not be empty"));
+    }
+    let Some(record) = app.vpn_sessions.get(normalized_session_id) else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    if record.account_id != account_id {
+        return Err(not_permitted_error(
+            "vpn session belongs to a different account",
+        ));
+    }
+    Ok(crate::utils::JsonBody(response_from_record(&record)).into_response())
 }
 
 pub(crate) async fn handle_delete_vpn_session(
@@ -308,15 +489,7 @@ pub(crate) async fn handle_delete_vpn_session(
         return Err(conversion_error("session_id must not be empty"));
     }
     let Some(record) = app.vpn_sessions.get(normalized_session_id) else {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            crate::utils::JsonBody(VpnSessionDeleteResponseDto {
-                session_id: normalized_session_id.to_owned(),
-                status: "not_found".to_owned(),
-                disconnected_at_ms: current_ms,
-            }),
-        )
-            .into_response());
+        return Ok(StatusCode::NOT_FOUND.into_response());
     };
     if record.account_id != account_id {
         return Err(not_permitted_error(
@@ -324,16 +497,30 @@ pub(crate) async fn handle_delete_vpn_session(
         ));
     }
     drop(record);
-    let _ = app.vpn_sessions.remove(normalized_session_id);
+    let (_, removed) = app
+        .vpn_sessions
+        .remove(normalized_session_id)
+        .ok_or_else(|| conversion_error("vpn session disappeared during delete"))?;
+    let receipt = build_receipt_record(&removed, current_ms, "disconnected");
+    store_receipt(&app, receipt.clone());
     Ok((
         StatusCode::OK,
-        crate::utils::JsonBody(VpnSessionDeleteResponseDto {
-            session_id: normalized_session_id.to_owned(),
-            status: "disconnected".to_owned(),
-            disconnected_at_ms: current_ms,
-        }),
+        crate::utils::JsonBody(receipt_response_from_record(&receipt)),
     )
         .into_response())
+}
+
+pub(crate) async fn handle_list_vpn_receipts(
+    app: SharedAppState,
+    method: &Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+) -> Result<Response, Error> {
+    let account_id = require_signed_request(&app, headers, method, uri, &[])?;
+    prune_expired_sessions(&app, now_ms());
+    let items = list_receipts_for_account(&app, &account_id);
+    let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
+    Ok(crate::utils::JsonBody(VpnReceiptListResponseDto { items, total }).into_response())
 }
 
 #[cfg(test)]
@@ -383,6 +570,9 @@ mod tests {
         let bytes = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("response bytes");
+        if status == StatusCode::NOT_FOUND {
+            panic!("expected JSON response, got 404");
+        }
         norito::json::from_slice(bytes.as_ref()).expect("json body")
     }
 
@@ -403,6 +593,8 @@ mod tests {
             vec!["standard", "low-latency", "high-security"]
         );
         assert!(!body.relay_endpoint.trim().is_empty());
+        assert_eq!(body.mtu_bytes, DEFAULT_VPN_MTU_BYTES);
+        assert_eq!(body.tunnel_addresses, default_tunnel_addresses());
     }
 
     #[tokio::test]
@@ -428,7 +620,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_and_delete_vpn_session_roundtrips_for_signed_account() {
+    async fn create_get_delete_and_list_vpn_session_roundtrip_for_signed_account() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let key_pair = KeyPair::random();
         let account = account_id_for(&key_pair);
@@ -450,7 +642,27 @@ mod tests {
         let session: VpnSessionResponseDto = read_json(created).await;
         assert_eq!(session.account_id, account.to_string());
         assert_eq!(session.exit_class, "low-latency");
+        assert_eq!(session.status, "active");
         assert_eq!(app.vpn_sessions.len(), 1);
+
+        let get_method = Method::GET;
+        let get_uri: Uri = format!("/v1/vpn/sessions/{}", session.session_id)
+            .parse()
+            .expect("get uri");
+        let get_headers = signed_app_headers(&account, &key_pair, &get_method, &get_uri, &[]);
+        let active = handle_get_vpn_session(
+            app.clone(),
+            &get_method,
+            &get_uri,
+            &get_headers,
+            &session.session_id,
+        )
+        .await
+        .expect("active")
+        .into_response();
+        let active_body: VpnSessionResponseDto = read_json(active).await;
+        assert_eq!(active_body.session_id, session.session_id);
+        assert_eq!(active_body.connected_at_ms, session.connected_at_ms);
 
         let delete_method = Method::DELETE;
         let delete_uri: Uri = format!("/v1/vpn/sessions/{}", session.session_id)
@@ -468,9 +680,27 @@ mod tests {
         .await
         .expect("deleted")
         .into_response();
-        let deleted_body: VpnSessionDeleteResponseDto = read_json(deleted).await;
+        let deleted_body: VpnReceiptResponseDto = read_json(deleted).await;
         assert_eq!(deleted_body.status, "disconnected");
+        assert_eq!(deleted_body.receipt_source, "torii");
         assert_eq!(app.vpn_sessions.len(), 0);
+
+        let receipts_method = Method::GET;
+        let receipts_uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let receipts_headers =
+            signed_app_headers(&account, &key_pair, &receipts_method, &receipts_uri, &[]);
+        let receipts = handle_list_vpn_receipts(
+            app.clone(),
+            &receipts_method,
+            &receipts_uri,
+            &receipts_headers,
+        )
+        .await
+        .expect("receipts")
+        .into_response();
+        let receipts_body: VpnReceiptListResponseDto = read_json(receipts).await;
+        assert_eq!(receipts_body.total, 1);
+        assert_eq!(receipts_body.items[0].session_id, session.session_id);
     }
 
     #[tokio::test]
@@ -555,5 +785,65 @@ mod tests {
             Err(error) => error,
         };
         assert!(format!("{error:?}").contains("different account"));
+    }
+
+    #[tokio::test]
+    async fn recreating_session_moves_previous_session_into_receipts() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = KeyPair::random();
+        let account = account_id_for(&key_pair);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&account));
+        let method = Method::POST;
+        let uri: Uri = "/v1/vpn/sessions".parse().expect("uri");
+
+        let first_body = norito::json::to_vec(&VpnSessionCreateRequestDto {
+            exit_class: "standard".to_owned(),
+        })
+        .expect("body");
+        let first_headers =
+            signed_app_headers(&account, &key_pair, &method, &uri, first_body.as_ref());
+        handle_create_vpn_session(
+            app.clone(),
+            &method,
+            &uri,
+            &first_headers,
+            first_body.as_ref(),
+        )
+        .await
+        .expect("first");
+
+        let second_body = norito::json::to_vec(&VpnSessionCreateRequestDto {
+            exit_class: "low-latency".to_owned(),
+        })
+        .expect("body");
+        let second_headers =
+            signed_app_headers(&account, &key_pair, &method, &uri, second_body.as_ref());
+        handle_create_vpn_session(
+            app.clone(),
+            &method,
+            &uri,
+            &second_headers,
+            second_body.as_ref(),
+        )
+        .await
+        .expect("second");
+
+        let receipts_method = Method::GET;
+        let receipts_uri: Uri = "/v1/vpn/receipts".parse().expect("receipts uri");
+        let receipts_headers =
+            signed_app_headers(&account, &key_pair, &receipts_method, &receipts_uri, &[]);
+        let receipts = handle_list_vpn_receipts(
+            app.clone(),
+            &receipts_method,
+            &receipts_uri,
+            &receipts_headers,
+        )
+        .await
+        .expect("receipts")
+        .into_response();
+        let receipts_body: VpnReceiptListResponseDto = read_json(receipts).await;
+        assert_eq!(receipts_body.total, 1);
+        assert_eq!(receipts_body.items[0].status, "replaced");
+        assert_eq!(app.vpn_sessions.len(), 1);
     }
 }

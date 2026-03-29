@@ -1146,7 +1146,10 @@ export interface ToriiVpnProfile {
   dnsPushIntervalSecs: number;
   meterFamily: string;
   routePushes: ReadonlyArray<string>;
+  excludedRoutes: ReadonlyArray<string>;
   dnsServers: ReadonlyArray<string>;
+  tunnelAddresses: ReadonlyArray<string>;
+  mtuBytes: number;
   displayBillingLabel: string;
 }
 
@@ -1157,17 +1160,32 @@ export interface ToriiVpnSession {
   relayEndpoint: string;
   leaseSecs: number;
   expiresAtMs: number;
+  connectedAtMs: number;
   meterFamily: string;
   routePushes: ReadonlyArray<string>;
+  excludedRoutes: ReadonlyArray<string>;
   dnsServers: ReadonlyArray<string>;
+  tunnelAddresses: ReadonlyArray<string>;
+  mtuBytes: number;
   helperTicketHex: string;
+  bytesIn: number;
+  bytesOut: number;
   status: string;
 }
 
-export interface ToriiVpnSessionDeleteResult {
+export interface ToriiVpnReceipt {
   sessionId: string;
-  status: string;
+  accountId: string;
+  exitClass: string;
+  relayEndpoint: string;
+  meterFamily: string;
+  connectedAtMs: number;
   disconnectedAtMs: number;
+  durationMs: number;
+  bytesIn: number;
+  bytesOut: number;
+  status: string;
+  receiptSource: string;
 }
 
 export type SnsNameStatus =
@@ -6819,13 +6837,24 @@ export declare class ToriiClient {
       canonicalAuth: CanonicalRequestAuth;
     },
   ): Promise<ToriiVpnSession>;
+  getVpnSession(
+    sessionId: string,
+    options: {
+      signal?: AbortSignal;
+      canonicalAuth: CanonicalRequestAuth;
+    },
+  ): Promise<ToriiVpnSession | null>;
   deleteVpnSession(
     sessionId: string,
     options?: {
       signal?: AbortSignal;
       canonicalAuth: CanonicalRequestAuth;
     },
-  ): Promise<ToriiVpnSessionDeleteResult | null>;
+  ): Promise<ToriiVpnReceipt | null>;
+  listVpnReceipts(options: {
+    signal?: AbortSignal;
+    canonicalAuth: CanonicalRequestAuth;
+  }): Promise<ReadonlyArray<ToriiVpnReceipt>>;
   getSnsPolicy(suffixId: number, options?: { signal?: AbortSignal }): Promise<SnsSuffixPolicy>;
   getSnsRegistration(
     selector: string,

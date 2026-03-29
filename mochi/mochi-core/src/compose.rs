@@ -983,9 +983,10 @@ impl InstructionDraft {
             InstructionDraft::RegisterDomain { domain } => {
                 Register::domain(Domain::new(domain.clone())).into()
             }
-            InstructionDraft::RegisterAccount { account } => {
-                Register::account(Account::from_scoped_id(account.clone())).into()
-            }
+            InstructionDraft::RegisterAccount { account } => Register::account(
+                Account::new_in_domain(account.account().clone(), account.domain().clone()),
+            )
+            .into(),
             InstructionDraft::RegisterAssetDefinition {
                 definition,
                 mintable,
@@ -1804,7 +1805,7 @@ mod tests {
         };
 
         assert_eq!(register.object.id, ALICE_ID.clone());
-        assert_eq!(register.object.scoped_id().as_ref(), Some(&expected));
+        assert_eq!(register.object.domain(), Some(expected.domain()));
     }
 
     #[test]

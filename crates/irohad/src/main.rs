@@ -2237,8 +2237,8 @@ mod network_relay_tests {
             },
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
+            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -2558,10 +2558,12 @@ mod network_relay_tests {
     }
 
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
-        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV1 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
             request_id: Hash::prehashed([0x41; 32]),
-            hop_count: 0,
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
             request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
@@ -7974,8 +7976,8 @@ mod tests {
     mod relay_ingress {
         use super::*;
         use iroha_core::torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V1, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV1,
+            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
@@ -7989,10 +7991,12 @@ mod tests {
                 dataspace_id: DataSpaceId::new(0),
             };
             let request = iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(
-                ToriiProxyRequestV1 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V1,
+                ToriiProxyRequestV2 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V2,
                     request_id: Hash::new(b"torii-proxy-request"),
-                    hop_count: 0,
+                    hop_count: 1,
+                    max_hops: 3,
+                    visited_peer_ids: Vec::new(),
                     request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
                         endpoint: ToriiReadEndpointV1::AccountsList,
                         expected_route: route,

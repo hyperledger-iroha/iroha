@@ -2,27 +2,112 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 Torii multi-hop ingress + latency-aware admission implementation):
+the remaining ingress fixes are now implemented in the Torii/queue layer:
+NPoS routing now has bounded transparent multi-hop forwarding, and
+permissioned admission now sheds on queue latency as well as raw count.
+
+- added an internal Torii proxy envelope V2 with `hop_count`, `max_hops`, and
+  `visited_peer_ids`, then threaded it through `iroha_core`, `iroha_torii`,
+  and `irohad` without changing the public HTTP surface;
+- changed incoming Torii proxy handling to re-forward non-authoritative
+  requests across authoritative-first candidates while excluding the local
+  peer, the immediate sender, and already-visited peers, with explicit
+  loop-prevention / exhausted-hop telemetry; and
+- added `QueuePressureSnapshot`, explicit local enqueue-age tracking, and
+  age-based early shedding in `POST /transaction`, with focused queue/Torii
+  regressions green on the current tree; and
+- completed the requested release build
+  `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`.
+
+Open work for this slice now remains:
+- rerun the full preserved-peer stable permissioned soak on this exact patch
+  set and confirm whether age-aware admission collapses
+  `transaction queued for too long`,
+  `haven't got tx confirmation within 20s`,
+  and `plan submission failed`; and
+- rerun the full preserved-peer stable NPoS soak on this exact patch set and
+  confirm whether transparent multi-hop ingress materially collapses
+  `route_unavailable` before reopening any Sumeragi dissemination work.
+
+Latest sync (2026-03-29 scoped-id account builder removal pass):
+the repo no longer uses or exposes the old scoped-id account builder shim; the
+remaining account-model cleanup is now the larger `ScopedAccountId` /
+`linked_domains` / scoped-`REGISTER_ACCOUNT` surface rather than that removed
+convenience layer.
+
+- converted the remaining `iroha_core`, `iroha_torii`, `integration_tests`, and
+  `mochi-core` scoped-account fixture/setup callsites to
+  `Account::new_in_domain(account, domain)`;
+- removed the old scoped-id account builder constructors plus the dead
+  `scoped_id()` compatibility view from the data model and updated the active
+  account-model docs/guidance; and
+- revalidated the touched compile surface with `iroha_data_model`,
+  `iroha_core --tests`, `iroha_torii --tests`,
+  `integration_tests --test sumeragi_vote_qc_commit`, and `mochi-core`.
+
+Earlier sync (2026-03-29 full preserved-peer stable reruns on the Torii ingress slice):
+the earlier clean permissioned target-height run did not reproduce: a fresh
+permissioned rerun stalled at `499` with queue/confirmation starvation again,
+and the full NPoS rerun stalled at `320` after an authoritative-route collapse,
+so this slice is not an acceptance candidate.
+
+- permissioned rerun log:
+  `/tmp/izanami_permissioned_torii_ingressfix_rerun_20260329T081619Z.log`
+  failed with
+  `plan submission failed=54`,
+  `transaction queued for too long=78`,
+  `haven't got tx confirmation within 20s=35`,
+  and
+  `no strict block height progress for 600s ... height 499`,
+  while the old repair markers and `route_unavailable` stayed at zero;
+- NPoS rerun log:
+  `/tmp/izanami_npos_torii_ingressfix_rerun_20260329T083305Z.log`
+  failed with
+  `route_unavailable=758`,
+  `plan submission failed=143`,
+  repeated
+  `no reachable authoritative peers are available for lane 1 dataspace 1`,
+  and
+  `no strict block height progress for 600s ... height 320`; and
+- both reruns kept
+  `requested block-sync range pull from committed anchor=0`,
+  `sharing from fallback anchor=0`,
+  and
+  `requested missing BlockCreated while awaiting RBC INIT=0`,
+  so the remaining bugs are outside the earlier consensus-repair class.
+
+Open work for this slice now remains:
+- diagnose the permissioned preserved-peer stable regression that still
+  re-enters ingress/confirmation starvation on some reruns despite the
+  early-shed admission change;
+- diagnose the NPoS authoritative-route / proxy visibility failure that still
+  escalates from `local peer is not authoritative` to
+  `no reachable authoritative peers are available` under load; and
+- rerun both full envelopes only after those two failure classes are addressed;
+  do not widen consensus or client semantics again before then.
+
 Latest sync (2026-03-29 Taira shared-roster deploy bundle):
 the checked-in Taira deploy path no longer assumes operators will hand-edit one
 peer-1 config into a full validator set.
 
 - `scripts/render_taira_validator_bundle.py` now renders one validator
-  `config.toml` per host from a single roster, with focused coverage in
-  `scripts/tests/render_taira_validator_bundle_test.py`;
-- `configs/soranexus/taira/validator_roster.example.toml` and
+  `config.toml` per host from a public roster plus a separate private-key file,
+  with focused coverage in `scripts/tests/render_taira_validator_bundle_test.py`;
+- `configs/soranexus/taira/validator_roster.example.toml`,
+  `validator_secrets.example.toml`, `taira-canary-client.example.toml`, and
   `taira-irohad.env.example` now document the supported user-local inputs; and
 - `check_mcp_rollout.sh` now requires at least four validators in the commit QC
-  set before Taira rollout can pass on the public path.
+  set before Taira rollout can pass on the public path, while auto-discovering
+  a repo-built `iroha` CLI or falling back to `cargo run`.
 
 Open work for this slice now remains:
-- fix the remaining live public write-path failure so the signed canary no
-  longer returns
-  `503 route_unavailable: no reachable authoritative peers are available for lane 0 dataspace 0`;
-- once that passes, capture a successful
+- capture the successful
   `bash configs/soranexus/taira/check_mcp_rollout.sh --write-config /run/secrets/taira-canary-client.toml`
-  transcript in the rollout ticket; and
-- if operators want less manual secret handling, add a follow-up renderer input
-  format that splits public roster data from per-validator private key files.
+  transcript in the rollout ticket using a real long-lived canary signer, not
+  just an ad-hoc local temp file; and
+- if the cargo fallback is too slow for ops hosts, ship or cache a dedicated
+  `iroha` binary alongside the deploy bundle so signed canaries stay fast.
 
 Latest sync (2026-03-29 Torii transparent ingress + early-shed slice):
 the server-side Torii slice now fixes the old permissioned over-admission
@@ -74,7 +159,10 @@ the current core-host behavior.
   registration, and current opaque asset-id semantics;
 - `crates/iroha_core/src/smartcontracts/ivm/host.rs` now routes
   `REGISTER_ACCOUNT` through `Account::new_in_domain(account, domain)` instead
-  of `Account::from_scoped_id(...)`; and
+  of the old scoped-id builder shim; and
+- `crates/iroha_cli/src/main_shared.rs` test harnesses now use the same
+  explicit `new_in_domain(...)` path instead of the old
+  scoped-id constructor shim; and
 - `crates/ivm/src/{core_host.rs,host.rs}` plus the doc generator now describe
   and emit the current `AccountId`/opaque-id ABI behavior consistently.
 
@@ -476,7 +564,7 @@ Open work from this slice:
   cleanup across CLI, Torii tests, bridge helpers, IVM, and docs so account
   creation and account-targeting ABIs stop depending on scoped account IDs;
 - remove the remaining `ScopedAccountId` compatibility builders/views from the
-  data model (`from_scoped_id`, `new_in_domain`, `domain()`, `scoped_id()`)
+  data model (`new_in_domain`, `domain()`)
   once downstream consumers stop depending on them;
 - decide whether `linked_domains` remains a transient internal projection only
   or is removed entirely from stored account records once the remaining

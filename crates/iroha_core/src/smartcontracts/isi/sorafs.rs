@@ -17,7 +17,7 @@ use iroha_data_model::{
         },
         pin_registry::{
             ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord, ManifestDigest,
-            PinManifestRecord, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
+            PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
             ReplicationOrderStatus, StorageClass,
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
@@ -37,7 +37,9 @@ use sorafs_manifest::{
     alias_cache::decode_alias_proof,
     capacity::{
         CAPACITY_DISPUTE_VERSION_V1, CapacityDeclarationV1, CapacityDisputeEvidenceV1,
-        CapacityDisputeKind, CapacityDisputeV1, CapacityMetadataEntry, ReplicationOrderV1,
+        CapacityDisputeKind, CapacityDisputeV1, CapacityMetadataEntry,
+        REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+        ReplicationOrderV1,
     },
     validate_chunker_handle, validate_pin_policy,
 };
@@ -420,7 +422,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             ));
         }
 
-        let record = PinManifestRecord::new(
+        let mut record = PinManifestRecord::new(
             digest,
             chunker,
             chunk_digest_sha3_256,
@@ -431,8 +433,40 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             successor_of,
             Metadata::default(),
         );
+        record.approve(submitted_epoch, None);
+
+        if let Some(alias) = &record.alias {
+            ensure_alias_unique(
+                alias,
+                &state_transaction.world.pin_manifests,
+                &state_transaction.world.manifest_aliases,
+                Some(&digest),
+            )?;
+            bind_alias_record(
+                state_transaction,
+                alias,
+                &digest,
+                authority,
+                submitted_epoch,
+                record.policy.retention_epoch,
+            );
+        }
+
+        let auto_providers = select_auto_replication_providers(
+            state_transaction,
+            &record.chunker,
+            &record.policy,
+            submitted_epoch,
+        );
+        let auto_order = build_auto_replication_order(&record, authority, &auto_providers);
 
         state_transaction.world.pin_manifests.insert(digest, record);
+        if let Some(order) = auto_order {
+            state_transaction
+                .world
+                .replication_orders
+                .insert(order.order_id, order);
+        }
 
         Ok(())
     }
@@ -892,6 +926,156 @@ fn convert_storage_class(
 
 fn order_hex(order_id: &ReplicationOrderId) -> String {
     hex::encode(order_id.as_bytes())
+}
+
+const AUTO_REPLICATION_ORDER_NAMESPACE: &[u8] = b"sorafs:auto-replication-order:v1";
+const AUTO_REPLICATION_ORDER_SLICE_GIB: u64 = 1;
+const AUTO_REPLICATION_ORDER_EPOCH_SLACK: u64 = 1;
+const AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS: u32 = 86_400;
+const AUTO_REPLICATION_ORDER_AVAILABILITY_PERCENT_MILLI: u32 = 99_500;
+const AUTO_REPLICATION_ORDER_POR_SUCCESS_PERCENT_MILLI: u32 = 98_000;
+const AUTO_REPLICATION_ORDER_SECS_PER_EPOCH: u64 = 3_600;
+
+fn supports_chunker_profile(declaration: &CapacityDeclarationV1, profile: &str) -> bool {
+    declaration.chunker_commitments.iter().any(|commitment| {
+        commitment.profile_id == profile
+            || commitment
+                .profile_aliases
+                .as_ref()
+                .is_some_and(|aliases| aliases.iter().any(|alias| alias == profile))
+    })
+}
+
+fn select_auto_replication_providers(
+    state_transaction: &StateTransaction<'_, '_>,
+    chunker: &iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle,
+    policy: &PinPolicy,
+    submitted_epoch: u64,
+) -> Vec<ProviderId> {
+    let required_replicas = usize::from(policy.min_replicas);
+    if required_replicas == 0 {
+        return Vec::new();
+    }
+
+    let canonical_profile = chunker.to_handle();
+    let default_storage_class = state_transaction
+        .world
+        .sorafs_pricing
+        .get()
+        .default_storage_class;
+    let mut providers = Vec::with_capacity(required_replicas);
+
+    for (provider_id, declaration_record) in state_transaction.world.capacity_declarations.iter() {
+        if providers.len() == required_replicas {
+            break;
+        }
+
+        if submitted_epoch < declaration_record.valid_from_epoch
+            || submitted_epoch > declaration_record.valid_until_epoch
+        {
+            continue;
+        }
+
+        if state_transaction
+            .world
+            .provider_owners
+            .get(provider_id)
+            .is_none()
+        {
+            continue;
+        }
+
+        let Ok(storage_class) =
+            storage_class_from_declaration_record(declaration_record, default_storage_class)
+        else {
+            continue;
+        };
+        if storage_class != policy.storage_class {
+            continue;
+        }
+
+        let Ok(declaration) =
+            decode_from_bytes::<CapacityDeclarationV1>(&declaration_record.declaration)
+        else {
+            continue;
+        };
+        if !supports_chunker_profile(&declaration, &canonical_profile) {
+            continue;
+        }
+
+        providers.push(*provider_id);
+    }
+
+    providers
+}
+
+fn auto_replication_order_id(
+    digest: &ManifestDigest,
+    assignments: &[ReplicationAssignmentV1],
+) -> ReplicationOrderId {
+    let mut seed = Vec::with_capacity(
+        AUTO_REPLICATION_ORDER_NAMESPACE.len() + digest.as_bytes().len() + assignments.len() * 32,
+    );
+    seed.extend_from_slice(AUTO_REPLICATION_ORDER_NAMESPACE);
+    seed.extend_from_slice(digest.as_bytes());
+    for assignment in assignments {
+        seed.extend_from_slice(&assignment.provider_id);
+    }
+    ReplicationOrderId::new(*blake3_hash(&seed).as_bytes())
+}
+
+fn build_auto_replication_order(
+    record: &PinManifestRecord,
+    issued_by: &AccountId,
+    assignments: &[ProviderId],
+) -> Option<ReplicationOrderRecord> {
+    if assignments.len() < usize::from(record.policy.min_replicas) {
+        return None;
+    }
+
+    let assignments: Vec<_> = assignments
+        .iter()
+        .take(usize::from(record.policy.min_replicas))
+        .map(|provider| ReplicationAssignmentV1 {
+            provider_id: *provider.as_bytes(),
+            slice_gib: AUTO_REPLICATION_ORDER_SLICE_GIB,
+            lane: None,
+        })
+        .collect();
+    let order_id = auto_replication_order_id(&record.digest, &assignments);
+    let issued_epoch = record.submitted_epoch;
+    let deadline_epoch = issued_epoch.saturating_add(AUTO_REPLICATION_ORDER_EPOCH_SLACK);
+    let issued_at = issued_epoch.saturating_mul(AUTO_REPLICATION_ORDER_SECS_PER_EPOCH);
+    let deadline_at =
+        issued_at.saturating_add(u64::from(AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS));
+    let order = ReplicationOrderV1 {
+        version: REPLICATION_ORDER_VERSION_V1,
+        order_id: *order_id.as_bytes(),
+        manifest_cid: record.digest.as_bytes().to_vec(),
+        manifest_digest: *record.digest.as_bytes(),
+        chunking_profile: record.chunker.to_handle(),
+        target_replicas: record.policy.min_replicas,
+        assignments,
+        issued_at,
+        deadline_at,
+        sla: ReplicationOrderSlaV1 {
+            ingest_deadline_secs: AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS,
+            min_availability_percent_milli: AUTO_REPLICATION_ORDER_AVAILABILITY_PERCENT_MILLI,
+            min_por_success_percent_milli: AUTO_REPLICATION_ORDER_POR_SUCCESS_PERCENT_MILLI,
+        },
+        metadata: Vec::new(),
+    };
+
+    let canonical_order = norito::to_bytes(&order).ok()?;
+    Some(ReplicationOrderRecord {
+        order_id,
+        manifest_digest: record.digest,
+        issued_by: issued_by.clone(),
+        issued_epoch,
+        deadline_epoch,
+        canonical_order,
+        status: ReplicationOrderStatus::Pending,
+    })
 }
 
 fn manifest_error(err: &ManifestValidationError) -> InstructionExecutionError {
@@ -2382,7 +2566,7 @@ mod sorafs_tests {
             .get(&default_digest())
             .expect("manifest stored");
         assert_eq!(record.submitted_by, alice());
-        assert_eq!(record.status, PinStatus::Pending);
+        assert_eq!(record.status, PinStatus::Approved(5));
     }
 
     #[test]
@@ -2467,12 +2651,13 @@ mod sorafs_tests {
         digest: ManifestDigest,
         chunk_digest: [u8; 32],
     ) {
+        let submitted_epoch = 5;
         let register = RegisterPinManifest {
             digest,
             chunker: default_chunker(),
             chunk_digest_sha3_256: chunk_digest,
             policy: default_policy(),
-            submitted_epoch: 5,
+            submitted_epoch,
             alias: None,
             successor_of: None,
         };
@@ -2489,7 +2674,7 @@ mod sorafs_tests {
 
         let approve = ApprovePinManifest {
             digest,
-            approved_epoch: 7,
+            approved_epoch: submitted_epoch,
             council_envelope: Some(envelope),
             council_envelope_digest: None,
         };
@@ -3141,7 +3326,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn register_manifest_inserts_record() {
+    fn register_manifest_activates_record_immediately() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -3164,9 +3349,10 @@ mod sorafs_tests {
             .pin_manifests
             .get(&default_digest())
             .expect("manifest stored");
-        assert!(matches!(stored.status, PinStatus::Pending));
+        assert_eq!(stored.status, PinStatus::Approved(5));
         assert_eq!(stored.chunk_digest_sha3_256, default_chunk_digest());
         assert!(stored.council_envelope_digest.is_none());
+        assert_eq!(stx.world.replication_orders.iter().count(), 0);
     }
 
     #[test]
@@ -3253,10 +3439,17 @@ mod sorafs_tests {
         let stored_alias = stored.alias.as_ref().expect("alias stored");
         assert_eq!(stored_alias.name, alias.name);
         assert_eq!(stored_alias.namespace, alias.namespace);
+        let alias_record = stx
+            .world
+            .manifest_aliases
+            .get(&ManifestAliasId::from(&alias))
+            .expect("alias binding stored");
+        assert!(alias_record.targets_manifest(&default_digest()));
+        assert_eq!(alias_record.bound_epoch, 5);
     }
 
     #[test]
-    fn approve_manifest_with_alias_records_binding() {
+    fn approve_manifest_with_alias_records_council_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -3286,7 +3479,7 @@ mod sorafs_tests {
 
         ApprovePinManifest {
             digest: default_digest(),
-            approved_epoch: 9,
+            approved_epoch: 5,
             council_envelope: Some(envelope),
             council_envelope_digest: None,
         }
@@ -3300,8 +3493,59 @@ mod sorafs_tests {
             .get(&alias_id)
             .expect("alias record stored");
         assert!(alias_record.targets_manifest(&default_digest()));
-        assert_eq!(alias_record.bound_epoch, 9);
+        assert_eq!(alias_record.bound_epoch, 5);
         assert_eq!(alias_record.expiry_epoch, default_policy().retention_epoch);
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored after approval");
+        assert!(stored.council_envelope_digest.is_some());
+    }
+
+    #[test]
+    fn register_manifest_auto_issues_replication_order_for_matching_capacity() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let (provider, mut declaration) = capacity_record_with_owner(&alice());
+        declaration.valid_from_epoch = 4;
+        declaration.valid_until_epoch = 20;
+        stx.world.provider_owners.insert(provider, alice());
+        stx.world
+            .capacity_declarations
+            .insert(provider, declaration);
+
+        let mut policy = default_policy();
+        policy.min_replicas = 1;
+        RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy,
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register manifest");
+
+        let (_order_id, order) = stx
+            .world
+            .replication_orders
+            .iter()
+            .next()
+            .expect("auto replication order stored");
+        assert_eq!(order.manifest_digest, default_digest());
+        assert_eq!(order.issued_epoch, 5);
+        assert_eq!(order.deadline_epoch, 6);
+
+        let decoded =
+            decode_from_bytes::<ReplicationOrderV1>(&order.canonical_order).expect("decode order");
+        assert_eq!(decoded.target_replicas, 1);
+        assert_eq!(decoded.assignments.len(), 1);
+        assert_eq!(decoded.assignments[0].provider_id, *provider.as_bytes());
+        assert_eq!(decoded.assignments[0].slice_gib, 1);
     }
 
     #[test]
@@ -3417,7 +3661,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn approve_manifest_updates_status() {
+    fn approve_manifest_records_council_digest_for_auto_approved_manifest() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -3451,7 +3695,7 @@ mod sorafs_tests {
 
         let approve = ApprovePinManifest {
             digest: default_digest(),
-            approved_epoch: 7,
+            approved_epoch: 5,
             council_envelope: Some(envelope),
             council_envelope_digest: None,
         };
@@ -3464,7 +3708,7 @@ mod sorafs_tests {
             .pin_manifests
             .get(&default_digest())
             .expect("manifest stored");
-        assert!(matches!(stored.status, PinStatus::Approved(7)));
+        assert!(matches!(stored.status, PinStatus::Approved(5)));
         assert_eq!(stored.council_envelope_digest, Some(expected_digest));
     }
 

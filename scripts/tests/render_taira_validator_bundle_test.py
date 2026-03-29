@@ -39,20 +39,24 @@ enabled = true
 """
 
 
-def _write_roster(path: Path, validator_count: int = 4) -> None:
+def _write_roster(path: Path, validator_count: int = 4, inline_private_keys: bool = True) -> None:
     validators = []
     for index in range(1, validator_count + 1):
-        validators.extend(
+        entry = [
+            "[[validators]]",
+            f'slug = "taira-validator-{index}"',
+            f'public_key = "peer-{index}-public"',
+        ]
+        if inline_private_keys:
+            entry.append(f'private_key = "peer-{index}-private"')
+        entry.extend(
             [
-                "[[validators]]",
-                f'slug = "taira-validator-{index}"',
-                f'public_key = "peer-{index}-public"',
-                f'private_key = "peer-{index}-private"',
                 f'pop_hex = "peer-{index}-pop"',
                 f'public_address = "taira-validator-{index}.sora.org:1337"',
                 "",
             ]
         )
+        validators.extend(entry)
     path.write_text(
         "\n".join(
             [
@@ -63,6 +67,20 @@ def _write_roster(path: Path, validator_count: int = 4) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _write_secrets(path: Path, validator_count: int = 4) -> None:
+    validators = []
+    for index in range(1, validator_count + 1):
+        validators.extend(
+            [
+                "[[validators]]",
+                f'slug = "taira-validator-{index}"',
+                f'private_key = "peer-{index}-private"',
+                "",
+            ]
+        )
+    path.write_text("\n".join(validators), encoding="utf-8")
 
 
 def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
@@ -99,11 +117,25 @@ def test_load_roster_requires_four_validators(tmp_path: Path) -> None:
         raise AssertionError("load_roster accepted a too-small validator roster")
 
 
+def test_load_roster_merges_private_keys_from_secrets(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
+
+    validators = MODULE.load_roster(roster_path, secrets_path=secrets_path)
+
+    assert validators[0].private_key == "peer-1-private"
+    assert validators[-1].private_key == "peer-4-private"
+
+
 def test_main_supports_single_validator_render(tmp_path: Path) -> None:
     roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
     base_config_path = tmp_path / "config.toml"
     output_dir = tmp_path / "out"
-    _write_roster(roster_path)
+    _write_roster(roster_path, inline_private_keys=False)
+    _write_secrets(secrets_path)
     base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
 
     exit_code = MODULE.main(
@@ -112,6 +144,8 @@ def test_main_supports_single_validator_render(tmp_path: Path) -> None:
             str(base_config_path),
             "--roster",
             str(roster_path),
+            "--secrets",
+            str(secrets_path),
             "--output-dir",
             str(output_dir),
             "--only",
