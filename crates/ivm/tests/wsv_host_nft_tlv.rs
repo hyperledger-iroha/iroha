@@ -6,8 +6,6 @@ use ivm::{
     mock_wsv::{AccountId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
     syscalls,
 };
-use norito::to_bytes;
-
 mod common;
 use common::assemble_syscalls;
 
@@ -32,8 +30,8 @@ fn account(domain: &str, public_key: &str) -> ScopedAccountId {
 }
 
 fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let buf = to_bytes(account).expect("encode account into Norito");
-    make_tlv(PointerType::AccountId as u16, &buf)
+    let account = AccountId::from(account).to_string();
+    make_tlv(PointerType::AccountId as u16, account.as_bytes())
 }
 
 #[test]
@@ -48,7 +46,7 @@ fn create_transfer_set_nft_with_tlv() {
     );
     let carol = account(
         "wonder",
-        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
+        "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063",
     );
 
     let mut wsv = MockWorldStateView::new();

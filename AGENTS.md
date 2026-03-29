@@ -147,6 +147,11 @@ Note: First release policy
 - Treat any Taira/runtime signing inputs such as `authority`,
   `private_key`, bearer tokens, or forwarded auth headers as runtime-only
   secrets and never persist them in repo files or committed docs.
+- For Taira rollout/debug work, do not trust MCP discovery alone. Use
+  `configs/soranexus/taira/check_mcp_rollout.sh`, and for final public cutover
+  require the signed canary path with `--write-config <runtime-only client.toml>`.
+- If a live public Taira write fails with `route_unavailable`, treat it as an
+  ingress or authoritative-peer routing failure first, not a user payload bug.
 
 ## Navigation tips
 - Search code: `rg '<term>'` and list files: `fd <name>`.

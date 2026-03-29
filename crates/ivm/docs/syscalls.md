@@ -407,6 +407,7 @@ but they must not change the host ABI.
 | 0x7D | JSON_GET_BLOB_HEX | - | u64=0 | - |
 | 0x7E | VRF_EPOCH_SEED | r10=&NoritoBytes(VrfEpochSeedRequest) | r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64 | asset:gas/G_vote_get@ivm.core/v2 |
 | 0x7F | JSON_GET_NUMERIC | - | u64=0 | - |
+| 0x80 | JSON_GET_ASSET_DEFINITION_ID | - | u64=0 | - |
 | 0x90 | SM3_HASH | r10=&Blob(message) | r10=ptr (&Blob(digest)) | - |
 | 0x91 | SM2_VERIFY | r10=&Blob(msg), r11=&Blob(sig), r12=&Blob(pubkey), r13=&Blob(distid)? | u64=0/1 | asset:gas/G_verify@ivm.core/v2 |
 | 0x92 | SM4_GCM_SEAL | r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(plaintext) | r10=ptr (&Blob(ciphertext || tag16)) | - |
@@ -423,6 +424,7 @@ but they must not change the host ABI.
 | 0xA5 | SUBSCRIPTION_BILL | - | u64=0 | asset:gas/G_sub_bill@ivm.core/v2 |
 | 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
 | 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
+| 0xA8 | CURRENT_TIME_MS | - | u64=0 | - |
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | - |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | - |
 | 0xB2 | AXT_COMMIT | - | u64=0 | - |
@@ -453,6 +455,13 @@ but they must not change the host ABI.
 | 0xFE | COMMIT_OUTPUT | - | u64=0 | asset:gas/G_commit@ivm.core/v2 |
 | 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 <!-- END GENERATED SYSCALLS -->
+
+
+
+
+
+
+
 
 
 

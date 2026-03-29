@@ -26,6 +26,7 @@ max_frame_bytes_tx_gossip = 1048576
 [torii]
 address = "0.0.0.0:18080"
 public_address = "https://taira.sora.org"
+max_content_len = 64_000_000
 
 [torii.mcp]
 enabled = true
@@ -57,6 +58,11 @@ pow_vrf_seed_enabled = true
 discovery_enabled = true
 known_capabilities = ["torii_gateway", "chunk_range_fetch"]
 admission_envelopes_dir = "configs/soranexus/taira/sorafs_admission"
+
+[sorafs.gateway.denylist]
+catalog_path = "configs/soranexus/taira/sorafs_gateway_denylist.catalog.json"
+opt_out_packs = []
+extra_packs = []
 
 [sorafs.repair]
 enabled = false

@@ -22,6 +22,10 @@ That endpoint must be enabled by the deployed validator config before the
 plugin can be used. If it returns `404`, the network has not been redeployed
 with native Torii MCP yet.
 
+For public write readiness, MCP discovery is not enough. A healthy rollout also
+needs a signed canary write to succeed; otherwise public reads can work while
+transactions still fail with `route_unavailable`.
+
 ## Install from this repo
 
 Use the repo-local marketplace entry in `.agents/plugins/marketplace.json` and
@@ -82,3 +86,8 @@ Those values are runtime-only inputs:
 - do not commit them into plugin manifests or docs
 - do not write them to files unless the user explicitly asks for that
 - prefer read-only queries until the user clearly asks to mutate live state
+
+When live Taira writes fail with `route_unavailable`, treat that as an ingress
+or authoritative-peer deployment issue and rerun
+`configs/soranexus/taira/check_mcp_rollout.sh --write-config <runtime-only client.toml>`
+rather than debugging the plugin surface first.

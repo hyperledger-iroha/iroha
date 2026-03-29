@@ -1,6 +1,92 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-28
+Last updated: 2026-03-29
+
+Latest sync (2026-03-29 Torii transparent ingress + early-shed slice):
+the server-side Torii slice now fixes the old permissioned over-admission
+failure class, but permissioned still misses the preserved-peer stable latency
+gate, so the NPoS rerun remains blocked by policy.
+
+- `crates/iroha_torii/src/lib.rs` now decouples strict local route authority
+  from proxy candidate selection, trying authoritative peers first and then
+  other online peers for ingress proxying while keeping local execution
+  authority unchanged;
+- the same slice now early-sheds local transaction submission at
+  `high_load_tx_threshold` through the existing queue-full rejection path
+  instead of over-admitting work that later times out in `Queued`;
+- focused Torii tests plus the requested release build are green on the
+  current tree; and
+- the full preserved-peer stable permissioned rerun with
+  `/tmp/iroha_target_torii_ingressfix_iso/release/{iroha3d,izanami}` reached
+  `strict/quorum=2003` with
+  `route_unavailable=0`, `plan submission failed=0`,
+  `transaction queued for too long=0`,
+  `haven't got tx confirmation within 20s=0`,
+  and the old repair markers still at zero, but it still failed at
+  `target_reached` because `interval_p95_ms=2501 > 1000`
+  (log: `/tmp/izanami_permissioned_torii_ingressfix_20260329T072628Z.log`).
+
+Open work for this slice now remains:
+- investigate the remaining permissioned steady-state throughput/cadence
+  problem in `iroha_core` rather than expanding Torii ingress semantics again;
+  the next bug is no longer queue overload, it is sub-acceptance pipeline pace;
+- once permissioned meets the unchanged `interval_p95_ms <= 1000` gate,
+  rerun the full preserved-peer stable permissioned envelope and only then
+  rerun the full preserved-peer stable NPoS envelope; and
+- keep the NPoS root-cause record centered on authoritative-route/proxy
+  visibility until an end-to-end NPoS soak on top of this Torii slice proves
+  whether the broader proxy candidate set materially collapses
+  `route_unavailable`.
+
+Latest sync (2026-03-29 IVM canonical-account TLV cleanup):
+the active IVM/mock-host path no longer mixes canonical account-target syscalls
+with scoped-account TLVs, and opaque asset-definition registration now matches
+the current core-host behavior.
+
+- `crates/ivm/src/mock_wsv.rs` now keeps `REGISTER_ACCOUNT` as the explicit
+  scoped-registration exception while account-target permissions/unregister
+  flows use canonical `AccountId` subjects, and canonical opaque
+  `AssetDefinitionId` registration no longer requires a matching domain row;
+- the focused IVM TLV tests and negative cases were updated to use canonical
+  `AccountId` TLVs for account-target syscalls, scoped TLVs only for account
+  registration, and current opaque asset-id semantics;
+- `crates/iroha_core/src/smartcontracts/ivm/host.rs` now routes
+  `REGISTER_ACCOUNT` through `Account::new_in_domain(account, domain)` instead
+  of `Account::from_scoped_id(...)`; and
+- `crates/ivm/src/{core_host.rs,host.rs}` plus the doc generator now describe
+  and emit the current `AccountId`/opaque-id ABI behavior consistently.
+
+Open work for this slice now remains:
+- remove the remaining public `ScopedAccountId`/`linked_domains` surfaces from
+  the data model and stop treating scoped registration as the long-term ABI;
+- sweep `connect_norito_bridge`, `iroha_cli`, and the remaining IVM/Kotodama
+  helpers/tests for stale scoped-account assumptions; and
+- once the public ABI surface is settled, regenerate/update the remaining docs
+  and fixtures that still speak in terms of scoped account ids outside the
+  explicit transitional registration path.
+
+Latest sync (2026-03-29 Taira MCP rollout gate hardened around live writes):
+the repo no longer treats MCP discovery alone as sufficient evidence that the
+public Taira write path is healthy.
+
+- `configs/soranexus/taira/check_mcp_rollout.sh` now enforces required curated
+  `iroha.*` tools, checks the native `/status` snapshot, and requires a signed
+  canary write for public rollout unless operators explicitly opt into
+  read-only mode with `--skip-write-canary`; and
+- the Taira deploy docs, plugin README, standalone skill, and `AGENTS.md` now
+  document the stronger gate and classify `route_unavailable` as a deployment
+  routing failure rather than a plugin/user-input bug.
+
+Open work for this slice now remains:
+- fix the live public Taira routing/topology issue so the signed write canary
+  no longer fails with
+  `503 route_unavailable: no reachable authoritative peers are available for lane 0 dataspace 0`;
+- once that is fixed, rerun
+  `bash configs/soranexus/taira/check_mcp_rollout.sh --write-config /run/secrets/taira-canary-client.toml`
+  and capture the successful canary output in the rollout ticket; and
+- if the public ingress is intentionally non-authoritative, document or expose a
+  stable authoritative-write path for Codex users instead of advertising the
+  current public endpoint as write-ready.
 
 Latest sync (2026-03-28 Taira Sorafs upload proxy fix):
 the public edge on this machine no longer rejects larger Sorafs uploads with
@@ -125,6 +211,29 @@ Open work for this follow-up now remains:
 - after public MCP is live, complete the end-to-end Taira Codex smoke
   (`GET /v1/mcp`, `tools/list`, hidden `torii.*`, one public read, one
   explicit-key write flow).
+
+Latest sync (2026-03-28 full preserved-peer rerun on the repeatable-trigger repin cut):
+the client-side `izanami` repin change improved both modes, but it did not
+clear the gate and it confirmed the next dominant bugs are outside consensus.
+
+- permissioned advanced from the prior `186` plateau to `385`, kept the old
+  recovery markers at zero, and stayed under the p95 latency gate
+  (`interval_p95_ms=843`), but still failed `no strict block height progress`
+  because ingress/backpressure starvation remains active
+  (`plan submission failed=63`,
+  `transaction queued for too long=78`,
+  `haven't got tx confirmation within 20s=42`);
+- NPoS advanced from the prior `878` plateau to `1847`, kept
+  `Failed to find asset=0`, and held `plan submission failed=0` until the late
+  stall window, which is strong evidence that the repeatable-trigger repin
+  logic in `crates/izanami/src/chaos.rs` fixed the original pinned-endpoint
+  pathology;
+- but NPoS still emitted `route_unavailable=7340`, then regressed into late
+  repeatable-trigger timeout/submission failures and missed the latency gate at
+  `interval_p95_ms=2501`; and
+- conclusion: the next NPoS slice should move into Nexus/Torii
+  authoritative-route visibility/proxying, not back into nomination logic or
+  broader consensus changes.
 
 Latest sync (2026-03-28 Torii peer-monitor `/configuration` auth fix):
 the live Taira config-monitor warning loop is closed.

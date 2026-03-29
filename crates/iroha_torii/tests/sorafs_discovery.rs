@@ -2135,6 +2135,92 @@ async fn sorafs_storage_endpoints_round_trip() {
 }
 
 #[tokio::test]
+async fn sorafs_storage_pin_uses_configured_torii_body_limit() {
+    if !ingest_tests_enabled() {
+        eprintln!("skipping storage pin body-limit regression (SORAFS_TORII_SKIP_INGEST_TESTS=1)");
+        return;
+    }
+
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.max_content_len = Bytes(8_000_000);
+    cfg.torii.sorafs_storage.enabled = true;
+    cfg.torii.sorafs_storage.max_parallel_fetches = 1;
+    cfg.torii.sorafs_storage.max_pins = 8;
+    cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(8_000_000);
+    cfg.torii.sorafs_gateway.enforce_capabilities = false;
+    cfg.torii.sorafs_gateway.enforce_admission = false;
+    cfg.torii.sorafs_gateway.require_manifest_envelope = false;
+    let temp_dir = tempdir().expect("storage temp dir");
+    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+
+    let harness = build_torii_harness(&cfg);
+    let app = harness.app.clone();
+
+    // This payload expands past Axum's default body cap once base64-encoded, so
+    // the request only succeeds when the route honors `torii.max_content_len`.
+    let payload = vec![0x5Au8; 2_200_000];
+    let manifest = ManifestBuilder::new()
+        .root_cid(vec![0x55; 16])
+        .dag_codec(DagCodecId(0x71))
+        .chunking_from_profile(
+            sorafs_chunker::ChunkProfile::DEFAULT,
+            BLAKE3_256_MULTIHASH_CODE,
+        )
+        .content_length(payload.len() as u64)
+        .car_digest(blake3::hash(&payload).into())
+        .car_size(payload.len() as u64)
+        .pin_policy(PinPolicy::default())
+        .build()
+        .expect("manifest");
+
+    let pin_body = {
+        let mut map = json::Map::new();
+        map.insert(
+            "manifest_b64".to_owned(),
+            json::Value::from(
+                BASE64_STANDARD.encode(to_bytes(&manifest).expect("encode manifest")),
+            ),
+        );
+        map.insert(
+            "payload_b64".to_owned(),
+            json::Value::from(BASE64_STANDARD.encode(&payload)),
+        );
+        json::Value::Object(map)
+    };
+    let pin_request = Request::builder()
+        .method("POST")
+        .uri("/v1/sorafs/storage/pin")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json::to_vec(&pin_body).expect("serialize pin request"),
+        ))
+        .expect("pin request");
+    let mut pin_request = pin_request;
+    pin_request
+        .extensions_mut()
+        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
+
+    let pin_response = app
+        .clone()
+        .oneshot(pin_request)
+        .await
+        .expect("pin response");
+    let pin_status = pin_response.status();
+    let pin_bytes = BodyExt::collect(pin_response.into_body())
+        .await
+        .expect("collect pin body")
+        .to_bytes();
+    assert!(
+        pin_status == StatusCode::OK,
+        "pin request failed: {pin_status} body={}",
+        String::from_utf8_lossy(&pin_bytes)
+    );
+}
+
+#[tokio::test]
 async fn sorafs_pin_register_route_accepts_manifest() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;

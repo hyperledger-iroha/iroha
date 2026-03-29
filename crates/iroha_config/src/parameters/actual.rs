@@ -6524,6 +6524,14 @@ impl SorafsGatewayRateLimit {
 pub struct SorafsGatewayDenylist {
     /// Optional filesystem path to a JSON denylist.
     pub path: Option<PathBuf>,
+    /// Optional filesystem path to a pack-catalog JSON document.
+    pub catalog_path: Option<PathBuf>,
+    /// Pack identifiers explicitly disabled on this node.
+    pub opt_out_packs: Vec<String>,
+    /// Additional pack identifiers explicitly enabled on this node.
+    pub extra_packs: Vec<String>,
+    /// Optional jurisdiction code used to activate matching regional packs.
+    pub jurisdiction: Option<String>,
     /// Maximum TTL applied to standard entries when `expires_at` is omitted.
     pub standard_ttl: Duration,
     /// Maximum TTL applied to emergency entries.
@@ -6538,6 +6546,10 @@ impl Default for SorafsGatewayDenylist {
     fn default() -> Self {
         Self {
             path: defaults::sorafs::gateway::denylist::path(),
+            catalog_path: None,
+            opt_out_packs: Vec::new(),
+            extra_packs: Vec::new(),
+            jurisdiction: None,
             standard_ttl: defaults::sorafs::gateway::denylist::STANDARD_TTL,
             emergency_ttl: defaults::sorafs::gateway::denylist::EMERGENCY_TTL,
             emergency_review_window: defaults::sorafs::gateway::denylist::EMERGENCY_REVIEW_WINDOW,

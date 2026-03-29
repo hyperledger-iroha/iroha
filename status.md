@@ -1,6 +1,212 @@
 # Status
 
-Last updated: 2026-03-28
+Last updated: 2026-03-29
+
+## 2026-03-29 Follow-up: Torii transparent ingress + early-shed fixes the old permissioned failure class, but the stable latency gate still fails
+- Implemented the combined server-side slice in
+  `crates/iroha_torii/src/lib.rs`:
+  - local execution authority remains owned by
+    `authoritative_lane_peer_ids(...)` /
+    `is_local_authoritative_for_route(...)`, while a new proxy-candidate
+    helper feeds `execute_torii_proxy_request_with_fallback(...)` with
+    authoritative peers first and then other online peers, logging
+    `proxy_candidate_count`, `authoritative_candidate_count`, and
+    `fallback_used`;
+  - the local `POST /transaction` path now early-sheds before enqueue when
+    `queue.active_len() >= high_load_tx_threshold`, using the existing
+    queue-full rejection envelope and headers instead of silently
+    over-admitting work that cannot clear inside the confirmation budget; and
+  - focused Torii coverage now locks in the retry / ordering / admission
+    semantics:
+    `handler_post_transaction_early_sheds_before_local_enqueue`,
+    `torii_proxy_candidate_peers_prioritize_authoritative_before_fallback`,
+    `torii_proxy_candidate_peers_include_online_fallback_for_npos_non_core_routes`,
+    and
+    `execute_torii_proxy_request_across_candidates_retries_route_unavailable`.
+- Build and focused verification on the current tree:
+  - `cargo fmt --all -- crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo test -p iroha_torii handler_post_transaction_ -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo test -p iroha_torii --lib torii_proxy_candidate_peers_ -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo test -p iroha_torii --lib execute_torii_proxy_request_across_candidates_retries_route_unavailable -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo test -p iroha_torii --lib authoritative_lane_peer_ids_ -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/cargo_home_torii_ingressfix CARGO_TARGET_DIR=/tmp/iroha_target_torii_ingressfix_iso cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami` (pass)
+- Full preserved-peer stable permissioned rerun on the new binaries:
+  - log=`/tmp/izanami_permissioned_torii_ingressfix_20260329T072628Z.log`
+  - tmpdir=`/tmp/iroha-soak-permissioned-torii_ingressfix_20260329T072628Z`
+  - permitdir=`/tmp/iroha-permit-permissioned-torii_ingressfix_20260329T072628Z.UavOPQ`
+  - the run now reaches the target height instead of stalling:
+    `quorum_min_height=2003 strict_min_height=2003 target_blocks=2000`
+  - elapsed=`2750.631789625s` (~45m 51s)
+  - final gate failure moved entirely to latency:
+    `interval_p95_ms=2501` and `strict_interval_p95_ms=2501`
+    exceeded the `1000ms` threshold at `checkpoint target_reached`
+  - summary=`successes=13741 failures=12 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`
+  - the old repair / ingress-failure markers stayed clean in this run:
+    `no strict block height progress=0`,
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `route_unavailable=0`,
+    `plan submission failed=0`,
+    `transaction queued for too long=0`,
+    `haven't got tx confirmation within 20s=0`,
+    `Failed to find asset=0`
+  - target-height phase snapshot at failure:
+    `phase_collect_da_ms=406`,
+    `phase_collect_precommit_ms=1026`,
+    `phase_pipeline_total_ms=1433`,
+    `phase_pipeline_total_ema_ms=1193`
+- Gated verification result:
+  - because permissioned did not reach the target *cleanly* under the
+    unchanged acceptance criteria, the plan's gating rule blocked the full
+    preserved-peer stable NPoS rerun on this slice.
+- Net:
+  - the Torii early-shed change appears to have removed the old
+    permissioned over-admission / confirmation-starvation failure mode, and
+    the tree no longer reproduces the earlier low-height permissioned stall;
+    but
+  - the remaining end-to-end blocker is now steady-state block cadence
+    (`~1.4s-2.5s` with periodic `3.3s-5.0s` spikes), so this slice fixes
+    ingress behavior without yet restoring acceptable preserved-peer stable
+    throughput.
+
+## 2026-03-29 Follow-up: IVM account-target TLVs and opaque asset registration now match the current canonical surfaces
+- Continued the universal-account cleanup across the active IVM/mock-host
+  path instead of leaving the stale scoped-account assumptions in tests and
+  runtime shims:
+  - `crates/ivm/src/mock_wsv.rs` now treats account-target permissions and
+    unregister flows as canonical `AccountId` subjects, while
+    `REGISTER_ACCOUNT` still accepts the explicit scoped registration payload;
+  - the mock asset-definition registration path no longer rejects canonical
+    opaque `AssetDefinitionId` values just because their synthetic `aid`
+    domain is not a first-class domain row, matching the current core host
+    behavior;
+  - the focused IVM TLV tests were updated to send canonical account TLVs for
+    account-target syscalls, scoped TLVs only for account registration, and to
+    drop one stale negative case that relied on the old domain-bearing asset-id
+    model; and
+  - `crates/iroha_core/src/smartcontracts/ivm/host.rs`,
+    `crates/ivm/src/core_host.rs`, and `crates/ivm/src/host.rs` now use the
+    explicit `Account::new_in_domain(account, domain)` transitional path for
+    `REGISTER_ACCOUNT`, parse `GET_AUTHORITY` as a canonical `AccountId`, and
+    describe account-target pointer ABI comments in terms of `AccountId`.
+- Fixed the syscall doc generator drift uncovered while revalidating the ABI
+  docs:
+  - `crates/ivm/src/bin/gen_syscalls_doc.rs` now renders markdown from the same
+    normalized spec data used for Rust codegen, unescapes TOML string literals
+    correctly, escapes generated Rust strings correctly, and no longer leaves
+    `--check` stuck on a newline-only diff.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo run -p ivm --bin gen_syscalls_doc -- --write` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo run -p ivm --bin gen_syscalls_doc -- --check` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo test -p ivm generated_syscalls_section_is_up_to_date --test syscalls_doc_sync -- --exact --nocapture` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo test -p ivm register_asset_definition_does_not_require_domain_row_for_opaque_id --lib -- --nocapture` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo test -p ivm --test wsv_host_account_admin --test wsv_host_grant_revoke_tlv --test wsv_host_unregister_tlv --test wsv_host_unregister_neg_cases --test wsv_host_nft_unregister_positive --test wsv_host_nft_tlv --test wsv_host_pointer_tlv --test wsv_host_role_admin_tlv --test wsv_host_role_admin_neg --test wsv_host_role_vs_direct_perm --test wsv_host_register_account_asset_tlv` (pass)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo test -p iroha_core register_account_syscall_queues_instruction --lib -- --nocapture` (pass; same pre-existing `iroha_core` warnings remain)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p ivm` (pass)
+  - `git diff --check` (pass)
+- Remaining gap:
+  - the repo is still not `AccountId`-only: `ScopedAccountId`, stored
+    `linked_domains`, the scoped `REGISTER_ACCOUNT` ABI surface, and many
+    CLI/bridge/test helpers still remain.
+
+## 2026-03-28 Full preserved-peer stable soak rerun on the repeatable-trigger repin cut
+- Rebuilt the release soak binaries with
+  `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 CARGO_TARGET_DIR=/tmp/iroha_target_fullsoak_20260328 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`.
+- Full preserved-peer stable permissioned rerun:
+  - log=`/tmp/izanami_permissioned_routefix_20260328T192634Z.log`
+  - tmpdir=`/tmp/iroha-soak-permissioned-routefix_20260328T192634Z`
+  - permitdir=`/tmp/iroha-permit-permissioned-routefix_20260328T192634Z`
+  - final error=`no strict block height progress for 600s (strict min height 385, quorum min height 385, target 2000, tolerated_failures 0)`
+  - summary=`successes=1337 failures=64 izanami_ingress_failover_total=172 izanami_ingress_endpoint_unhealthy_total=137`
+  - acceptance markers stayed clean:
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `route_unavailable=0`,
+    `Failed to find asset=0`
+  - dominant failure signature remains ingress/backpressure starvation, not
+    consensus recovery:
+    `plan submission failed=63`,
+    `transaction queued for too long=78`,
+    `haven't got tx confirmation within 20s=42`
+  - weighted block-interval gate from the logged progress samples:
+    quorum/strict `interval_p95_ms=843`
+  - net: this cut materially improved the permissioned stall height from `186`
+    to `385`, but it still misses the primary liveness gate.
+- Full preserved-peer stable NPoS rerun:
+  - log=`/tmp/izanami_npos_routefix_20260328T194201Z.log`
+  - tmpdir=`/tmp/iroha-soak-npos-routefix_20260328T194201Z`
+  - permitdir=`/tmp/iroha-permit-npos-routefix_20260328T194201Z`
+  - final error=`no strict block height progress for 600s (strict min height 1847, quorum min height 1847, target 2000, tolerated_failures 0)`
+  - summary=`successes=12221 failures=70 izanami_ingress_failover_total=1904 izanami_ingress_endpoint_unhealthy_total=1017`
+  - acceptance markers stayed clean on the old recovery-path axes:
+    `requested block-sync range pull from committed anchor=0`,
+    `sharing from fallback anchor=0`,
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+    `Failed to find asset=0`
+  - the repeatable-trigger repin cut clearly improved early survival:
+    the run advanced from the old `878` plateau to `1847`, and
+    `plan submission failed` stayed at `0` until the late stall window
+  - but the authoritative-route layer is still fundamentally unhealthy:
+    `route_unavailable=7340`
+  - once late-stage routing scarcity exhausted the repin budget, the run
+    regressed into submission failures rooted in repeatable-trigger
+    confirmation/status checks:
+    `plan submission failed=54`
+  - weighted block-interval gate from the logged progress samples:
+    quorum/strict `interval_p95_ms=2501`
+  - net: the client-side repin fix mitigated the original pinned-endpoint
+    pathology, but it did not fix the underlying authoritative-route
+    availability/proxy problem. NPoS still fails both liveness and latency.
+- Critique:
+  - permissioned and NPoS are still not behaviorally equivalent under this
+    soak envelope, so the implementation is still wrong even though the client
+    repin change helps;
+  - the NPoS gap no longer looks like nomination/election compute cost;
+    it looks like route resolution or proxy availability collapsing under load;
+    and
+  - the next slice should stay out of consensus and fix Nexus/Torii
+    authoritative-route behavior so any ingress peer can actually forward to
+    the current lane authority, while permissioned ingress/backpressure remains
+    separate work.
+
+## 2026-03-29 Follow-up: Taira MCP rollout gate now requires a real public write canary
+- Tightened the Taira rollout smoke in
+  `configs/soranexus/taira/check_mcp_rollout.sh` so public MCP rollout can no
+  longer pass on discovery alone:
+  - the script now verifies required curated tools such as
+    `iroha.status`, `iroha.sumeragi.status`, and the transaction submit aliases;
+  - it also checks the native `/status` snapshot for basic Torii/Sumeragi
+    health before trusting the MCP surface; and
+  - final public validation now requires a runtime-only canary signer config
+    via `--write-config ...`, which runs a signed `iroha ledger transaction ping`
+    against the checked endpoint unless the operator explicitly opts into
+    read-only mode with `--skip-write-canary`.
+- Updated operator and agent-facing docs to match the stronger contract:
+  - `configs/soranexus/taira/README.md` now documents the signed canary path
+    and treats `route_unavailable` as an ingress or authoritative-peer routing
+    failure;
+  - `plugins/iroha/README.md`, `skills/sora-taira-testnet/SKILL.md`, and
+    `AGENTS.md` now direct humans and agents to rerun the rollout script with a
+    runtime-only canary signer rather than debugging the plugin surface first.
+- Verification:
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh` (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --skip-write-canary`
+    against `https://taira.sora.org/v1/mcp` (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local`
+    without `--write-config` now fails immediately with the expected operator
+    error (pass)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --write-config <temp client.toml>`
+    now fails with the improved `route_unavailable` write-canary diagnosis
+    against the live public Taira host (expected failure; proves the stronger
+    gate catches the current deployment issue)
+- Remaining gap:
+  - as of 2026-03-29, live public Taira still rejects signed lane-0 writes with
+    `503 route_unavailable`, so the deployment is still not end-to-end healthy
+    for Codex/public write flows even though MCP discovery and read-only checks
+    succeed.
 
 ## 2026-03-28 Follow-up: repeatable-trigger ingress now repins on `route_unavailable`
 - Fixed the NPoS/Nexus ingress-authority bug in
