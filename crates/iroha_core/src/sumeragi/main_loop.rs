@@ -375,23 +375,6 @@ fn pending_extends_tip(
         .unwrap_or(false)
 }
 
-// Avoid bootstrap deadlocks by allowing initial proposals before any online peers are reported.
-fn should_defer_for_online_peers(
-    online_total: usize,
-    required: usize,
-    offline_grace_expired: bool,
-    online_peers: usize,
-    last_successful_proposal: Option<Instant>,
-) -> bool {
-    if online_total >= required || offline_grace_expired {
-        return false;
-    }
-    if online_peers == 0 && last_successful_proposal.is_none() {
-        return false;
-    }
-    true
-}
-
 fn count_online_validators(online: &iroha_p2p::OnlinePeers, roster: &[PeerId]) -> usize {
     if roster.is_empty() {
         return 0;
@@ -30911,7 +30894,6 @@ enum ProposalDeferWarningKind {
     HighestQcMissing,
     ParentMissing,
     InsufficientOnlinePeers,
-    ProceedingBelowQuorumAfterGrace,
     EmptyCommitTopologyProposal,
     EmptyCommitTopologyFinalize,
 }

@@ -833,6 +833,7 @@ mod tests {
         };
         let msg = BlockMessage::ConsensusParams(params);
         let encoded = BlockMessageWire::encode_message(&msg);
+        assert!(encoded.starts_with(&norito::core::MAGIC));
         let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded));
         let network = NetworkMessage::SumeragiBlock(Box::new(wire));
 

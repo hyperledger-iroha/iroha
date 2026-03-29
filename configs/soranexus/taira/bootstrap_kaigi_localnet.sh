@@ -34,6 +34,71 @@ need_cmd() {
   fi
 }
 
+ensure_launchd_runner() {
+  local runner="$LOCALNET_DIR/launchd-run.sh"
+  if [[ -f "$runner" ]]; then
+    return 0
+  fi
+  if [[ ! -f "$LOCALNET_DIR/start.sh" ]]; then
+    echo "missing required file: $runner" >&2
+    exit 1
+  fi
+  cat >"$runner" <<EOF
+#!/bin/zsh
+set -euo pipefail
+setopt null_glob
+
+DIR=\$(cd "\$(dirname "\$0")" && pwd)
+IROHAD_BIN="\${IROHAD_BIN:-$ROOT_DIR/target/release/irohad}"
+
+if [[ ! -x "\$IROHAD_BIN" ]]; then
+  echo "irohad binary not executable: \$IROHAD_BIN" >&2
+  exit 1
+fi
+
+cleanup() {
+  local pidfile pid
+  for pidfile in "\$DIR"/peer*.pid; do
+    [[ -f "\$pidfile" ]] || continue
+    pid=\$(<"\$pidfile")
+    [[ -n "\$pid" ]] || continue
+    kill "\$pid" 2>/dev/null || true
+  done
+}
+
+for pid in \${(f)"\$(pgrep -f "\$DIR/peer[0-3]\\\\.toml" 2>/dev/null || true)"}; do
+  [[ -n "\$pid" ]] || continue
+  kill "\$pid" 2>/dev/null || true
+done
+
+rm -f "\$DIR"/peer*.pid
+trap cleanup HUP INT TERM EXIT
+
+for i in 0 1 2 3; do
+  snapshot_dir="\$DIR/storage/peer\${i}/snapshot"
+  mkdir -p "\$snapshot_dir"
+  env SNAPSHOT_STORE_DIR="\$snapshot_dir" RUST_LOG="\${RUST_LOG:-info}" \\
+    "\$IROHAD_BIN" --sora --config "\$DIR/peer\${i}.toml" >> "\$DIR/peer\${i}.log" 2>&1 &
+  pid=\$!
+  print -r -- "\$pid" > "\$DIR/peer\${i}.pid"
+  echo "peer\$i pid \$pid"
+done
+
+while true; do
+  for pidfile in "\$DIR"/peer*.pid; do
+    [[ -f "\$pidfile" ]] || continue
+    pid=\$(<"\$pidfile")
+    if ! kill -0 "\$pid" 2>/dev/null; then
+      echo "peer from \${pidfile:t} exited" >&2
+      exit 1
+    fi
+  done
+  sleep 1
+done
+EOF
+  chmod +x "$runner"
+}
+
 extract_toml_string() {
   local key="$1"
   local file="$2"
@@ -87,7 +152,7 @@ need_file "$LOCALNET_DIR/client.toml"
 need_file "$LOCALNET_DIR/peer0.toml"
 need_file "$LOCALNET_DIR/peer1.toml"
 need_file "$LOCALNET_DIR/peer2.toml"
-need_file "$LOCALNET_DIR/launchd-run.sh"
+ensure_launchd_runner
 
 HOST_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/client.toml")"
 PEER0_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer0.toml")"

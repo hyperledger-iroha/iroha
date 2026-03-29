@@ -4857,24 +4857,6 @@ async fn quorum_timeout_extends_when_da_enabled() {
 }
 
 #[test]
-fn online_peer_deferral_skips_bootstrap_without_observed_peers() {
-    let should_defer = super::should_defer_for_online_peers(1, 3, false, 0, None);
-    assert!(
-        !should_defer,
-        "bootstrap should not defer solely because online peers are unknown"
-    );
-}
-
-#[test]
-fn online_peer_deferral_applies_after_successful_proposal() {
-    let should_defer = super::should_defer_for_online_peers(1, 3, false, 0, Some(Instant::now()));
-    assert!(
-        should_defer,
-        "deferral should apply once online peer tracking has been established"
-    );
-}
-
-#[test]
 fn online_peer_count_filters_non_validator_peers() {
     let (peer_a, _, _) = bls_peer("127.0.0.1:22000");
     let (peer_b, _, _) = bls_peer("127.0.0.1:22001");
@@ -73045,6 +73027,107 @@ async fn pacemaker_skips_proposal_when_only_inflight_transactions() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_allows_proposal_with_low_online_peers_after_prior_success() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let block1 = sample_block(1, 0, None);
+    actor.kura.store_block(block1.clone()).expect("store block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let mut highest_qc = actor.latest_committed_qc().unwrap_or_else(|| {
+        let mut qc = sample_qc_ref(committed_height, 0);
+        qc.phase = Phase::Commit;
+        qc
+    });
+    highest_qc.phase = Phase::Commit;
+
+    let topology = actor.effective_commit_topology();
+    let required = super::network_topology::Topology::new(topology.clone()).min_votes_for_commit();
+    let local_peer = actor.common_config.peer.id().clone();
+    let search_limit = u64::try_from(topology.len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(1);
+    let view = (0..search_limit)
+        .find(|candidate_view| {
+            let mut candidate_topology = super::network_topology::Topology::new(topology.clone());
+            actor
+                .leader_index_for(&mut candidate_topology, tracked_height, *candidate_view)
+                .ok()
+                .is_some_and(|leader| {
+                    candidate_topology
+                        .position(local_peer.public_key())
+                        .is_some_and(|idx| idx == leader)
+                })
+        })
+        .expect("find view where local peer is leader");
+
+    let mut recorded = 0usize;
+    for peer in topology.iter() {
+        if peer == &local_peer {
+            continue;
+        }
+        actor.subsystems.propose.new_view_tracker.record(
+            tracked_height,
+            view,
+            peer.clone(),
+            highest_qc,
+        );
+        recorded = recorded.saturating_add(1);
+        if recorded.saturating_add(1) >= required {
+            break;
+        }
+    }
+
+    let now = Instant::now();
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, now);
+    actor.subsystems.propose.last_successful_proposal =
+        Some(now.checked_sub(Duration::from_millis(1)).unwrap_or(now));
+
+    let remote_online = actor.network.online_peers(std::collections::HashSet::len);
+    assert_eq!(remote_online, 0, "test expects no remote peers online");
+    assert!(
+        remote_online.saturating_add(1) < required,
+        "test requires local + online snapshot to remain below commit quorum"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "low online peer counts should stay advisory even after a prior successful proposal"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_some(),
+        "proposal should be assembled despite the transient online-peer undercount"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_defers_reproposal_when_authoritative_block_already_owns_slot() {
     use std::borrow::Cow;
 
@@ -75402,145 +75485,6 @@ async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
         let _history_guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
     }
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn pacemaker_defers_when_active_roster_empty() {
-    use crate::sumeragi::status;
-
-    status::reset_commit_certs_for_tests();
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
-    actor
-        .kura
-        .store_block(block1.clone())
-        .expect("store block 1");
-    actor
-        .kura
-        .store_block(block2.clone())
-        .expect("store block 2");
-    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-    state.push_block_hash_for_testing(block1.hash());
-    state.push_block_hash_for_testing(block2.hash());
-
-    let validator_set = actor.effective_commit_topology();
-    let parent_hash = block2.hash();
-    let mut signers = BTreeSet::new();
-    for idx in 0..validator_set.len() {
-        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
-    }
-    let signers_bitmap = super::build_signers_bitmap(&signers, validator_set.len());
-    let topology = super::network_topology::Topology::new(validator_set.clone());
-    let bls_aggregate_signature = aggregate_signature_for_bitmap(
-        &actor.common_config.chain,
-        PERMISSIONED_TAG,
-        Phase::Commit,
-        parent_hash,
-        2,
-        0,
-        0,
-        &signers_bitmap,
-        &topology,
-        &harness.key_pairs,
-    );
-    status::record_commit_qc(Qc {
-        phase: Phase::Commit,
-        subject_block_hash: parent_hash,
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
-        height: 2,
-        view: 0,
-        epoch: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        aggregate: QcAggregate {
-            signers_bitmap,
-            bls_aggregate_signature,
-        },
-    });
-
-    {
-        let mut topo_block = actor.state.commit_topology.block();
-        topo_block.mutate_vec(Vec::clear);
-        topo_block.commit();
-    }
-    {
-        let mut world_block = actor.state.world.block();
-        world_block.peers.get_mut().clear();
-        world_block.commit();
-    }
-    {
-        let key_pair = KeyPair::random();
-        let peer_id = PeerId::new(key_pair.public_key().clone());
-        let address: SocketAddr = "127.0.0.1:7099".parse().expect("socket address parses");
-        let peer = Peer::new(address.into(), peer_id);
-        let trusted = trusted_with_pops(peer, Vec::new(), BTreeMap::new());
-        actor.common_config.trusted_peers = iroha_config::base::WithOrigin::inline(trusted);
-    }
-    assert!(
-        actor.state.commit_topology_snapshot().is_empty(),
-        "commit topology should be empty for this test"
-    );
-
-    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
-    actor.highest_qc = None;
-
-    let committed_height = actor.state.view().height() as u64;
-    let tracked_height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let offline_grace = actor.commit_quorum_timeout();
-    let now = Instant::now();
-    let start = now
-        .checked_sub(offline_grace + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor.phase_tracker.start_new_round(tracked_height, start);
-
-    let active_roster = actor.effective_commit_topology();
-    let proposed = actor.on_pacemaker_propose_ready(now);
-    if active_roster.len() <= 1 {
-        assert!(
-            proposed,
-            "single-validator fallback roster should allow pacemaker progress"
-        );
-    } else {
-        assert!(
-            !proposed,
-            "pacemaker should defer when online validators are below quorum"
-        );
-        assert!(
-            actor
-                .subsystems
-                .propose
-                .proposal_cache
-                .get_proposal(tracked_height, 0)
-                .is_none(),
-            "no proposal should be assembled while quorum is unavailable"
-        );
-    }
-
-    status::reset_commit_certs_for_tests();
     harness.shutdown.send();
 }
 

@@ -137,6 +137,9 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
 }
 
 /// Wire wrapper for consensus payloads.
+///
+/// Cached bytes always store a full Norito-framed [`BlockMessage`] so the payload remains
+/// self-describing even when it is forwarded through other framed envelopes.
 #[derive(Debug, Clone)]
 pub struct BlockMessageWire {
     message: Arc<BlockMessage>,
@@ -152,7 +155,7 @@ impl BlockMessageWire {
         }
     }
 
-    /// Wrap an `Arc`-backed message with cached encoded bytes.
+    /// Wrap an `Arc`-backed message with cached full-frame bytes.
     pub fn with_encoded(message: Arc<BlockMessage>, encoded: Arc<Vec<u8>>) -> Self {
         Self {
             message,
@@ -160,7 +163,7 @@ impl BlockMessageWire {
         }
     }
 
-    /// Wrap an owned message with cached encoded bytes.
+    /// Wrap an owned message with cached full-frame bytes.
     pub fn with_encoded_owned(message: BlockMessage, encoded: Arc<Vec<u8>>) -> Self {
         Self {
             message: Arc::new(message),
@@ -189,13 +192,61 @@ impl BlockMessageWire {
         self.encoded.as_ref().map(|bytes| bytes.len())
     }
 
+    fn framed_prefix_len(bytes: &[u8]) -> Result<usize, ncore::Error> {
+        const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
+
+        if bytes.len() < ncore::Header::SIZE {
+            return Err(ncore::Error::LengthMismatch);
+        }
+        if bytes[..4] != ncore::MAGIC {
+            return Err(ncore::Error::InvalidMagic);
+        }
+        if bytes.get(4) != Some(&ncore::VERSION_MAJOR) {
+            return Err(ncore::Error::UnsupportedVersion {
+                found: bytes[4],
+                expected: ncore::VERSION_MAJOR,
+            });
+        }
+        if bytes.get(5) != Some(&ncore::VERSION_MINOR) {
+            return Err(ncore::Error::UnsupportedMinorVersion {
+                found: bytes[5],
+                supported: ncore::VERSION_MINOR,
+            });
+        }
+        let schema = bytes.get(6..22).ok_or(ncore::Error::LengthMismatch)?;
+        if schema != <BlockMessage as NoritoSerialize>::schema_hash().as_slice() {
+            return Err(ncore::Error::SchemaMismatch);
+        }
+        let compression = *bytes.get(22).ok_or(ncore::Error::LengthMismatch)?;
+        if compression != ncore::Compression::None as u8 {
+            return Err(ncore::Error::unsupported_compression_with(
+                compression,
+                &[ncore::Compression::None],
+            ));
+        }
+        let len_bytes = bytes
+            .get(LEN_OFF..LEN_OFF + 8)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let mut length = [0u8; 8];
+        length.copy_from_slice(len_bytes);
+        let payload_len = usize::try_from(u64::from_le_bytes(length))
+            .map_err(|_| ncore::Error::LengthMismatch)?;
+        let align = core::mem::align_of::<ncore::Archived<BlockMessage>>();
+        let padding = if align <= 1 {
+            0
+        } else {
+            let rem = ncore::Header::SIZE % align;
+            if rem == 0 { 0 } else { align - rem }
+        };
+        ncore::Header::SIZE
+            .checked_add(padding)
+            .and_then(|size| size.checked_add(payload_len))
+            .filter(|size| *size <= bytes.len())
+            .ok_or(ncore::Error::LengthMismatch)
+    }
+
     pub(crate) fn encode_message(message: &BlockMessage) -> Vec<u8> {
-        let reserve = message
-            .encoded_len_exact()
-            .unwrap_or_else(|| message.encoded_len());
-        let mut buf = Vec::with_capacity(reserve);
-        message.encode_to(&mut buf);
-        buf
+        ncore::to_bytes(message).expect("encode block message")
     }
 }
 
@@ -225,7 +276,9 @@ impl NoritoSerialize for BlockMessageWire {
             writer.write_all(encoded)?;
             return Ok(());
         }
-        self.message.as_ref().serialize(writer)
+        let encoded = Self::encode_message(self.message.as_ref());
+        writer.write_all(&encoded)?;
+        Ok(())
     }
 }
 
@@ -237,8 +290,9 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let (message, consumed) = ncore::decode_field_canonical_slice::<BlockMessage>(bytes)?;
-        let encoded = Arc::new(bytes[..consumed].to_vec());
+        let view = ncore::from_bytes_view(bytes)?;
+        let message = view.decode::<BlockMessage>()?;
+        let encoded = Arc::new(bytes.to_vec());
         Ok(Self {
             message: Arc::new(message),
             encoded: Some(encoded),
@@ -248,8 +302,10 @@ impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
 
 impl<'a> ncore::DecodeFromSlice<'a> for BlockMessageWire {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let (message, consumed) = ncore::decode_field_canonical_slice::<BlockMessage>(bytes)?;
-        let encoded = Arc::new(bytes[..consumed].to_vec());
+        let consumed = Self::framed_prefix_len(bytes)?;
+        let framed = bytes.get(..consumed).ok_or(ncore::Error::LengthMismatch)?;
+        let message = ncore::decode_from_bytes::<BlockMessage>(framed)?;
+        let encoded = Arc::new(framed.to_vec());
         Ok((
             Self {
                 message: Arc::new(message),
@@ -576,6 +632,7 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
         transaction::TransactionBuilder,
     };
+    use norito::{core as norito_core, decode_from_bytes};
 
     use super::*;
     use crate::{block::BlockBuilder, sumeragi::consensus, tx::AcceptedTransaction};
@@ -592,6 +649,71 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    fn sample_qc_vote(seed: u8) -> consensus::QcVote {
+        consensus::QcVote {
+            phase: consensus::Phase::Commit,
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [seed; Hash::LENGTH],
+            )),
+            parent_state_root: Hash::prehashed([seed.wrapping_add(1); Hash::LENGTH]),
+            post_state_root: Hash::prehashed([seed.wrapping_add(2); Hash::LENGTH]),
+            height: u64::from(seed).saturating_add(1),
+            view: u64::from(seed % 4),
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: vec![seed, seed.wrapping_add(1)],
+        }
+    }
+
+    fn sample_qc(seed: u8) -> consensus::Qc {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let validator = PeerId::from(key_pair.public_key().clone());
+        let validator_set = vec![validator];
+        consensus::Qc {
+            phase: consensus::Phase::Commit,
+            subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [seed.wrapping_add(3); Hash::LENGTH],
+            )),
+            parent_state_root: Hash::prehashed([seed.wrapping_add(4); Hash::LENGTH]),
+            post_state_root: Hash::prehashed([seed.wrapping_add(5); Hash::LENGTH]),
+            height: u64::from(seed).saturating_add(2),
+            view: u64::from(seed % 3),
+            epoch: 0,
+            mode_tag: consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: consensus::QcAggregate {
+                signers_bitmap: vec![1],
+                bls_aggregate_signature: vec![seed.wrapping_add(6), seed.wrapping_add(7)],
+            },
+        }
+    }
+
+    fn sample_exec_witness_msg(seed: u8) -> consensus::ExecWitnessMsg {
+        consensus::ExecWitnessMsg {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [seed.wrapping_add(8); Hash::LENGTH],
+            )),
+            height: u64::from(seed).saturating_add(3),
+            view: u64::from(seed % 2),
+            epoch: 0,
+            witness: consensus::ExecWitness::default(),
+        }
+    }
+
+    fn roundtrip_cached_block_message_over_network_message(
+        message: BlockMessage,
+    ) -> crate::NetworkMessage {
+        let encoded = Arc::new(BlockMessageWire::encode_message(&message));
+        let wire = BlockMessageWire::with_encoded(Arc::new(message), encoded);
+        let network = crate::NetworkMessage::SumeragiBlock(Box::new(wire));
+        let bytes = network.encode();
+        Decode::decode(&mut bytes.as_slice()).expect("decode network message")
     }
 
     #[test]
@@ -748,6 +870,7 @@ mod tests {
         let encoded = BlockMessageWire::encode_message(&msg);
         let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded.clone()));
 
+        assert!(encoded.starts_with(&norito_core::MAGIC));
         assert_eq!(wire.encoded_len(), Some(encoded.len()));
         let bytes = wire.encode();
         assert_eq!(bytes, encoded);
@@ -783,6 +906,80 @@ mod tests {
         }
         assert_eq!(decoded.encoded_len(), Some(bytes.len()));
         assert_eq!(decoded.encode(), bytes);
+    }
+
+    #[test]
+    fn block_message_wire_cached_payload_is_self_describing() {
+        let vote = sample_qc_vote(0x41);
+        let msg = BlockMessage::QcVote(vote.clone());
+        let encoded = BlockMessageWire::encode_message(&msg);
+
+        assert!(encoded.starts_with(&norito_core::MAGIC));
+
+        let decoded = decode_from_bytes::<BlockMessage>(&encoded).expect("decode inner message");
+        match decoded {
+            BlockMessage::QcVote(decoded_vote) => assert_eq!(decoded_vote, vote),
+            other => panic!("expected qc vote, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_message_wire_network_roundtrip_cached_qc_vote() {
+        let decoded = roundtrip_cached_block_message_over_network_message(BlockMessage::QcVote(
+            sample_qc_vote(0x52),
+        ));
+        match decoded {
+            crate::NetworkMessage::SumeragiBlock(wire) => {
+                assert!(matches!(
+                    wire.as_ref().as_message(),
+                    BlockMessage::QcVote(_)
+                ));
+                assert!(
+                    wire.as_ref()
+                        .encoded_len()
+                        .is_some_and(|len| len >= norito_core::Header::SIZE)
+                );
+            }
+            other => panic!("expected cached sumeragi block message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_message_wire_network_roundtrip_cached_qc() {
+        let decoded =
+            roundtrip_cached_block_message_over_network_message(BlockMessage::Qc(sample_qc(0x63)));
+        match decoded {
+            crate::NetworkMessage::SumeragiBlock(wire) => {
+                assert!(matches!(wire.as_ref().as_message(), BlockMessage::Qc(_)));
+                assert!(
+                    wire.as_ref()
+                        .encoded_len()
+                        .is_some_and(|len| len >= norito_core::Header::SIZE)
+                );
+            }
+            other => panic!("expected cached sumeragi block message, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_message_wire_network_roundtrip_cached_exec_witness() {
+        let decoded = roundtrip_cached_block_message_over_network_message(
+            BlockMessage::ExecWitness(sample_exec_witness_msg(0x74)),
+        );
+        match decoded {
+            crate::NetworkMessage::SumeragiBlock(wire) => {
+                assert!(matches!(
+                    wire.as_ref().as_message(),
+                    BlockMessage::ExecWitness(_)
+                ));
+                assert!(
+                    wire.as_ref()
+                        .encoded_len()
+                        .is_some_and(|len| len >= norito_core::Header::SIZE)
+                );
+            }
+            other => panic!("expected cached sumeragi block message, got {other:?}"),
+        }
     }
 
     #[test]

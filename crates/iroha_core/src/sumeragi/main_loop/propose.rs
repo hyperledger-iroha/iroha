@@ -2205,59 +2205,12 @@ impl Actor {
                 "pacemaker attempt with queued transactions"
             );
         }
-        let offline_grace = self.commit_quorum_timeout();
-        let offline_grace_expired = view_age.is_some_and(|age| age >= offline_grace);
-        let should_defer_online = super::should_defer_for_online_peers(
-            online_total,
-            required,
-            offline_grace_expired,
-            online_peers,
-            self.subsystems.propose.last_successful_proposal,
-        );
-        if should_defer_online {
-            if pending_queue_len > 0 {
-                let throttle_hash = tip_hash.unwrap_or_else(|| {
-                    HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-                        [0; Hash::LENGTH],
-                    ))
-                });
-                if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
-                    ProposalDeferWarningKind::InsufficientOnlinePeers,
-                    tracked_height,
-                    current_view.unwrap_or_default(),
-                    throttle_hash,
-                    now,
-                    Duration::from_secs(5),
-                ) {
-                    iroha_logger::info!(
-                        queue_len = pending_queue_len,
-                        height = tracked_height,
-                        view = current_view,
-                        required,
-                        online_peers,
-                        online_total,
-                        grace_ms = offline_grace.as_millis(),
-                        suppressed_since_last,
-                        "deferring proposal: insufficient online peers for commit quorum (within grace)"
-                    );
-                }
-            } else {
-                trace!(
-                    height = tracked_height,
-                    required,
-                    online_peers,
-                    online_total,
-                    grace_ms = offline_grace.as_millis(),
-                    "deferring proposal: insufficient online peers for commit quorum (within grace)"
-                );
-            }
-            return false;
-        } else if online_total < required {
+        if online_total < required {
             let throttle_hash = tip_hash.unwrap_or_else(|| {
                 HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]))
             });
             if let Some(suppressed_since_last) = self.proposal_defer_warning_log.allow(
-                ProposalDeferWarningKind::ProceedingBelowQuorumAfterGrace,
+                ProposalDeferWarningKind::InsufficientOnlinePeers,
                 tracked_height,
                 current_view.unwrap_or_default(),
                 throttle_hash,
@@ -2271,10 +2224,9 @@ impl Actor {
                     required,
                     online_peers,
                     online_total,
-                    grace_ms = offline_grace.as_millis(),
                     age_ms = view_age.map(|age| age.as_millis()),
                     suppressed_since_last,
-                    "proceeding with proposal despite online peer count below quorum after grace"
+                    "online peer count below commit quorum; continuing proposal flow"
                 );
             }
         }

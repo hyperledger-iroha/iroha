@@ -110,6 +110,8 @@ pub struct GenesisBlock(pub SignedBlock);
 pub struct RawGenesisTransaction {
     /// Unique chain identifier of the blockchain instance.
     chain: ChainId,
+    /// Chain discriminant / i105 network prefix used to encode account literals in this manifest.
+    chain_discriminant: u16,
     /// Optional path to the IVM executor bytecode file (`.to`). If omitted,
     /// no executor upgrade is included in genesis.
     #[norito(default)]
@@ -1507,6 +1509,13 @@ pub mod genesis_instructions_json {
         fn parse_allows_null_executor_in_canonical_manifest() {
             let mut manifest_fields = norito::json::Map::new();
             manifest_fields.insert("chain".to_string(), Value::String("test-chain".to_string()));
+            manifest_fields.insert(
+                "chain_discriminant".to_string(),
+                norito::json::value::to_value(
+                    &iroha_data_model::account::address::chain_discriminant(),
+                )
+                .expect("serialize chain discriminant"),
+            );
             manifest_fields.insert("executor".to_string(), Value::Null);
             manifest_fields.insert("ivm_dir".to_string(), Value::String(".".to_string()));
             manifest_fields.insert(
@@ -1725,6 +1734,8 @@ fn normalize_pop_hex(raw: &str) -> Result<String, norito::json::Error> {
 pub struct NormalizedGenesis {
     /// Unique chain identifier.
     pub chain: ChainId,
+    /// Chain discriminant / i105 network prefix used to encode account literals in this manifest.
+    pub chain_discriminant: u16,
     /// Optional path to the executor bytecode.
     pub executor: Option<IvmPath>,
     /// Directory containing IVM bytecode libraries.
@@ -1753,6 +1764,11 @@ impl NormalizedGenesis {
         map.insert(
             "chain".to_string(),
             norito::json::value::to_value(&self.chain).expect("serialize chain id"),
+        );
+        map.insert(
+            "chain_discriminant".to_string(),
+            norito::json::value::to_value(&self.chain_discriminant)
+                .expect("serialize chain_discriminant"),
         );
         if let Some(path) = &self.executor {
             map.insert(
@@ -2194,6 +2210,7 @@ impl RawGenesisTransaction {
     fn from_json_value(value: norito::json::Value) -> Result<Self, norito::json::Error> {
         let mut map = Self::expect_object(value, "RawGenesisTransaction")?;
         let chain = Self::take_required_field::<ChainId>(&mut map, "chain")?;
+        let chain_discriminant = Self::take_required_field::<u16>(&mut map, "chain_discriminant")?;
         let executor = Self::take_optional_field::<IvmPath>(&mut map, "executor")?;
         let ivm_dir = map
             .remove("ivm_dir")
@@ -2207,6 +2224,8 @@ impl RawGenesisTransaction {
         let transactions_value = map
             .remove("transactions")
             .unwrap_or_else(|| norito::json::Value::Array(Vec::new()));
+        let _chain_discriminant =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
         let transactions =
             Self::decode_value::<Vec<RawGenesisTx>>(transactions_value, "transactions")?;
         Self::reject_set_parameter_instructions(&transactions)?;
@@ -2231,6 +2250,7 @@ impl RawGenesisTransaction {
         }
         Ok(Self {
             chain,
+            chain_discriminant,
             executor,
             ivm_dir,
             transactions,
@@ -2432,6 +2452,7 @@ impl RawGenesisTransaction {
         })?;
 
         let chain = manifest.chain.clone();
+        let chain_discriminant = manifest.chain_discriminant;
         let executor = manifest.executor.clone();
         let ivm_dir = manifest.ivm_dir.as_path().to_path_buf();
         let wire_proto_versions = manifest.wire_proto_versions.clone();
@@ -2440,6 +2461,7 @@ impl RawGenesisTransaction {
 
         Ok(NormalizedGenesis {
             chain,
+            chain_discriminant,
             executor,
             ivm_dir,
             consensus_mode,
@@ -2455,6 +2477,19 @@ impl RawGenesisTransaction {
     #[must_use]
     pub fn chain_id(&self) -> &ChainId {
         &self.chain
+    }
+
+    /// Chain discriminant / i105 network prefix advertised in the manifest.
+    #[must_use]
+    pub const fn chain_discriminant(&self) -> u16 {
+        self.chain_discriminant
+    }
+
+    /// Override the chain discriminant used when rendering this manifest.
+    #[must_use]
+    pub fn with_chain_discriminant(mut self, chain_discriminant: u16) -> Self {
+        self.chain_discriminant = chain_discriminant;
+        self
     }
 
     /// Raw genesis transactions preserved in the manifest.
@@ -2531,11 +2566,17 @@ mod tests2 {
 
     use super::*;
 
+    fn manifest_chain_discriminant_value() -> norito::json::Value {
+        norito::json::value::to_value(&iroha_data_model::account::address::chain_discriminant())
+            .expect("serialize chain discriminant")
+    }
+
     #[test]
     fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
         let chain = ChainId::from("iroha:test:genesismeta");
         let tx = RawGenesisTransaction {
             chain: chain.clone(),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -2591,6 +2632,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx {
@@ -2671,6 +2713,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx {
@@ -2706,6 +2749,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx {
@@ -2761,6 +2805,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain: chain.clone(),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![tx],
@@ -2816,6 +2861,7 @@ mod tests2 {
         let chain = ChainId::from("iroha:test:deterministic");
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -2946,6 +2992,7 @@ mod tests2 {
         let chain = ChainId::from("iroha:test:confdigest");
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -2977,6 +3024,7 @@ mod tests2 {
         let chain = ChainId::from("iroha:test:wire-digest");
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -3029,6 +3077,7 @@ mod tests2 {
         };
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![tx],
@@ -3082,6 +3131,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![tx_manual, tx_defaults],
@@ -3115,6 +3165,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![
@@ -3309,6 +3360,10 @@ mod tests2 {
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
         );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
+        );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
             "ivm_dir".to_string(),
@@ -3341,6 +3396,10 @@ mod tests2 {
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
         );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
+        );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
             "ivm_dir".to_string(),
@@ -3358,6 +3417,56 @@ mod tests2 {
             err.to_string().contains("consensus_mode"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn raw_genesis_requires_chain_discriminant() {
+        init_instruction_registry();
+
+        let mut manifest_fields = norito::json::Map::new();
+        manifest_fields.insert(
+            "chain".to_string(),
+            norito::json::Value::String("test-chain".into()),
+        );
+        manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
+        manifest_fields.insert(
+            "ivm_dir".to_string(),
+            norito::json::Value::String(".".into()),
+        );
+        manifest_fields.insert(
+            "consensus_mode".to_string(),
+            norito::json::Value::String("Permissioned".into()),
+        );
+        manifest_fields.insert(
+            "transactions".to_string(),
+            norito::json::Value::Array(vec![norito::json::Value::Object(norito::json::Map::new())]),
+        );
+
+        let manifest = norito::json::Value::Object(manifest_fields);
+        let err = RawGenesisTransaction::from_json_value(manifest)
+            .expect_err("missing chain_discriminant should be rejected");
+        assert!(
+            err.to_string().contains("chain_discriminant"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn raw_genesis_roundtrip_uses_manifest_chain_discriminant_for_account_literals() -> Result<()> {
+        init_instruction_registry();
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("iroha:test:testnet-prefix"),
+            PathBuf::from("."),
+        )
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+        .with_chain_discriminant(369);
+
+        let json = norito::json::to_json(&manifest)?;
+        let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
+        assert_eq!(decoded.chain_discriminant(), 369);
+        Ok(())
     }
 
     #[test]
@@ -3385,6 +3494,10 @@ mod tests2 {
         manifest_fields.insert(
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
+        );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
         );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
@@ -3450,6 +3563,10 @@ mod tests2 {
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
         );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
+        );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
             "ivm_dir".to_string(),
@@ -3490,6 +3607,10 @@ mod tests2 {
         manifest_fields.insert(
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
+        );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
         );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
@@ -3540,6 +3661,7 @@ mod tests2 {
     fn builder_preserves_consensus_metadata() {
         let manifest = RawGenesisTransaction {
             chain: ChainId::from("iroha:test:builder-meta"),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -3580,6 +3702,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain: ChainId::from("iroha:test:normalize"),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -3735,6 +3858,7 @@ mod tests2 {
 
             RawGenesisTransaction {
                 chain,
+                chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
                 executor: None,
                 ivm_dir: IvmPath::default(),
                 transactions: vec![RawGenesisTx {
@@ -3795,6 +3919,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx {
@@ -4114,6 +4239,7 @@ impl RawGenesisTransaction {
 
         let RawGenesisTransaction {
             chain: _,
+            chain_discriminant: _,
             executor,
             ivm_dir: _,
             mut transactions,
@@ -4719,6 +4845,7 @@ impl GenesisBuilder {
 
         RawGenesisTransaction {
             chain: self.chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: self.executor,
             ivm_dir: self.ivm_dir.into(),
             transactions,

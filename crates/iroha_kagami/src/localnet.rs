@@ -2225,14 +2225,15 @@ fn write_genesis(
     json_path: &Path,
     signed_path: &Path,
 ) -> Result<()> {
-    let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
-    let json = norito::json::to_json_pretty(genesis)?;
+    let chain_discriminant = chain_discriminant.unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
+    let genesis = genesis.clone().with_chain_discriminant(chain_discriminant);
+    let _chain_discriminant = Some(ChainDiscriminantGuard::enter(chain_discriminant));
+    let json = norito::json::to_json_pretty(&genesis)?;
     fs::write(json_path, json).wrap_err("failed to write genesis.json")?;
 
     let genesis_key_pair = KeyPair::new(genesis_public_key.clone(), genesis_private_key.0)
         .wrap_err("make genesis key pair")?;
     let block = genesis
-        .clone()
         .build_and_sign(&genesis_key_pair)
         .wrap_err("sign genesis block")?;
     let framed = block.0.encode_wire().wrap_err("frame genesis block")?;

@@ -1,6 +1,7 @@
 {
   "bls_domain": "bls-iroha2:npos-sumeragi:v1",
   "chain": "00000000-0000-0000-0000-000000000000",
+  "chain_discriminant": 753,
   "consensus_fingerprint": "0x93302b74b56389b3f626a58c91ce2cf8dc3c398bb80621efdc45024ec2c50b1b",
   "consensus_mode": "Npos",
   "crypto": {

@@ -86,6 +86,7 @@ static HSE_DECRYPT: AtomicU64 = AtomicU64::new(0);
 static HSE_CODEC: AtomicU64 = AtomicU64::new(0);
 static HSE_IO: AtomicU64 = AtomicU64::new(0);
 static HSE_OTHER: AtomicU64 = AtomicU64::new(0);
+static MALFORMED_PAYLOAD_FRAMES: AtomicU64 = AtomicU64::new(0);
 
 // Handshake latency histogram buckets (ms)
 const HN: usize = 12;
@@ -1132,6 +1133,15 @@ pub fn handshake_ms_count() -> u64 {
     HANDSHAKE_MS_COUNT.load(Ordering::Relaxed)
 }
 
+/// Returns the number of decrypted peer frames dropped due to malformed inner payloads.
+pub fn malformed_payload_frame_count() -> u64 {
+    MALFORMED_PAYLOAD_FRAMES.load(Ordering::Relaxed)
+}
+
+fn record_malformed_payload_frame() {
+    MALFORMED_PAYLOAD_FRAMES.fetch_add(1, Ordering::Relaxed);
+}
+
 fn observe_handshake_ms(ms: u64) {
     HANDSHAKE_MS_SUM.fetch_add(ms, Ordering::Relaxed);
     HANDSHAKE_MS_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1920,8 +1930,7 @@ mod run {
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
     const OUTBOUND_DRAIN_LO_MAX: usize = 32;
     const INBOUND_SEND_WARN_MS: u64 = 250;
-    const FORMAT_ERROR_BACKOFF_BASE_MS: u64 = 10;
-    const FORMAT_ERROR_BACKOFF_MAX_MS: u64 = 200;
+    const MALFORMED_PAYLOAD_FRAME_THRESHOLD: u32 = 3;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum HighTopic {
@@ -1929,6 +1938,12 @@ mod run {
         Consensus,
         ConsensusPayload,
         ConsensusChunk,
+    }
+
+    fn note_malformed_payload_frame(streak: &mut u32) -> bool {
+        record_malformed_payload_frame();
+        *streak = streak.saturating_add(1);
+        *streak >= MALFORMED_PAYLOAD_FRAME_THRESHOLD
     }
 
     fn low_topic_label(topic: LowTopic) -> &'static str {
@@ -2320,6 +2335,7 @@ mod run {
                 read_low.map(|read| MessageReader::new(read, cryptographer.clone(), max_frame_bytes));
             // Sampler for repeated read/parse errors to avoid log floods from malformed peers
             let mut read_err_sampler = LogSampler::new();
+            let mut malformed_payload_sampler = LogSampler::new();
             let mut recv_backpressure_sampler = LogSampler::new();
             let mut message_sender_hi = MessageSender::new(write, cryptographer.clone(), max_frame_bytes);
             let mut message_sender_low =
@@ -2369,7 +2385,8 @@ mod run {
             let mut hi_control_burst: u8 = 0;
             let mut hi_consensus_burst: u8 = 0;
             let mut hi_payload_burst: u8 = 0;
-            let mut format_error_streak: u32 = 0;
+            let mut malformed_payload_streak_hi: u32 = 0;
+            let mut malformed_payload_streak_low: u32 = 0;
 
             loop {
                 if let Some((topic, msg)) = maybe_take_low_after_hi(
@@ -2699,35 +2716,50 @@ mod run {
                     msg = message_reader.read_message() => {
                         let (message, encoded_len): (Message<T>, usize) = match msg {
                             Ok(Some((msg, encoded_len))) => {
-                                format_error_streak = 0;
+                                malformed_payload_streak_hi = 0;
                                 (msg, encoded_len)
                             }
                             Ok(None) => {
                                 iroha_logger::debug!("Peer send whole message and close connection");
                                 break;
                             }
-                            Err(error) => {
-                                let is_format_error = matches!(error, Error::Format);
-                                if is_format_error {
-                                    format_error_streak = format_error_streak.saturating_add(1);
-                                } else {
-                                    format_error_streak = 0;
+                            Err(Error::MalformedPayloadFrame) => {
+                                let disconnect =
+                                    note_malformed_payload_frame(&mut malformed_payload_streak_hi);
+                                if let Some(suppressed) = malformed_payload_sampler
+                                    .should_log(tokio::time::Duration::from_millis(500))
+                                {
+                                    iroha_logger::warn!(
+                                        peer = %peer_id,
+                                        conn_id,
+                                        stream = "high",
+                                        malformed_payload_streak = malformed_payload_streak_hi,
+                                        threshold = MALFORMED_PAYLOAD_FRAME_THRESHOLD,
+                                        suppressed,
+                                        "Dropped malformed decrypted peer payload frame"
+                                    );
                                 }
-                                let backoff_ms = (u64::from(format_error_streak)
-                                    .saturating_mul(FORMAT_ERROR_BACKOFF_BASE_MS))
-                                .min(FORMAT_ERROR_BACKOFF_MAX_MS);
+                                if disconnect {
+                                    iroha_logger::error!(
+                                        peer = %peer_id,
+                                        conn_id,
+                                        stream = "high",
+                                        malformed_payload_streak = malformed_payload_streak_hi,
+                                        "Disconnecting peer after consecutive malformed decrypted payload frames"
+                                    );
+                                    break;
+                                }
+                                idle_interval.reset();
+                                ping_interval.reset();
+                                continue;
+                            }
+                            Err(error) => {
                                 if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
                                     iroha_logger::error!(
                                         ?error,
                                         suppressed=supp,
-                                        format_error = is_format_error,
-                                        format_error_streak,
-                                        backoff_ms,
                                         "Error while reading message from peer."
                                     );
-                                }
-                                if is_format_error && backoff_ms > 0 {
-                                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                                 }
                                 break;
                             }
@@ -2794,7 +2826,7 @@ mod run {
                     }, if message_reader_low.is_some() => {
                         let (message, encoded_len): (Message<T>, usize) = match msg {
                             Ok(Some((msg, encoded_len))) => {
-                                format_error_streak = 0;
+                                malformed_payload_streak_low = 0;
                                 (msg, encoded_len)
                             }
                             Ok(None) => {
@@ -2802,28 +2834,43 @@ mod run {
                                 message_reader_low = None;
                                 continue;
                             }
-                            Err(error) => {
-                                let is_format_error = matches!(error, Error::Format);
-                                if is_format_error {
-                                    format_error_streak = format_error_streak.saturating_add(1);
-                                } else {
-                                    format_error_streak = 0;
+                            Err(Error::MalformedPayloadFrame) => {
+                                let disconnect =
+                                    note_malformed_payload_frame(&mut malformed_payload_streak_low);
+                                if let Some(suppressed) = malformed_payload_sampler
+                                    .should_log(tokio::time::Duration::from_millis(500))
+                                {
+                                    iroha_logger::warn!(
+                                        peer = %peer_id,
+                                        conn_id,
+                                        stream = "low",
+                                        malformed_payload_streak = malformed_payload_streak_low,
+                                        threshold = MALFORMED_PAYLOAD_FRAME_THRESHOLD,
+                                        suppressed,
+                                        "Dropped malformed decrypted peer payload frame"
+                                    );
                                 }
-                                let backoff_ms = (u64::from(format_error_streak)
-                                    .saturating_mul(FORMAT_ERROR_BACKOFF_BASE_MS))
-                                .min(FORMAT_ERROR_BACKOFF_MAX_MS);
+                                if disconnect {
+                                    iroha_logger::error!(
+                                        peer = %peer_id,
+                                        conn_id,
+                                        stream = "low",
+                                        malformed_payload_streak = malformed_payload_streak_low,
+                                        "Disconnecting peer after consecutive malformed decrypted payload frames"
+                                    );
+                                    break;
+                                }
+                                idle_interval.reset();
+                                ping_interval.reset();
+                                continue;
+                            }
+                            Err(error) => {
                                 if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
                                     iroha_logger::debug!(
                                         ?error,
                                         suppressed=supp,
-                                        format_error = is_format_error,
-                                        format_error_streak,
-                                        backoff_ms,
                                         "Error while reading message from peer (low stream)."
                                     );
-                                }
-                                if is_format_error && backoff_ms > 0 {
-                                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                                 }
                                 message_reader_low = None;
                                 continue;
@@ -3157,7 +3204,7 @@ mod run {
         ///
         /// # Errors
         /// - Fail to decrypt message
-        /// - Fail to decode message
+        /// - Fail to decode the encrypted envelope
         fn parse_next_encrypted_frame(&mut self) -> Result<bool, Error> {
             let mut buf = &self.buffer[..];
             if buf.remaining() < Self::U32_SIZE {
@@ -3174,50 +3221,56 @@ mod run {
             }
 
             let data = &buf[..size];
-            {
+            let parsed = (|| -> Result<VecDeque<(M, usize)>, Error> {
                 let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
                 let decrypted_len = decrypted.len();
                 if decrypted_len == 0 {
-                    return Err(Error::Format);
-                }
-
-                // Decrypted payload may contain multiple Norito-framed messages.
-                let align = core::mem::align_of::<ncore::Archived<M>>();
-                let mut offset = 0usize;
-                while offset < decrypted_len {
-                    let remaining = decrypted.get(offset..).ok_or(Error::Format)?;
-                    let frame_len = framed_message_len::<M>(
-                        remaining,
-                        self.framed_schema,
-                        self.framed_padding,
-                    )?;
-                    let frame = remaining.get(..frame_len).ok_or(Error::Format)?;
-                    let misaligned = align > 1
-                        && !frame.is_empty()
-                        && !((frame.as_ptr() as usize).is_multiple_of(align));
-                    let decoded = if misaligned {
-                        let aligned =
-                            Self::copy_to_aligned_scratch(&mut self.decode_scratch, frame, align);
-                        ncore::decode_from_bytes::<M>(aligned)
+                    return Err(Error::MalformedPayloadFrame);
+                } else {
+                    // Decrypted payload may contain multiple Norito-framed messages.
+                    let align = core::mem::align_of::<ncore::Archived<M>>();
+                    let mut offset = 0usize;
+                    let mut frame_messages = VecDeque::new();
+                    while offset < decrypted_len {
+                        let remaining = decrypted
+                            .get(offset..)
+                            .ok_or(Error::MalformedPayloadFrame)?;
+                        let frame_len = framed_message_len::<M>(
+                            remaining,
+                            self.framed_schema,
+                            self.framed_padding,
+                        )
+                        .map_err(|_| Error::MalformedPayloadFrame)?;
+                        let frame = remaining
+                            .get(..frame_len)
+                            .ok_or(Error::MalformedPayloadFrame)?;
+                        let misaligned = align > 1
+                            && !frame.is_empty()
+                            && !((frame.as_ptr() as usize).is_multiple_of(align));
+                        let decoded = if misaligned {
+                            let aligned = Self::copy_to_aligned_scratch(
+                                &mut self.decode_scratch,
+                                frame,
+                                align,
+                            );
+                            ncore::decode_from_bytes::<M>(aligned)
+                        } else {
+                            ncore::decode_from_bytes::<M>(frame)
+                        };
+                        let decoded = decoded.map_err(|_| Error::MalformedPayloadFrame)?;
+                        frame_messages.push_back((decoded, frame_len));
+                        offset = offset.saturating_add(frame_len);
+                    }
+                    if offset != decrypted_len {
+                        Err(Error::MalformedPayloadFrame)
                     } else {
-                        ncore::decode_from_bytes::<M>(frame)
-                    };
-                    let decoded = match decoded {
-                        Ok(value) => value,
-                        Err(err) => {
-                            iroha_logger::warn!(error = ?err, "Failed to decode peer message");
-                            return Err(Error::Format);
-                        }
-                    };
-                    self.pending.push_back((decoded, frame_len));
-                    offset = offset.saturating_add(frame_len);
+                        Ok(frame_messages)
+                    }
                 }
-                if offset != decrypted_len {
-                    return Err(Error::Format);
-                }
-            };
+            })();
 
             self.buffer.advance(size + Self::U32_SIZE);
+            self.pending.extend(parsed?);
 
             Ok(true)
         }
@@ -4605,6 +4658,32 @@ mod run {
             );
         }
 
+        fn framed_message<T: Encode>(value: &T) -> Vec<u8> {
+            ncore::to_bytes(value).expect("encode framed message")
+        }
+
+        fn encrypted_frame(plaintext: &[u8], key_byte: u8) -> Vec<u8> {
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
+                    .expect("valid key length");
+            let mut encrypted = Vec::new();
+            let encrypted = cryptographer
+                .encrypt_into(plaintext, &mut encrypted)
+                .expect("encrypt frame");
+            let mut frame = Vec::with_capacity(
+                MessageReader::<ChaCha20Poly1305, Message<Blob>>::U32_SIZE + encrypted.len(),
+            );
+            let encrypted_len =
+                u32::try_from(encrypted.len()).expect("encrypted frame length fits in u32");
+            frame.extend_from_slice(&encrypted_len.to_be_bytes());
+            frame.extend_from_slice(encrypted);
+            frame
+        }
+
+        fn blob_message_frame(payload: &[u8]) -> Vec<u8> {
+            framed_message(&Message::Data(Blob(payload.to_vec())))
+        }
+
         struct FakeRead {
             data: Bytes,
             pos: usize,
@@ -4628,8 +4707,170 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn malformed_frame_flood_is_sampled() {
-            // Build a buffer with many bogus frames: [len=16][16 zero bytes] * N
+        async fn malformed_decrypted_payload_frame_is_dropped_and_next_valid_frame_is_delivered() {
+            let key_byte = 5u8;
+            let mut malformed_plain = blob_message_frame(&[1u8]);
+            let mut truncated_inner = blob_message_frame(&[2u8]);
+            truncated_inner.pop().expect("truncate inner frame");
+            malformed_plain.extend_from_slice(&truncated_inner);
+            let valid_plain = blob_message_frame(&[9u8]);
+
+            let mut raw = encrypted_frame(&malformed_plain, key_byte);
+            raw.extend_from_slice(&encrypted_frame(&valid_plain, key_byte));
+
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
+                data: Bytes::from(raw),
+                pos: 0,
+            });
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
+                    .expect("valid key length");
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
+                MessageReader::new(read, cryptographer, 1024);
+
+            let err = reader
+                .read_message()
+                .await
+                .expect_err("first decrypted frame should be dropped");
+            assert!(matches!(err, Error::MalformedPayloadFrame));
+
+            let (message, encoded_len) = reader
+                .read_message()
+                .await
+                .expect("read next frame")
+                .expect("valid frame should remain readable");
+            assert_eq!(encoded_len, valid_plain.len());
+            match message {
+                Message::Data(blob) => assert_eq!(blob.0, vec![9u8]),
+                other => panic!("expected valid data frame, got {other:?}"),
+            }
+
+            let none = reader.read_message().await.expect("stream exhausted");
+            assert!(none.is_none());
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn malformed_payload_frame_counter_tracks_recovery_without_disconnect() {
+            let key_byte = 6u8;
+            let mut first_bad = blob_message_frame(&[1u8, 2u8]);
+            first_bad.pop().expect("truncate first malformed frame");
+            let valid_plain = blob_message_frame(&[7u8, 8u8]);
+            let mut second_bad = blob_message_frame(&[3u8, 4u8]);
+            second_bad.pop().expect("truncate second malformed frame");
+
+            let mut raw = encrypted_frame(&first_bad, key_byte);
+            raw.extend_from_slice(&encrypted_frame(&valid_plain, key_byte));
+            raw.extend_from_slice(&encrypted_frame(&second_bad, key_byte));
+            raw.extend_from_slice(&encrypted_frame(&valid_plain, key_byte));
+
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
+                data: Bytes::from(raw),
+                pos: 0,
+            });
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
+                    .expect("valid key length");
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
+                MessageReader::new(read, cryptographer, 1024);
+            let counter_before = super::super::malformed_payload_frame_count();
+            let mut streak = 0u32;
+
+            let err = reader
+                .read_message()
+                .await
+                .expect_err("first malformed frame should not decode");
+            assert!(matches!(err, Error::MalformedPayloadFrame));
+            assert!(
+                !super::note_malformed_payload_frame(&mut streak),
+                "one malformed decrypted frame must not disconnect the session"
+            );
+            assert!(
+                super::super::malformed_payload_frame_count() >= counter_before.saturating_add(1)
+            );
+
+            let (message, _) = reader
+                .read_message()
+                .await
+                .expect("valid frame after malformed one")
+                .expect("message after malformed one");
+            streak = 0;
+            match message {
+                Message::Data(blob) => assert_eq!(blob.0, vec![7u8, 8u8]),
+                other => panic!("expected valid data frame, got {other:?}"),
+            }
+
+            let err = reader
+                .read_message()
+                .await
+                .expect_err("second malformed frame should not decode");
+            assert!(matches!(err, Error::MalformedPayloadFrame));
+            assert!(
+                !super::note_malformed_payload_frame(&mut streak),
+                "streak should restart after a successfully decoded frame"
+            );
+            assert_eq!(streak, 1);
+            assert!(
+                super::super::malformed_payload_frame_count() >= counter_before.saturating_add(2)
+            );
+
+            let (message, _) = reader
+                .read_message()
+                .await
+                .expect("reader should continue after second malformed frame")
+                .expect("final valid message");
+            match message {
+                Message::Data(blob) => assert_eq!(blob.0, vec![7u8, 8u8]),
+                other => panic!("expected valid data frame, got {other:?}"),
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn malformed_payload_frame_disconnects_after_three_consecutive_frames() {
+            let key_byte = 7u8;
+            let mut malformed_plain = blob_message_frame(&[0xAAu8]);
+            malformed_plain.pop().expect("truncate malformed frame");
+
+            let mut raw = Vec::new();
+            for _ in 0..super::MALFORMED_PAYLOAD_FRAME_THRESHOLD {
+                raw.extend_from_slice(&encrypted_frame(&malformed_plain, key_byte));
+            }
+
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
+                data: Bytes::from(raw),
+                pos: 0,
+            });
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
+                    .expect("valid key length");
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
+                MessageReader::new(read, cryptographer, 1024);
+            let counter_before = super::super::malformed_payload_frame_count();
+            let mut streak = 0u32;
+
+            for attempt in 1..=super::MALFORMED_PAYLOAD_FRAME_THRESHOLD {
+                let err = reader
+                    .read_message()
+                    .await
+                    .expect_err("malformed decrypted frame should be reported");
+                assert!(matches!(err, Error::MalformedPayloadFrame));
+                let disconnect = super::note_malformed_payload_frame(&mut streak);
+                assert_eq!(
+                    disconnect,
+                    attempt == super::MALFORMED_PAYLOAD_FRAME_THRESHOLD
+                );
+            }
+
+            assert_eq!(streak, super::MALFORMED_PAYLOAD_FRAME_THRESHOLD);
+            assert!(
+                super::super::malformed_payload_frame_count()
+                    >= counter_before
+                        .saturating_add(u64::from(super::MALFORMED_PAYLOAD_FRAME_THRESHOLD))
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn decrypt_failure_remains_fatal_and_log_sampling_limits_flood() {
+            // Build a buffer with many bogus encrypted frames: [len=16][16 zero bytes] * N.
             const FRAMES: usize = 200;
             let mut raw = Vec::with_capacity(FRAMES * (4 + 16));
             for _ in 0..FRAMES {
@@ -4641,20 +4882,18 @@ mod run {
                 data: Bytes::from(raw),
                 pos: 0,
             });
-            // Any key works; decrypt will fail on random zeros
-            let crypt =
-                super::cryptographer::Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(
-                    &[1u8; 32],
-                )
-                .expect("valid key length");
-            let mut mr: MessageReader<ChaCha20Poly1305, Dummy> =
-                MessageReader::new(read, crypt, 1024);
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[1u8; 32])
+                    .expect("valid key length");
+            let mut reader: MessageReader<ChaCha20Poly1305, Dummy> =
+                MessageReader::new(read, cryptographer, 1024);
 
-            // First attempt should yield an error due to malformed/cannot decrypt frame
-            let err = mr.read_message().await.err();
-            assert!(err.is_some(), "expected read error from malformed frame");
+            let err = reader
+                .read_message()
+                .await
+                .expect_err("undecryptable frame should remain fatal");
+            assert!(matches!(err, Error::SymmetricEncryption(_)));
 
-            // Now simulate a flood of such errors and ensure our sampler would emit at most once
             let mut sampler = crate::sampler::LogSampler::new();
             let mut logged = 0u32;
             for _ in 0..FRAMES {

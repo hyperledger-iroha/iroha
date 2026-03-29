@@ -1,6 +1,166 @@
 # Status
 
-Last updated: 2026-03-29
+Last updated: 2026-03-30
+
+## 2026-03-30 Full preserved-peer stable reruns cleared the old signatures but still failed on residual recovered-frame liveness loss
+- Completed the preserved-peer stable reruns on the transport-fix patch set:
+  - permissioned log:
+    `/tmp/izanami_permissioned_transportfix_20260329T210605Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-permissioned-transportfix_20260329T210605Z`;
+  - NPoS log:
+    `/tmp/izanami_npos_transportfix_20260329T213039Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-npos-transportfix_20260329T213039Z`.
+- The targeted regressions stayed gone in both full runs:
+  - no repeated `Failed to decode peer message, error: LengthMismatch`;
+  - no `Failed to decode peer message` churn at all in the main soak logs;
+  - no `deferring proposal: insufficient online peers for commit quorum`; and
+  - both envelopes grew far past the prior stall bands:
+    permissioned reached `strict_min_height=392` and NPoS reached
+    `strict_min_height=382`.
+- The peer-session hardening was active on the real soak path, but the
+  underlying malformed-frame source remains:
+  - permissioned peer logs recorded `3991` `Dropped malformed decrypted peer
+    payload frame` warnings across the four peers;
+  - NPoS peer logs recorded `3435` of the same warning across the four peers;
+  - neither run logged any threshold-triggered
+    `Disconnecting peer after 3 consecutive malformed payload frames`; and
+  - neither run showed decrypt-failure, AEAD-failure, or oversize-frame fatal
+    signatures.
+- Permissioned no longer died at the old low-height transport stall, but it
+  still failed as a soak:
+  - the run advanced quickly through the former `16/18` failure region and
+    then collapsed into a hard strict-min stall at
+    `strict_min_height=392` / `quorum_min_height=392` with
+    `strict_reference_height=394`;
+  - `izanami` failed the 600s strict-progress watchdog with
+    `successes=1673`, `failures=470`,
+    `izanami_ingress_failover_total=442`, and
+    `izanami_ingress_endpoint_unhealthy_total=672`; and
+  - the dominant external symptom was heavy ingress distress
+    (`queue_full`/endpoint-loss), but the preserved peer logs show recovered
+    malformed decrypted payload drops continuing cluster-wide while the strict
+    minimum stopped moving.
+- NPoS also cleared the old low-height stall, but the soak still ended in
+  error:
+  - the run progressed past the prior `8/10` stop and sustained growth all the
+    way to `strict_min_height=382`;
+  - unlike permissioned, it mostly avoided large ingress collapse
+    (`queue_full=93`, `no ingress endpoints=7`) and instead spent the full
+    hour in repeated synchronized strict-min stalls followed by small
+    recoveries;
+  - the run reached the duration deadline and then failed the shared-host
+    stable latency gate with
+    `quorum p95 block interval 27509ms exceeded threshold 1000ms`; and
+  - the final summary was `successes=757`, `failures=65`,
+    `izanami_ingress_failover_total=251`, and
+    `izanami_ingress_endpoint_unhealthy_total=168`.
+- Acceptance against this slice is mixed:
+  - the self-describing consensus wire and online-peer gate downgrade removed
+    the old `LengthMismatch`/low-online proposer signatures; and
+  - the peer-session hardening prevented the old immediate-validator-ejection
+    chain, but the full reruns still fail because recovered malformed peer
+    payload loss remains high enough to destroy liveness/latency under stable
+    soak.
+
+## 2026-03-30 Transport-induced consensus stall chain fixed in consensus wire, peer session handling, and proposer gating
+- The earlier Torii public `SignedTransaction` ingress regression remains fixed
+  separately; the remaining preserved-peer stable stall reported on March 29
+  was transport-induced and chained through three internal failure points:
+  ambient-flag-sensitive cached consensus bytes, immediate peer ejection on a
+  single malformed decrypted payload frame, and proposer-side hard deferral on
+  transient `online_peers` undercount.
+- Canonicalized cached consensus wire bytes in
+  `crates/iroha_core/src/sumeragi/message.rs`:
+  - `BlockMessageWire` now caches and re-emits a full Norito-framed
+    `BlockMessage` instead of a bare payload slice;
+  - cached and uncached serialization paths now emit identical framed bytes;
+  - `NoritoDeserialize` / `DecodeFromSlice` now decode the framed inner payload
+    through Norito’s framed decode path and preserve the exact framed bytes in
+    the cache; and
+  - focused regressions now lock in self-describing framed-cache semantics for
+    cached `QcVote`, `Qc`, and `ExecWitness` broadcasts.
+- Hardened peer stream handling in `crates/iroha_p2p/src/peer.rs` and
+  `crates/iroha_p2p/src/lib.rs`:
+  - malformed decrypted inner payload frames now surface as a dedicated
+    recoverable `MalformedPayloadFrame` error after successful decrypt and
+    frame delimitation;
+  - the reader now drops the whole decrypted frame, consumes it from the
+    encrypted buffer, and continues with the next frame instead of killing the
+    session immediately;
+  - peer-session policy now counts malformed decrypted payload frames,
+    rate-limits warnings, resets the streak on successful decode, and
+    disconnects only after `3` consecutive malformed decrypted payload frames
+    on the same stream; and
+  - oversized frames, truncated encrypted envelopes, and decrypt failures stay
+    session-fatal.
+- Removed the transient online-peer hard gate from proposer control flow in
+  `crates/iroha_core/src/sumeragi/main_loop/propose.rs` and
+  `crates/iroha_core/src/sumeragi/main_loop.rs`:
+  - the pacemaker/proposer no longer returns early solely because
+    `online_total < required`;
+  - low `online_peers` snapshots now remain telemetry-only via the existing
+    rate-limited warning path; and
+  - actual commit safety remains unchanged because commit still depends on real
+    votes and QC quorum.
+- Replaced the old low-online deferral tests with proposer coverage that proves
+  proposals still issue after a prior successful round even when the transient
+  online snapshot remains below commit quorum.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core block_message_wire -- --nocapture` (pass)
+  - `cargo test -p iroha_p2p --lib malformed_payload_frame -- --nocapture` (pass)
+  - `cargo test -p iroha_p2p --lib malformed_decrypted_payload_frame -- --nocapture` (pass)
+  - `cargo test -p iroha_p2p --lib decrypt_failure_remains_fatal -- --nocapture` (pass)
+  - `cargo test -p iroha_p2p --lib message_decode_from_slice_roundtrip -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib online_peer_deferral -- --nocapture` (pass; no legacy tests remain after removing the old deferral lock-in)
+  - `cargo test -p iroha_core --lib pacemaker_allows_proposal_with_low_online_peers_after_prior_success -- --nocapture` (pass)
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami` (pass)
+- Full preserved-peer stable permissioned and NPoS soak reruns remain pending
+  on this patch set; acceptance still requires sustained height growth past the
+  prior `16/18` and `8/10` stall bands without renewed
+  `LengthMismatch` decode churn or proposer deferral on low online-peer
+  snapshots.
+
+## 2026-03-29 Mandatory genesis `chain_discriminant` + fresh Taira reset
+- Made `chain_discriminant` mandatory in the JSON genesis manifest path so a
+  genesis bundle always declares the network prefix that its account literals
+  must decode under.
+- `crates/iroha_genesis/src/lib.rs` now carries `chain_discriminant` through
+  `RawGenesisTransaction` and `NormalizedGenesis`, emits it on
+  `to_json_value()`, requires it on `from_json_value()`, and enters the
+  matching `ChainDiscriminantGuard` before decoding the embedded genesis
+  transactions. `GenesisBuilder::build_raw()` now stamps the manifest with the
+  currently active chain discriminant instead of relying on ambient defaults.
+- `crates/iroha_kagami/src/localnet.rs` now writes the generated genesis JSON
+  with the explicit chain discriminant embedded, and
+  `crates/iroha_kagami/examples/taira_kaigi_localnet.rs` now scopes its Taira
+  overlay/account-literal generation to the manifest discriminant before
+  re-signing the overlayed genesis.
+- Updated the checked-in genesis manifests under `defaults/`,
+  `defaults/kagami/`, `configs/soranexus/`, and `wizard-output/` so the
+  loader-compatible `chain_discriminant` field is present everywhere.
+- Hardened `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` so the Taira
+  bootstrap recreates `launchd-run.sh` automatically if a newly generated
+  localnet bundle does not emit it.
+- Rebuilt `irohad`, `kagami`, and the explorer; regenerated the served
+  `dist/taira-localnet` from fresh genesis; re-applied the live faucet/Kaigi
+  overlay; and restarted the detached `taira-localnet` session. Public checks
+  now pass again:
+  - `https://taira.sora.org/status`
+  - `https://taira.sora.org/v1/accounts/faucet/puzzle`
+  - `https://taira.sora.org/v1/mcp`
+  - `https://taira.sora.org/v1/kaigi/relays`
+  - `https://taira-explorer.sora.org/`
+- Focused verification completed:
+  - `cargo test -p iroha_genesis raw_genesis_requires_chain_discriminant -- --nocapture` (pass)
+  - `cargo test -p iroha_genesis raw_genesis_roundtrip_uses_manifest_chain_discriminant_for_account_literals -- --nocapture` (pass)
+  - `cargo build -p irohad -p iroha_kagami --bin kagami --example taira_kaigi_localnet --release` (pass)
+  - `cargo test -p iroha_kagami --example taira_kaigi_localnet -- --nocapture` (pass)
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh` (pass)
+  - live loopback/public `curl` checks for Taira `/status`, faucet puzzle,
+    MCP, Kaigi relays, and explorer root (pass)
 
 ## 2026-03-29 Follow-up: strict workspace clippy is green after the cross-crate cleanup sweep
 - Cleared the remaining strict workspace lint/compile blockers across the late
