@@ -1508,13 +1508,7 @@ impl CommittedTxFilters {
     /// Helper associated with query processing.
     #[allow(clippy::too_many_lines)]
     pub fn applies(&self, tx: &CommittedTransaction) -> bool {
-        // authority presence and equality set checks (External only)
-        let authority_val = match &tx.entrypoint {
-            crate::transaction::signed::TransactionEntrypoint::External(signed) => {
-                Some(signed.authority().clone())
-            }
-            _ => None,
-        };
+        let authority_val = tx.entrypoint.authority_opt().cloned();
         if let Some(required) = self.authority_exists
             && (required != authority_val.is_some())
         {
@@ -1550,31 +1544,14 @@ impl CommittedTxFilters {
         }
         // timestamp lower bound
         if let Some(ge) = self.ts_ge {
-            let created_ms = match &tx.entrypoint {
-                crate::transaction::signed::TransactionEntrypoint::External(s) => {
-                    match u64::try_from(s.creation_time().as_millis()) {
-                        Ok(v) => v,
-                        Err(_) => return false,
-                    }
-                }
-                crate::transaction::signed::TransactionEntrypoint::Time(_) => {
-                    // Time triggers can be considered to have their step time; we approximate using block time here as zero.
-                    // Treat as not matching lower bound by default.
-                    0
-                }
-            };
+            let created_ms = tx.entrypoint.creation_time_ms().unwrap_or(0);
             if created_ms < ge {
                 return false;
             }
         }
         // timestamp upper bound
         if let Some(le) = self.ts_le {
-            let created_ms = match &tx.entrypoint {
-                crate::transaction::signed::TransactionEntrypoint::External(s) => {
-                    u64::try_from(s.creation_time().as_millis()).unwrap_or(u64::MAX)
-                }
-                crate::transaction::signed::TransactionEntrypoint::Time(_) => u64::MAX,
-            };
+            let created_ms = tx.entrypoint.creation_time_ms().unwrap_or(u64::MAX);
             if created_ms > le {
                 return false;
             }

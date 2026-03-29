@@ -14,8 +14,9 @@ use crate::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
-    transaction::signed::{
-        SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner,
+    transaction::{
+        PrivateKaigiTransaction,
+        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner},
     },
     trigger::TimeTriggerEntrypoint,
 };
@@ -25,6 +26,7 @@ use crate::{
 pub struct BlockBuilder {
     header: BlockHeader,
     transactions: Vec<SignedTransaction>,
+    external_entrypoints: Vec<TransactionEntrypoint>,
     time_triggers: Vec<TimeTriggerEntrypoint>,
     results: Vec<TransactionResult>,
     entry_merkle: MerkleTree<TransactionEntrypoint>,
@@ -42,6 +44,7 @@ impl BlockBuilder {
         Self {
             header,
             transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
             time_triggers: Vec::new(),
             results: Vec::new(),
             entry_merkle: MerkleTree::default(),
@@ -55,16 +58,28 @@ impl BlockBuilder {
 
     /// Push a signed transaction and update the entrypoint Merkle tree.
     pub fn push_transaction(&mut self, tx: SignedTransaction) -> usize {
-        let idx = self.transactions.len();
+        let idx = self.external_entrypoints.len();
         let h: HashOf<TransactionEntrypoint> = tx.hash_as_entrypoint();
         self.entry_merkle.add(h);
+        self.external_entrypoints
+            .push(TransactionEntrypoint::External(tx.clone()));
         self.transactions.push(tx);
+        idx
+    }
+
+    /// Push an authority-free private Kaigi transaction and update the entrypoint Merkle tree.
+    pub fn push_private_kaigi_transaction(&mut self, tx: PrivateKaigiTransaction) -> usize {
+        let idx = self.external_entrypoints.len();
+        let h: HashOf<TransactionEntrypoint> = tx.hash_as_entrypoint();
+        self.entry_merkle.add(h);
+        self.external_entrypoints
+            .push(TransactionEntrypoint::PrivateKaigi(tx));
         idx
     }
 
     /// Push a time trigger and update the entrypoint Merkle tree.
     pub fn push_time_trigger(&mut self, trig: TimeTriggerEntrypoint) -> usize {
-        let idx = self.transactions.len() + self.time_triggers.len();
+        let idx = self.external_entrypoints.len() + self.time_triggers.len();
         let h: HashOf<TransactionEntrypoint> = trig.hash_as_entrypoint();
         self.entry_merkle.add(h);
         self.time_triggers.push(trig);
@@ -118,6 +133,7 @@ impl BlockBuilder {
             previous_roster_evidence,
         };
         let result = BlockResult {
+            external_entrypoints: self.external_entrypoints,
             time_triggers: self.time_triggers,
             merkle: self.entry_merkle,
             result_merkle: self.result_merkle,

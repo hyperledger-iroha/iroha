@@ -193,11 +193,14 @@ impl SignedBlock {
         let merkle = MerkleTree::from_iter(hashes.to_owned());
 
         // Ensure the consensus merkle root covering only external transactions remains intact.
-        let external_hashes = self
+        let external_entrypoints: Vec<TransactionEntrypoint> = self
             .payload
             .transactions
             .iter()
-            .map(SignedTransaction::hash_as_entrypoint);
+            .cloned()
+            .map(TransactionEntrypoint::from)
+            .collect();
+        let external_hashes = external_entrypoints.iter().map(TransactionEntrypoint::hash);
         let external_merkle: MerkleTree<TransactionEntrypoint> =
             external_hashes.collect::<MerkleTree<_>>();
         let external_root = external_merkle.root();
@@ -217,6 +220,7 @@ impl SignedBlock {
         let axt_policy_snapshot =
             axt_policy_snapshot.map(crate::nexus::AxtPolicySnapshot::with_computed_version);
         self.result = Some(BlockResult {
+            external_entrypoints,
             time_triggers,
             merkle,
             result_merkle,
@@ -266,7 +270,7 @@ impl SignedBlock {
         let entry_merkle_proof = result_state.merkle.get_proof(idx_u32)?;
         let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
 
-        let external_count = self.external_transactions().len();
+        let external_count = self.external_entrypoint_count();
         let entry_root = if idx < external_count {
             self.payload.header.merkle_root?
         } else {
@@ -454,6 +458,11 @@ impl SignedBlock {
         };
 
         let signature = BlockSignature::new(0, SignatureOf::from_hash(private_key, header.hash()));
+        let external_entrypoints: Vec<TransactionEntrypoint> = transactions
+            .iter()
+            .cloned()
+            .map(TransactionEntrypoint::from)
+            .collect();
         let payload = BlockPayload {
             header,
             transactions,
@@ -464,6 +473,7 @@ impl SignedBlock {
         };
 
         let result = BlockResult {
+            external_entrypoints,
             time_triggers: Vec::new(),
             merkle: entry_merkle,
             result_merkle,
@@ -1357,6 +1367,7 @@ mod tests {
             .add(crate::transaction::signed::TransactionResult::hash_from_inner(&result_inner));
 
         let result = BlockResult {
+            external_entrypoints: Vec::new(),
             time_triggers: vec![entrypoint],
             merkle: entry_merkle,
             result_merkle,
