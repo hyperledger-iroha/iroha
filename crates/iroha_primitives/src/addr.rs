@@ -911,7 +911,8 @@ mod std_compat {
         #[inline]
         fn from(other: Ipv4Addr) -> Self {
             let Ipv4Addr(octets) = other;
-            std::net::Ipv4Addr::from_octets(octets)
+            let [a, b, c, d] = octets;
+            std::net::Ipv4Addr::new(a, b, c, d)
         }
     }
 
@@ -927,7 +928,8 @@ mod std_compat {
         #[inline]
         fn from(other: Ipv6Addr) -> Self {
             let Ipv6Addr(segments) = other;
-            std::net::Ipv6Addr::from_segments(segments)
+            let [a, b, c, d, e, f, g, h] = segments;
+            std::net::Ipv6Addr::new(a, b, c, d, e, f, g, h)
         }
     }
 

@@ -10,14 +10,16 @@ use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     query::error::QueryExecutionFail,
-    soranet::vpn::{VpnExitClassV1, VpnHelperTicketV1},
+    soranet::vpn::{
+        VPN_DEFAULT_TUNNEL_MTU_BYTES, VpnExitClassV1, VpnHelperTicketV1,
+        derive_vpn_session_address_plan_v1,
+    },
 };
 
 use crate::{Error, SharedAppState};
 
 const SUPPORTED_EXIT_CLASSES: [&str; 3] = ["standard", "low-latency", "high-security"];
 const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2/128"];
-const DEFAULT_VPN_MTU_BYTES: u64 = 1280;
 const MAX_RECEIPTS_PER_ACCOUNT: usize = 24;
 
 #[derive(
@@ -237,7 +239,7 @@ fn build_profile(dto: &ConfigGetDTO) -> VpnProfileResponseDto {
         excluded_routes: Vec::new(),
         dns_servers: Vec::new(),
         tunnel_addresses: default_tunnel_addresses(),
-        mtu_bytes: DEFAULT_VPN_MTU_BYTES,
+        mtu_bytes: u64::from(VPN_DEFAULT_TUNNEL_MTU_BYTES),
         display_billing_label: format!("{default_exit_class} · {}", vpn.meter_family),
     }
 }
@@ -444,6 +446,8 @@ pub(crate) async fn handle_create_vpn_session(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("vpn");
     let session_id = build_session_id(&account_id, &exit_class, nonce, current_ms);
+    let address_plan =
+        derive_vpn_session_address_plan_v1(relay_session_id_from_session_id(&session_id));
     let expires_at_ms = current_ms.saturating_add(profile.lease_secs.saturating_mul(1_000));
     let helper_ticket_hex = build_helper_ticket_hex(
         &session_id,
@@ -462,7 +466,7 @@ pub(crate) async fn handle_create_vpn_session(
         route_pushes: profile.route_pushes,
         excluded_routes: profile.excluded_routes,
         dns_servers: profile.dns_servers,
-        tunnel_addresses: profile.tunnel_addresses,
+        tunnel_addresses: address_plan.client_tunnel_addresses,
         mtu_bytes: profile.mtu_bytes,
         helper_ticket_hex,
         bytes_in: 0,
@@ -617,7 +621,7 @@ mod tests {
             vec!["standard", "low-latency", "high-security"]
         );
         assert!(!body.relay_endpoint.trim().is_empty());
-        assert_eq!(body.mtu_bytes, DEFAULT_VPN_MTU_BYTES);
+        assert_eq!(body.mtu_bytes, u64::from(VPN_DEFAULT_TUNNEL_MTU_BYTES));
         assert_eq!(body.tunnel_addresses, default_tunnel_addresses());
     }
 
@@ -682,6 +686,8 @@ mod tests {
         assert_eq!(session.account_id, account.to_string());
         assert_eq!(session.exit_class, "low-latency");
         assert_eq!(session.status, "active");
+        assert_ne!(session.tunnel_addresses, default_tunnel_addresses());
+        assert_eq!(session.tunnel_addresses.len(), 2);
         assert_eq!(app.vpn_sessions.len(), 1);
 
         let get_method = Method::GET;

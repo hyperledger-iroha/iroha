@@ -22,8 +22,10 @@ pub const DOMAIN_ENDORSEMENT_VERSION_V1: u8 = 1;
     Encode,
     Decode,
     IntoSchema,
-    crate::DeriveJsonSerialize,
-    crate::DeriveJsonDeserialize,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct DomainEndorsementScope {
     /// Optional dataspace the endorsement applies to.
@@ -63,8 +65,10 @@ impl DomainEndorsementScope {
     Encode,
     Decode,
     IntoSchema,
-    crate::DeriveJsonSerialize,
-    crate::DeriveJsonDeserialize,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct DomainEndorsementSignature {
     /// Signer's public key (must belong to the configured committee).
@@ -84,8 +88,10 @@ pub struct DomainEndorsementSignature {
     Encode,
     Decode,
     IntoSchema,
-    crate::DeriveJsonSerialize,
-    crate::DeriveJsonDeserialize,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct DomainEndorsement {
     /// Version byte for forward evolution.
@@ -129,8 +135,10 @@ impl DomainEndorsement {
     Encode,
     Decode,
     IntoSchema,
-    crate::DeriveJsonSerialize,
-    crate::DeriveJsonDeserialize,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct DomainCommittee {
     /// Stable committee identifier.
@@ -163,8 +171,10 @@ impl DomainCommittee {
     Encode,
     Decode,
     IntoSchema,
-    crate::DeriveJsonSerialize,
-    crate::DeriveJsonDeserialize,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct DomainEndorsementPolicy {
     /// Committee identifier this domain trusts.
@@ -186,8 +196,10 @@ pub struct DomainEndorsementPolicy {
     Encode,
     Decode,
     IntoSchema,
-    crate::DeriveJsonSerialize,
-    crate::DeriveJsonDeserialize,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct DomainEndorsementRecord {
     /// Accepted endorsement payload.
