@@ -2,6 +2,21 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: `iroha_core`/`iroha_torii` compile hygiene for contract-runtime visibility and SoraFS manifest helpers
+- Removed the last dead contiguous-frontier phase from
+  `crates/iroha_core/src/sumeragi/main_loop.rs` by dropping the unused
+  `AwaitVotes` state and updating the active frontier-owner predicates to only
+  reference runtime phases that are still reachable on the current path.
+- Cleaned up one remaining `iroha_torii` test-helper warning in
+  `crates/iroha_torii/src/sorafs/api.rs` by marking the unused
+  `manifest_digest` parameter intentionally unused.
+- Revalidated the previously reported contract-runtime visibility warnings and
+  SoraFS manifest compile errors on the current tree: the targeted crate check
+  is now clean.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_core -p iroha_torii --all-targets` (pass)
+
 ## 2026-03-29 Follow-up: Taira deploy bundle now renders validator configs from a shared roster
 - Added `scripts/render_taira_validator_bundle.py` plus focused tests in
   `scripts/tests/render_taira_validator_bundle_test.py` so operators can render

@@ -9179,7 +9179,7 @@ mod advert_tests {
 
     fn encode_replication_order_bytes_with_providers(
         order_id: &ReplicationOrderId,
-        manifest_digest: &ManifestDigest,
+        _manifest_digest: &ManifestDigest,
         manifest_cid: &[u8],
         providers: Vec<[u8; 32]>,
         deadline_epoch: u64,
