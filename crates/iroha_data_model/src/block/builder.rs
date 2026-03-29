@@ -117,6 +117,11 @@ impl BlockBuilder {
         self.previous_roster_evidence = evidence;
     }
 
+    /// Commit an SCCP commitment root in the resulting block header.
+    pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
+        self.header.set_sccp_commitment_root(root);
+    }
+
     /// Build a `SignedBlock` with the provided signatures.
     pub fn build(mut self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
         // Write roots into header
@@ -129,6 +134,7 @@ impl BlockBuilder {
         let payload = BlockPayload {
             header: self.header,
             transactions: self.transactions,
+            external_entrypoints: self.external_entrypoints.clone(),
             da_commitments,
             da_proof_policies,
             da_pin_intents,

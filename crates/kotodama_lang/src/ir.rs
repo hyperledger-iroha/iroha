@@ -1095,7 +1095,7 @@ fn lower_function_named(
     }
     let state_env = state_env_snapshot();
     for (name, ty) in state_env.iter() {
-        allocate_state_value(&mut ctx, &mut vars, name, ty, name);
+        register_state_value_metadata(&mut ctx, name, ty, name);
     }
     for (name, tmp) in param_temps {
         vars.insert(name, tmp);
@@ -1261,21 +1261,12 @@ fn lower_entrypoint_param(
     Ok(dest)
 }
 
-fn allocate_state_value(
-    ctx: &mut LowerCtx,
-    vars: &mut HashMap<String, Temp>,
-    name: &str,
-    ty: &Type,
-    literal: &str,
-) {
+fn register_state_value_metadata(ctx: &mut LowerCtx, name: &str, ty: &Type, literal: &str) {
     ctx.state_name_literals
         .insert(name.to_string(), literal.to_string());
     let resolved = semantic::resolve_struct_type(ty);
     match &resolved {
         Type::Map(k, v) => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::MapNew { dest: t });
-            vars.insert(name.to_string(), t);
             let key_ty = semantic::resolve_struct_type(k);
             let value_ty = semantic::resolve_struct_type(v);
             register_state_map_value_literals(ctx, name, &value_ty, literal);
@@ -1291,21 +1282,17 @@ fn allocate_state_value(
             for (i, (fname, fty)) in fields.iter().enumerate() {
                 let child = format!("{name}#{i}");
                 let child_literal = format!("{literal}_{fname}");
-                allocate_state_value(ctx, vars, &child, fty, &child_literal);
+                register_state_value_metadata(ctx, &child, fty, &child_literal);
             }
         }
         Type::Tuple(ts) => {
             for (i, fty) in ts.iter().enumerate() {
                 let child = format!("{name}#{i}");
                 let child_literal = format!("{literal}_{i}");
-                allocate_state_value(ctx, vars, &child, fty, &child_literal);
+                register_state_value_metadata(ctx, &child, fty, &child_literal);
             }
         }
-        _ => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            vars.insert(name.to_string(), t);
-        }
+        _ => {}
     }
 }
 
@@ -1794,8 +1781,8 @@ fn lower_statement(ctx: &mut LowerCtx, stmt: &TypedStatement, vars: &mut HashMap
             {
                 let _ =
                     lower_state_map_set_value(ctx, &bn, key_tmp, &spec.key, &spec.value, value_tmp);
+                return;
             }
-            // Always keep ephemeral path for within-run semantics
             let m = lower_expr(ctx, map, vars);
             ctx.current_instr(Instr::MapSet {
                 map: m,
@@ -1811,7 +1798,7 @@ fn lower_state_foreach_int_map(
     ctx: &mut LowerCtx,
     key: &str,
     value: &Option<String>,
-    map: &TypedExpr,
+    _map: &TypedExpr,
     body: &TypedBlock,
     start: usize,
     bound: Option<usize>,
@@ -1819,8 +1806,6 @@ fn lower_state_foreach_int_map(
     value_codec: ValueCodec,
     vars: &mut HashMap<String, Temp>,
 ) {
-    // Evaluate map expression for potential side effects.
-    let _ = lower_expr(ctx, map, vars);
     let max_iters = bound.unwrap_or(2);
     let max_iters_i64 = (max_iters.min(i64::MAX as usize)) as i64;
     let base_start_i64 = (start.min(i64::MAX as usize)) as i64;

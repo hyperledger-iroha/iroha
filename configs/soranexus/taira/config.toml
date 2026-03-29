@@ -102,7 +102,7 @@ lane_count = 3
 
 [nexus.fees]
 fee_asset_id = "xor#universal"
-fee_sink_account_id = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+fee_sink_account_id = "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
 base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"
@@ -203,8 +203,13 @@ window_slots = 48
 seed_tag = "iroha:da:rotate:v1\u0000"
 latency_decay = 0.25
 
-[governance]
+[gov]
 plain_voting_enabled = false
+citizenship_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+bond_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+slash_receiver_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+viral_incentive_pool_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+viral_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
 parliament_committee_size = 21
 parliament_term_blocks = 43200
 parliament_min_stake = 1
@@ -218,3 +223,6 @@ review_panel_size = 13
 policy_jury_size = 25
 oversight_committee_size = 7
 fma_committee_size = 5
+
+[gov.sorafs_telemetry]
+submitters = ["testuロ1Pカt8オgキララク5ユニヰチウヱワヲヱLLノVセユXケシリnノハjク9eQL2MVG9T"]

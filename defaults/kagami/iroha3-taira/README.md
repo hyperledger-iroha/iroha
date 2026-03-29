@@ -1,6 +1,7 @@
 # iroha3-taira sample bundle
 
 - chain id: iroha3-taira
+- chain discriminant: 369
 - collectors: k=3 r=2
 - VRF seed (hex): 8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B
 - genesis public key: ed0120CFBB23652880ABCAEEE2FA6F512A1657E5D7EDBC7B45589721FD86C2FEC9F559

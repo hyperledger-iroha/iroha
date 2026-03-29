@@ -840,7 +840,7 @@ impl Actor {
         let height = pending.height;
         let view = pending.view;
         let parent = pending.block.header().prev_block_hash();
-        let txs = pending.block.transactions_vec().clone();
+        let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
         let reason_label = validation_reject_reason_label(err);
         let proposal_epoch = self.epoch_for_height(height);
         pending.validation_status = ValidationStatus::Invalid;

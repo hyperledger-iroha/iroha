@@ -2,6 +2,146 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 Taira testnet prefix/config rollout):
+the served Taira localnet now boots cleanly with Taira-prefixed account
+literals after moving the generator/live overrides to `[gov]` and explicitly
+overriding `gov.sorafs_telemetry.submitters` with the testnet-prefixed
+submitter account instead of relying on the Sora default.
+
+- `crates/iroha_kagami/src/localnet.rs` and `xtask/src/kagami_profiles.rs`
+  now emit `[gov]` and `[gov.sorafs_telemetry]` for Taira/testnet bundles;
+- the checked-in and served Taira configs now carry the same override shape;
+- the public/local Taira status endpoints are healthy again on the rebuilt
+  release binary.
+
+Open work for this slice now remains:
+- sweep the remaining translated/runbook docs that still refer to
+  `governance.sorafs_telemetry.*` or `[governance]` so operator docs match the
+  current config schema everywhere.
+
+Latest sync (2026-03-29 Kagami fresh-genesis boot fix):
+fresh `kagami localnet` output is bootable again on this checkout, including
+the release `irohad` path that previously failed with a genesis decode
+`length mismatch`.
+
+- `crates/norito/src/core.rs` now supports prefix decoding for packed
+  self-delimiting fields, and `crates/norito_derive/src/lib.rs` now uses that
+  path for the hybrid packed derive cases that were mis-decoding
+  genesis-shaped account metadata;
+- `crates/iroha_data_model/src/block/mod.rs` now enforces exact canonical
+  versioned `SignedBlock` payload length after archived/adaptive decode, which
+  avoids the failing release-only slice fast path while keeping the public
+  decoder strict; and
+- release validation now passes for the Norito packed regression tests, the
+  versioned signed-block decode tests, the Kagami genesis-handshake test, and
+  a fresh isolated 4-peer localnet boot using
+  `/tmp/iroha_kagami_fix_target/release/{kagami,irohad}` reached
+  `/status` with `peers=3`.
+
+Open work for this slice now remains:
+- redeploy the served Taira bundle from a newly generated signed genesis so the
+  live `dist/taira-localnet` no longer depends on the preserved fallback
+  bundle; and
+- remove the temporary archived/adaptive exact-decode fallback in
+  `decode_signed_block_exact(...)` once the remaining `DecodeFromSlice`
+  release-path regression is fully understood and the direct exact decoder is
+  trustworthy again.
+
+Latest sync (2026-03-29 linked-domain account builder cleanup):
+the `NewAccount` compatibility constructor is gone from the active data-model
+API, and the low-risk scaffolding/generator crates no longer use
+`Account::new_in_domain(...)` either.
+
+- removed `NewAccount::new_in_domain(...)` from
+  `crates/iroha_data_model/src/account.rs`;
+- converted `crates/iroha_kagami`, `crates/iroha_test_network`,
+  `mochi/mochi-core`, and `python/iroha_python/iroha_python_rs` to
+  `Account::new(account_id).with_linked_domain(domain_id)` for explicit
+  linked-domain registration;
+- updated the remaining in-file Norito/registration roundtrip tests to use the
+  canonical builder chain; and
+- revalidated with `cargo check -p iroha_data_model`,
+  `cargo check -p mochi-core`, `cargo check -p iroha_kagami --tests`, and
+  `cargo check -p iroha_test_network`.
+
+Open work for this slice now remains:
+- remove the larger scoped-registration compatibility layer itself:
+  `ScopedAccountId`, `Account::new_in_domain(...)`, stored `linked_domains`,
+  and the scoped `REGISTER_ACCOUNT` ABI surface; and
+- keep collapsing the remaining higher-churn callsites in `iroha_cli`,
+  `iroha_torii`, `iroha_core`, and `integration_tests` before removing
+  `Account::new_in_domain(...)` itself.
+
+Latest sync (2026-03-29 bound quorum recovery + hedged Torii authority routing + best-effort RBC status persistence):
+the requested internal node-side recovery slice is in place without changing
+public HTTP APIs, consensus semantics, or configuration surface.
+
+- `crates/iroha_core/src/sumeragi/main_loop.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
+  `crates/iroha_core/src/sumeragi/mod.rs` now gate quorum-timeout deferral on
+  fresh same-height block-local progress, re-arm terminal-height recovery, and
+  prioritize vote draining once commit-quorum recovery is already urgent;
+- `crates/iroha_torii/src/lib.rs` now uses authoritative-first hedged proxy
+  execution with first-success semantics while keeping the existing candidate
+  ordering, loop prevention, and hop-budget rules; and
+- `crates/iroha_core/src/sumeragi/rbc_status.rs` now degrades to memory-only
+  status snapshots after fatal disk-capacity persistence faults and exposes the
+  degraded state through telemetry.
+
+Open work for this slice now remains:
+- run the remaining heavier validation from the implementation checklist,
+  especially `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`; and
+- run the preserved-peer stable permissioned soak and preserved-peer stable
+  NPoS soak on this patch set.
+
+Latest sync (2026-03-29 Taira signed rollout canary auto-faucet bootstrap):
+the public Taira rollout smoke no longer fails just because the chosen canary
+signer is unfunded for the fee asset; it can now bootstrap that signer through
+the live faucet and then complete the signed ping automatically.
+
+- `configs/soranexus/taira/check_mcp_rollout.sh` now parses the failed signed
+  ping output to recover the authority account id, invokes
+  `scripts/taira_faucet_canary.py` when the only write failure is
+  `Failed to find asset`, and retries the signed canary long enough for the
+  queued faucet transfer to land; and
+- `scripts/taira_faucet_canary.py` now tolerates non-UTF8 HTTP error bodies,
+  while the Taira README, canary example config, skill instructions, and
+  `AGENTS.md` all document the new bootstrap path and the remaining
+  requirement that the signer already exist on Taira; and
+- live validation against `https://taira.sora.org` succeeded end to end,
+  including a real solved faucet claim and a successful signed retry.
+
+Open work for this slice now remains:
+- wire the strict `check_mcp_rollout.sh --write-config ...` path into the
+  actual Taira deploy/restart checklist or CI job so the public canary is
+  enforced automatically instead of relying on a manual operator run.
+
+Latest sync (2026-03-29 Taira frame-cap + Torii core-lane fallback fix):
+the served Taira localnet is accepting public writes again, including payloads
+large enough to exceed the old 256 KiB tx-gossip frame cap.
+
+- `crates/iroha_kagami/src/localnet.rs` now emits
+  `network.max_frame_bytes_tx_gossip = 1048576` for Nexus-enabled localnets,
+  and the focused localnet regression covers that generated config;
+- `crates/iroha_torii/src/lib.rs` now treats the NPoS core lane as locally
+  routable when public validator records, `commit_topology()`, and
+  `world().peers()` are all empty but connected peers are present, which
+  removed the served Taira `503 route_unavailable` failure on
+  `/v1/nexus/public_lanes/0/validators`; and
+- the served Taira localnet was restarted on the patched `irohad` binary and
+  validated live with both a normal public ping and a `350017`-byte metadata
+  ping, advancing the chain to block `45` without any fresh
+  `frame_cap_too_small` logs.
+
+Open work for this slice now remains:
+- explain why `GET /v1/nexus/public_lanes/0/validators` is locally routable
+  again but still returns an empty `items` array even though the generated
+  Taira genesis contains `RegisterPublicLaneValidator` /
+  `ActivatePublicLaneValidator` bootstrap instructions; and
+- decide whether the zeroed `sumeragi.commit_qc_*` counters on the served
+  Taira `/status` output after restart are a telemetry/reporting bug or a
+  deeper NPoS snapshot issue.
+
 Latest sync (2026-03-29 Kaigi CLI privacy-artifact parity + merge-drift cleanup):
 the reported `iroha_cli` Kaigi compile break is closed: the CLI now matches the
 privacy-aware `CreateKaigi` / `EndKaigi` ISI surface again, and the extra merge
@@ -326,8 +466,8 @@ current `iroha_data_model` and `iroha_kagami` callers.
 - `crates/iroha_data_model/src/account.rs` no longer moves the test
   `DomainId` before asserting on it;
 - `crates/iroha_kagami/src/genesis/sign.rs` and
-  `crates/iroha_kagami/src/localnet.rs` now use `NewAccount::domain()` instead
-  of the removed field access; and
+  `crates/iroha_kagami/src/localnet.rs` now check `linked_domains()` instead of
+  the removed field access; and
 - focused validation is green again for
   `cargo test -p iroha_data_model new_account_json_roundtrip_defaults -- --nocapture`
   and `cargo check -p iroha_kagami --tests`.
@@ -337,8 +477,9 @@ Open work from this slice:
   cleanup across CLI, Torii tests, bridge helpers, IVM, and docs so remaining
   callers converge on the current account-domain API shape; and
 - decide whether future call sites that need to retain a caller-owned
-  `DomainId` should prefer helpers such as `NewAccount::new_in_domain(...)`
-  over materializing a temporary `ScopedAccountId`.
+  `DomainId` should prefer builder chains such as
+  `NewAccount::new(id).with_linked_domain(domain)` over materializing a
+  temporary `ScopedAccountId`.
 
 Latest sync (2026-03-28 Taira Kaigi local bootstrap landed and is live):
 the served Taira localnet on this machine now exposes real Kaigi relay data
@@ -427,7 +568,8 @@ the local Taira validator set and explorer are back on the latest checkouts,
 and the fresh-genesis redeploy is healthy again on this machine.
 
 - `iroha_kagami` now compiles against the updated account/domain API after the
-  `Account::new_in_domain(...)` and `register.object.domain()` fixes; and
+  `Account::new_in_domain(...)` and `register.object.linked_domains()` fixes;
+  and
 - the reset flow again regenerates `dist/taira-localnet`, restarts the detached
   `taira-localnet` screen session, serves a live faucet puzzle, returns valid
   Connect sessions, and points the rebuilt explorer bundle at
@@ -708,7 +850,7 @@ Open work from this slice:
   cleanup across CLI, Torii tests, bridge helpers, IVM, and docs so account
   creation and account-targeting ABIs stop depending on scoped account IDs;
 - remove the remaining `ScopedAccountId` compatibility builders/views from the
-  data model (`new_in_domain`, `domain()`)
+  data model (`new_in_domain`)
   once downstream consumers stop depending on them;
 - decide whether `linked_domains` remains a transient internal projection only
   or is removed entirely from stored account records once the remaining

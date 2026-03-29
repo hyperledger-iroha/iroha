@@ -6460,12 +6460,141 @@ where
     Ok((value, used))
 }
 
+/// Decode a single field from the front of `bytes`, permitting trailing bytes after the field.
+///
+/// This is intended for packed layouts where a self-delimiting field is followed by additional
+/// packed fields in the same payload. The returned `usize` is the canonical byte length consumed
+/// by the decoded field.
+pub fn decode_field_prefix<T>(bytes: &[u8]) -> Result<(T, usize), Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+{
+    #[inline]
+    fn resolve_prefix_used<T>(
+        value: &T,
+        payload_len: usize,
+        used_ctx: Option<usize>,
+    ) -> Result<usize, Error>
+    where
+        T: crate::NoritoSerialize,
+    {
+        match used_ctx {
+            Some(used) if used != 0 => {
+                if used > payload_len {
+                    return Err(Error::LengthMismatch);
+                }
+                let recomputed = recompute_canonical_len(value)?;
+                if recomputed > payload_len || used > recomputed {
+                    return Err(Error::LengthMismatch);
+                }
+                Ok(recomputed)
+            }
+            _ => {
+                let recomputed = recompute_canonical_len(value)?;
+                if recomputed > payload_len {
+                    return Err(Error::LengthMismatch);
+                }
+                Ok(recomputed)
+            }
+        }
+    }
+
+    if bytes.is_empty() {
+        if core::mem::size_of::<Archived<T>>() == 0 {
+            let _guard = PayloadCtxGuard::enter(&[]);
+            let value = unsafe {
+                crate::guarded_try_deserialize(|| {
+                    T::try_deserialize(&*std::ptr::NonNull::<Archived<T>>::dangling().as_ptr())
+                })?
+            };
+            return Ok((value, 0));
+        }
+        return Err(Error::LengthMismatch);
+    }
+
+    struct RootGuard(bool);
+    impl Drop for RootGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                clear_decode_root();
+            }
+        }
+    }
+    let _root_guard = if payload_root_span().is_none() {
+        set_decode_root(bytes);
+        Some(RootGuard(true))
+    } else {
+        None
+    };
+
+    let bytes_len = bytes.len();
+    let _flags_guard = if decode_flags_active() {
+        None
+    } else {
+        Some(DecodeFlagsGuard::enter(default_encode_flags()))
+    };
+
+    let align = core::mem::align_of::<Archived<T>>();
+    let ptr = bytes.as_ptr();
+    let ptr_us = ptr as usize;
+
+    if align <= 1 || ptr_us.is_multiple_of(align) {
+        let payload_guard = PayloadCtxGuard::enter(bytes);
+        let archived = unsafe { &*(ptr as *const Archived<T>) };
+        let value = crate::guarded_try_deserialize(|| T::try_deserialize(archived))?;
+        let used_ctx = payload_ctx_max_access();
+        drop(payload_guard);
+        let used = resolve_prefix_used(&value, bytes_len, used_ctx)?;
+        note_payload_access(bytes, used);
+        return Ok((value, used));
+    }
+
+    struct TmpAlloc {
+        ptr: *mut u8,
+        layout: Layout,
+        len: usize,
+        needs_dealloc: bool,
+    }
+
+    impl Drop for TmpAlloc {
+        fn drop(&mut self) {
+            unsafe { dealloc_checked(self.ptr, self.layout, self.needs_dealloc) };
+        }
+    }
+
+    let layout =
+        Layout::from_size_align(bytes_len.max(1), align).map_err(|_| Error::LengthMismatch)?;
+    let (tmp_ptr, needs_dealloc) = unsafe { alloc_checked(layout) };
+    let alloc = TmpAlloc {
+        ptr: tmp_ptr,
+        layout,
+        len: bytes_len,
+        needs_dealloc,
+    };
+    let (value, used) = unsafe {
+        core::ptr::copy(bytes.as_ptr(), alloc.ptr, bytes_len);
+        let tmp_slice = std::slice::from_raw_parts(alloc.ptr as *const u8, alloc.len);
+        let payload_guard = PayloadCtxGuard::enter(tmp_slice);
+        let archived = &*(alloc.ptr as *const Archived<T>);
+        let value = crate::guarded_try_deserialize(|| T::try_deserialize(archived))?;
+        let used_ctx = payload_ctx_max_access();
+        drop(payload_guard);
+        let used = resolve_prefix_used(&value, bytes_len, used_ctx)?;
+        Result::<(T, usize), Error>::Ok((value, used))
+    }?;
+    note_payload_access(bytes, used);
+    Ok((value, used))
+}
+
 /// Decode a field using its `DecodeFromSlice` implementation, ensuring full
 /// consumption without re-encoding for canonical length checks.
 ///
 /// This is intended for hot paths where re-serializing is too costly and the
 /// slice-based decoder already guarantees canonical consumption.
-pub fn decode_field_canonical_slice<T>(bytes: &[u8]) -> Result<(T, usize), Error>
+fn decode_field_with_slice_decoder<T>(
+    bytes: &[u8],
+    require_full_consumption: bool,
+) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
 {
@@ -6505,12 +6634,19 @@ where
 
     let payload_guard = PayloadCtxGuard::enter(bytes);
     let (value, used) = <T as DecodeFromSlice>::decode_from_slice(bytes)?;
-    if used != bytes.len() {
+    if require_full_consumption && used != bytes.len() {
         return Err(Error::LengthMismatch);
     }
     note_payload_access(bytes, used);
     drop(payload_guard);
     Ok((value, used))
+}
+
+pub fn decode_field_canonical_slice<T>(bytes: &[u8]) -> Result<(T, usize), Error>
+where
+    T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+{
+    decode_field_with_slice_decoder(bytes, true)
 }
 
 /// Decode a field using its `DecodeFromSlice` implementation, ensuring full

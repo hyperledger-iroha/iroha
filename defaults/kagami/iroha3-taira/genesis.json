@@ -36,7 +36,7 @@
         {
           "Register": {
             "Account": {
-              "id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "id": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "label": null,
               "metadata": {
                 "key": "value"
@@ -84,7 +84,7 @@
         {
           "Register": {
             "Account": {
-              "id": "sorauロ1PスNgソリ9マユ2ユ9トZタテフWwヒセヰトツT3WコTxカオホKモロmキNSD7UG",
+              "id": "testuロ1PスNgソリ9マユ2ユ9トZタテフWwヒセヰトツT3WコTxカオホKモロmキNSD7UG",
               "label": null,
               "metadata": {
                 
@@ -277,16 +277,16 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "sorauロ1PオヨアFテoiネフomツカオG9キトZe36JナヨツホルuGQULツ2Mリウ894YPT"
+              "source": "testuロ1PオヨアFテoiネフomツカオG9キトZe36JナヨツホルuGQULツ2Mリウ894YPT"
             }
           }
         },
         {
           "Grant": {
             "Permission": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -296,7 +296,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -306,7 +306,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": {
                 "name": "CanRegisterAccount"
               }

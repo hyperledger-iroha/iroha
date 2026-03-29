@@ -1144,5 +1144,50 @@ mod tests {
             Some(EXPECTED_TAIRA_CHAIN_ID),
             "public Taira genesis.json must match the shipped live chain id"
         );
+        assert!(
+            config_text.contains("testu"),
+            "public Taira config.toml must render testnet i105 literals"
+        );
+        assert!(
+            !config_text.contains("sorau"),
+            "public Taira config.toml must not leak mainnet i105 literals"
+        );
+        assert!(
+            genesis_text.contains("testu"),
+            "public Taira genesis.json must render testnet i105 literals"
+        );
+        assert!(
+            !genesis_text.contains("sorau"),
+            "public Taira genesis.json must not leak mainnet i105 literals"
+        );
+        let first_tx_instructions = genesis
+            .get("transactions")
+            .and_then(JsonValue::as_array)
+            .and_then(|items| items.first())
+            .and_then(|tx| tx.get("instructions"))
+            .and_then(JsonValue::as_array)
+            .expect("public Taira genesis.json must include bootstrap instructions");
+        let xor_universal = first_tx_instructions
+            .iter()
+            .find(|instruction| {
+                instruction
+                    .get("Register")
+                    .and_then(|register| register.get("AssetDefinition"))
+                    .and_then(|asset| asset.get("id"))
+                    .and_then(JsonValue::as_str)
+                    == Some("xor#universal")
+            })
+            .expect("public Taira genesis.json must register xor#universal");
+        let confidential_mode = xor_universal
+            .get("Register")
+            .and_then(|register| register.get("AssetDefinition"))
+            .and_then(|asset| asset.get("confidential_policy"))
+            .and_then(|policy| policy.get("mode"))
+            .and_then(JsonValue::as_str);
+        assert_eq!(
+            confidential_mode,
+            Some("Convertible"),
+            "public Taira genesis.json must keep xor#universal shield-capable for wallet shielding"
+        );
     }
 }

@@ -6721,6 +6721,10 @@ pub struct Metrics {
     pub sumeragi_rbc_store_evictions_total: IntCounter,
     /// Sumeragi RBC: persist requests dropped due to a full async queue (cumulative)
     pub sumeragi_rbc_persist_drops_total: IntCounter,
+    /// Sumeragi RBC status snapshot persistence disabled due to fatal disk faults (0/1)
+    pub sumeragi_rbc_status_persistence_disabled: GenericGauge<AtomicU64>,
+    /// Sumeragi RBC status snapshot fatal persist failures (cumulative)
+    pub sumeragi_rbc_status_persist_failures_total: IntCounter,
     /// Sumeragi RBC: proposals deferred due to store back-pressure (cumulative)
     pub sumeragi_rbc_backpressure_deferrals_total: IntCounter,
     /// Sumeragi RBC: DELIVER deferrals waiting on READY quorum (cumulative)
@@ -10090,6 +10094,16 @@ impl Default for Metrics {
         let sumeragi_rbc_persist_drops_total = IntCounter::new(
             "sumeragi_rbc_persist_drops_total",
             "Sumeragi RBC persist requests dropped due to full async queue",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_status_persistence_disabled = GenericGauge::new(
+            "sumeragi_rbc_status_persistence_disabled",
+            "Sumeragi RBC status snapshot persistence disabled due to fatal disk faults (0/1)",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_status_persist_failures_total = IntCounter::new(
+            "sumeragi_rbc_status_persist_failures_total",
+            "Sumeragi RBC status snapshot fatal persist failures",
         )
         .expect("Infallible");
         let sumeragi_rbc_backpressure_deferrals_total = IntCounter::new(
@@ -13781,7 +13795,9 @@ impl Default for Metrics {
             sumeragi_rbc_store_bytes,
             sumeragi_rbc_store_pressure,
             sumeragi_rbc_store_evictions_total,
-            sumeragi_rbc_persist_drops_total
+            sumeragi_rbc_persist_drops_total,
+            sumeragi_rbc_status_persistence_disabled,
+            sumeragi_rbc_status_persist_failures_total
         );
         register!(
             registry,
@@ -14302,6 +14318,8 @@ impl Default for Metrics {
             sumeragi_rbc_store_pressure,
             sumeragi_rbc_store_evictions_total,
             sumeragi_rbc_persist_drops_total,
+            sumeragi_rbc_status_persistence_disabled,
+            sumeragi_rbc_status_persist_failures_total,
             sumeragi_rbc_backpressure_deferrals_total,
             sumeragi_rbc_deliver_defer_ready_total,
             sumeragi_rbc_deliver_defer_chunks_total,

@@ -4,6 +4,8 @@
 #
 # `check_mcp_rollout.sh` rewrites `torii_url` to the chosen local/public target,
 # so only `chain`, `basic_auth` (optional), and `[account]` are required here.
+# The account must already exist on Taira; the rollout smoke can now bootstrap
+# the faucet asset automatically if this signer still has a zero faucet balance.
 
 chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
 

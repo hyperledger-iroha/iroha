@@ -114,6 +114,7 @@ impl SignedBlock {
             payload: BlockPayload {
                 header,
                 transactions,
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -139,6 +140,7 @@ impl SignedBlock {
             payload: BlockPayload {
                 header,
                 transactions,
+                external_entrypoints: Vec::new(),
                 da_commitments,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -193,13 +195,8 @@ impl SignedBlock {
         let merkle = MerkleTree::from_iter(hashes.to_owned());
 
         // Ensure the consensus merkle root covering only external transactions remains intact.
-        let external_entrypoints: Vec<TransactionEntrypoint> = self
-            .payload
-            .transactions
-            .iter()
-            .cloned()
-            .map(TransactionEntrypoint::from)
-            .collect();
+        let external_entrypoints: Vec<TransactionEntrypoint> =
+            self.external_entrypoints_cloned().collect();
         let external_hashes = external_entrypoints.iter().map(TransactionEntrypoint::hash);
         let external_merkle: MerkleTree<TransactionEntrypoint> =
             external_hashes.collect::<MerkleTree<_>>();
@@ -455,6 +452,7 @@ impl SignedBlock {
             creation_time_ms,
             view_change_index: 0,
             confidential_features,
+            sccp_commitment_root: None,
         };
 
         let signature = BlockSignature::new(0, SignatureOf::from_hash(private_key, header.hash()));
@@ -466,6 +464,7 @@ impl SignedBlock {
         let payload = BlockPayload {
             header,
             transactions,
+            external_entrypoints: external_entrypoints.clone(),
             da_commitments: None,
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
@@ -1190,24 +1189,28 @@ pub fn decode_framed_signed_block(
     decode_versioned_signed_block_inner(deframed.bare_versioned.as_ref(), deframed.bytes.as_ref())
 }
 
-struct RootGuard;
-
-impl Drop for RootGuard {
-    fn drop(&mut self) {
-        norito::core::clear_decode_root();
-    }
-}
-
 type VersionError = iroha_version::error::Error;
 
 fn decode_signed_block_exact(bytes: &[u8]) -> Result<SignedBlock, iroha_version::error::Error> {
-    norito::core::set_decode_root(bytes);
-    let _root_guard = RootGuard;
-    let (block, used) = <SignedBlock as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
+    // `SignedBlock` versioned payloads are canonical bare Norito archives. The archived
+    // `NoritoDeserialize` path is currently more robust than the derive-generated
+    // `DecodeFromSlice` fast path for large genesis-shaped payloads, so decode through the
+    // archived view and then verify exact consumption by roundtripping the canonical payload.
+    //
+    // TODO: Remove the roundtrip check once the remaining `DecodeFromSlice` regression is
+    // fixed at the derive level and the exact slice decoder is trustworthy for these payloads.
+    let block = norito::codec::decode_adaptive::<SignedBlock>(bytes)
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
-    let remaining = bytes.len().saturating_sub(used);
-    if remaining != 0 {
-        return Err(VersionError::ExtraBytesLeft(remaining as u64));
+    let canonical_len = encode_signed_block_payload(&block).len();
+    if canonical_len < bytes.len() {
+        return Err(VersionError::ExtraBytesLeft(
+            bytes.len().saturating_sub(canonical_len) as u64,
+        ));
+    }
+    if canonical_len != bytes.len() {
+        return Err(VersionError::NoritoCodec(
+            norito::Error::LengthMismatch.to_string(),
+        ));
     }
     Ok(block)
 }
@@ -1303,10 +1306,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1321,10 +1326,12 @@ mod tests {
         let payload = BlockPayload {
             header,
             transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
             previous_roster_evidence: None,
+            external_entrypoints: Vec::new(),
         };
         let key_pair =
             iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
@@ -1384,10 +1391,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: Some(result),
         };
@@ -1403,10 +1412,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1424,10 +1435,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1466,6 +1479,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 123_456_789_000,
             view_change_index: 123,
             confidential_features: None,
@@ -1514,10 +1528,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1567,11 +1583,13 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: vec![tx],
+                transactions: vec![tx.clone()],
+                external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1610,10 +1628,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1654,10 +1674,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1691,10 +1713,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1725,10 +1749,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1788,10 +1814,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1871,10 +1899,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1902,10 +1932,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1928,10 +1960,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1961,10 +1995,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -2036,10 +2072,12 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };

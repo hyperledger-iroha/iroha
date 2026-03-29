@@ -4839,10 +4839,9 @@ impl NetworkBuilder {
                 Register::domain(Domain::new(nexus_domain.clone())).into(),
                 Register::domain(Domain::new(ivm_domain.clone())).into(),
                 Register::domain(Domain::new(universal_domain)).into(),
-                Register::account(Account::new_in_domain(
-                    gas_account_id.clone(),
-                    nexus_domain.clone(),
-                ))
+                Register::account(
+                    Account::new(gas_account_id.clone()).with_linked_domain(nexus_domain.clone()),
+                )
                 .into(),
                 Register::asset_definition(definition).into(),
                 Register::asset_definition(fee_definition).into(),
@@ -4851,10 +4850,9 @@ impl NetworkBuilder {
             for peer in &peer_ids {
                 let validator_id = AccountId::new(peer.public_key().clone());
                 bootstrap_tx.push(
-                    Register::account(Account::new_in_domain(
-                        validator_id.clone(),
-                        nexus_domain.clone(),
-                    ))
+                    Register::account(
+                        Account::new(validator_id.clone()).with_linked_domain(nexus_domain.clone()),
+                    )
                     .into(),
                 );
                 bootstrap_tx.push(

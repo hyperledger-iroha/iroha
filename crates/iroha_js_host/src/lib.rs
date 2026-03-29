@@ -24,7 +24,7 @@ use std::{
     path::PathBuf,
     ptr,
     str::FromStr,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -42,6 +42,7 @@ use halo2_proofs::{
     },
     transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
 };
+use iroha_core::zk::{hash_vk as hash_verifying_key_box, test_utils::halo2_fixture_envelope};
 use iroha::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
@@ -112,8 +113,10 @@ use iroha_data_model::{
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::ContractManifest,
     transaction::{
-        Executable, TransactionSubmissionReceipt,
-        signed::{SignedTransaction, TransactionBuilder},
+        Executable, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
+        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
+        TransactionSubmissionReceipt,
+        signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
     trigger::{
         Trigger, TriggerId,
@@ -142,7 +145,7 @@ use norito::{
     codec::{Decode, DecodeAll, Encode},
     core::{self, DecodeFromSlice},
     decode_from_bytes,
-    json::{self, Map, Value},
+    json::{self, JsonDeserialize, Map, Value},
 };
 use rand_core_06::OsRng;
 use sorafs_car::{
@@ -7824,6 +7827,158 @@ pub struct JsSignedTransaction {
     pub hash: Buffer,
 }
 
+/// Result of building an authority-free private Kaigi transaction entrypoint.
+#[napi(object)]
+pub struct JsPrivateKaigiTransactionEntrypoint {
+    /// Norito-encoded transaction entrypoint bytes.
+    pub transaction_entrypoint: Buffer,
+    /// Canonical pipeline hash used by Torii status polling.
+    pub hash: Buffer,
+    /// Action hash bound into the fee-spend proof.
+    pub action_hash: Buffer,
+}
+
+/// Result of building a private Kaigi confidential XOR fee-spend envelope.
+#[napi(object)]
+pub struct JsPrivateKaigiFeeSpendEnvelope {
+    /// Asset definition that the confidential fee spend targets.
+    pub asset_definition_id: String,
+    /// Recent shielded Merkle root bound into the spend.
+    pub anchor_root: Buffer,
+    /// Consumed nullifiers for the fee spend.
+    pub nullifiers: Vec<Buffer>,
+    /// Output commitments created by the fee spend.
+    pub output_commitments: Vec<Buffer>,
+    /// Encrypted payloads attached to the output commitments.
+    pub encrypted_change_payloads: Vec<Buffer>,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
+}
+
+fn parse_private_kaigi_json<T>(context: &str, payload: String) -> napi::Result<T>
+where
+    T: JsonDeserialize,
+{
+    json::from_json(&payload).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} json: {err}"),
+        )
+    })
+}
+
+fn parse_kaigi_id_literal(value: &str, context: &str) -> napi::Result<KaigiId> {
+    let trimmed = value.trim();
+    let Some((domain, call_name)) = trimmed.split_once(':') else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be in `domain:callName` format"),
+        ));
+    };
+    let domain_id = DomainId::from_str(domain).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} domain id: {err}"),
+        )
+    })?;
+    let call_name = Name::from_str(call_name).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} call name: {err}"),
+        )
+    })?;
+    Ok(KaigiId::new(domain_id, call_name))
+}
+
+fn normalize_private_kaigi_creation_time_ms(creation_time_ms: Option<i64>) -> napi::Result<u64> {
+    match creation_time_ms {
+        Some(ms) => u64::try_from(ms).map_err(|_| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                "creation_time_ms must be non-negative",
+            )
+        }),
+        None => SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .map_err(norito_to_napi),
+    }
+}
+
+fn normalize_private_kaigi_nonce(nonce: Option<u32>) -> napi::Result<Option<NonZeroU32>> {
+    nonce
+        .map(|value| {
+            NonZeroU32::new(value).ok_or_else(|| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "nonce must be non-zero (fits in u32)",
+                )
+            })
+        })
+        .transpose()
+}
+
+fn parse_fixed_32_hex(context: &str, value: &str) -> napi::Result<[u8; 32]> {
+    let normalized = value.trim();
+    let normalized = normalized.strip_prefix("0x").unwrap_or(normalized);
+    let decoded = hex::decode(normalized).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be valid hex: {err}"),
+        )
+    })?;
+    if decoded.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be exactly 32 bytes"),
+        ));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&decoded);
+    Ok(out)
+}
+
+fn private_kaigi_fee_aux_json(
+    action_hash_hex: &str,
+    chain_id: &str,
+    asset_definition_id: &str,
+    fee_amount: &str,
+) -> Vec<u8> {
+    json::to_string(&norito_json!({
+        "schema": "iroha.private_kaigi.fee.v1",
+        "action_hash_hex": action_hash_hex,
+        "chain_id": chain_id,
+        "asset_definition_id": asset_definition_id,
+        "fee_amount": fee_amount,
+    }))
+    .expect("private Kaigi fee aux JSON serialization")
+    .into_bytes()
+}
+
+fn build_private_kaigi_fee_digest(label: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(label);
+    for part in parts {
+        hasher.update(&u64::try_from(part.len()).unwrap_or(u64::MAX).to_le_bytes());
+        hasher.update(part);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn build_private_kaigi_entrypoint_result(
+    tx: PrivateKaigiTransaction,
+) -> JsPrivateKaigiTransactionEntrypoint {
+    let action_hash = tx.action_hash();
+    let hash = tx.hash();
+    let entrypoint = TransactionEntrypoint::PrivateKaigi(tx);
+    let entrypoint_bytes = Encode::encode(&entrypoint);
+    JsPrivateKaigiTransactionEntrypoint {
+        transaction_entrypoint: Buffer::from(entrypoint_bytes),
+        hash: Buffer::from(hash.as_ref().to_vec()),
+        action_hash: Buffer::from(action_hash.as_ref().to_vec()),
+    }
+}
+
 /// Build and sign a single-instruction `RegisterDomain` transaction.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -7917,6 +8072,263 @@ pub fn build_transaction(
         nonce,
         secret.as_ref(),
     )
+}
+
+/// Build a private Kaigi create transaction entrypoint.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_private_create_kaigi_transaction(
+    chain_id: String,
+    call_json: String,
+    artifacts_json: String,
+    fee_spend_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
+    let chain: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let call: PrivateKaigiTemplate = parse_private_kaigi_json("private create call", call_json)?;
+    let artifacts: PrivateKaigiArtifacts =
+        parse_private_kaigi_json("private Kaigi artifacts", artifacts_json)?;
+    let fee_spend: PrivateKaigiFeeSpend =
+        parse_private_kaigi_json("private Kaigi fee spend", fee_spend_json)?;
+    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
+    let tx = PrivateKaigiTransaction {
+        chain,
+        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
+        nonce: normalize_private_kaigi_nonce(nonce)?,
+        metadata,
+        action: PrivateKaigiAction::Create(PrivateCreateKaigi { call }),
+        artifacts,
+        fee_spend,
+    };
+    Ok(build_private_kaigi_entrypoint_result(tx))
+}
+
+/// Build a deterministic confidential XOR fee-spend envelope for private Kaigi.
+///
+/// This helper only supports transfer verifying keys whose circuit id matches one of the
+/// built-in Halo2 fixture circuits. The caller must pass the active `vk_transfer` record bytes
+/// advertised by the network so the helper can verify the local fixture matches the network VK.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_private_kaigi_fee_spend(
+    chain_id: String,
+    asset_definition_id: String,
+    action_hash: Uint8Array,
+    anchor_root_hex: String,
+    fee_amount: String,
+    vk_backend: String,
+    vk_circuit_id: String,
+    vk_bytes: Uint8Array,
+) -> napi::Result<JsPrivateKaigiFeeSpendEnvelope> {
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    if action_hash.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "action_hash must be exactly 32 bytes",
+        ));
+    }
+    let anchor_root = parse_fixed_32_hex("anchor_root_hex", &anchor_root_hex)?;
+    let fee_amount = fee_amount.trim().to_owned();
+    if fee_amount.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "fee_amount must be non-empty",
+        ));
+    }
+    let _parsed_fee_amount = Numeric::from_str(&fee_amount).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid fee_amount numeric literal: {err}"),
+        )
+    })?;
+    let vk_backend = vk_backend.trim().to_owned();
+    if vk_backend != "halo2/ipa" {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "unsupported private Kaigi fee transfer verifier backend `{vk_backend}`; expected halo2/ipa"
+            ),
+        ));
+    }
+    if vk_bytes.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "vk_bytes must be present for private Kaigi fee spend construction",
+        ));
+    }
+
+    let network_vk = iroha_data_model::proof::VerifyingKeyBox::new(
+        vk_backend.clone(),
+        vk_bytes.as_ref().to_vec(),
+    );
+    let fixture = halo2_fixture_envelope(
+        vk_circuit_id.trim().to_owned(),
+        hash_verifying_key_box(&network_vk),
+    );
+    let fixture_vk_bytes = fixture.vk_bytes.ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "unsupported private Kaigi fee verifier circuit `{}`",
+                vk_circuit_id.trim()
+            ),
+        )
+    })?;
+    if fixture_vk_bytes != vk_bytes.as_ref() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "private Kaigi fee verifier `{vk_backend}::{}` does not match the built-in fixture circuit",
+                vk_circuit_id.trim()
+            ),
+        ));
+    }
+
+    let action_hash_hex = hex::encode(action_hash.as_ref());
+    let asset_definition_string = asset_definition_id.to_string();
+    let nullifier = build_private_kaigi_fee_digest(
+        b"iroha.private_kaigi.fee.nullifier.v1",
+        &[
+            action_hash.as_ref(),
+            chain_id.as_bytes(),
+            asset_definition_string.as_bytes(),
+        ],
+    );
+    let output_commitment = build_private_kaigi_fee_digest(
+        b"iroha.private_kaigi.fee.output.v1",
+        &[
+            action_hash.as_ref(),
+            fee_amount.as_bytes(),
+            anchor_root.as_slice(),
+        ],
+    );
+    let encrypted_change_payload = json::to_string(&norito_json!({
+        "schema": "iroha.private_kaigi.change.v1",
+        "asset_definition_id": asset_definition_string,
+        "action_hash_hex": action_hash_hex,
+        "fee_amount": fee_amount,
+        "change_amount": "0",
+    }))
+    .expect("private Kaigi change payload JSON serialization")
+    .into_bytes();
+
+    let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        norito::decode_from_bytes(&fixture.proof_bytes).map_err(|err| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                format!("failed to decode private Kaigi fee proof fixture: {err}"),
+            )
+        })?;
+    envelope.aux = private_kaigi_fee_aux_json(
+        &action_hash_hex,
+        chain_id.trim(),
+        &asset_definition_id.to_string(),
+        &fee_amount,
+    );
+    let encoded = norito::to_bytes(&envelope).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to encode private Kaigi fee proof envelope: {err}"),
+        )
+    })?;
+
+    Ok(JsPrivateKaigiFeeSpendEnvelope {
+        asset_definition_id: asset_definition_id.to_string(),
+        anchor_root: Buffer::from(anchor_root.to_vec()),
+        nullifiers: vec![Buffer::from(nullifier.to_vec())],
+        output_commitments: vec![Buffer::from(output_commitment.to_vec())],
+        encrypted_change_payloads: vec![Buffer::from(encrypted_change_payload)],
+        proof: Buffer::from(encoded),
+    })
+}
+
+/// Build a private Kaigi join transaction entrypoint.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_private_join_kaigi_transaction(
+    chain_id: String,
+    call_id: String,
+    artifacts_json: String,
+    fee_spend_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
+    let chain: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let call_id = parse_kaigi_id_literal(&call_id, "call_id")?;
+    let artifacts: PrivateKaigiArtifacts =
+        parse_private_kaigi_json("private Kaigi artifacts", artifacts_json)?;
+    let fee_spend: PrivateKaigiFeeSpend =
+        parse_private_kaigi_json("private Kaigi fee spend", fee_spend_json)?;
+    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
+    let tx = PrivateKaigiTransaction {
+        chain,
+        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
+        nonce: normalize_private_kaigi_nonce(nonce)?,
+        metadata,
+        action: PrivateKaigiAction::Join(PrivateJoinKaigi { call_id }),
+        artifacts,
+        fee_spend,
+    };
+    Ok(build_private_kaigi_entrypoint_result(tx))
+}
+
+/// Build a private Kaigi end transaction entrypoint.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_private_end_kaigi_transaction(
+    chain_id: String,
+    call_id: String,
+    ended_at_ms: Option<i64>,
+    artifacts_json: String,
+    fee_spend_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
+    let chain: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let call_id = parse_kaigi_id_literal(&call_id, "call_id")?;
+    let ended_at_ms = ended_at_ms
+        .map(|value| {
+            u64::try_from(value).map_err(|_| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "ended_at_ms must be non-negative when provided",
+                )
+            })
+        })
+        .transpose()?;
+    let artifacts: PrivateKaigiArtifacts =
+        parse_private_kaigi_json("private Kaigi artifacts", artifacts_json)?;
+    let fee_spend: PrivateKaigiFeeSpend =
+        parse_private_kaigi_json("private Kaigi fee spend", fee_spend_json)?;
+    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
+    let tx = PrivateKaigiTransaction {
+        chain,
+        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
+        nonce: normalize_private_kaigi_nonce(nonce)?,
+        metadata,
+        action: PrivateKaigiAction::End(PrivateEndKaigi {
+            call_id,
+            ended_at_ms,
+        }),
+        artifacts,
+        fee_spend,
+    };
+    Ok(build_private_kaigi_entrypoint_result(tx))
 }
 
 /// Build a Norito-encoded trigger action that executes on a time schedule.

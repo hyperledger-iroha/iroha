@@ -1289,10 +1289,8 @@ fn execute_register(
     }
 
     let register_account = if let Some(home_domain) = home_domain.clone() {
-        iroha_data_model::account::NewAccount::new_in_domain(
-            multisig_account_id.clone(),
-            home_domain,
-        )
+        iroha_data_model::account::NewAccount::new(multisig_account_id.clone())
+            .with_linked_domain(home_domain)
     } else {
         iroha_data_model::account::NewAccount::new(multisig_account_id.clone())
     };
@@ -1827,7 +1825,8 @@ fn ensure_signatory_account_exists(
             let mut metadata = Metadata::default();
             metadata.insert((*MULTISIG_CREATED_VIA_KEY).clone(), Json::new("multisig"));
             let register_account = if let Some(home_domain) = home_domain.cloned() {
-                iroha_data_model::account::NewAccount::new_in_domain(signatory.clone(), home_domain)
+                iroha_data_model::account::NewAccount::new(signatory.clone())
+                    .with_linked_domain(home_domain)
             } else {
                 iroha_data_model::account::NewAccount::new(signatory.clone())
             };
@@ -2555,10 +2554,10 @@ mod tests {
         account_id: &AccountId,
         label: &str,
     ) {
-        Register::account(iroha_data_model::account::NewAccount::new_in_domain(
-            account_id.clone(),
-            domain_id.clone(),
-        ))
+        Register::account(
+            iroha_data_model::account::NewAccount::new(account_id.clone())
+                .with_linked_domain(domain_id.clone()),
+        )
         .execute(authority, state_transaction)
         .expect(label);
     }
@@ -2579,11 +2578,9 @@ mod tests {
             Json::new(Some(domain_id.clone())),
         );
         Register::account(
-            iroha_data_model::account::NewAccount::new_in_domain(
-                multisig_id.clone(),
-                domain_id.clone(),
-            )
-            .with_metadata(metadata),
+            iroha_data_model::account::NewAccount::new(multisig_id.clone())
+                .with_linked_domain(domain_id.clone())
+                .with_metadata(metadata),
         )
         .execute(owner_id, state_transaction)
         .expect(label);

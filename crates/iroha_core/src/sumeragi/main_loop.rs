@@ -47,7 +47,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
     sorafs::pin_registry::ManifestDigest,
-    transaction::{Executable, SignedTransaction},
+    transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_logger::prelude::*;
 use iroha_p2p::network::data_frame_wire_len;
@@ -464,15 +464,15 @@ fn realign_qcs_after_failed_commit(
 fn requeue_block_transactions(
     queue: &Queue,
     state: &State,
-    txs: Vec<SignedTransaction>,
+    txs: Vec<TransactionEntrypoint>,
 ) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>) {
     let mut requeued = 0usize;
     let mut failures = 0usize;
     let mut duplicate_failures = 0usize;
     let mut gossip_hashes: Vec<_> = Vec::new();
     for tx in txs {
-        let tx_hash = tx.hash();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(tx));
+        let tx_hash = accepted.hash();
         let routing_decision = if let Some(decision) = crate::queue::routing_ledger::get(&tx_hash) {
             decision
         } else if let Some(decision) = match queue.route_for_gossip_without_state(&accepted) {
@@ -544,7 +544,7 @@ fn drop_pending_block_and_requeue(
     state: &State,
 ) -> Option<(usize, usize, usize, usize)> {
     let pending = pending_blocks.remove(&pending_hash)?;
-    let txs = pending.block.transactions_vec().clone();
+    let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
     let tx_count = txs.len();
     let (requeued, failures, duplicate_failures, _) = requeue_block_transactions(queue, state, txs);
     Some((tx_count, requeued, failures, duplicate_failures))
@@ -587,8 +587,11 @@ fn handle_commit_failure_with_qc_quorum(
     latest_committed: Option<crate::sumeragi::consensus::QcHeaderRef>,
 ) -> QcCommitFailureOutcome {
     pending.tx_batch = None;
-    let (requeued, failed_requeues, duplicate_requeues, _) =
-        requeue_block_transactions(queue, state, failed_block.transactions_vec().clone());
+    let (requeued, failed_requeues, duplicate_requeues, _) = requeue_block_transactions(
+        queue,
+        state,
+        failed_block.external_entrypoints_cloned().collect(),
+    );
     let (new_locked, new_highest) =
         realign_qcs_after_failed_commit(locked_qc, highest_qc, block_hash, latest_committed);
     pending.block = failed_block;
@@ -609,7 +612,7 @@ fn handle_commit_failure_with_qc_quorum(
 fn handle_prev_block_mismatch(
     queue: &Queue,
     state: &State,
-    txs: Vec<SignedTransaction>,
+    txs: Vec<TransactionEntrypoint>,
 ) -> PrevBlockMismatchOutcome {
     let (requeued, failures, _duplicates, _) = requeue_block_transactions(queue, state, txs);
     PrevBlockMismatchOutcome { requeued, failures }
@@ -5917,7 +5920,6 @@ impl Actor {
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> bool {
         queue_depths.block_payload_rx > 0
-            || queue_depths.rbc_chunk_rx > 0
             || queue_depths.block_rx > 0
             || self.has_residual_round_backlog_for_height(frontier_height)
     }
@@ -5971,35 +5973,36 @@ impl Actor {
             )
     }
 
-    fn frontier_recovery_same_slot_ingress_active(
+    fn frontier_recovery_same_slot_payload_progress_recent(
         &self,
         frontier_height: u64,
         frontier_view: u64,
-        queue_depths: super::status::WorkerQueueDepthSnapshot,
+        now: Instant,
     ) -> bool {
-        if !self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths) {
-            return false;
-        }
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
 
-        let frontier_slot_ingress_active = self.frontier_slot_is_exact_height(frontier_height)
+        let frontier_slot_progress_recent = self.frontier_slot_is_exact_height(frontier_height)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
+                let slot_progress_at = slot
+                    .timers
+                    .last_updated_at
+                    .max(slot.timers.last_progress_at);
                 slot.height == frontier_height
                     && slot.view <= frontier_view
                     && !matches!(slot.mode, FrontierSlotMode::Finalized)
-                    && (slot.block_created_seen
-                        || slot.body_present
-                        || matches!(
-                            slot.phase,
-                            FrontierSlotPhase::ValidateBody | FrontierSlotPhase::AwaitCommitQc
-                        ))
+                    && recent(slot_progress_at)
+                    && (slot.exact_fetch_armed || (slot.block_created_seen && !slot.body_present))
             });
 
-        frontier_slot_ingress_active
-            || self.slot_has_authoritative_payload(frontier_height, frontier_view)
+        frontier_slot_progress_recent
             || self.pending.pending_blocks.values().any(|pending| {
                 !pending.aborted
                     && pending.height == frontier_height
                     && pending.view == frontier_view
+                    && pending.progress_age(now) < window
             })
             || self
                 .subsystems
@@ -6010,34 +6013,26 @@ impl Actor {
                     !inflight.pending.aborted
                         && inflight.pending.height == frontier_height
                         && inflight.pending.view == frontier_view
+                        && inflight.pending.progress_age(now) < window
                 })
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .sessions
-                .iter()
-                .any(|(key, session)| {
-                    key.1 == frontier_height
-                        && key.2 == frontier_view
-                        && !session.is_invalid()
-                        && !session.delivered
-                })
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .pending
-                .keys()
-                .any(|key| key.1 == frontier_height && key.2 == frontier_view)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .seed_inflight
-                .keys()
-                .any(|key| key.1 == frontier_height && key.2 == frontier_view)
-            || self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
+    }
+
+    fn frontier_recovery_same_slot_ingress_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        if !self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths) {
+            return false;
+        }
+
+        self.frontier_recovery_same_slot_payload_progress_recent(
+            frontier_height,
+            frontier_view,
+            now,
+        )
     }
 
     fn frontier_recovery_same_height_rbc_sender_activity_active(
@@ -6117,24 +6112,12 @@ impl Actor {
                 .any(|key| key.1 == frontier_height)
     }
 
-    fn frontier_recovery_same_slot_vote_backed_recovery_active(
+    fn frontier_recovery_same_slot_vote_backed_work_active(
         &self,
         frontier_height: u64,
         frontier_view: u64,
         now: Instant,
     ) -> bool {
-        let frontier_slot_vote_backed = self.frontier_slot_is_exact_height(frontier_height)
-            && self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == frontier_height
-                    && slot.view <= frontier_view
-                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
-                    && (slot.quorum_progress.votes_observed
-                        || slot.quorum_progress.commit_qc_observed
-                        || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
-            });
-        if frontier_slot_vote_backed {
-            return true;
-        }
         let window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -6235,17 +6218,68 @@ impl Actor {
                 .any(|(height, view, _)| *height == frontier_height && *view == frontier_view)
     }
 
+    fn frontier_recovery_same_slot_vote_backed_recovery_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> bool {
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
+        let frontier_slot_vote_backed = self.frontier_slot_is_exact_height(frontier_height)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                let recent_vote_progress = slot
+                    .quorum_progress
+                    .last_commit_qc_at
+                    .or(slot.quorum_progress.last_vote_at)
+                    .is_some_and(recent)
+                    || recent(
+                        slot.timers
+                            .last_progress_at
+                            .max(slot.timers.last_updated_at),
+                    );
+                slot.height == frontier_height
+                    && slot.view <= frontier_view
+                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
+                    && recent_vote_progress
+                    && (slot.quorum_progress.votes_observed
+                        || slot.quorum_progress.commit_qc_observed
+                        || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
+            });
+        if frontier_slot_vote_backed {
+            return true;
+        }
+        self.frontier_recovery_same_slot_vote_backed_work_active(
+            frontier_height,
+            frontier_view,
+            now,
+        )
+    }
+
     fn frontier_recovery_same_slot_missing_payload_recovery_active(
         &self,
         frontier_height: u64,
         frontier_view: u64,
         now: Instant,
     ) -> bool {
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
         let frontier_slot_missing_payload = self.frontier_slot_is_exact_height(frontier_height)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
+                let recent_missing_payload_progress = slot.timers.last_fetch_at.is_some_and(recent)
+                    || recent(
+                        slot.timers
+                            .last_progress_at
+                            .max(slot.timers.last_updated_at),
+                    );
                 slot.height == frontier_height
                     && slot.view <= frontier_view
                     && matches!(slot.mode, FrontierSlotMode::Normal)
+                    && recent_missing_payload_progress
                     && slot.exact_fetch_armed
                     && !slot.body_present
                     && matches!(slot.phase, FrontierSlotPhase::AwaitBody)
@@ -6253,10 +6287,6 @@ impl Actor {
         if frontier_slot_missing_payload {
             return true;
         }
-        let window = self
-            .frontier_recovery_window()
-            .max(Duration::from_millis(1));
-        let recent = |at: Instant| now.saturating_duration_since(at) < window;
         let committed_height = self.committed_height_snapshot();
 
         self.deferred_missing_payload_qcs.values().any(|entry| {
@@ -6303,72 +6333,16 @@ impl Actor {
         let same_height_payload_dependency_backlog_active = dependency_progress_at
             .is_some_and(|progress| recent(progress))
             && payload_inbound_backlog_active;
-        let same_slot_payload_ingress_active = payload_inbound_backlog_active
-            && (self.slot_has_authoritative_payload(frontier_height, frontier_view)
-                || self.pending.pending_blocks.values().any(|pending| {
-                    !pending.aborted
-                        && pending.height == frontier_height
-                        && pending.view == frontier_view
-                })
-                || self
-                    .subsystems
-                    .commit
-                    .inflight
-                    .as_ref()
-                    .is_some_and(|inflight| {
-                        !inflight.pending.aborted
-                            && inflight.pending.height == frontier_height
-                            && inflight.pending.view == frontier_view
-                    })
-                || self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .sessions
-                    .iter()
-                    .any(|(key, session)| {
-                        key.1 == frontier_height
-                            && key.2 == frontier_view
-                            && !session.is_invalid()
-                            && !session.delivered
-                    })
-                || self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .pending
-                    .keys()
-                    .any(|key| key.1 == frontier_height && key.2 == frontier_view)
-                || self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .seed_inflight
-                    .keys()
-                    .any(|key| key.1 == frontier_height && key.2 == frontier_view));
-        let frontier_slot_reassembly_active = self.frontier_slot_is_exact_height(frontier_height)
-            && self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == frontier_height
-                    && slot.view <= frontier_view
-                    && matches!(slot.mode, FrontierSlotMode::Normal)
-                    && (slot.block_created_seen
-                        || slot.body_present
-                        || slot.exact_fetch_armed
-                        || matches!(
-                            slot.phase,
-                            FrontierSlotPhase::ValidateBody | FrontierSlotPhase::AwaitCommitQc
-                        ))
-            });
+        let same_slot_payload_ingress_active = self.frontier_recovery_same_slot_ingress_active(
+            frontier_height,
+            frontier_view,
+            now,
+            queue_depths,
+        );
 
-        frontier_slot_reassembly_active
-            || same_height_payload_dependency_backlog_active
+        same_height_payload_dependency_backlog_active
             || same_slot_payload_ingress_active
             || self.frontier_recovery_same_height_rbc_sender_activity_active(frontier_height, now)
-            || self.frontier_recovery_same_slot_missing_payload_recovery_active(
-                frontier_height,
-                frontier_view,
-                now,
-            )
             || self
                 .pending
                 .missing_block_requests
@@ -6421,14 +6395,10 @@ impl Actor {
         ) || self.frontier_recovery_same_slot_ingress_active(
             frontier_height,
             frontier_view,
+            now,
             queue_depths,
         ) || self.frontier_recovery_same_height_rbc_sender_activity_active(frontier_height, now)
             || self.frontier_recovery_same_slot_vote_backed_recovery_active(
-                frontier_height,
-                frontier_view,
-                now,
-            )
-            || self.frontier_recovery_same_slot_missing_payload_recovery_active(
                 frontier_height,
                 frontier_view,
                 now,
@@ -6934,6 +6904,46 @@ impl Actor {
                 progress_age >= stall_grace && progress_age < quorum_timeout
             })
             .count()
+    }
+
+    pub(super) fn quorum_recovery_vote_drain_urgent(&self) -> bool {
+        let now = Instant::now();
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let votes_waiting = queue_depths.vote_rx > 0;
+        let quorum_timeout = self.quorum_timeout(self.runtime_da_enabled());
+        if quorum_timeout == Duration::ZERO {
+            return false;
+        }
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+
+        self.pending.pending_blocks.iter().any(|(hash, pending)| {
+            if pending.aborted
+                || !pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+            {
+                return false;
+            }
+
+            let has_vote_evidence = pending.local_commit_vote_emitted()
+                || pending.commit_qc_observed()
+                || self.pending_block_has_votes(*hash, pending.height, pending.view)
+                || self.pending_block_has_qc(*hash, pending.height, pending.view);
+            if !has_vote_evidence && !votes_waiting {
+                return false;
+            }
+
+            let stall_age = if has_vote_evidence {
+                pending.progress_age(now)
+            } else {
+                now.saturating_duration_since(pending.inserted_at)
+            };
+            stall_age >= quorum_timeout
+        })
     }
 
     fn has_blocking_pending_blocks(&self) -> bool {
@@ -27880,8 +27890,12 @@ impl Actor {
                 now,
                 queue_depths,
             );
-        let same_slot_ingress_active =
-            self.frontier_recovery_same_slot_ingress_active(frontier_height, view, queue_depths);
+        let same_slot_ingress_active = self.frontier_recovery_same_slot_ingress_active(
+            frontier_height,
+            view,
+            now,
+            queue_depths,
+        );
         let same_slot_missing_payload_recovery_active = self
             .frontier_recovery_same_slot_missing_payload_recovery_active(
                 frontier_height,

@@ -33,6 +33,9 @@ point operators at
 For that runtime-only signer config, prefer
 `configs/soranexus/taira/taira-canary-client.example.toml`; the generic
 `defaults/client.toml` targets the zero chain id and is not valid for Taira.
+The signer must already exist on Taira, but the rollout smoke can now solve the
+faucet puzzle and fund the missing fee asset automatically when the only
+failure is `Failed to find asset`.
 If the rollout is still using hand-edited validator configs, point them at
 `configs/soranexus/taira/validator_roster.example.toml`,
 `configs/soranexus/taira/validator_secrets.example.toml`, and
@@ -97,6 +100,9 @@ so every validator shares the same `trusted_peers` / `trusted_peers_pop` roster.
 5. Treat `route_unavailable` as deployment health, not user input failure:
    the public Torii node is up but the write route still cannot reach an
    authoritative peer.
+6. Treat `Failed to find asset` on the signed rollout canary as a likely
+   unfunded-signer condition first; use the rollout smoke or the public faucet
+   endpoints before assuming the chain rejected the signer itself.
 
 ## Safety
 

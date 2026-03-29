@@ -19,6 +19,7 @@ workspace = true
 napi = { version = "3.5.1", default-features = false, features = ["napi6", "tokio_rt"] }
 napi-derive = { version = "3.3.2", default-features = false, features = ["type-def"] }
 iroha_crypto = { workspace = true, features = ["std", "rand", "sm"] }
+iroha_core = { workspace = true, features = ["iroha-core-tests"] }
 iroha_data_model = { workspace = true, features = ["std", "json", "transparent_api"] }
 iroha_primitives = { workspace = true }
 norito = { workspace = true }

@@ -984,7 +984,8 @@ impl InstructionDraft {
                 Register::domain(Domain::new(domain.clone())).into()
             }
             InstructionDraft::RegisterAccount { account } => Register::account(
-                Account::new_in_domain(account.account().clone(), account.domain().clone()),
+                Account::new(account.account().clone())
+                    .with_linked_domain(account.domain().clone()),
             )
             .into(),
             InstructionDraft::RegisterAssetDefinition {
@@ -1805,7 +1806,8 @@ mod tests {
         };
 
         assert_eq!(register.object.id, ALICE_ID.clone());
-        assert_eq!(register.object.domain(), Some(expected.domain()));
+        assert_eq!(register.object.linked_domains().len(), 1);
+        assert!(register.object.linked_domains().contains(expected.domain()));
     }
 
     #[test]

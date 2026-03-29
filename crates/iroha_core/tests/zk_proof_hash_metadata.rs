@@ -40,7 +40,8 @@ fn zk_transfer_and_unshield_emit_proof_hash_in_metadata() {
     let (owner, _owner_key) = gen_account_in("zkd");
     let init: [InstructionBox; 5] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone()).with_linked_domain(domain_id.clone()))
+            .into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),

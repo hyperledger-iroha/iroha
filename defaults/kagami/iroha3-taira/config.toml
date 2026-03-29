@@ -1,5 +1,6 @@
 # Sample config for iroha3-taira (generated via cargo xtask kagami-profiles)
 chain = "iroha3-taira"
+chain_discriminant = 369
 public_key = "ea0130A71AAB00BE72C1BDF6B6A7F5D107E9D224DE900C3DDF6C84C1F17B0BB31E59A1403C9028320058E08D6659E0E7F92F0F"
 private_key = "8926200717D1BF038741E75D1B8EFC788F0A292D821A6D06420D0FF172E7BCB294BF41"
 
@@ -59,13 +60,23 @@ pow_vrf_seed_enabled = true
 identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"
 identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
 
+[gov]
+citizenship_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+bond_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+slash_receiver_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+viral_incentive_pool_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+viral_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+
+[gov.sorafs_telemetry]
+submitters = ["testuロ1Pカt8オgキララク5ユニヰチウヱワヲヱLLノVセユXケシリnノハjク9eQL2MVG9T"]
+
 [nexus]
 enabled = true
 lane_count = 3
 
 [nexus.fees]
 fee_asset_id = "xor#universal"
-fee_sink_account_id = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+fee_sink_account_id = "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
 base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"

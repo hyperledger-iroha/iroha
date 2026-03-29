@@ -1274,6 +1274,7 @@ fn block_with_da_commitment(manifest_hash: ManifestDigest) -> SignedBlock {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -11427,6 +11428,7 @@ async fn block_sync_update_skips_fetch_when_checkpoint_present() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 4,
         confidential_features: None,
@@ -11907,6 +11909,7 @@ async fn block_sync_caches_qc_before_block_known() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -12003,6 +12006,7 @@ async fn block_sync_cache_rejects_qc_epoch_mismatch() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -12110,6 +12114,7 @@ async fn block_sync_cache_uses_activation_height_mode_tag() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -12189,6 +12194,7 @@ async fn process_precommit_qc_allows_realign_on_missing_parent() {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: view,
             confidential_features: None,
@@ -12284,6 +12290,7 @@ async fn process_precommit_qc_defers_realign_when_locked_payload_missing() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -13882,6 +13889,7 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -31811,6 +31819,7 @@ async fn maybe_emit_rbc_deliver_recovers_block_created_locally() {
         creation_time_ms,
         view_change_index: view,
         confidential_features,
+        sccp_commitment_root: None,
     };
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(tx);
@@ -32847,6 +32856,7 @@ fn manifest_block_guard_rejects_hash_mismatch_on_audit_lane() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35215,6 +35225,7 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35335,6 +35346,7 @@ fn block_sync_update_uses_journal_roster() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35474,6 +35486,7 @@ fn block_sync_update_includes_commit_qc_from_history() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35582,6 +35595,7 @@ fn block_sync_update_includes_commit_qc_from_precommit_signers() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35671,6 +35685,7 @@ fn block_sync_update_includes_checkpoint_from_history() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35780,6 +35795,7 @@ fn block_sync_update_canonicalizes_signature_indices_for_roster() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 1,
         confidential_features: None,
@@ -35867,6 +35883,7 @@ fn block_sync_update_uses_activation_height_mode_tag() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -35933,6 +35950,7 @@ fn block_sync_update_uses_active_roster_for_checkpoint() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -36056,6 +36074,7 @@ fn block_sync_update_uses_history_after_restart_like_path() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -76720,6 +76739,7 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 1,
         view_change_index: view,
         confidential_features: None,
@@ -94098,7 +94118,7 @@ async fn reschedule_near_quorum_vote_backed_defers_during_first_frontier_settle_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reschedule_defers_vote_backed_quorum_timeout_while_consensus_backlogged() {
+async fn reschedule_ignores_vote_backed_quorum_timeout_rbc_queue_backlog() {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
@@ -94171,30 +94191,24 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_consensus_backlogged
     );
 
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let quiet_window = super::saturating_mul_duration(actor.rebroadcast_cooldown(), 8)
+        .max(Duration::from_millis(400))
+        .max(quorum_timeout);
+    let stalled_at = Instant::now() - quiet_window - Duration::from_millis(1);
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
-    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
-    pending.touch_progress(Instant::now());
+    pending.inserted_at = stalled_at;
+    pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    let _ = actor.try_replay_deferred_votes();
+    actor
+        .pending
+        .missing_block_requests
+        .retain(|_, request| !(request.height == height && request.view == view_idx));
 
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
     assert!(
-        !actor.reschedule_stale_pending_blocks(None),
-        "vote-backed pending should defer while consensus backlog is still progressing"
-    );
-    let pending_after = actor
-        .pending
-        .pending_blocks
-        .get(&block_hash)
-        .expect("pending retained");
-    assert!(
-        pending_after.last_quorum_reschedule.is_none(),
-        "vote-backed pending should not be quorum-rescheduled under active consensus backlog"
-    );
-
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::RbcChunks, 1);
-    assert!(
         actor.reschedule_stale_pending_blocks(None),
-        "clearing consensus backlog should allow quorum reschedule"
+        "unrelated RBC queue depth should not suppress a vote-backed quorum retransmit once the quiet window expires"
     );
     let pending_after = actor
         .pending
@@ -94203,7 +94217,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_consensus_backlogged
         .expect("pending retained");
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
-        "pending should be quorum-rescheduled once consensus backlog clears"
+        "vote-backed pending should still reschedule under unrelated RBC queue depth"
     );
 
     harness.shutdown.send();
@@ -94299,7 +94313,7 @@ async fn reschedule_skips_vote_backed_quorum_timeout_while_progress_is_recent() 
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress() {
+async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_height() {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
@@ -94360,8 +94374,11 @@ async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progre
     actor.handle_vote(vote);
 
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let quiet_window = super::saturating_mul_duration(actor.rebroadcast_cooldown(), 8)
+        .max(Duration::from_millis(400))
+        .max(quorum_timeout);
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
-    let stalled_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    let stalled_at = Instant::now() - quiet_window - Duration::from_millis(1);
     pending.inserted_at = stalled_at;
     pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
@@ -94369,6 +94386,8 @@ async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progre
         .pending
         .missing_block_requests
         .retain(|_, request| !(request.height == height && request.view == view_idx));
+    actor.frontier_slot = None;
+    actor.frontier_recovery = None;
 
     assert!(
         actor.reschedule_stale_pending_blocks(None),
@@ -94402,23 +94421,24 @@ async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progre
     actor.touch_pending_progress(block_hash, height, view_idx, non_vote_progress_at);
     let second_attempt_at = non_vote_progress_at + quorum_timeout + Duration::from_millis(1);
     assert!(
-        !actor.reschedule_stale_pending_blocks_with_now(second_attempt_at, None),
-        "vote-backed quorum timeout should not reschedule again without higher vote count"
+        actor.reschedule_stale_pending_blocks_with_now(second_attempt_at, None),
+        "terminal contiguous-frontier vote-backed recovery should rearm on cooldown even without higher vote count"
     );
     let pending_after = actor
         .pending
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
-    assert_eq!(
-        pending_after.last_quorum_reschedule,
-        Some(stale_reschedule),
-        "duplicate reschedule should not update the send gate"
+    assert!(
+        pending_after
+            .last_quorum_reschedule
+            .is_some_and(|at| at >= second_attempt_at),
+        "re-armed vote-backed recovery should refresh the resend gate at the new attempt instant"
     );
     let posts_after_second: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts_after_second.is_empty(),
-        "non-vote progress should not emit retransmit work"
+        !posts_after_second.is_empty(),
+        "re-armed terminal-height recovery should emit another retransmit burst"
     );
 
     harness.shutdown.send();
@@ -94496,6 +94516,7 @@ async fn reschedule_defers_first_vote_backed_quorum_timeout_during_frontier_sett
     pending.inserted_at = now - quorum_timeout - Duration::from_millis(1);
     pending.touch_progress(now - settling_progress_age);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    let _ = actor.try_replay_deferred_votes();
     actor
         .pending
         .missing_block_requests
@@ -94521,8 +94542,29 @@ async fn reschedule_defers_first_vote_backed_quorum_timeout_during_frontier_sett
     );
 
     let stale_now = now + Duration::from_millis(2);
+    let second_reschedule = actor.reschedule_stale_pending_blocks_with_now(stale_now, None);
+    if !second_reschedule {
+        eprintln!(
+            "debug_settle_window targets={:?} last_quorum_reschedule={:?} frontier_slot={:?} frontier_recovery={:?}",
+            actor.quorum_retransmit_targets_for_missing_votes(
+                block_hash,
+                height,
+                view_idx,
+                &actor.effective_commit_topology(),
+                required,
+                1,
+            ),
+            actor
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .and_then(|pending| pending.last_quorum_reschedule),
+            actor.frontier_slot,
+            actor.frontier_recovery,
+        );
+    }
     assert!(
-        actor.reschedule_stale_pending_blocks_with_now(stale_now, None),
+        second_reschedule,
         "first vote-backed resend should arm once the settle window expires"
     );
     let pending_after = actor
@@ -94746,6 +94788,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_w
         .unwrap_or(now);
     pending.touch_progress(last_progress);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    let _ = actor.try_replay_deferred_votes();
     actor
         .pending
         .missing_block_requests
@@ -94908,6 +94951,10 @@ async fn reschedule_skips_vote_backed_retransmit_while_same_height_rbc_sender_ac
         .unwrap_or(now);
     pending.touch_progress(last_progress);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    actor
+        .pending
+        .missing_block_requests
+        .retain(|_, request| !(request.height == height && request.view == view_idx));
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
         frontier_height: height,
         phase: super::FrontierRecoveryPhase::CatchUp,
@@ -95033,6 +95080,11 @@ async fn reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window()
             .unwrap_or(now),
     );
     actor.pending.pending_blocks.insert(block_hash, pending);
+    let _ = actor.try_replay_deferred_votes();
+    actor
+        .pending
+        .missing_block_requests
+        .retain(|_, request| !(request.height == height && request.view == view_idx));
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
         frontier_height: height,
         phase: super::FrontierRecoveryPhase::CatchUp,
@@ -95190,7 +95242,7 @@ async fn reschedule_forces_after_backlog_extension_cap_reached() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
+async fn reschedule_ignores_quorum_timeout_vote_queue_backlog() {
     let _worker_guard = super::status::worker_queue_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -95208,35 +95260,21 @@ async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
-    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    let stalled_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    pending.inserted_at = stalled_at;
+    pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view_idx, payload_hash);
 
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
 
     assert!(
-        !actor.reschedule_stale_pending_blocks(None),
-        "vote backlog should defer quorum reschedule"
-    );
-    let pending_after = actor
-        .pending
-        .pending_blocks
-        .get(&block_hash)
-        .expect("pending retained");
-    assert!(
-        pending_after.last_quorum_reschedule.is_none(),
-        "pending should not be quorum-rescheduled while vote queue is backlogged"
-    );
-
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
-
-    assert!(
         actor.reschedule_stale_pending_blocks(None),
-        "clearing vote backlog should allow quorum reschedule"
+        "generic vote queue depth should not suppress quorum-timeout recovery"
     );
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
-        "zero-vote reschedule should drop the pending block once vote backlog clears"
+        "zero-vote reschedule should drop the pending block even while vote ingress is queued"
     );
 
     harness.shutdown.send();
@@ -97516,6 +97554,7 @@ fn empty_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> S
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -97563,6 +97602,7 @@ fn sample_block_with_signature_index(
         creation_time_ms,
         view_change_index: view,
         confidential_features: None,
+        sccp_commitment_root: None,
     };
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(heartbeat);
@@ -97646,6 +97686,7 @@ fn block_with_txs(
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -97739,6 +97780,7 @@ fn heartbeat_block_for_state(
         creation_time_ms,
         view_change_index: view,
         confidential_features,
+        sccp_commitment_root: None,
     };
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(heartbeat);
@@ -100070,7 +100112,10 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
     let mut tx_b_builder = TransactionBuilder::new(chain_id, account);
     tx_b_builder.set_nonce(NonZeroU32::new(2).expect("nonce must be non-zero"));
     let tx_b = tx_b_builder.sign(kp.private_key());
-    let txs = vec![tx_a.clone(), tx_b.clone()];
+    let txs = vec![
+        TransactionEntrypoint::External(tx_a.clone()),
+        TransactionEntrypoint::External(tx_b.clone()),
+    ];
 
     let (requeued, failures, duplicate_failures, gossip_hashes) =
         super::requeue_block_transactions(&queue, &state, txs);
@@ -100138,8 +100183,11 @@ fn prev_block_mismatch_requeues_payload() {
     );
     let tx = sample_transaction();
     let block = block_with_txs(9, 3, None, vec![tx.clone()]);
-    let outcome =
-        super::handle_prev_block_mismatch(&queue, &state, block.transactions_vec().clone());
+    let outcome = super::handle_prev_block_mismatch(
+        &queue,
+        &state,
+        block.external_entrypoints_cloned().collect(),
+    );
 
     assert_eq!(outcome.requeued, 1, "payload should be requeued");
     assert_eq!(outcome.failures, 0, "requeue should succeed under capacity");

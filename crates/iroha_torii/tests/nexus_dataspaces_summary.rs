@@ -134,7 +134,9 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         .execute(&ALICE_ID, &mut stx)
         .expect("register domain");
     Register::account(
-        NewAccount::new_in_domain(account_id.clone(), domain_id.clone()).with_uaid(Some(uaid)),
+        NewAccount::new(account_id.clone())
+            .with_linked_domain(domain_id.clone())
+            .with_uaid(Some(uaid)),
     )
     .execute(&ALICE_ID, &mut stx)
     .expect("register account with uaid");

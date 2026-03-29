@@ -722,11 +722,9 @@ fn populate_genesis_results(
         .unwrap_or_else(|| genesis_account.clone());
     let genesis_domain =
         Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&effective_genesis_account);
-    let genesis_account_entry = Account::new_in_domain(
-        effective_genesis_account.clone(),
-        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-    )
-    .build(&effective_genesis_account);
+    let genesis_account_entry = Account::new(effective_genesis_account.clone())
+        .with_linked_domain(iroha_genesis::GENESIS_DOMAIN_ID.clone())
+        .build(&effective_genesis_account);
     let mut world = World::with([genesis_domain], [genesis_account_entry], []);
     iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0);
     let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
@@ -1461,9 +1459,9 @@ mod tests {
 
         let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         let genesis_domain_id = iroha_genesis::GENESIS_DOMAIN_ID.clone();
-        let genesis_account_entry =
-            Account::new_in_domain(genesis_account.clone(), genesis_domain_id.clone())
-                .build(&genesis_account);
+        let genesis_account_entry = Account::new(genesis_account.clone())
+            .with_linked_domain(genesis_domain_id.clone())
+            .build(&genesis_account);
         let controller_account_entry = Account::new(controller.clone()).build(&controller);
         let domains = vec![Domain::new(genesis_domain_id).build(&genesis_account)];
         let mut asset_definition =
@@ -1807,10 +1805,9 @@ mod tests {
 
         let post_topology_transactions = vec![vec![
             Register::domain(Domain::new(nexus_domain.clone())).into(),
-            Register::account(Account::new_in_domain(
-                validator_id.clone(),
-                nexus_domain.clone(),
-            ))
+            Register::account(
+                Account::new(validator_id.clone()).with_linked_domain(nexus_domain.clone()),
+            )
             .into(),
             Register::asset_definition({
                 let __asset_definition_id = stake_asset_id.clone();
@@ -1893,11 +1890,10 @@ mod tests {
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
         let gas_label: Name = "gas".parse().expect("gas label");
-        let gas_account = Account::new_in_domain(
-            AccountId::new(KeyPair::random().public_key().clone()).clone(),
-            ivm_domain.clone(),
-        )
-        .with_label(Some(AccountLabel::new(ivm_domain.clone(), gas_label)));
+        let gas_account =
+            Account::new(AccountId::new(KeyPair::random().public_key().clone()).clone())
+                .with_linked_domain(ivm_domain.clone())
+                .with_label(Some(AccountLabel::new(ivm_domain.clone(), gas_label)));
         let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
             .with_instructions([
                 InstructionBox::from(Register::domain(Domain::new(ivm_domain))),

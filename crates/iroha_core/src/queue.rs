@@ -577,9 +577,9 @@ impl Drop for TransactionGuard {
 
 impl Queue {
     fn collect_lane_privacy_proofs(tx: &CheckedTransaction<'_>) -> Vec<LanePrivacyProof> {
-        tx.as_ref()
-            .as_ref()
-            .attachments()
+        tx.external()
+            .into_iter()
+            .flat_map(|signed| signed.attachments().into_iter())
             .into_iter()
             .flat_map(|list| list.0.iter())
             .filter_map(|attachment| attachment.lane_privacy.clone())
@@ -587,34 +587,63 @@ impl Queue {
     }
 
     fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
-        let signed = tx.as_ref();
-        signed
-            .encoded_len_exact()
-            .unwrap_or_else(|| signed.encoded_len())
+        match tx.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => signed
+                .encoded_len_exact()
+                .unwrap_or_else(|| signed.encoded_len()),
+            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(entrypoint) => {
+                entrypoint
+                    .encoded_len_exact()
+                    .unwrap_or_else(|| entrypoint.encoded_len())
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::Time(entrypoint) => entrypoint
+                .encoded_len_exact()
+                .unwrap_or_else(|| entrypoint.encoded_len()),
+        }
     }
 
     pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
-        match tx.as_ref().instructions() {
-            Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
-            Executable::IvmProved(proved) => gas::meter_instructions(proved.overlay.as_ref()),
-            Executable::Ivm(_) => match crate::executor::parse_gas_limit(tx.as_ref().metadata()) {
-                Ok(Some(limit)) => limit,
-                Ok(None) => {
-                    warn!(
-                        tx = %tx.as_ref().hash(),
-                        "missing gas_limit metadata while deriving proposal gas cost"
-                    );
-                    0
+        match tx.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+                match signed.instructions() {
+                    Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
+                    Executable::IvmProved(proved) => {
+                        gas::meter_instructions(proved.overlay.as_ref())
+                    }
+                    Executable::Ivm(_) => match crate::executor::parse_gas_limit(signed.metadata())
+                    {
+                        Ok(Some(limit)) => limit,
+                        Ok(None) => {
+                            warn!(
+                                tx = %tx.hash(),
+                                "missing gas_limit metadata while deriving proposal gas cost"
+                            );
+                            0
+                        }
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                tx = %tx.hash(),
+                                "invalid gas_limit metadata while deriving proposal gas cost"
+                            );
+                            0
+                        }
+                    },
                 }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        tx = %tx.as_ref().hash(),
-                        "invalid gas_limit metadata while deriving proposal gas cost"
-                    );
-                    0
-                }
-            },
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
+                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
+                    .map(|instruction| gas::meter_instruction(&instruction))
+                    .unwrap_or_else(|err| {
+                        warn!(
+                            ?err,
+                            tx = %tx.hash(),
+                            "failed to derive proposal gas cost for private Kaigi transaction"
+                        );
+                        0
+                    })
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::Time(_) => 0,
         }
     }
 
@@ -765,17 +794,19 @@ impl Queue {
         tx: &CheckedTransaction<'_>,
     ) -> Result<BTreeSet<String>, Error> {
         let mut approvals = BTreeSet::new();
-        let signed = tx.as_ref().as_ref();
-        let authority = signed.authority();
-        let authority_i105 = authority.canonical_i105().map_err(|err| {
-            Self::enforcement_error(
-                alias,
-                format!("failed to encode authority `{authority}` as i105: {err}"),
-            )
-        })?;
-        approvals.insert(authority_i105);
+        if let Some(authority) = tx.as_ref().authority_opt() {
+            let authority_i105 = authority.canonical_i105().map_err(|err| {
+                Self::enforcement_error(
+                    alias,
+                    format!("failed to encode authority `{authority}` as i105: {err}"),
+                )
+            })?;
+            approvals.insert(authority_i105);
+        }
 
-        let metadata = signed.metadata();
+        let Some(metadata) = tx.as_ref().metadata() else {
+            return Ok(approvals);
+        };
         let Some(raw) = metadata.get(&*GOV_APPROVERS_METADATA_KEY) else {
             return Ok(approvals);
         };
@@ -1399,9 +1430,9 @@ impl Queue {
 
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
-        let tx_creation_time = tx.as_ref().creation_time();
+        let tx_creation_time = tx.creation_time();
 
-        let time_limit = tx.as_ref().time_to_live().map_or_else(
+        let time_limit = tx.time_to_live().map_or_else(
             || self.tx_time_to_live,
             |tx_time_to_live| core::cmp::min(self.tx_time_to_live, tx_time_to_live),
         );
@@ -1463,14 +1494,13 @@ impl Queue {
                 let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
                     Arc::clone(entry.value())
                 } else {
-                    let signed = tx_ref.as_accepted().as_ref();
                     let encoded_len = self
                         .tx_encoded_len
                         .get(&hash)
                         .map(|entry| *entry.value())
                         .unwrap_or_else(|| Self::compute_tx_encoded_len(tx_ref.as_accepted()));
                     let mut buf = Vec::with_capacity(encoded_len);
-                    signed.encode_to(&mut buf);
+                    tx_ref.as_accepted().entrypoint().encode_to(&mut buf);
                     let payload = Arc::new(buf);
                     self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
                     payload
@@ -1613,7 +1643,7 @@ impl Queue {
         trace!(
             lane_id = %lane_id,
             dataspace_id = %dataspace_id,
-            tx = %tx.as_ref().hash(),
+            tx = %tx.hash(),
             "Pushing to the queue"
         );
         let checked = match tx.into_checked(state_view) {
@@ -1690,11 +1720,11 @@ impl Queue {
         trace!(
             lane_id = %lane_id,
             dataspace_id = %dataspace_id,
-            tx = %tx.as_ref().hash(),
+            tx = %tx.hash(),
             "Pushing to the queue"
         );
 
-        let tx_hash = tx.as_ref().hash();
+        let tx_hash = tx.hash();
         if state.has_committed_transaction(tx_hash) {
             return Err(Failure {
                 tx: tx.into(),
@@ -1763,15 +1793,28 @@ impl Queue {
         if let Some(status) = manifest_status {
             if let Some(rules) = status.rules() {
                 let alias = status.alias.clone();
-                if !rules.validators.is_empty()
+                if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
+                    #[cfg(feature = "telemetry")]
+                    telemetry_handle.record_manifest_admission("missing_authority");
+                    return Err(Failure {
+                        tx: Box::new(checked.as_accepted().clone()),
+                        err: Error::GovernanceNotPermitted {
+                            alias,
+                            reason:
+                                "authority-free transactions cannot satisfy lane validator gating"
+                                    .to_string(),
+                        },
+                    });
+                }
+                if let Some(authority) = checked.as_ref().authority_opt()
                     && !rules
                         .validators
                         .iter()
-                        .any(|validator| validator == checked.as_ref().authority())
+                        .any(|validator| validator == authority)
                 {
                     iroha_logger::warn!(
                         lane = %alias,
-                        authority = %checked.as_ref().authority(),
+                        authority = %authority,
                         "rejecting transaction not signed by governance validator"
                     );
                     #[cfg(feature = "telemetry")]
@@ -1887,24 +1930,28 @@ impl Queue {
             Some(lane_privacy_registry_handle)
         };
 
-        let lane_identity = Self::extract_lane_identity_metadata(
-            world,
-            checked.as_ref().authority(),
-            dataspace_id,
-            &lane_alias,
-        )
-        .map_err(|err| Failure {
-            tx: Box::new(checked.as_accepted().clone()),
-            err,
-        })?;
+        let lane_identity = checked
+            .as_ref()
+            .authority_opt()
+            .map(|authority| {
+                Self::extract_lane_identity_metadata(world, authority, dataspace_id, &lane_alias)
+            })
+            .transpose()
+            .map_err(|err| Failure {
+                tx: Box::new(checked.as_accepted().clone()),
+                err,
+            })?
+            .unwrap_or((None, Vec::new()));
 
         let lane_compliance = self.lane_compliance.read().clone();
-        if let Some(engine) = lane_compliance.as_ref() {
+        if let (Some(engine), Some(authority)) =
+            (lane_compliance.as_ref(), checked.as_ref().authority_opt())
+        {
             let (uaid_value, capability_tags) = lane_identity;
             let ctx = LaneComplianceContext {
                 lane_id,
                 dataspace_id,
-                authority: checked.as_ref().authority(),
+                authority,
                 uaid: uaid_value.as_ref(),
                 capability_tags: capability_tags.as_slice(),
                 lane_privacy_registry,
@@ -1978,11 +2025,13 @@ impl Queue {
             });
         }
 
-        if let Err(err) = self.check_and_increase_per_user_tx_count(checked.as_ref().authority()) {
-            return Err(Failure {
-                tx: checked.as_accepted().clone().into(),
-                err,
-            });
+        if let Some(authority) = checked.as_ref().authority_opt() {
+            if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                return Err(Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err,
+                });
+            }
         }
 
         // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
@@ -2009,7 +2058,9 @@ impl Queue {
             }
             self.tx_enqueued_at_ms.remove(&hash);
             self.queued_tx_enqueued_at_ms.remove(&hash);
-            self.decrease_per_user_tx_count(err_tx.as_ref().as_ref().authority());
+            if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
+                self.decrease_per_user_tx_count(authority);
+            }
             self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
             return Err(Failure {
                 tx: Box::new(
@@ -2283,11 +2334,13 @@ impl Queue {
             });
         }
 
-        if let Err(err) = self.check_and_increase_per_user_tx_count(checked.as_ref().authority()) {
-            return Err(Failure {
-                tx: checked.as_accepted().clone().into(),
-                err,
-            });
+        if let Some(authority) = checked.as_ref().authority_opt() {
+            if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                return Err(Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err,
+                });
+            }
         }
 
         // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
@@ -2314,7 +2367,9 @@ impl Queue {
             }
             self.tx_enqueued_at_ms.remove(&hash);
             self.queued_tx_enqueued_at_ms.remove(&hash);
-            self.decrease_per_user_tx_count(err_tx.as_ref().as_ref().authority());
+            if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
+                self.decrease_per_user_tx_count(authority);
+            }
             self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
             return Err(Failure {
                 tx: Box::new(
@@ -2458,7 +2513,9 @@ impl Queue {
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
                     self.untrack_expiry_hash(&hash);
-                    self.decrease_per_user_tx_count(removed_tx.as_ref().as_ref().authority());
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
                     if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
                     } else {
@@ -2569,7 +2626,9 @@ impl Queue {
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
                     self.untrack_expiry_hash(&hash);
-                    self.decrease_per_user_tx_count(removed_tx.as_ref().as_ref().authority());
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
                     if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
                     } else {
@@ -3073,7 +3132,9 @@ impl Queue {
                     .unwrap_or_default();
                 self.removed_hashes.insert(hash, ());
                 self.untrack_expiry_hash(&hash);
-                self.decrease_per_user_tx_count(tx_arc.as_ref().as_ref().authority());
+                if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
+                    self.decrease_per_user_tx_count(authority);
+                }
                 #[cfg(feature = "telemetry")]
                 self.record_teu_dequeue(&hash, None);
                 self.tx_enqueued_at_ms.remove(&hash);
@@ -3177,7 +3238,9 @@ impl Queue {
                 .routing_decisions
                 .remove(&hash)
                 .map(|(_, decision)| decision);
-            self.decrease_per_user_tx_count(tx.as_ref().authority());
+            if let Some(authority) = tx.as_ref().authority_opt() {
+                self.decrease_per_user_tx_count(authority);
+            }
             if let Some(decision) = decision {
                 routing_ledger::record(hash, decision);
             }
@@ -3216,7 +3279,9 @@ impl Queue {
             self.tx_gossip_payloads.remove(&hash);
             if let Some(tx_arc) = tx_arc {
                 self.removed_hashes.insert(hash, ());
-                self.decrease_per_user_tx_count(tx_arc.as_ref().as_ref().authority());
+                if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
+                    self.decrease_per_user_tx_count(authority);
+                }
                 #[cfg(feature = "telemetry")]
                 self.record_teu_dequeue(&hash, telemetry);
                 removed = removed.saturating_add(1);
@@ -3274,13 +3339,25 @@ impl Queue {
     fn compute_teu_weight(tx: &AcceptedTransaction<'static>) -> u64 {
         use iroha_data_model::transaction::Executable;
 
-        match tx.as_ref().instructions() {
-            Executable::Instructions(batch) => {
-                let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
-                gas::meter_instructions(&instructions)
+        match tx.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+                match signed.instructions() {
+                    Executable::Instructions(batch) => {
+                        let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
+                        gas::meter_instructions(&instructions)
+                    }
+                    Executable::IvmProved(proved) => {
+                        gas::meter_instructions(proved.overlay.as_ref())
+                    }
+                    Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
+                }
             }
-            Executable::IvmProved(proved) => gas::meter_instructions(proved.overlay.as_ref()),
-            Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
+            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
+                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
+                    .map(|instruction| gas::meter_instruction(&instruction))
+                    .unwrap_or(0)
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::Time(_) => 0,
         }
     }
 

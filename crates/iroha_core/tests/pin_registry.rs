@@ -852,10 +852,9 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
             .expect("register default domain");
     }
     if tx.world().account(&alice).is_err() {
-        Register::account(NewAccount::new_in_domain(
-            alice.clone(),
-            default_domain.clone(),
-        ))
+        Register::account(
+            NewAccount::new(alice.clone()).with_linked_domain(default_domain.clone()),
+        )
         .execute(&alice, tx)
         .expect("register sorafs authority");
     }

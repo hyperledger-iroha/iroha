@@ -133,7 +133,8 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
             AssetDefinition::numeric(asset_def_id.clone()).with_name("rose".to_owned());
         let init_instrs: [InstructionBox; 5] = [
             Register::domain(Domain::new(domain_id.clone())).into(),
-            Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+            Register::account(NewAccount::new(owner.clone()).with_linked_domain(domain_id.clone()))
+                .into(),
             Register::asset_definition(definition).into(),
             Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
