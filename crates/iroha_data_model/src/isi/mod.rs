@@ -220,6 +220,54 @@ impl From<crate::isi::staking::ExitPublicLaneValidator> for InstructionBox {
     }
 }
 
+impl From<crate::isi::kaigi::CreateKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::CreateKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::JoinKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::JoinKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::LeaveKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::LeaveKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::EndKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::EndKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::RecordKaigiUsage> for InstructionBox {
+    fn from(i: crate::isi::kaigi::RecordKaigiUsage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::SetKaigiRelayManifest> for InstructionBox {
+    fn from(i: crate::isi::kaigi::SetKaigiRelayManifest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::RegisterKaigiRelay> for InstructionBox {
+    fn from(i: crate::isi::kaigi::RegisterKaigiRelay) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::ReportKaigiRelayHealth> for InstructionBox {
+    fn from(i: crate::isi::kaigi::ReportKaigiRelayHealth) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::nexus::SetLaneRelayEmergencyValidators> for InstructionBox {
     fn from(i: crate::isi::nexus::SetLaneRelayEmergencyValidators) -> Self {
         InstructionBox(Box::new(i))

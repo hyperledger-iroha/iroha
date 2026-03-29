@@ -1422,7 +1422,7 @@ impl Actor {
                                 .retain(|(_, hash, _, _, _), _| hash != &parent);
                         }
                     } else {
-                        let txs = pending.block.transactions_vec().clone();
+                        let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
                         let (requeued, failures, duplicate_failures, _) =
                             requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
                         warn!(
@@ -1617,7 +1617,7 @@ impl Actor {
                         let outcome = handle_prev_block_mismatch(
                             self.queue.as_ref(),
                             self.state.as_ref(),
-                            failed_block.transactions_vec().clone(),
+                            failed_block.external_entrypoints_cloned().collect(),
                         );
                         if outcome.failures > 0 {
                             warn!(
@@ -2519,7 +2519,7 @@ impl Actor {
         let height = pending.height;
         let view = pending.view;
         let block_hash = inflight.block_hash;
-        let txs = pending.block.transactions_vec().clone();
+        let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
         let (requeued, failures, duplicate_failures, _) =
             requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
         if failures > 0 {

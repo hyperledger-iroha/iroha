@@ -12518,7 +12518,7 @@ where
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_transaction_via_proxy(
     app: &SharedAppState,
-    transaction: SignedTransaction,
+    transaction: TransactionEntrypoint,
     routing_decision: RoutingDecision,
 ) -> Response {
     execute_torii_proxy_request_with_fallback(
@@ -13344,7 +13344,8 @@ async fn process_incoming_torii_proxy_request(
                 transaction,
                 expected_route,
             } => {
-                let tx_hash = transaction.hash();
+                let tx_hash =
+                    HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(transaction.hash()));
                 match routing::accept_transaction_for_ingress(
                     app.chain_id.clone(),
                     app.state.clone(),
@@ -19340,7 +19341,9 @@ async fn handler_post_vk_update(
 async fn handler_post_transaction(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
-    NoritoVersioned(transaction): NoritoVersioned<iroha_data_model::transaction::SignedTransaction>,
+    NoritoVersioned(transaction): NoritoVersioned<
+        iroha_data_model::transaction::signed::TransactionEntrypoint,
+    >,
 ) -> Result<impl IntoResponse, Error> {
     let token_hdr = headers
         .get("x-api-token")
@@ -19356,8 +19359,12 @@ async fn handler_post_transaction(
             )));
         }
     }
-    let auth_id = format!("{}", transaction.authority());
-    let key = token_hdr.unwrap_or(auth_id);
+    let key = token_hdr.unwrap_or_else(|| {
+        transaction.authority_opt().map_or_else(
+            || format!("entrypoint:{}", transaction.hash()),
+            |authority| authority.to_string(),
+        )
+    });
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.tx_rate_limiter, &key, enforce).await {
@@ -19365,7 +19372,7 @@ async fn handler_post_transaction(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    let tx_hash = transaction.hash();
+    let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::from(transaction.hash()));
     let accepted_tx = routing::accept_transaction_for_ingress(
         app.chain_id.clone(),
         app.state.clone(),

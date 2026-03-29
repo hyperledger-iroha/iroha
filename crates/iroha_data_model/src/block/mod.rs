@@ -114,6 +114,7 @@ impl SignedBlock {
             payload: BlockPayload {
                 header,
                 transactions,
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -139,6 +140,7 @@ impl SignedBlock {
             payload: BlockPayload {
                 header,
                 transactions,
+                external_entrypoints: Vec::new(),
                 da_commitments,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -194,11 +196,7 @@ impl SignedBlock {
 
         // Ensure the consensus merkle root covering only external transactions remains intact.
         let external_entrypoints: Vec<TransactionEntrypoint> = self
-            .payload
-            .transactions
-            .iter()
-            .cloned()
-            .map(TransactionEntrypoint::from)
+            .external_entrypoints_cloned()
             .collect();
         let external_hashes = external_entrypoints.iter().map(TransactionEntrypoint::hash);
         let external_merkle: MerkleTree<TransactionEntrypoint> =
@@ -466,6 +464,7 @@ impl SignedBlock {
         let payload = BlockPayload {
             header,
             transactions,
+            external_entrypoints: external_entrypoints.clone(),
             da_commitments: None,
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
