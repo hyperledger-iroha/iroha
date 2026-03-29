@@ -2,6 +2,24 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: routed GET filters keep JSON literals as query strings during Torii proxying
+- Fixed the routed read proxy query decoder in `crates/iroha_torii/src/lib.rs`
+  so proxied GET parameters now use the same scalar coercion rules as the
+  normal `NoritoQuery` path instead of eagerly decoding each value as JSON.
+- This restores the intended validation flow for compact `filter=` query
+  parameters on proxied list endpoints such as `/v1/accounts`: JSON filter
+  literals now stay strings until the route handler canonicalizes and validates
+  them, so dotted/non-canonical I105 account literals are rejected with the
+  underlying canonical-account error instead of `failed to decode proxied query
+  params`.
+- Added a focused routed-read regression in `crates/iroha_torii/src/lib.rs`
+  that locks in round-tripping JSON filter literals as strings across
+  `encode_torii_proxy_query(...)` and `decode_torii_proxy_query(...)`.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib torii_proxy_query_roundtrip_preserves_json_filter_literals_as_strings -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation accounts_listing_filter_rejects_dotted_i105_literals -- --nocapture` (pass)
+
 ## 2026-03-29 Follow-up: SoraFS storage-pin integration tests match the current client API again
 - Updated the two direct single-file SoraFS pin callsites in
   `integration_tests/tests/soranet_web_deploy.rs` and

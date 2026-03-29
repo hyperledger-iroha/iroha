@@ -2,6 +2,24 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 Torii proxied list-filter decoding):
+the immediate routed-read regression on `/v1/accounts` is closed: proxied GET
+query params now keep compact JSON filter literals as strings, matching the
+normal query extractor semantics instead of failing early during proxy decode.
+
+- updated `crates/iroha_torii/src/lib.rs` so `decode_torii_proxy_query(...)`
+  uses scalar query coercion for proxied GET params, which preserves
+  `ListFilterParams.filter` as a string and lets the downstream account-id
+  canonicalization path return the expected I105 validation error; and
+- added a focused regression in the Torii routed-read test module plus reran
+  the originally failing integration case
+  `accounts_listing_filter_rejects_dotted_i105_literals`.
+
+Open work for this slice now remains:
+- rerun a broader `integration_tests` or workspace validation pass when the
+  next longer test window is available; this fix was verified with the routed
+  Torii unit test and the single reported integration regression only.
+
 Latest sync (2026-03-29 SoraFS storage-pin integration-test callers):
 the two direct single-file SoraFS pin integration tests now match the current
 three-argument `Client::post_sorafs_storage_pin(...)` API again, so the
