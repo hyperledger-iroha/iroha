@@ -2329,7 +2329,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     /// Apply queued ISIs via the executor while preserving an optional
     /// contract runtime context for nested contract execution.
-    pub fn apply_queued_with_contract_runtime_context(
+    pub(crate) fn apply_queued_with_contract_runtime_context(
         &mut self,
         tx: &mut StateTransaction<'_, '_>,
         authority: &AccountId,

@@ -1394,7 +1394,12 @@ pub struct StoragePinRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, PartialEq, Eq,
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    PartialEq,
+    Eq,
 )]
 /// File entry describing how a logical dataset file maps into the concatenated payload.
 pub struct StorageFileEntryDto {

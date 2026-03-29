@@ -3166,7 +3166,6 @@ enum FrontierSlotMode {
     Normal,
     DeepCatchup,
     Finalized,
-    Superseded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3188,8 +3187,6 @@ enum FrontierBodyState {
 enum FrontierValidationState {
     Unknown,
     Pending,
-    Valid,
-    Invalid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3232,11 +3229,6 @@ struct FrontierTimers {
     deep_catchup_entered_at: Option<Instant>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
-struct FrontierLocalVoteState {
-    local_vote_emitted: bool,
-}
-
 #[derive(Debug, Clone)]
 struct FrontierRepairState {
     fetch_stage: FrontierBodyFetchStage,
@@ -3262,11 +3254,6 @@ enum FrontierSlotEvent {
         block_hash: HashOf<BlockHeader>,
         view: u64,
         sender: Option<PeerId>,
-    },
-    OnBodyValidated {
-        block_hash: HashOf<BlockHeader>,
-        view: u64,
-        valid: bool,
     },
     OnVoteObserved {
         block_hash: HashOf<BlockHeader>,
@@ -3319,7 +3306,6 @@ struct FrontierSlot {
     candidate: FrontierCandidate,
     quorum_progress: FrontierQuorumProgress,
     timers: FrontierTimers,
-    local_vote_state: FrontierLocalVoteState,
     repair_state: FrontierRepairState,
     // TODO: remove these compatibility mirrors once the remaining slot helpers read the nested
     // FSM fields directly instead of the legacy flat fields.
@@ -3410,7 +3396,6 @@ impl FrontierSlot {
             candidate,
             quorum_progress: FrontierQuorumProgress::default(),
             timers,
-            local_vote_state: FrontierLocalVoteState::default(),
             repair_state,
             view,
             block_hash,
@@ -3568,9 +3553,7 @@ impl FrontierSlot {
                     self.repair_state.pending_requesters.insert(requester);
                 }
                 self.mode = match self.mode {
-                    FrontierSlotMode::Finalized | FrontierSlotMode::Superseded => {
-                        FrontierSlotMode::Normal
-                    }
+                    FrontierSlotMode::Finalized => FrontierSlotMode::Normal,
                     mode => mode,
                 };
             }
@@ -3595,29 +3578,6 @@ impl FrontierSlot {
                 }
                 self.phase = FrontierSlotPhase::ValidateBody;
                 self.record_progress(now);
-            }
-            FrontierSlotEvent::OnBodyValidated {
-                block_hash,
-                view,
-                valid,
-            } => {
-                if !self.matches_candidate(block_hash, view) {
-                    self.sync_compat_fields();
-                    return actions;
-                }
-                if valid {
-                    self.candidate.validation_state = FrontierValidationState::Valid;
-                    self.phase = if self.quorum_progress.commit_qc_observed {
-                        FrontierSlotPhase::AwaitCommitQc
-                    } else {
-                        FrontierSlotPhase::AwaitVotes
-                    };
-                    self.record_progress(now);
-                } else {
-                    self.candidate.validation_state = FrontierValidationState::Invalid;
-                    self.phase = FrontierSlotPhase::AwaitBlockCreated;
-                    self.note_lag_if_needed(now);
-                }
             }
             FrontierSlotEvent::OnVoteObserved {
                 block_hash,
@@ -5887,10 +5847,7 @@ impl Actor {
         if self.frontier_slot_is_exact_height(frontier_height)
             && let Some(slot) = self.frontier_slot.as_ref()
             && slot.height == frontier_height
-            && !matches!(
-                slot.mode,
-                FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
-            )
+            && !matches!(slot.mode, FrontierSlotMode::Finalized)
             && slot.repair_state.last_reason != Some("missing_qc")
         {
             return slot.repair_state.last_reason;
@@ -5919,10 +5876,7 @@ impl Actor {
         if self.frontier_slot_is_exact_height(frontier_height)
             && let Some(slot) = self.frontier_slot.as_ref()
             && slot.height == frontier_height
-            && !matches!(
-                slot.mode,
-                FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
-            )
+            && !matches!(slot.mode, FrontierSlotMode::Finalized)
         {
             let window = window.max(Duration::from_millis(1));
             let slot_last_action_at = [
@@ -6002,10 +5956,7 @@ impl Actor {
         if self.frontier_slot_is_exact_height(frontier_height) {
             return self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == frontier_height
-                    && !matches!(
-                        slot.mode,
-                        FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
-                    )
+                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
                     && self.same_height_dependency_backlog_active_in_frontier_window(
                         frontier_height,
                         now,
@@ -6035,10 +5986,7 @@ impl Actor {
             && self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == frontier_height
                     && slot.view <= frontier_view
-                    && !matches!(
-                        slot.mode,
-                        FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
-                    )
+                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
                     && (slot.block_created_seen
                         || slot.body_present
                         || matches!(
@@ -6182,10 +6130,7 @@ impl Actor {
             && self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == frontier_height
                     && slot.view <= frontier_view
-                    && !matches!(
-                        slot.mode,
-                        FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
-                    )
+                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
                     && (slot.quorum_progress.votes_observed
                         || slot.quorum_progress.commit_qc_observed
                         || matches!(
@@ -6581,10 +6526,7 @@ impl Actor {
         if self.frontier_slot_is_exact_height(frontier_height)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == frontier_height
-                    && !matches!(
-                        slot.mode,
-                        FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
-                    )
+                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
                     && (slot.quorum_progress.votes_observed
                         || slot.quorum_progress.commit_qc_observed
                         || matches!(
@@ -6639,10 +6581,7 @@ impl Actor {
     fn frontier_slot_has_active_owner_state(&self, height: u64) -> bool {
         self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.height == height
-                && !matches!(
-                    slot.mode,
-                    FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
-                )
+                && !matches!(slot.mode, FrontierSlotMode::Finalized)
                 && (matches!(slot.mode, FrontierSlotMode::DeepCatchup)
                     || matches!(
                         slot.phase,
@@ -6673,10 +6612,7 @@ impl Actor {
 
         if let Some(slot) = self.frontier_slot.as_mut()
             && slot.height == frontier_height
-            && !matches!(
-                slot.mode,
-                FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
-            )
+            && !matches!(slot.mode, FrontierSlotMode::Finalized)
         {
             slot.active_view = slot.active_view.max(requested_view);
             slot.repair_state.last_reason = Some(reason);
@@ -13866,26 +13802,6 @@ impl Actor {
                         block_hash,
                         view,
                         sender,
-                    },
-                    lag_window,
-                );
-                self.frontier_slot = Some(slot);
-                actions
-            }
-            FrontierSlotEvent::OnBodyValidated {
-                block_hash,
-                view,
-                valid,
-            } => {
-                let Some(mut slot) = self.frontier_slot.take() else {
-                    return FrontierSlotActions::default();
-                };
-                let actions = slot.step(
-                    now,
-                    FrontierSlotEvent::OnBodyValidated {
-                        block_hash,
-                        view,
-                        valid,
                     },
                     lag_window,
                 );
