@@ -2,6 +2,33 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 Taira reset on updated irohad + explorer rebuild):
+the served Taira testnet is healthy again on the updated checkout, and the
+rebuilt explorer is live, but the reset had to fall back to the last known
+good signed genesis because fresh `kagami localnet` output is not bootable on
+this checkout.
+
+- rebuilt `irohad` / `kagami` from `f3de5b11b01e`, rebuilt the explorer from
+  `/Users/administrator/dev/iroha2-block-explorer-web` commit
+  `8f2c52f70ad2`, and restarted the served `dist/taira-localnet` on fresh
+  storage under the updated `irohad` binary;
+- verified live recovery through `http://127.0.0.1:29080/status`,
+  `https://taira.sora.org/status`, `https://taira.sora.org/v1/accounts/faucet/puzzle`,
+  `https://taira.sora.org/v1/mcp`, `https://taira.sora.org/v1/kaigi/relays`,
+  and `https://taira-explorer.sora.org/`; and
+- isolated the current generator/startup regression: an untouched fresh
+  `kagami localnet` bundle fails at genesis decode with
+  `Norito (de)serialization issue: length mismatch`, and a Norito trace points
+  at `RegisterBox::Account` genesis decoding in the account metadata
+  `Vec<(Name, Json)>` path.
+
+Open work for this slice now remains:
+- fix the current `kagami localnet` / genesis encoding regression so a freshly
+  generated Taira bundle boots without falling back to
+  `dist/taira-localnet.prev-20260329-151827`; and
+- rerun the Taira reset from a newly generated signed genesis once that
+  decoder/encoder mismatch is fixed, then remove the deployment workaround.
+
 Latest sync (2026-03-29 Taira frame-cap + Torii core-lane fallback fix):
 the served Taira localnet is accepting public writes again, including payloads
 large enough to exceed the old 256 KiB tx-gossip frame cap.

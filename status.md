@@ -2,6 +2,34 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Taira reset recovered on updated irohad via last known good signed genesis
+- Reset the served Taira localnet and kept the updated explorer live after the
+  latest local checkout updates:
+  - rebuilt `irohad` / `kagami` from `f3de5b11b01e`;
+  - kept the rebuilt explorer from
+    `/Users/administrator/dev/iroha2-block-explorer-web` commit
+    `8f2c52f70ad2` serving through nginx; and
+  - restarted `dist/taira-localnet` under detached `screen` session
+    `taira-localnet` on fresh storage.
+- The current `kagami localnet` output on this checkout is not bootable yet:
+  both an untouched fresh bundle and a re-signed served bundle fail during
+  startup with `Error occurred while reading genesis block` /
+  `Norito (de)serialization issue: length mismatch`.
+- A focused Norito trace narrowed the current decode failure to
+  `RegisterBox::Account` genesis instructions while decoding account metadata
+  as `Vec<(Name, Json)>`, so the reset used the last known good Taira signed
+  genesis from `dist/taira-localnet.prev-20260329-151827` as a deployment
+  workaround.
+- Live verification on March 29, 2026 after the reset:
+  - `GET http://127.0.0.1:29080/status` returned `200`;
+  - `GET https://taira.sora.org/status` returned `200` with
+    `peers=3`, `blocks=1`, `txs_approved=11`, `txs_rejected=0`;
+  - `GET https://taira.sora.org/v1/accounts/faucet/puzzle` returned `200`;
+  - `GET https://taira.sora.org/v1/mcp` returned `200`;
+  - `GET https://taira.sora.org/v1/kaigi/relays` returned `total=3`; and
+  - `GET https://taira-explorer.sora.org/` returned `200` with the rebuilt
+    bundle and `config.json` still pointing at `https://taira.sora.org`.
+
 ## 2026-03-29 Taira localnet frame-cap + Torii core-lane fallback fix restored public writes
 - Raised the generated Nexus localnet tx-gossip frame cap so Taira-sized public
   transactions no longer inherit the too-small global default:
