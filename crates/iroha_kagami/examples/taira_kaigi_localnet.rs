@@ -10,7 +10,7 @@ use color_eyre::{
 };
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
-    account::AccountId,
+    account::{AccountId, address::ChainDiscriminantGuard},
     domain::DomainId,
     isi::SetKeyValue,
     kaigi::{KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration},
@@ -168,6 +168,9 @@ fn run(args: Args) -> Result<()> {
         .iter()
         .map(|raw| RelaySpec::parse(raw))
         .collect::<Result<Vec<_>>>()?;
+    let manifest = RawGenesisTransaction::from_path(&args.genesis)
+        .wrap_err("failed to load base genesis manifest")?;
+    let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
     let host_public_key =
         PublicKey::from_str(&args.host_public_key).wrap_err("failed to parse host public key")?;
     let host = AccountId::new(host_public_key);
@@ -176,9 +179,6 @@ fn run(args: Args) -> Result<()> {
         DomainId::from_str(&args.call_domain).wrap_err("invalid call domain")?,
         Name::from_str(&args.call_name).wrap_err("invalid call name")?,
     );
-
-    let manifest = RawGenesisTransaction::from_path(&args.genesis)
-        .wrap_err("failed to load base genesis manifest")?;
     let signed = append_kaigi_overlay(
         manifest,
         relay_domain,
@@ -216,6 +216,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_genesis::GenesisBuilder;
 
     #[test]
     fn relay_spec_parses_expected_fields() {
@@ -247,6 +248,32 @@ mod tests {
         assert_eq!(
             feedback_key(&public_key).expect("feedback key").to_string(),
             "kaigi_relay_feedback__ea0130B4A704CBEADF686CAECDAF705102C9902CFED8B71016906F6D724D0BB7F04DE540F29585B7FB8B46962FB70D0AD97249"
+        );
+    }
+
+    #[test]
+    fn manifest_chain_discriminant_scopes_overlay_account_literals() {
+        let manifest = GenesisBuilder::new_without_executor(
+            "iroha:test:kaigi-taira".parse().expect("chain id"),
+            PathBuf::from("."),
+        )
+        .build_raw()
+        .with_chain_discriminant(369);
+        let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
+        let public_key = PublicKey::from_str(
+            "ea0130B99B89AD5D2F51D17AB69D32BC3A44C2CC5FF65E28590022B972148AD4DF00712FEC4EFF5BC6B3AEF33ABCF18F5CAD5B",
+        )
+        .expect("public key");
+        let relay = relay_registration(&RelaySpec {
+            public_key,
+            hpke_public_key_b64: "K4NiAXqV5L1V3aD+/9NItPlFhEtm3qD4Q4K/1M8jewQ=".to_string(),
+            bandwidth_class: 3,
+        });
+        let value = Json::try_new(relay).expect("serialize relay registration");
+        assert!(
+            value.get().contains("test"),
+            "expected Taira/testnet prefix in relay registration JSON: {}",
+            value.get()
         );
     }
 }
