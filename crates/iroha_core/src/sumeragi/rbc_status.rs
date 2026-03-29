@@ -563,7 +563,11 @@ fn persist_if_needed(inner: &mut Inner, context: &'static str) {
             return;
         }
 
-        warn!(?err, context = context, "failed to persist RBC session store");
+        warn!(
+            ?err,
+            context = context,
+            "failed to persist RBC session store"
+        );
     }
 }
 
@@ -1208,10 +1212,7 @@ mod tests {
         assert_eq!(handle.get(&key), Some(updated));
         let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
         assert!(
-            inner
-                .disk
-                .as_ref()
-                .is_some_and(|disk| disk.disabled),
+            inner.disk.as_ref().is_some_and(|disk| disk.disabled),
             "fatal persist errors must disable future disk writes"
         );
         drop(inner);
@@ -1290,10 +1291,7 @@ mod tests {
         {
             let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
             assert!(
-                inner
-                    .disk
-                    .as_ref()
-                    .is_some_and(|disk| !disk.disabled),
+                inner.disk.as_ref().is_some_and(|disk| !disk.disabled),
                 "explicit configure(Some(...)) must re-enable persistence"
             );
         }
@@ -1312,7 +1310,10 @@ mod tests {
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
-        handle.update(replacement.clone(), SystemTime::now() + Duration::from_secs(3));
+        handle.update(
+            replacement.clone(),
+            SystemTime::now() + Duration::from_secs(3),
+        );
 
         assert!(
             read_persisted_snapshot(dir.path())

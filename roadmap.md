@@ -2,6 +2,32 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 Taira frame-cap + Torii core-lane fallback fix):
+the served Taira localnet is accepting public writes again, including payloads
+large enough to exceed the old 256 KiB tx-gossip frame cap.
+
+- `crates/iroha_kagami/src/localnet.rs` now emits
+  `network.max_frame_bytes_tx_gossip = 1048576` for Nexus-enabled localnets,
+  and the focused localnet regression covers that generated config;
+- `crates/iroha_torii/src/lib.rs` now treats the NPoS core lane as locally
+  routable when public validator records, `commit_topology()`, and
+  `world().peers()` are all empty but connected peers are present, which
+  removed the served Taira `503 route_unavailable` failure on
+  `/v1/nexus/public_lanes/0/validators`; and
+- the served Taira localnet was restarted on the patched `irohad` binary and
+  validated live with both a normal public ping and a `350017`-byte metadata
+  ping, advancing the chain to block `45` without any fresh
+  `frame_cap_too_small` logs.
+
+Open work for this slice now remains:
+- explain why `GET /v1/nexus/public_lanes/0/validators` is locally routable
+  again but still returns an empty `items` array even though the generated
+  Taira genesis contains `RegisterPublicLaneValidator` /
+  `ActivatePublicLaneValidator` bootstrap instructions; and
+- decide whether the zeroed `sumeragi.commit_qc_*` counters on the served
+  Taira `/status` output after restart are a telemetry/reporting bug or a
+  deeper NPoS snapshot issue.
+
 Latest sync (2026-03-29 Kaigi CLI privacy-artifact parity + merge-drift cleanup):
 the reported `iroha_cli` Kaigi compile break is closed: the CLI now matches the
 privacy-aware `CreateKaigi` / `EndKaigi` ISI surface again, and the extra merge

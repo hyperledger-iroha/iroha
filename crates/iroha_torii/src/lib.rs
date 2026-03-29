@@ -1282,6 +1282,7 @@ struct AppState {
     vpn_helper_ticket_secret: Option<[u8; 32]>,
     vpn_sessions: Arc<DashMap<String, vpn::VpnSessionRecord>>,
     vpn_receipts: Arc<DashMap<String, Vec<vpn::VpnReceiptRecord>>>,
+    vpn_state_lock: Arc<tokio::sync::Mutex<()>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     #[cfg(feature = "app_api")]
     soracloud_proxy_pending: Arc<tokio::sync::Mutex<BTreeMap<Hash, PendingSoracloudProxyRequest>>>,
@@ -24804,6 +24805,7 @@ impl Torii {
             vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
             vpn_sessions: Arc::new(DashMap::new()),
             vpn_receipts: Arc::new(DashMap::new()),
+            vpn_state_lock: Arc::new(tokio::sync::Mutex::new(())),
             soracloud_runtime: self.soracloud_runtime.clone(),
             #[cfg(feature = "app_api")]
             soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
@@ -27390,6 +27392,7 @@ pub(crate) mod tests_runtime_handlers {
             vpn_helper_ticket_secret: None,
             vpn_sessions: Arc::new(DashMap::new()),
             vpn_receipts: Arc::new(DashMap::new()),
+            vpn_state_lock: Arc::new(tokio::sync::Mutex::new(())),
             soracloud_runtime: None,
             #[cfg(feature = "app_api")]
             soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),

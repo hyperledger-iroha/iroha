@@ -2,6 +2,44 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Taira localnet frame-cap + Torii core-lane fallback fix restored public writes
+- Raised the generated Nexus localnet tx-gossip frame cap so Taira-sized public
+  transactions no longer inherit the too-small global default:
+  - `crates/iroha_kagami/src/localnet.rs` now emits
+    `network.max_frame_bytes_tx_gossip = 1048576` for Nexus-enabled localnets;
+    and
+  - the focused generator regression now asserts the Taira/Sora profile keeps
+    that 1 MiB cap in the rendered peer config.
+- Hardened Torii's authoritative-peer selection for the NPoS core lane:
+  - `crates/iroha_torii/src/lib.rs` now falls back to the local peer plus
+    currently connected peers when public-lane validator records,
+    `commit_topology()`, and `world().peers()` are all empty for the core
+    `lane_id=0` / `dataspace_id=0` route; and
+  - the new regression fixture explicitly clears the seeded test
+    `commit_topology` so the empty-state fallback matches the served Taira
+    bootstrap shape instead of a helper-only topology.
+- Applied the live Taira overlay and redeployed the served localnet on the
+  patched `irohad` binary from
+  `/tmp/iroha_target_torii_routefix_release/release/irohad`, including the
+  1 MiB `max_frame_bytes_tx_gossip` override in the served
+  `dist/taira-localnet/peer{0,1,2,3}.toml` configs.
+- Live verification on March 29, 2026:
+  - `GET http://127.0.0.1:29080/v1/nexus/public_lanes/0/validators` now
+    returns `200` with `x-iroha-routed-by: local` instead of `503
+    route_unavailable`;
+  - `GET https://taira.sora.org/v1/nexus/public_lanes/0/validators` also
+    returns `200`;
+  - a normal public ping advanced Taira from block `43` to `44`;
+  - a second ping carrying `350017` bytes of metadata advanced Taira to block
+    `45`, with `/status` reporting `tx_gossip.caps.frame_cap_bytes = 1048211`
+    and `frame_bytes = 351168` for the public batch; and
+  - the live peer logs contain no fresh `frame_cap_too_small` or
+    `route_unavailable` entries after the restart.
+- Focused verification completed:
+  - `cargo test -p iroha_kagami generated_sora_profile_peer_config_includes_mcp_writer_profile -- --nocapture` (pass)
+  - `cargo build -p irohad --release` with
+    `CARGO_TARGET_DIR=/tmp/iroha_target_torii_routefix_release` (pass)
+
 ## 2026-03-29 Follow-up: Kaigi CLI privacy-artifact parity and merge-drift cleanup
 - Updated `crates/iroha_cli/src/commands/kaigi.rs` so `kaigi create` and
   `kaigi end` now accept and forward the optional privacy artifacts required by
