@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Hyperledger.Iroha.Sdk</AssemblyName>
+    <Authors>Hyperledger Iroha Contributors</Authors>
+    <Description>Managed .NET SDK for interacting with Hyperledger Iroha.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <IsPackable>true</IsPackable>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <PackageId>Hyperledger.Iroha.Sdk</PackageId>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/hyperledger-iroha/iroha</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageTags>iroha;hyperledger;blockchain;dlt;sdk;csharp;dotnet</PackageTags>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/hyperledger-iroha/iroha</RepositoryUrl>
+    <RootNamespace>Hyperledger.Iroha</RootNamespace>
+    <TargetFramework>net8.0</TargetFramework>
+    <Version>0.1.0-preview.1</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NetSparkleUpdater.Chaos.NaCl" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+
+</Project>

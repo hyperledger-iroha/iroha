@@ -1,6 +1,58 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-27
+Last updated: 2026-03-28
+
+Latest sync (2026-03-28 managed C# transaction build/sign/submit slice):
+`csharp/` now contains the first managed `.NET 8` preview of
+`Hyperledger.Iroha.Sdk` plus a dedicated C# CI lane.
+
+- shipped in this slice:
+  - canonical I105 account-address parsing/rendering against the shared address
+    vectors, including multisig round-trips;
+  - Norm v1 domain normalization helpers for SDK boundary validation;
+  - managed Norito/hash building blocks for the SDK's offline transaction path,
+    including CRC64, BLAKE2b-256, and deterministic Iroha transaction hashing;
+  - managed Ed25519 canonical-request signing helpers;
+  - `IrohaClient` plus typed `ToriiClient` wrappers for node capabilities,
+    runtime ABI/hash/metrics, account pages, explorer QR snapshots, account
+    asset balances, account transaction summaries, permissions, identifier
+    policy listing, typed identifier resolution, reverse alias lookup by
+    account, account/asset/contract alias resolution, alias-index resolution,
+    UAID portfolio reads, space-directory bindings and manifest inventory
+    reads, account faucet puzzle/claim helpers, and JSON onboarding helpers
+    including multisig onboarding, while retaining generic JSON/text request
+    plumbing for uncovered routes;
+  - managed `scrypt-leading-zero-bits-v1` faucet PoW solving with deterministic
+    challenge and digest helpers, plus higher-level `ToriiClient` methods that
+    can fetch the current puzzle and prepare or submit a faucet claim for a
+    canonical account literal;
+  - `ToriiApiException` so non-success responses preserve HTTP status and body
+    rather than collapsing into generic transport errors;
+  - `LedgerClient`, `TransactionBuilder`, and
+    `SignedTransactionEnvelope` so the preview package can now build, sign,
+    submit, and poll canonical asset `Transfer`, `Mint`, and `Burn`
+    transactions instead of stopping at read/request-signing helpers;
+  - source-generated serialization for typed Torii request models instead of
+    raw dictionary payloads; and
+  - package/test/sample scaffolding with `dotnet build`, `dotnet test`, and
+    `dotnet pack` all succeeding locally, with an opt-in live smoke against
+    `https://taira.sora.org`, now including `/v1/explorer/accounts/{account_id}/qr`,
+    `/v1/identifier-policies`, `/v1/aliases/by_account`, and
+    `/v1/accounts/faucet/puzzle` plus empty-state coverage for
+    `/v1/space-directory/uaids/{uaid}` and `/v1/space-directory/uaids/{uaid}/manifests`.
+
+Validation:
+- `cd csharp && dotnet build Hyperledger.Iroha.Sdk.sln -c Release`
+- `cd csharp && dotnet test Hyperledger.Iroha.Sdk.sln -c Release`
+
+Open work for the C# SDK now remains:
+- extend the ledger surface past asset `Transfer`/`Mint`/`Burn` into the rest
+  of the instruction families and signed `/query` envelopes;
+- add richer paged query abstractions plus SSE/WebSocket streaming clients;
+- move the opt-in Taira smoke into a more complete live-network matrix without
+  making default CI depend on external testnet availability; and
+- extend the SDK into Connect, offline, Nexus, SoraFS, and the remaining
+  parity families before promoting the package beyond preview.
 
 Latest sync (2026-03-27 full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but NPoS is still contaminated by one repeated missing-asset failure):
 the rebuilt 4-peer preserved-peer stable envelopes on

@@ -1,6 +1,84 @@
 # Status
 
-Last updated: 2026-03-27
+Last updated: 2026-03-28
+
+## 2026-03-28 C# SDK slice now builds, signs, submits, and polls canonical asset transactions
+- Extended the preview `.NET 8` SDK under `csharp/` with the first managed ledger path:
+  - added managed Norito/hash primitives under
+    `csharp/src/Hyperledger.Iroha.Sdk/Norito/`, including CRC64, BLAKE2b-256,
+    and Iroha transaction-hash helpers;
+  - added `TransactionBuilder`, `SignedTransactionEnvelope`,
+    `LedgerClient`, and pipeline-status types under
+    `csharp/src/Hyperledger.Iroha.Sdk/Transactions/`;
+  - `IrohaClient` now exposes `Ledger` alongside `Torii`;
+  - `ToriiClient` now supports raw signed transaction submission to
+    `POST /transaction` and typed reads from
+    `/v1/pipeline/transactions/status`; and
+  - the public Torii DTO surface no longer exposes raw `JsonElement`
+    placeholders for permissions, manifest bodies, identifier policy
+    parameters, or identifier signature payloads.
+- The shipped managed ledger slice currently covers:
+  - canonical managed encoding for asset `Transfer`, `Mint`, and `Burn`
+    transactions;
+  - deterministic Ed25519 signing over the Iroha transaction payload hash;
+  - deterministic transaction-hash derivation from the signed transaction
+    entrypoint;
+  - low-level Torii submit support plus higher-level `LedgerClient`
+    `SubmitAsync(...)`, `WaitForAsync(...)`, and `SubmitAndWaitAsync(...)`; and
+  - byte-level regression tests that pin the current managed outputs, verify
+    signature structure, and poll pipeline status through the new facade.
+- Validation:
+  - `cd csharp && dotnet build Hyperledger.Iroha.Sdk.sln -c Release`
+  - `cd csharp && dotnet test Hyperledger.Iroha.Sdk.sln -c Release`
+- Residual note:
+  - signed query envelopes, richer instruction families, transaction streaming,
+    and the larger Connect/offline/Nexus/SoraFS parity families remain open.
+
+## 2026-03-28 C# SDK slice now adds identifier-policy and explorer-QR reads
+- Added a new `.NET 8` preview SDK tree under `csharp/` with:
+  - single-package library project `Hyperledger.Iroha.Sdk`
+  - fixture-backed unit tests
+  - integration-test project with an opt-in public Taira smoke
+  - sample console app
+  - central package management, local `global.json`, and
+    `.github/workflows/pr_csharp.yml`
+- The shipped managed implementation in this first slice covers:
+  - canonical I105 account-address parsing and rendering, including multisig
+    round-trip support against the shared fixture bundle
+  - Norm v1 domain normalization helper logic for SDK boundary validation
+  - Ed25519 signing/verification wrappers for managed canonical-request signing
+  - canonical Torii app-request header construction
+  - `IrohaClient` plus a typed `ToriiClient` surface for node capabilities,
+    runtime ABI/hash/metrics, account pages, explorer QR snapshots, account
+    asset balances, account transaction summaries, direct account permission
+    reads, identifier policy listing, typed identifier resolution, reverse
+    alias lookup by canonical account id, account/asset/contract alias
+    resolution, alias-index resolution, UAID portfolio reads, space-directory
+    bindings and manifest inventory reads, account faucet puzzle/claim
+    helpers, and JSON onboarding helpers including multisig onboarding
+  - managed `scrypt-leading-zero-bits-v1` faucet PoW challenge solving, with
+    deterministic challenge/digest helpers and `ToriiClient` convenience
+    methods that can fetch the live puzzle and build or submit a faucet claim
+    request for a caller-supplied account literal
+  - `ToriiApiException`, which now preserves status code, request URI, and
+    response body instead of surfacing only generic `HttpRequestException`; and
+  - source-generated JSON request serialization for the typed Torii request
+    models rather than falling back to reflection or raw dictionaries
+- Validation:
+  - `cd csharp && dotnet build Hyperledger.Iroha.Sdk.sln -c Release`
+  - `cd csharp && dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build`
+  - `cd csharp && dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj -c Release --no-build`
+  - `cd csharp && IROHA_CSHARP_RUN_LIVE_TESTS=1 IROHA_CSHARP_TORII_BASE_URL=https://taira.sora.org dotnet test tests/Hyperledger.Iroha.Sdk.IntegrationTests/Hyperledger.Iroha.Sdk.IntegrationTests.csproj -c Release`
+- Residual note:
+  - the C# SDK still stops well short of full parity; transaction/Norito
+    builders, signed Torii transaction/query envelopes, and the broader
+    Connect/offline/Nexus/SoraFS feature families remain follow-up work, and
+    the live Taira lane is still opt-in rather than part of default CI even
+    though it now covers `/v1/explorer/accounts/{account_id}/qr`,
+    `/v1/identifier-policies`, `/v1/accounts/faucet/puzzle`,
+    `/v1/space-directory/uaids/{uaid}`,
+    `/v1/space-directory/uaids/{uaid}/manifests`, and alias round-tripping
+    when the selected account page exposes aliases.
 
 ## 2026-03-27 Full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but the NPoS missing-asset storm is still present
 - Rebuilt `iroha3d` and `izanami` and reran the full 4-peer preserved-peer
