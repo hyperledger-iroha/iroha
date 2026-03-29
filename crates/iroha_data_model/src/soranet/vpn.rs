@@ -701,7 +701,7 @@ pub fn derive_vpn_session_address_plan_v1(session_id: [u8; 16]) -> VpnSessionAdd
 
     let mut low = [0u8; 8];
     low.copy_from_slice(&digest_bytes[8..16]);
-    let v6_subnet = (u64::from_be_bytes(low) >> 2) as u128;
+    let v6_subnet = u128::from(u64::from_be_bytes(low) >> 2);
     let v6_network = VPN_SESSION_IPV6_BASE | (v6_subnet << 2);
     let v6_route = format!("{}/126", Ipv6Addr::from(v6_network));
     let v6_server = format!("{}/126", Ipv6Addr::from(v6_network | 1));

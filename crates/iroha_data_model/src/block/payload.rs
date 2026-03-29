@@ -111,13 +111,13 @@ impl fmt::Display for BlockResult {
 
 impl SignedBlock {
     fn external_entrypoints_slice(&self) -> Option<&[TransactionEntrypoint]> {
-        if !self.payload.external_entrypoints.is_empty() {
-            Some(self.payload.external_entrypoints.as_slice())
-        } else {
+        if self.payload.external_entrypoints.is_empty() {
             self.result.as_ref().and_then(|result| {
                 (!result.external_entrypoints.is_empty())
                     .then_some(result.external_entrypoints.as_slice())
             })
+        } else {
+            Some(self.payload.external_entrypoints.as_slice())
         }
     }
 
@@ -237,17 +237,15 @@ impl SignedBlock {
     pub fn set_external_entrypoints(&mut self, entrypoints: Vec<TransactionEntrypoint>) {
         let merkle = entrypoints
             .iter()
-            .cloned()
             .map(|entrypoint| entrypoint.hash())
             .collect::<MerkleTree<TransactionEntrypoint>>();
-        self.payload.external_entrypoints = entrypoints.clone();
+        self.payload.external_entrypoints.clone_from(&entrypoints);
         self.payload.header.merkle_root = merkle.root();
         if let Some(result) = self.result.as_mut() {
             result.external_entrypoints = entrypoints;
             result.merkle = result
                 .external_entrypoints
                 .iter()
-                .cloned()
                 .map(|entrypoint| entrypoint.hash())
                 .chain(
                     result
@@ -437,9 +435,9 @@ struct ExternalTransactionIterator<'a> {
 
 impl<'a> ExternalTransactionIterator<'a> {
     fn new(block: &'a SignedBlock) -> Self {
-        let transactions: Vec<&SignedTransaction> = block
-            .external_entrypoints_slice()
-            .map(|entries| {
+        let transactions: Vec<&SignedTransaction> = block.external_entrypoints_slice().map_or_else(
+            || block.payload.transactions.iter().collect(),
+            |entries| {
                 entries
                     .iter()
                     .filter_map(|entry| match entry {
@@ -449,8 +447,8 @@ impl<'a> ExternalTransactionIterator<'a> {
                         }
                     })
                     .collect()
-            })
-            .unwrap_or_else(|| block.payload.transactions.iter().collect());
+            },
+        );
         let len = transactions.len();
         Self {
             transactions,

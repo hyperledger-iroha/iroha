@@ -481,7 +481,7 @@ impl SignedTransaction {
     }
 
     #[cfg(feature = "fault_injection")]
-    fn fault_injection_overlay(metadata: &Metadata) -> Option<Vec<String>> {
+    pub(crate) fn fault_injection_overlay(metadata: &Metadata) -> Option<Vec<String>> {
         metadata
             .get(&*FAULT_INJECTION_METADATA_NAME)
             .cloned()
@@ -489,7 +489,10 @@ impl SignedTransaction {
     }
 
     #[cfg(feature = "fault_injection")]
-    fn apply_fault_injection_overlay(metadata: &mut Metadata, additions: Vec<InstructionBox>) {
+    pub(crate) fn apply_fault_injection_overlay(
+        metadata: &mut Metadata,
+        additions: Vec<InstructionBox>,
+    ) {
         let mut combined = Self::fault_injection_overlay(metadata).unwrap_or_default();
         combined.extend(additions.into_iter().map(|instruction| {
             let bytes =

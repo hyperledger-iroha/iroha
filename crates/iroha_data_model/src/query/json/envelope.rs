@@ -91,6 +91,37 @@ pub enum QueryEnvelopeJson {
 
 impl Eq for QueryEnvelopeJson {}
 
+fn singular_payload<'a>(map: &'a Map) -> Result<&'a Map, QueryJsonError> {
+    map.get("payload")
+        .and_then(Value::as_object)
+        .ok_or(QueryJsonError::MissingField("singular", "payload"))
+}
+
+fn payload_required_string<'a>(
+    payload: &'a Map,
+    field: &'static str,
+) -> Result<&'a str, QueryJsonError> {
+    payload
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or(QueryJsonError::MissingField("payload", field))
+}
+
+fn payload_optional_string(
+    payload: &Map,
+    field: &'static str,
+) -> Result<Option<String>, QueryJsonError> {
+    payload
+        .get(field)
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or(QueryJsonError::InvalidField("payload", field))
+                .map(str::to_owned)
+        })
+        .transpose()
+}
+
 impl QueryEnvelopeJson {
     fn parse_map(map: &Map) -> Result<Self, QueryJsonError> {
         let mut singular: Option<&Value> = None;
@@ -193,6 +224,43 @@ pub enum SingularQueryJson {
 }
 
 impl SingularQueryJson {
+    fn parse_aliases(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindAliasesByAccountId {
+            account_id: payload_required_string(payload, "account_id")?.to_owned(),
+            dataspace: payload_optional_string(payload, "dataspace")?,
+            domain: payload_optional_string(payload, "domain")?,
+        })
+    }
+
+    fn parse_contract_manifest(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindContractManifestByCodeHash {
+            code_hash: payload_required_string(payload, "code_hash")?.to_owned(),
+        })
+    }
+
+    fn parse_asset_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindAssetById {
+            asset: payload_required_string(payload, "asset")?.to_owned(),
+            account_id: payload_required_string(payload, "account_id")?.to_owned(),
+            scope: payload.get("scope").cloned(),
+        })
+    }
+
+    fn parse_asset_definition(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindAssetDefinitionById {
+            asset: payload_required_string(payload, "asset")?.to_owned(),
+        })
+    }
+
+    fn parse_twitter_binding(payload: &Map) -> Result<Self, QueryJsonError> {
+        let binding_hash_value = payload
+            .get("binding_hash")
+            .ok_or(QueryJsonError::MissingField("payload", "binding_hash"))?;
+        let binding_hash = json::from_value::<crate::oracle::KeyedHash>(binding_hash_value.clone())
+            .map_err(|_| QueryJsonError::InvalidField("payload", "binding_hash"))?;
+        Ok(Self::FindTwitterBindingByHash { binding_hash })
+    }
+
     fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert(
@@ -263,97 +331,13 @@ impl SingularQueryJson {
             "FindAbiVersion" => Ok(SingularQueryJson::FindAbiVersion),
             "FindExecutorDataModel" => Ok(SingularQueryJson::FindExecutorDataModel),
             "FindParameters" => Ok(SingularQueryJson::FindParameters),
-            "FindAliasesByAccountId" => {
-                let payload = map
-                    .get("payload")
-                    .and_then(Value::as_object)
-                    .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
-                let account_id = payload
-                    .get("account_id")
-                    .and_then(Value::as_str)
-                    .ok_or(QueryJsonError::MissingField("payload", "account_id"))?;
-                let dataspace = payload
-                    .get("dataspace")
-                    .map(|value| {
-                        value
-                            .as_str()
-                            .ok_or(QueryJsonError::InvalidField("payload", "dataspace"))
-                            .map(str::to_owned)
-                    })
-                    .transpose()?;
-                let domain = payload
-                    .get("domain")
-                    .map(|value| {
-                        value
-                            .as_str()
-                            .ok_or(QueryJsonError::InvalidField("payload", "domain"))
-                            .map(str::to_owned)
-                    })
-                    .transpose()?;
-                Ok(SingularQueryJson::FindAliasesByAccountId {
-                    account_id: account_id.to_owned(),
-                    dataspace,
-                    domain,
-                })
-            }
+            "FindAliasesByAccountId" => Self::parse_aliases(singular_payload(map)?),
             "FindContractManifestByCodeHash" => {
-                let payload = map
-                    .get("payload")
-                    .and_then(Value::as_object)
-                    .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
-                let code_hash = payload
-                    .get("code_hash")
-                    .and_then(Value::as_str)
-                    .ok_or(QueryJsonError::MissingField("payload", "code_hash"))?;
-                Ok(SingularQueryJson::FindContractManifestByCodeHash {
-                    code_hash: code_hash.to_owned(),
-                })
+                Self::parse_contract_manifest(singular_payload(map)?)
             }
-            "FindAssetById" => {
-                let payload = map
-                    .get("payload")
-                    .and_then(Value::as_object)
-                    .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
-                let asset = payload
-                    .get("asset")
-                    .and_then(Value::as_str)
-                    .ok_or(QueryJsonError::MissingField("payload", "asset"))?;
-                let account_id = payload
-                    .get("account_id")
-                    .and_then(Value::as_str)
-                    .ok_or(QueryJsonError::MissingField("payload", "account_id"))?;
-                Ok(SingularQueryJson::FindAssetById {
-                    asset: asset.to_owned(),
-                    account_id: account_id.to_owned(),
-                    scope: payload.get("scope").cloned(),
-                })
-            }
-            "FindAssetDefinitionById" => {
-                let payload = map
-                    .get("payload")
-                    .and_then(Value::as_object)
-                    .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
-                let asset = payload
-                    .get("asset")
-                    .and_then(Value::as_str)
-                    .ok_or(QueryJsonError::MissingField("payload", "asset"))?;
-                Ok(SingularQueryJson::FindAssetDefinitionById {
-                    asset: asset.to_owned(),
-                })
-            }
-            "FindTwitterBindingByHash" => {
-                let payload = map
-                    .get("payload")
-                    .and_then(Value::as_object)
-                    .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
-                let binding_hash_value = payload
-                    .get("binding_hash")
-                    .ok_or(QueryJsonError::MissingField("payload", "binding_hash"))?;
-                let binding_hash =
-                    json::from_value::<crate::oracle::KeyedHash>(binding_hash_value.clone())
-                        .map_err(|_| QueryJsonError::InvalidField("payload", "binding_hash"))?;
-                Ok(SingularQueryJson::FindTwitterBindingByHash { binding_hash })
-            }
+            "FindAssetById" => Self::parse_asset_by_id(singular_payload(map)?),
+            "FindAssetDefinitionById" => Self::parse_asset_definition(singular_payload(map)?),
+            "FindTwitterBindingByHash" => Self::parse_twitter_binding(singular_payload(map)?),
             other => Err(QueryJsonError::UnknownSingularType(other.to_owned())),
         }
     }

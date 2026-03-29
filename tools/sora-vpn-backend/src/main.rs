@@ -2,7 +2,7 @@ use std::{
     env,
     ffi::OsStr,
     fs, io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, SocketAddr},
     process::{Command as ProcessCommand, ExitCode},
     sync::{Arc, Mutex},
 };
@@ -1058,6 +1058,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
     use super::*;
 
     #[test]
