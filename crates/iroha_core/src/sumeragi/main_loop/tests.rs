@@ -94299,7 +94299,7 @@ async fn reschedule_skips_vote_backed_quorum_timeout_while_progress_is_recent() 
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress() {
+async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_height() {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
@@ -94402,23 +94402,24 @@ async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progre
     actor.touch_pending_progress(block_hash, height, view_idx, non_vote_progress_at);
     let second_attempt_at = non_vote_progress_at + quorum_timeout + Duration::from_millis(1);
     assert!(
-        !actor.reschedule_stale_pending_blocks_with_now(second_attempt_at, None),
-        "vote-backed quorum timeout should not reschedule again without higher vote count"
+        actor.reschedule_stale_pending_blocks_with_now(second_attempt_at, None),
+        "terminal contiguous-frontier vote-backed recovery should rearm on cooldown even without higher vote count"
     );
     let pending_after = actor
         .pending
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
-    assert_eq!(
-        pending_after.last_quorum_reschedule,
-        Some(stale_reschedule),
-        "duplicate reschedule should not update the send gate"
+    assert!(
+        pending_after
+            .last_quorum_reschedule
+            .is_some_and(|at| at >= second_attempt_at),
+        "re-armed vote-backed recovery should refresh the resend gate at the new attempt instant"
     );
     let posts_after_second: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts_after_second.is_empty(),
-        "non-vote progress should not emit retransmit work"
+        !posts_after_second.is_empty(),
+        "re-armed terminal-height recovery should emit another retransmit burst"
     );
 
     harness.shutdown.send();
@@ -95190,7 +95191,7 @@ async fn reschedule_forces_after_backlog_extension_cap_reached() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
+async fn reschedule_ignores_quorum_timeout_vote_queue_backlog() {
     let _worker_guard = super::status::worker_queue_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -95215,28 +95216,12 @@ async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
 
     assert!(
-        !actor.reschedule_stale_pending_blocks(None),
-        "vote backlog should defer quorum reschedule"
-    );
-    let pending_after = actor
-        .pending
-        .pending_blocks
-        .get(&block_hash)
-        .expect("pending retained");
-    assert!(
-        pending_after.last_quorum_reschedule.is_none(),
-        "pending should not be quorum-rescheduled while vote queue is backlogged"
-    );
-
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
-
-    assert!(
         actor.reschedule_stale_pending_blocks(None),
-        "clearing vote backlog should allow quorum reschedule"
+        "generic vote queue depth should not suppress quorum-timeout recovery"
     );
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
-        "zero-vote reschedule should drop the pending block once vote backlog clears"
+        "zero-vote reschedule should drop the pending block even while vote ingress is queued"
     );
 
     harness.shutdown.send();

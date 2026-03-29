@@ -6117,24 +6117,12 @@ impl Actor {
                 .any(|key| key.1 == frontier_height)
     }
 
-    fn frontier_recovery_same_slot_vote_backed_recovery_active(
+    fn frontier_recovery_same_slot_vote_backed_work_active(
         &self,
         frontier_height: u64,
         frontier_view: u64,
         now: Instant,
     ) -> bool {
-        let frontier_slot_vote_backed = self.frontier_slot_is_exact_height(frontier_height)
-            && self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == frontier_height
-                    && slot.view <= frontier_view
-                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
-                    && (slot.quorum_progress.votes_observed
-                        || slot.quorum_progress.commit_qc_observed
-                        || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
-            });
-        if frontier_slot_vote_backed {
-            return true;
-        }
         let window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -6233,6 +6221,31 @@ impl Actor {
                 .highest_qc_missing_defer_markers
                 .iter()
                 .any(|(height, view, _)| *height == frontier_height && *view == frontier_view)
+    }
+
+    fn frontier_recovery_same_slot_vote_backed_recovery_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> bool {
+        let frontier_slot_vote_backed = self.frontier_slot_is_exact_height(frontier_height)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height
+                    && slot.view <= frontier_view
+                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
+                    && (slot.quorum_progress.votes_observed
+                        || slot.quorum_progress.commit_qc_observed
+                        || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
+            });
+        if frontier_slot_vote_backed {
+            return true;
+        }
+        self.frontier_recovery_same_slot_vote_backed_work_active(
+            frontier_height,
+            frontier_view,
+            now,
+        )
     }
 
     fn frontier_recovery_same_slot_missing_payload_recovery_active(
@@ -6934,6 +6947,46 @@ impl Actor {
                 progress_age >= stall_grace && progress_age < quorum_timeout
             })
             .count()
+    }
+
+    pub(super) fn quorum_recovery_vote_drain_urgent(&self) -> bool {
+        let now = Instant::now();
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let votes_waiting = queue_depths.vote_rx > 0;
+        let quorum_timeout = self.quorum_timeout(self.runtime_da_enabled());
+        if quorum_timeout == Duration::ZERO {
+            return false;
+        }
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+
+        self.pending.pending_blocks.iter().any(|(hash, pending)| {
+            if pending.aborted
+                || !pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+            {
+                return false;
+            }
+
+            let has_vote_evidence = pending.local_commit_vote_emitted()
+                || pending.commit_qc_observed()
+                || self.pending_block_has_votes(*hash, pending.height, pending.view)
+                || self.pending_block_has_qc(*hash, pending.height, pending.view);
+            if !has_vote_evidence && !votes_waiting {
+                return false;
+            }
+
+            let stall_age = if has_vote_evidence {
+                pending.progress_age(now)
+            } else {
+                now.saturating_duration_since(pending.inserted_at)
+            };
+            stall_age >= quorum_timeout
+        })
     }
 
     fn has_blocking_pending_blocks(&self) -> bool {
