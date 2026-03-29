@@ -1457,8 +1457,9 @@ pub struct KaigiCallViewDto {
     pub domain: String,
     /// Call-name component of the call identifier.
     pub call_name: String,
-    /// Host authority currently recorded on-chain.
-    pub host_account_id: String,
+    /// Host authority currently recorded on-chain (transparent mode only).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub host_account_id: Option<String>,
     /// Optional billing authority used for settlement.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub billing_account_id: Option<String>,
@@ -1523,8 +1524,9 @@ pub struct KaigiCallViewDto {
 pub struct KaigiCallSignalDto {
     /// Entrypoint hash of the transaction carrying the signal.
     pub entrypoint_hash: String,
-    /// Authority that submitted the signal transaction.
-    pub authority: String,
+    /// Authority that submitted the signal transaction (transparent mode only).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub authority: Option<String>,
     /// Optional transaction creation timestamp.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub timestamp_ms: Option<u64>,
@@ -1759,15 +1761,21 @@ fn load_kaigi_record(
 
 #[cfg(feature = "app_api")]
 fn kaigi_call_view_from_record(record: &iroha_data_model::kaigi::KaigiRecord) -> KaigiCallViewDto {
+    let reveal_authorities =
+        record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
     KaigiCallViewDto {
         call_id: record.id.to_string(),
         domain: record.id.domain_id.to_string(),
         call_name: record.id.call_name.to_string(),
-        host_account_id: crate::account_literal::display_literal(&record.host),
-        billing_account_id: record
-            .billing_account
-            .as_ref()
-            .map(crate::account_literal::display_literal),
+        host_account_id: reveal_authorities
+            .then(|| crate::account_literal::display_literal(&record.host)),
+        billing_account_id: reveal_authorities.then(|| {
+            record
+                .billing_account
+                .as_ref()
+                .map(crate::account_literal::display_literal)
+        })
+        .flatten(),
         title: record.title.clone(),
         description: record.description.clone(),
         max_participants: record.max_participants,
@@ -1820,6 +1828,7 @@ fn kaigi_metadata_u64(value: &Value, keys: &[&str]) -> Option<u64> {
 #[cfg(feature = "app_api")]
 fn kaigi_signal_from_transaction(
     tx: &iroha_data_model::query::CommittedTransaction,
+    reveal_authorities: bool,
 ) -> Option<KaigiCallSignalDto> {
     let TransactionEntrypoint::External(signed) = tx.entrypoint() else {
         return None;
@@ -1839,15 +1848,22 @@ fn kaigi_signal_from_transaction(
 
     Some(KaigiCallSignalDto {
         entrypoint_hash: tx.entrypoint_hash().to_string(),
-        authority: crate::account_literal::display_literal(signed.authority()),
+        authority: reveal_authorities
+            .then(|| crate::account_literal::display_literal(signed.authority())),
         timestamp_ms,
         call_id,
         signal_kind,
-        host_account_id: kaigi_metadata_string(&signal_json, &["hostAccountId", "host_account_id"]),
-        participant_account_id: kaigi_metadata_string(
-            &signal_json,
-            &["participantAccountId", "participant_account_id"],
-        ),
+        host_account_id: reveal_authorities.then(|| {
+            kaigi_metadata_string(&signal_json, &["hostAccountId", "host_account_id"])
+        })
+        .flatten(),
+        participant_account_id: reveal_authorities.then(|| {
+            kaigi_metadata_string(
+                &signal_json,
+                &["participantAccountId", "participant_account_id"],
+            )
+        })
+        .flatten(),
         created_at_ms,
         metadata: IrohaJson::from(signal_json),
     })
@@ -19468,7 +19484,7 @@ mod sorafs_capacity_tests {
                 micropayment_probability_bps: 10_000,
                 micropayment_payout_nano: 50_000_000,
             },
-            metadata: Metadata::default(),
+            metadata: dm::Metadata::default(),
         };
 
         let record = node
@@ -24650,11 +24666,88 @@ mod tx_query_filter_tests {
             metadata,
         );
 
-        let signal = kaigi_signal_from_transaction(&tx).expect("signal should parse");
+        let signal = kaigi_signal_from_transaction(&tx, true).expect("signal should parse");
+        let authority_literal = authority.to_string();
         assert_eq!(signal.call_id, "kaigi:weekly-sync");
         assert_eq!(signal.signal_kind, "answer");
         assert_eq!(signal.created_at_ms, 1_700_000_000_000);
         assert_eq!(signal.timestamp_ms, Some(1_700_000_000_100));
+        assert_eq!(signal.authority.as_deref(), Some(authority_literal.as_str()));
+        assert_eq!(
+            signal.participant_account_id.as_deref(),
+            Some(authority_literal.as_str())
+        );
+    }
+
+    #[test]
+    fn kaigi_signal_from_transaction_hides_identities_for_private_calls() {
+        let (authority, keypair) = account_with_key();
+        let mut metadata = dm::Metadata::default();
+        metadata.insert(
+            "kaigi_signal".parse().expect("metadata key"),
+            Json::new(crate::json_object(vec![
+                crate::json_entry("schema", "iroha-demo-kaigi-chain-signal/v1"),
+                crate::json_entry("callId", "kaigi:weekly-sync"),
+                crate::json_entry("signalKind", "answer"),
+                crate::json_entry("hostAccountId", authority.to_string()),
+                crate::json_entry("participantAccountId", authority.to_string()),
+                crate::json_entry("createdAtMs", 1_700_000_000_000_u64),
+            ])),
+        );
+
+        let tx = make_external_tx_with_metadata(
+            &authority,
+            &keypair,
+            1_700_000_000_100,
+            None,
+            true,
+            metadata,
+        );
+
+        let signal = kaigi_signal_from_transaction(&tx, false).expect("signal should parse");
+        assert_eq!(signal.call_id, "kaigi:weekly-sync");
+        assert!(signal.authority.is_none());
+        assert!(signal.host_account_id.is_none());
+        assert!(signal.participant_account_id.is_none());
+    }
+
+    #[test]
+    fn kaigi_call_view_hides_host_identity_for_private_calls() {
+        let (host, _) = account_with_key();
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            "kaigi".parse().expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let record = iroha_data_model::kaigi::KaigiRecord {
+            id: call_id,
+            host,
+            billing_account: None,
+            title: Some("Weekly Sync".to_owned()),
+            description: None,
+            max_participants: Some(1),
+            gas_rate_per_minute: 0,
+            metadata: Metadata::default(),
+            scheduled_start_ms: Some(1_700_000_000_000),
+            privacy_mode: iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1,
+            room_policy: iroha_data_model::kaigi::KaigiRoomPolicy::Authenticated,
+            relay_manifest: None,
+            participants: Vec::new(),
+            participant_metadata: std::collections::BTreeMap::new(),
+            roster_root: Hash::prehashed([0x44; Hash::LENGTH]).into(),
+            roster_commitments: Vec::new(),
+            nullifier_log: Vec::new(),
+            usage_commitments: Vec::new(),
+            status: iroha_data_model::kaigi::KaigiStatus::Active,
+            created_at_ms: 1_700_000_000_000,
+            ended_at_ms: None,
+            total_duration_ms: 0,
+            total_billed_gas: 0,
+            segments_recorded: 0,
+        };
+
+        let view = kaigi_call_view_from_record(&record);
+        assert!(view.host_account_id.is_none());
+        assert!(view.billing_account_id.is_none());
     }
 
     #[test]
@@ -30894,7 +30987,9 @@ pub async fn handle_v1_kaigi_call_signals(
     call_id: KaigiId,
     crate::NoritoQuery(params): crate::NoritoQuery<KaigiCallSignalsParams>,
 ) -> Result<AxResponse, Error> {
-    let _ = load_kaigi_record(state.as_ref(), &call_id)?;
+    let record = load_kaigi_record(state.as_ref(), &call_id)?;
+    let reveal_authorities =
+        record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
     let after_timestamp_ms = params.after_timestamp_ms;
     let limit = params
         .limit
@@ -30909,7 +31004,7 @@ pub async fn handle_v1_kaigi_call_signals(
     let call_literal = call_id.to_string();
     let mut items = committed_transactions_snapshot(state.as_ref())
         .into_iter()
-        .filter_map(|tx| kaigi_signal_from_transaction(&tx))
+        .filter_map(|tx| kaigi_signal_from_transaction(&tx, reveal_authorities))
         .filter(|signal| signal.call_id == call_literal)
         .filter(|signal| {
             after_timestamp_ms.is_none_or(|minimum| {

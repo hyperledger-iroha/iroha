@@ -21600,10 +21600,10 @@ function normalizeKaigiCallView(payload) {
     call_id: requireNonEmptyString(record.call_id, "kaigi call.call_id"),
     domain: requireNonEmptyString(record.domain, "kaigi call.domain"),
     call_name: requireNonEmptyString(record.call_name, "kaigi call.call_name"),
-    host_account_id: requireNonEmptyString(
-      record.host_account_id,
-      "kaigi call.host_account_id",
-    ),
+    host_account_id:
+      record.host_account_id === null || record.host_account_id === undefined
+        ? undefined
+        : requireNonEmptyString(record.host_account_id, "kaigi call.host_account_id"),
     billing_account_id:
       record.billing_account_id === null || record.billing_account_id === undefined
         ? undefined
@@ -21713,7 +21713,10 @@ function normalizeKaigiCallSignal(payload, context) {
       record.entrypoint_hash,
       `${context}.entrypoint_hash`,
     ),
-    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    authority:
+      record.authority === null || record.authority === undefined
+        ? undefined
+        : requireNonEmptyString(record.authority, `${context}.authority`),
     timestamp_ms:
       record.timestamp_ms === null || record.timestamp_ms === undefined
         ? undefined

@@ -4291,7 +4291,7 @@ export interface KaigiCallView {
   call_id: string;
   domain: string;
   call_name: string;
-  host_account_id: string;
+  host_account_id?: string | null;
   billing_account_id?: string | null;
   title?: string | null;
   description?: string | null;
@@ -4317,7 +4317,7 @@ export interface KaigiCallView {
 
 export interface KaigiCallSignal {
   entrypoint_hash: string;
-  authority: string;
+  authority?: string | null;
   timestamp_ms?: number | null;
   call_id: string;
   signal_kind: string;
@@ -4418,6 +4418,23 @@ export interface ConfidentialKeyset {
   ovkHex: string;
   fvkHex: string;
   asHex(): Record<string, string>;
+}
+
+export interface KaigiRosterJoinProof {
+  commitment: Buffer;
+  nullifier: Buffer;
+  rosterRoot: Buffer;
+  proof: Buffer;
+  commitmentHex: string;
+  nullifierHex: string;
+  rosterRootHex: string;
+  proofBase64: string;
+}
+
+export interface KaigiRosterJoinProofOptions {
+  seed: ArrayBufferView | ArrayBuffer | Buffer;
+  rosterRootHex?: string | null;
+  roster_root_hex?: string | null;
 }
 
 export interface RegisterDomainInput {
@@ -7528,6 +7545,10 @@ export function verifySm2(
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
   distid?: string,
 ): boolean;
+
+export function buildKaigiRosterJoinProof(
+  options: KaigiRosterJoinProofOptions,
+): KaigiRosterJoinProof;
 
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,

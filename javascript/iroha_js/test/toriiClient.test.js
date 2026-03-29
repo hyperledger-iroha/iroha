@@ -13570,7 +13570,6 @@ test("getKaigiCall returns null on 404 and normalizes call views", async () => {
         call_id: callId,
         domain: "kaigi",
         call_name: "demo-room",
-        host_account_id: FIXTURE_ALICE_ID,
         title: "Weekly Sync",
         gas_rate_per_minute: 0,
         metadata: {
@@ -13604,6 +13603,7 @@ test("getKaigiCall returns null on 404 and normalizes call views", async () => {
   assert.equal(call?.call_id, callId);
   assert.equal(call?.privacy_mode, "private");
   assert.equal(call?.participant_count, 1);
+  assert.equal(call?.host_account_id, undefined);
   assert.equal(call?.relay_manifest?.expiryMs, 1700000001000);
 });
 
@@ -13620,12 +13620,9 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
         items: [
           {
             entrypoint_hash: "deadbeef",
-            authority: FIXTURE_BOB_ID,
             timestamp_ms: "1700000000100",
             call_id: callId,
             signal_kind: "answer",
-            host_account_id: FIXTURE_ALICE_ID,
-            participant_account_id: FIXTURE_BOB_ID,
             created_at_ms: "1700000000000",
             metadata: {
               schema: "iroha-demo-kaigi-chain-signal/v1",
@@ -13648,6 +13645,8 @@ test("listKaigiCallSignals encodes filters and normalizes payloads", async () =>
   assert.ok(requested?.includes("offset=2"));
   assert.equal(signals.total, 1);
   assert.equal(signals.items[0].signal_kind, "answer");
+  assert.equal(signals.items[0].authority, undefined);
+  assert.equal(signals.items[0].participant_account_id, undefined);
   assert.equal(signals.items[0].created_at_ms, 1700000000000);
 });
 
