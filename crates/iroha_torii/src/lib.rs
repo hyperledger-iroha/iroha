@@ -1277,6 +1277,7 @@ struct AppState {
     offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_lineage::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
+    vpn_helper_ticket_secret: Option<[u8; 32]>,
     vpn_sessions: Arc<DashMap<String, vpn::VpnSessionRecord>>,
     vpn_receipts: Arc<DashMap<String, Vec<vpn::VpnReceiptRecord>>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
@@ -10700,8 +10701,58 @@ fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
     );
 }
 
-fn signed_query_requires_fanout(request: &iroha_data_model::query::QueryRequest) -> bool {
-    !matches!(request, iroha_data_model::query::QueryRequest::Continue(_))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SignedQueryScope {
+    LocalReplicated,
+    AuthorityRouted,
+    CrossDataspaceFanout,
+}
+
+fn payload_matches_query<Query>(payload: &[u8]) -> bool
+where
+    Query: norito::codec::Decode,
+{
+    payload.is_empty() || norito::decode_from_bytes::<Query>(payload).is_ok()
+}
+
+fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
+    use iroha_data_model::{
+        query::{
+            QueryItemKind, iter_query_inner,
+            trigger::prelude::{FindActiveTriggerIds, FindTriggers},
+        },
+        trigger::{Trigger, TriggerId},
+    };
+
+    if let Some(query_box) = query.query_box() {
+        if let Some(erased) = iter_query_inner::<Trigger>(query_box) {
+            return payload_matches_query::<FindTriggers>(erased.payload());
+        }
+        if let Some(erased) = iter_query_inner::<TriggerId>(query_box) {
+            return payload_matches_query::<FindActiveTriggerIds>(erased.payload());
+        }
+        return false;
+    }
+
+    query
+        .fast_dsl_parts()
+        .is_some_and(|(item_kind, _, _, payload)| match item_kind {
+            QueryItemKind::Trigger => payload_matches_query::<FindTriggers>(payload),
+            QueryItemKind::TriggerId => payload_matches_query::<FindActiveTriggerIds>(payload),
+            _ => false,
+        })
+}
+
+fn signed_query_scope(request: &iroha_data_model::query::QueryRequest) -> SignedQueryScope {
+    match request {
+        iroha_data_model::query::QueryRequest::Continue(_) => SignedQueryScope::AuthorityRouted,
+        iroha_data_model::query::QueryRequest::Start(query)
+            if is_trigger_inventory_query(query) =>
+        {
+            SignedQueryScope::LocalReplicated
+        }
+        _ => SignedQueryScope::CrossDataspaceFanout,
+    }
 }
 
 fn clone_verified_query_request(
@@ -19008,7 +19059,8 @@ async fn handler_post_transaction(
             dataspace = routing_decision.dataspace_id.as_u64(),
             queue_depth,
             high_load_tx_threshold = app.high_load_tx_threshold,
-            oldest_tracked_tx_age_ms = queue_pressure.oldest_tracked_tx_age_ms,
+            queued_tx_count = queue_pressure.queued_tx_count,
+            oldest_queued_tx_age_ms = queue_pressure.oldest_queued_tx_age_ms,
             queue_pressure_saturated_by_count = queue_pressure.saturated_by_count,
             queue_pressure_saturated_by_age = queue_pressure.saturated_by_age,
             backpressure = ?queue_pressure.into_backpressure(),
@@ -19577,19 +19629,26 @@ async fn handler_signed_query(
         }
     }
 
+    let query_scope = signed_query_scope(query_request.request());
+
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-    if signed_query_requires_fanout(query_request.request())
+    if matches!(query_scope, SignedQueryScope::CrossDataspaceFanout)
         && torii_all_dataspace_routes(app.as_ref()).len() > 1
     {
         let verified_query = routing::verify_signed_query_request(&query_request)?;
         return Ok(execute_torii_query_via_fanout(&app, verified_query, format).await);
     }
 
-    let routing_decision = match resolve_signed_query_routing(app.as_ref(), &query_request) {
-        Ok(decision) => Some(decision),
-        Err(error) => {
-            iroha_logger::warn!(%error, "failed to resolve signed query routing at ingress");
-            None
+    let routing_decision = match query_scope {
+        SignedQueryScope::LocalReplicated => None,
+        SignedQueryScope::AuthorityRouted | SignedQueryScope::CrossDataspaceFanout => {
+            match resolve_signed_query_routing(app.as_ref(), &query_request) {
+                Ok(decision) => Some(decision),
+                Err(error) => {
+                    iroha_logger::warn!(%error, "failed to resolve signed query routing at ingress");
+                    None
+                }
+            }
         }
     };
 
@@ -21634,6 +21693,7 @@ pub struct Torii {
     offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_lineage::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
+    vpn_helper_ticket_secret: Option<[u8; 32]>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
 }
 
@@ -21644,6 +21704,7 @@ pub struct ToriiRuntimeDeps {
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
+    vpn_helper_ticket_secret: Option<[u8; 32]>,
 }
 
 impl ToriiRuntimeDeps {
@@ -21655,6 +21716,7 @@ impl ToriiRuntimeDeps {
             soracloud_runtime: None,
             sorafs_node: None,
             sorafs_cache: None,
+            vpn_helper_ticket_secret: None,
         }
     }
 
@@ -21679,6 +21741,13 @@ impl ToriiRuntimeDeps {
         sorafs_cache: Arc<RwLock<sorafs::ProviderAdvertCache>>,
     ) -> Self {
         self.sorafs_cache = Some(sorafs_cache);
+        self
+    }
+
+    /// Attach the shared secret used to mint helper-authenticated VPN tickets.
+    #[must_use]
+    pub fn with_vpn_helper_ticket_secret(mut self, secret: Option<[u8; 32]>) -> Self {
+        self.vpn_helper_ticket_secret = secret;
         self
     }
 }
@@ -23532,6 +23601,7 @@ impl Torii {
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
+        let vpn_helper_ticket_secret = runtime_deps.vpn_helper_ticket_secret;
         routing::debug_match_flag::set_from_config(config.debug_match_filters);
         routing::set_app_query_limits(routing::AppQueryLimits::new(
             config.app_api.default_list_limit.get().into(),
@@ -24068,6 +24138,7 @@ impl Torii {
             offline_policy_snapshot,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
+            vpn_helper_ticket_secret,
             soracloud_runtime,
         }
     }
@@ -24382,6 +24453,7 @@ impl Torii {
             offline_policy_snapshot: self.offline_policy_snapshot.clone(),
             #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
+            vpn_helper_ticket_secret: self.vpn_helper_ticket_secret,
             vpn_sessions: Arc::new(DashMap::new()),
             vpn_receipts: Arc::new(DashMap::new()),
             soracloud_runtime: self.soracloud_runtime.clone(),
@@ -26430,6 +26502,142 @@ pub(crate) mod tests_runtime_handlers {
         World::with([domain], [account], [])
     }
 
+    fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppState) {
+        let secondary_dataspace = DataSpaceId::new(1);
+        let secondary_lane = LaneId::new(1);
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: secondary_lane,
+                    dataspace_id: secondary_dataspace,
+                    alias: "secondary".to_owned(),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: secondary_dataspace,
+                alias: "secondary".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+
+        let app_state = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+        state.set_nexus(nexus.clone()).expect("apply nexus config");
+        let state_view = app_state.state.view();
+        app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    }
+
+    #[derive(Default)]
+    struct CapturingIterableQueryExecutor {
+        query: Mutex<Option<iroha_data_model::query::QueryWithParams>>,
+    }
+
+    impl CapturingIterableQueryExecutor {
+        fn into_query(self) -> iroha_data_model::query::QueryWithParams {
+            self.query
+                .into_inner()
+                .expect("capture mutex should not be poisoned")
+                .expect("query builder should have captured a query")
+        }
+    }
+
+    impl iroha_data_model::query::builder::QueryExecutor for CapturingIterableQueryExecutor {
+        type Cursor = ();
+        type Error = ();
+
+        fn execute_singular_query(
+            &self,
+            _query: iroha_data_model::query::SingularQueryBox,
+        ) -> Result<iroha_data_model::query::SingularQueryOutputBox, Self::Error> {
+            unreachable!("capturing executor should only be used for iterable queries")
+        }
+
+        fn start_query(
+            &self,
+            query: iroha_data_model::query::QueryWithParams,
+        ) -> Result<
+            (
+                iroha_data_model::query::QueryOutputBatchBoxTuple,
+                u64,
+                Option<Self::Cursor>,
+            ),
+            Self::Error,
+        > {
+            *self.query.lock().expect("capture mutex should lock") = Some(query);
+            Err(())
+        }
+
+        fn continue_query(
+            _cursor: Self::Cursor,
+        ) -> Result<
+            (
+                iroha_data_model::query::QueryOutputBatchBoxTuple,
+                u64,
+                Option<Self::Cursor>,
+            ),
+            Self::Error,
+        > {
+            unreachable!("capturing executor should not continue queries")
+        }
+    }
+
+    fn build_find_triggers_query_for_test() -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::query::trigger::prelude::FindTriggers,
+        )
+        .execute();
+        executor.into_query()
+    }
+
+    fn build_find_active_trigger_ids_query_for_test() -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
+        )
+        .execute();
+        executor.into_query()
+    }
+
+    fn signed_find_triggers_query_for_test(
+        authority: AccountId,
+        key_pair: &KeyPair,
+    ) -> iroha_data_model::query::SignedQuery {
+        iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test())
+            .with_authority(authority)
+            .sign(key_pair)
+    }
+
+    fn signed_find_active_trigger_ids_query_for_test(
+        authority: AccountId,
+        key_pair: &KeyPair,
+    ) -> iroha_data_model::query::SignedQuery {
+        iroha_data_model::query::QueryRequest::Start(build_find_active_trigger_ids_query_for_test())
+            .with_authority(authority)
+            .sign(key_pair)
+    }
+
     #[cfg(feature = "app_api")]
     pub(crate) fn bind_account_alias_for_test(
         app: &SharedAppState,
@@ -26828,6 +27036,7 @@ pub(crate) mod tests_runtime_handlers {
             )),
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
+            vpn_helper_ticket_secret: None,
             vpn_sessions: Arc::new(DashMap::new()),
             vpn_receipts: Arc::new(DashMap::new()),
             soracloud_runtime: None,
@@ -27275,6 +27484,156 @@ pub(crate) mod tests_runtime_handlers {
             Some("PRTRY:QUEUE_FULL")
         );
         assert_eq!(app.queue.active_len(), 1);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_old() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .high_load_tx_threshold = usize::MAX;
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "age-inflight-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "age-inflight-2".to_string())])
+            .sign(keypair.private_key());
+
+        let _ = app
+            .queue
+            .refresh_pressure_budget_from_block_time(Duration::ZERO);
+
+        let first = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx1),
+        )
+        .await
+        .expect("first transaction should be accepted")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
+        let mut guards = Vec::new();
+        app.queue.get_transactions_for_block(
+            &app.state.view(),
+            NonZeroUsize::new(1).expect("nonzero tx count"),
+            &mut guards,
+        );
+        assert_eq!(guards.len(), 1, "queue should expose one in-flight guard");
+        assert_eq!(app.queue.queued_len(), 0, "no queued transactions remain");
+
+        std::thread::sleep(Duration::from_millis(2_100));
+
+        let second = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx2),
+        )
+        .await
+        .expect("second transaction should not be age-shed")
+        .into_response();
+        assert_eq!(second.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            app.queue.queued_len(),
+            1,
+            "second transaction should enqueue"
+        );
+
+        drop(guards);
+    }
+
+    #[test]
+    fn signed_query_scope_classifies_trigger_inventory_queries_as_local_replicated() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+
+        let find_triggers = signed_find_triggers_query_for_test(authority.clone(), &key_pair);
+        assert_eq!(
+            super::signed_query_scope(find_triggers.payload.request()),
+            super::SignedQueryScope::LocalReplicated
+        );
+
+        let find_active_ids = signed_find_active_trigger_ids_query_for_test(authority, &key_pair);
+        assert_eq!(
+            super::signed_query_scope(find_active_ids.payload.request()),
+            super::SignedQueryScope::LocalReplicated
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_signed_query_executes_find_triggers_locally_with_multiple_dataspaces() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_multiple_dataspace_routes_for_test(&mut app);
+        assert!(
+            super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
+            "test requires multiple dataspace routes"
+        );
+
+        let response = super::handler_signed_query(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            NoritoVersioned(signed_find_triggers_query_for_test(authority, &key_pair)),
+        )
+        .await
+        .expect("find triggers query should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers().get("x-iroha-routed-by").is_none(),
+            "local trigger queries should not fan out"
+        );
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "local trigger queries should not publish a routed lane"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_signed_query_executes_find_active_trigger_ids_locally_with_multiple_dataspaces()
+     {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_multiple_dataspace_routes_for_test(&mut app);
+        assert!(
+            super::torii_all_dataspace_routes(app.as_ref()).len() > 1,
+            "test requires multiple dataspace routes"
+        );
+
+        let response = super::handler_signed_query(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            NoritoVersioned(signed_find_active_trigger_ids_query_for_test(
+                authority, &key_pair,
+            )),
+        )
+        .await
+        .expect("find active trigger ids query should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers().get("x-iroha-routed-by").is_none(),
+            "local trigger queries should not fan out"
+        );
+        assert!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .is_none(),
+            "local trigger queries should not publish a routed dataspace"
+        );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]

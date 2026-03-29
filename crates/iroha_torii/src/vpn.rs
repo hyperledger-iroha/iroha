@@ -7,8 +7,10 @@ use axum::{
 use iroha_config::client_api::ConfigGetDTO;
 use iroha_core::kiso::KisoHandle;
 use iroha_data_model::{
-    ValidationFail, account::AccountId, query::error::QueryExecutionFail,
-    soranet::vpn::VpnExitClassV1,
+    ValidationFail,
+    account::AccountId,
+    query::error::QueryExecutionFail,
+    soranet::vpn::{VpnExitClassV1, VpnHelperTicketV1},
 };
 
 use crate::{Error, SharedAppState};
@@ -263,8 +265,26 @@ fn build_session_id(account_id: &AccountId, exit_class: &str, nonce: &str, now_m
     )
 }
 
-fn build_helper_ticket_hex(session_id: &str) -> String {
-    hex::encode(blake3::hash(format!("{session_id}:helper").as_bytes()).as_bytes())
+fn relay_session_id_from_session_id(session_id: &str) -> [u8; 16] {
+    let digest = blake3::hash(session_id.as_bytes());
+    let mut session_key = [0u8; 16];
+    session_key.copy_from_slice(&digest.as_bytes()[..16]);
+    session_key
+}
+
+fn build_helper_ticket_hex(
+    session_id: &str,
+    expires_at_ms: u64,
+    secret: Option<&[u8; 32]>,
+) -> String {
+    match secret {
+        Some(secret) => VpnHelperTicketV1 {
+            session_id: relay_session_id_from_session_id(session_id),
+            expires_at_ms,
+        }
+        .to_hex(secret),
+        None => hex::encode(blake3::hash(format!("{session_id}:helper").as_bytes()).as_bytes()),
+    }
 }
 
 fn response_from_record(record: &VpnSessionRecord) -> VpnSessionResponseDto {
@@ -424,8 +444,12 @@ pub(crate) async fn handle_create_vpn_session(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("vpn");
     let session_id = build_session_id(&account_id, &exit_class, nonce, current_ms);
-    let helper_ticket_hex = build_helper_ticket_hex(&session_id);
     let expires_at_ms = current_ms.saturating_add(profile.lease_secs.saturating_mul(1_000));
+    let helper_ticket_hex = build_helper_ticket_hex(
+        &session_id,
+        expires_at_ms,
+        app.vpn_helper_ticket_secret.as_ref(),
+    );
     let record = VpnSessionRecord {
         session_id: session_id.clone(),
         account_id,
@@ -595,6 +619,21 @@ mod tests {
         assert!(!body.relay_endpoint.trim().is_empty());
         assert_eq!(body.mtu_bytes, DEFAULT_VPN_MTU_BYTES);
         assert_eq!(body.tunnel_addresses, default_tunnel_addresses());
+    }
+
+    #[test]
+    fn helper_ticket_uses_versioned_ticket_when_secret_is_present() {
+        let secret = [0x5A; 32];
+        let session_id = "sess_live";
+        let expires_at_ms = 50_000;
+        let encoded = build_helper_ticket_hex(session_id, expires_at_ms, Some(&secret));
+        let parsed =
+            VpnHelperTicketV1::parse_hex(&encoded, &secret, 1).expect("ticket should parse");
+        assert_eq!(
+            relay_session_id_from_session_id(session_id),
+            parsed.session_id
+        );
+        assert_eq!(expires_at_ms, parsed.expires_at_ms);
     }
 
     #[tokio::test]

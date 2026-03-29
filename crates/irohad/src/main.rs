@@ -4769,7 +4769,8 @@ impl Iroha {
         });
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
-            .with_sorafs_node(sorafs_node);
+            .with_sorafs_node(sorafs_node)
+            .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
             runtime_deps.with_sorafs_cache(cache)
         } else {

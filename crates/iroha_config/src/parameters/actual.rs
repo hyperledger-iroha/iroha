@@ -1001,6 +1001,8 @@ pub struct SoranetVpn {
     pub exit_class: String,
     /// Meter family identifier for billing receipts.
     pub meter_family: String,
+    /// Optional 32-byte shared secret used to mint helper-authenticated VPN tickets.
+    pub helper_ticket_secret: Option<[u8; 32]>,
 }
 
 impl Default for SoranetVpn {
@@ -1019,6 +1021,7 @@ impl Default for SoranetVpn {
             dns_push_interval: defaults::soranet::vpn::dns_push_interval_secs(),
             exit_class: defaults::soranet::vpn::EXIT_CLASS.to_string(),
             meter_family: defaults::soranet::vpn::METER_FAMILY.to_string(),
+            helper_ticket_secret: None,
         }
     }
 }

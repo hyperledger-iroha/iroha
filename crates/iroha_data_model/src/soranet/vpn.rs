@@ -21,6 +21,10 @@ use super::RelayId;
 
 /// Fixed-length cell size used by the VPN tunnel.
 pub const VPN_CELL_LEN: usize = 1_024;
+/// Magic prefix used by helper-authenticated VPN tickets.
+pub const VPN_HELPER_TICKET_MAGIC: &[u8; 8] = b"SVPNHT1\0";
+/// Fixed byte length of a helper-authenticated VPN ticket.
+pub const VPN_HELPER_TICKET_LEN: usize = 64;
 
 /// Header serialization length (bytes).
 const VPN_HEADER_LEN: usize = 42;
@@ -682,6 +686,157 @@ pub struct VpnSessionReceiptV1 {
     pub meter_hash: [u8; 32],
 }
 
+/// Helper-authenticated ticket carried by the local VPN controller when opening a relay session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VpnHelperTicketV1 {
+    /// Session identifier bound to the tunnel runtime.
+    pub session_id: [u8; 16],
+    /// Absolute expiry time in milliseconds since the Unix epoch.
+    pub expires_at_ms: u64,
+}
+
+impl VpnHelperTicketV1 {
+    /// Serialize the helper ticket into its fixed-length on-wire representation.
+    #[must_use]
+    pub fn to_bytes(&self, secret: &[u8; 32]) -> [u8; VPN_HELPER_TICKET_LEN] {
+        let mut bytes = [0u8; VPN_HELPER_TICKET_LEN];
+        bytes[..VPN_HELPER_TICKET_MAGIC.len()].copy_from_slice(VPN_HELPER_TICKET_MAGIC);
+        let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
+        bytes[cursor..cursor + self.session_id.len()].copy_from_slice(&self.session_id);
+        cursor += self.session_id.len();
+        bytes[cursor..cursor + 8].copy_from_slice(&self.expires_at_ms.to_be_bytes());
+        cursor += 8;
+        let mac = helper_ticket_mac(secret, &bytes[..cursor]);
+        let mac_bytes = mac.as_bytes();
+        bytes[cursor..cursor + mac_bytes.len()].copy_from_slice(mac_bytes);
+        bytes
+    }
+
+    /// Serialize the helper ticket as hex for transport through JSON control-plane payloads.
+    #[must_use]
+    pub fn to_hex(&self, secret: &[u8; 32]) -> String {
+        hex::encode(self.to_bytes(secret))
+    }
+
+    /// Return `true` when the supplied bytes look like a helper-auth ticket.
+    #[must_use]
+    pub fn looks_like(bytes: &[u8]) -> bool {
+        bytes.len() == VPN_HELPER_TICKET_LEN && bytes.starts_with(VPN_HELPER_TICKET_MAGIC)
+    }
+
+    /// Parse and verify a helper-authenticated ticket.
+    ///
+    /// # Errors
+    /// Returns an error when the frame length, magic prefix, MAC, or expiry are invalid.
+    pub fn parse(
+        bytes: &[u8],
+        secret: &[u8; 32],
+        now_ms: u64,
+    ) -> Result<Self, VpnHelperTicketError> {
+        if bytes.len() != VPN_HELPER_TICKET_LEN {
+            return Err(VpnHelperTicketError::InvalidLength {
+                expected: VPN_HELPER_TICKET_LEN,
+                actual: bytes.len(),
+            });
+        }
+        if !bytes.starts_with(VPN_HELPER_TICKET_MAGIC) {
+            return Err(VpnHelperTicketError::InvalidMagic);
+        }
+        let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
+        let mut session_id = [0u8; 16];
+        session_id.copy_from_slice(&bytes[cursor..cursor + 16]);
+        cursor += 16;
+        let mut expires = [0u8; 8];
+        expires.copy_from_slice(&bytes[cursor..cursor + 8]);
+        cursor += 8;
+        let expected_mac = helper_ticket_mac(secret, &bytes[..cursor]);
+        if expected_mac.as_bytes() != &bytes[cursor..] {
+            return Err(VpnHelperTicketError::InvalidMac);
+        }
+        let expires_at_ms = u64::from_be_bytes(expires);
+        if expires_at_ms <= now_ms {
+            return Err(VpnHelperTicketError::Expired {
+                expires_at_ms,
+                now_ms,
+            });
+        }
+        Ok(Self {
+            session_id,
+            expires_at_ms,
+        })
+    }
+
+    /// Parse and verify a helper-authenticated ticket encoded as hex.
+    ///
+    /// # Errors
+    /// Returns an error when the hex input or the decoded ticket is invalid.
+    pub fn parse_hex(
+        hex_ticket: &str,
+        secret: &[u8; 32],
+        now_ms: u64,
+    ) -> Result<Self, VpnHelperTicketError> {
+        let decoded = hex::decode(hex_ticket).map_err(VpnHelperTicketError::Hex)?;
+        Self::parse(&decoded, secret, now_ms)
+    }
+}
+
+fn helper_ticket_mac(secret: &[u8; 32], payload: &[u8]) -> blake3::Hash {
+    let mut hasher = blake3::Hasher::new_keyed(secret);
+    hasher.update(b"soranet-vpn-helper-ticket-v1");
+    hasher.update(payload);
+    hasher.finalize()
+}
+
+/// Errors surfaced while parsing or verifying helper-authenticated VPN tickets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VpnHelperTicketError {
+    /// Ticket length did not match the pinned helper-ticket size.
+    InvalidLength {
+        /// Expected fixed helper-ticket length.
+        expected: usize,
+        /// Actual decoded ticket length.
+        actual: usize,
+    },
+    /// Helper ticket did not carry the expected versioned magic prefix.
+    InvalidMagic,
+    /// Helper ticket MAC did not verify against the shared secret.
+    InvalidMac,
+    /// Helper ticket expired before verification completed.
+    Expired {
+        /// Ticket expiry timestamp in milliseconds since the Unix epoch.
+        expires_at_ms: u64,
+        /// Current verifier clock in milliseconds since the Unix epoch.
+        now_ms: u64,
+    },
+    /// Hex decoding failed before ticket verification.
+    Hex(hex::FromHexError),
+}
+
+impl fmt::Display for VpnHelperTicketError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidLength { expected, actual } => {
+                write!(
+                    f,
+                    "vpn helper ticket length must be {expected} bytes (got {actual})"
+                )
+            }
+            Self::InvalidMagic => f.write_str("vpn helper ticket magic prefix is invalid"),
+            Self::InvalidMac => f.write_str("vpn helper ticket MAC verification failed"),
+            Self::Expired {
+                expires_at_ms,
+                now_ms,
+            } => write!(
+                f,
+                "vpn helper ticket expired at {expires_at_ms}ms (current time {now_ms}ms)"
+            ),
+            Self::Hex(error) => write!(f, "vpn helper ticket hex decode failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for VpnHelperTicketError {}
+
 /// Errors surfaced while building or validating VPN cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VpnCellError {
@@ -877,6 +1032,57 @@ mod tests {
             result,
             Err(VpnCellError::FlowLabelOverflow { max_bits: 8, .. })
         ));
+    }
+
+    #[test]
+    fn helper_ticket_roundtrips_and_verifies_mac() {
+        let secret = [0x42; 32];
+        let ticket = VpnHelperTicketV1 {
+            session_id: [0xAB; 16],
+            expires_at_ms: 1_700_000_000_000,
+        };
+        let bytes = ticket.to_bytes(&secret);
+        assert!(VpnHelperTicketV1::looks_like(&bytes));
+
+        let parsed = VpnHelperTicketV1::parse(&bytes, &secret, 1_699_999_999_000)
+            .expect("helper ticket should verify");
+        assert_eq!(ticket, parsed);
+
+        let hex = ticket.to_hex(&secret);
+        let parsed_hex = VpnHelperTicketV1::parse_hex(&hex, &secret, 1_699_999_999_000)
+            .expect("helper ticket hex should verify");
+        assert_eq!(ticket, parsed_hex);
+    }
+
+    #[test]
+    fn helper_ticket_rejects_tampering() {
+        let secret = [0x24; 32];
+        let ticket = VpnHelperTicketV1 {
+            session_id: [0x11; 16],
+            expires_at_ms: 55_000,
+        };
+        let mut bytes = ticket.to_bytes(&secret);
+        bytes[VPN_HELPER_TICKET_MAGIC.len() + 3] ^= 0xFF;
+        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1).expect_err("tamper must fail");
+        assert_eq!(VpnHelperTicketError::InvalidMac, err);
+    }
+
+    #[test]
+    fn helper_ticket_rejects_expired_ticket() {
+        let secret = [0x99; 32];
+        let ticket = VpnHelperTicketV1 {
+            session_id: [0x77; 16],
+            expires_at_ms: 999,
+        };
+        let bytes = ticket.to_bytes(&secret);
+        let err = VpnHelperTicketV1::parse(&bytes, &secret, 1_000).expect_err("expiry must fail");
+        assert_eq!(
+            VpnHelperTicketError::Expired {
+                expires_at_ms: 999,
+                now_ms: 1_000,
+            },
+            err
+        );
     }
 
     #[test]

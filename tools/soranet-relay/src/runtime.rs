@@ -40,6 +40,7 @@ use iroha_data_model::{
             SoranetPowFailureReasonV1, SoranetPrivacyHandshakeFailureV1, SoranetPrivacyModeV1,
             SoranetPrivacyThrottleScopeV1,
         },
+        vpn::{VpnCellClassV1, VpnFlowLabelV1, VpnHelperTicketError, VpnHelperTicketV1},
     },
 };
 use iroha_primitives::json::Json;
@@ -51,7 +52,7 @@ use rand::{SeedableRng, rngs::StdRng};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use thiserror::Error;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::{Mutex, Notify},
     task::JoinHandle,
@@ -95,8 +96,8 @@ use crate::{
         CELL_SIZE_BYTES, Cell, CellClass, CellScheduler, OverflowPolicy, QueueDepths,
         SchedulerConfig,
     },
-    vpn::{VpnOverlay, VpnSessionHandle},
-    vpn_adapter::VpnAdapter,
+    vpn::{VpnFrameIoError, VpnOverlay, VpnSessionHandle},
+    vpn_adapter::{VpnAdapter, VpnBridge},
 };
 
 struct AdminRenderContext<'a> {
@@ -635,12 +636,21 @@ struct HandshakeOutcome {
     handshake_bytes: u64,
     puzzle_verify_micros: Option<u64>,
     vpn_session: Option<VpnSessionHandle>,
+    vpn_helper_ticket: Option<VpnHelperTicketV1>,
 }
 
 struct HandshakeByteGuard<'a> {
     metrics: &'a Metrics,
     bytes: u64,
     consumed: bool,
+}
+
+#[derive(Debug, Error)]
+enum VpnBackendBridgeError {
+    #[error(transparent)]
+    Vpn(#[from] VpnFrameIoError),
+    #[error("backend io error: {0}")]
+    BackendIo(#[from] std::io::Error),
 }
 
 impl<'a> HandshakeByteGuard<'a> {
@@ -689,6 +699,13 @@ fn derive_vpn_session_id(remote: SocketAddr, transcript_hash: [u8; 32]) -> [u8; 
     let mut session_id = [0u8; 16];
     session_id.copy_from_slice(&digest.as_bytes()[..16]);
     session_id
+}
+
+fn vpn_flow_label_from_session_id(session_id: [u8; 16]) -> VpnFlowLabelV1 {
+    let value = (u32::from(session_id[0]) << 16)
+        | (u32::from(session_id[1]) << 8)
+        | u32::from(session_id[2]);
+    VpnFlowLabelV1::from_u32(value).expect("three-byte flow label should always fit")
 }
 
 fn record_route_open_ingress_metrics(
@@ -1581,6 +1598,7 @@ impl RelayRuntime {
                 handshake_bytes,
                 puzzle_verify_micros,
                 vpn_session,
+                vpn_helper_ticket,
             }) => {
                 let elapsed = attempt.elapsed();
                 metrics.record_success();
@@ -1765,6 +1783,7 @@ impl RelayRuntime {
                     lease,
                     resources,
                     vpn_session,
+                    vpn_helper_ticket,
                 )
                 .await;
             }
@@ -1951,6 +1970,7 @@ impl RelayRuntime {
         congestion_lease: Option<CongestionLease>,
         resources: MonitorCircuitResources,
         vpn_session: Option<VpnSessionHandle>,
+        vpn_helper_ticket: Option<VpnHelperTicketV1>,
     ) {
         let privacy_mode: SoranetPrivacyModeV1 = resources.mode.into();
         let measurement_resources = resources.clone();
@@ -1974,12 +1994,27 @@ impl RelayRuntime {
             measurement_resources,
             remote,
         ));
-        let exit_task = tokio::spawn(Self::serve_exit_streams(
-            connection.clone(),
-            exit_resources,
-            remote,
+        let exit_task = match (
+            resources.vpn.clone(),
             vpn_session.clone(),
-        ));
+            vpn_helper_ticket,
+        ) {
+            (Some(vpn), Some(session), Some(helper_ticket)) => {
+                tokio::spawn(Self::serve_vpn_backend_tunnel(
+                    connection.clone(),
+                    remote,
+                    vpn,
+                    session,
+                    helper_ticket,
+                ))
+            }
+            _ => tokio::spawn(Self::serve_exit_streams(
+                connection.clone(),
+                exit_resources,
+                remote,
+                vpn_session.clone(),
+            )),
+        };
 
         let reason = connection.closed().await;
         abort_padding_task(padding_task);
@@ -2221,6 +2256,145 @@ impl RelayRuntime {
                     break;
                 }
             }
+        }
+    }
+
+    async fn serve_vpn_backend_tunnel(
+        connection: Connection,
+        remote: SocketAddr,
+        overlay: Arc<VpnOverlay>,
+        vpn_session: VpnSessionHandle,
+        helper_ticket: VpnHelperTicketV1,
+    ) {
+        let Some(backend_addr) = overlay.config().backend_socket_addr() else {
+            warn!(
+                remote = %remote,
+                session_id = %hex::encode(helper_ticket.session_id),
+                "vpn helper connection rejected: vpn.backend_addr is not configured"
+            );
+            connection.close(0u32.into(), b"vpn backend unavailable");
+            return;
+        };
+
+        let backend =
+            match timeout(HANDSHAKE_STREAM_TIMEOUT, TcpStream::connect(backend_addr)).await {
+                Ok(Ok(stream)) => stream,
+                Ok(Err(error)) => {
+                    warn!(
+                        remote = %remote,
+                        backend = %backend_addr,
+                        %error,
+                        "failed to connect relay VPN backend"
+                    );
+                    connection.close(0u32.into(), b"vpn backend connect failed");
+                    return;
+                }
+                Err(_) => {
+                    warn!(
+                        remote = %remote,
+                        backend = %backend_addr,
+                        "timed out connecting relay VPN backend"
+                    );
+                    connection.close(0u32.into(), b"vpn backend connect timeout");
+                    return;
+                }
+            };
+
+        let (mut send, mut recv) =
+            match timeout(HANDSHAKE_STREAM_TIMEOUT, connection.accept_bi()).await {
+                Ok(Ok(streams)) => streams,
+                Ok(Err(error)) => {
+                    warn!(
+                        remote = %remote,
+                        %error,
+                        "failed to accept vpn helper tunnel stream"
+                    );
+                    connection.close(0u32.into(), b"vpn tunnel stream failed");
+                    return;
+                }
+                Err(_) => {
+                    warn!(
+                        remote = %remote,
+                        "timed out waiting for vpn helper tunnel stream"
+                    );
+                    connection.close(0u32.into(), b"vpn tunnel stream timeout");
+                    return;
+                }
+            };
+
+        let flow_label = vpn_flow_label_from_session_id(helper_ticket.session_id);
+        let adapter = VpnAdapter::new(vpn_session.session().clone(), overlay.as_ref().clone());
+        let bridge = VpnBridge::new(adapter.clone(), helper_ticket.session_id, flow_label);
+        let mtu = bridge.max_payload_len();
+        let (mut backend_read, mut backend_write) = tokio::io::split(backend);
+
+        info!(
+            remote = %remote,
+            backend = %backend_addr,
+            session_id = %hex::encode(helper_ticket.session_id),
+            expires_at_ms = helper_ticket.expires_at_ms,
+            "bridging helper-authenticated vpn tunnel to relay backend"
+        );
+        if let Err(error) = Self::bridge_vpn_backend_streams(
+            &mut send,
+            &mut recv,
+            bridge,
+            &adapter,
+            &mut backend_read,
+            &mut backend_write,
+            mtu,
+        )
+        .await
+        {
+            warn!(
+                remote = %remote,
+                backend = %backend_addr,
+                session_id = %hex::encode(helper_ticket.session_id),
+                %error,
+                "vpn helper bridge stopped"
+            );
+        }
+    }
+
+    async fn bridge_vpn_backend_streams<VW, VR, BR, BW>(
+        vpn_writer: &mut VW,
+        vpn_reader: &mut VR,
+        mut bridge: VpnBridge,
+        adapter: &VpnAdapter,
+        backend_reader: &mut BR,
+        backend_writer: &mut BW,
+        mtu: usize,
+    ) -> Result<(), VpnBackendBridgeError>
+    where
+        VW: AsyncWrite + Unpin,
+        VR: AsyncRead + Unpin,
+        BR: AsyncRead + Unpin,
+        BW: AsyncWrite + Unpin,
+    {
+        let upstream = async {
+            bridge
+                .pump_tun_to_vpn(backend_reader, vpn_writer, mtu)
+                .await
+                .map(|_| ())
+                .map_err(VpnBackendBridgeError::from)
+        };
+        let downstream = async {
+            loop {
+                match adapter.read_ingress_frame(vpn_reader).await {
+                    Ok(cell) => {
+                        if cell.header.class == VpnCellClassV1::Data {
+                            backend_writer.write_all(&cell.payload).await?;
+                        }
+                    }
+                    Err(VpnFrameIoError::FrameLength { actual: 0, .. }) => break Ok(()),
+                    Err(error) => break Err(VpnBackendBridgeError::from(error)),
+                }
+            }
+        };
+
+        tokio::select! {
+            result = upstream => result,
+            result = downstream => result,
         }
     }
 
@@ -3107,6 +3281,10 @@ impl RelayRuntime {
             .vpn
             .as_ref()
             .map(|overlay| overlay.start_session(Arc::clone(&context.metrics)));
+        let helper_ticket_secret = context
+            .vpn
+            .as_ref()
+            .and_then(|overlay| overlay.config().helper_ticket_secret_bytes());
         let mut byte_guard = HandshakeByteGuard::new(&context.metrics);
         let mut puzzle_verify_micros: Option<u64> = None;
 
@@ -3121,8 +3299,9 @@ impl RelayRuntime {
         let mut pending_puzzle_ticket: Option<PowTicket> = None;
         let mut pending_pow_ticket: Option<PowTicket> = None;
         let mut admission_token: Option<AdmissionToken> = None;
+        let mut vpn_helper_ticket: Option<VpnHelperTicketV1> = None;
 
-        if has_token_policy || (pow_required && puzzle_enforced) {
+        if helper_ticket_secret.is_some() || has_token_policy || (pow_required && puzzle_enforced) {
             let first_frame = match timeout(
                 HANDSHAKE_PAYLOAD_TIMEOUT,
                 Self::read_handshake_frame(&mut recv),
@@ -3135,7 +3314,25 @@ impl RelayRuntime {
             };
             byte_guard.add(first_frame.len() + 2);
 
-            if has_token_policy && token::frame_looks_like_token(&first_frame) {
+            if let Some(secret) = helper_ticket_secret.as_ref() {
+                if VpnHelperTicketV1::looks_like(&first_frame) {
+                    let now_ms = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("system clock should be after unix epoch")
+                        .as_millis()
+                        .min(u128::from(u64::MAX)) as u64;
+                    vpn_helper_ticket =
+                        Some(VpnHelperTicketV1::parse(&first_frame, secret, now_ms)?);
+                } else if has_token_policy && token::frame_looks_like_token(&first_frame) {
+                    let token = AdmissionToken::decode(&first_frame)
+                        .map_err(HandshakeError::TokenDecode)?;
+                    admission_token = Some(token);
+                } else if pow_required && puzzle_enforced {
+                    puzzle_ticket_frame = Some(first_frame);
+                } else {
+                    cached_client_frame = Some(first_frame);
+                }
+            } else if has_token_policy && token::frame_looks_like_token(&first_frame) {
                 let token =
                     AdmissionToken::decode(&first_frame).map_err(HandshakeError::TokenDecode)?;
                 admission_token = Some(token);
@@ -3150,6 +3347,7 @@ impl RelayRuntime {
             && puzzle_enforced
             && puzzle_ticket_frame.is_none()
             && admission_token.is_none()
+            && vpn_helper_ticket.is_none()
         {
             return Err(HandshakeError::MissingChallenge);
         }
@@ -3325,7 +3523,9 @@ impl RelayRuntime {
         let handshake_bytes = byte_guard.finish();
         let vpn_session = match (vpn_session, context.vpn.as_ref()) {
             (Some(session_handle), Some(overlay)) => {
-                let session_id = derive_vpn_session_id(remote, session.transcript_hash);
+                let session_id = vpn_helper_ticket
+                    .map(|ticket| ticket.session_id)
+                    .unwrap_or_else(|| derive_vpn_session_id(remote, session.transcript_hash));
                 Some(overlay.bind_session(session_handle, session_id))
             }
             _ => None,
@@ -3336,6 +3536,7 @@ impl RelayRuntime {
             handshake_bytes,
             puzzle_verify_micros,
             vpn_session,
+            vpn_helper_ticket,
         })
     }
 
@@ -3660,6 +3861,8 @@ enum HandshakeError {
     TokenDecode(TokenDecodeError),
     #[error("token verification failed: {0}")]
     Token(#[from] TokenPolicyError),
+    #[error("vpn helper ticket verification failed: {0}")]
+    HelperTicket(#[from] VpnHelperTicketError),
 }
 
 fn role_bits(mode: RelayMode) -> u8 {
@@ -3805,6 +4008,7 @@ mod tests {
             privacy_metrics::{
                 SoranetPowFailureReasonV1, SoranetPrivacyModeV1, SoranetPrivacyThrottleScopeV1,
             },
+            vpn::{VPN_CELL_LEN, VpnCellFlagsV1, VpnCellV1},
         },
     };
     use norito::{codec::Encode, decode_from_bytes, to_bytes};
@@ -3812,7 +4016,7 @@ mod tests {
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
     use tempfile::NamedTempFile;
     use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
+        io::{AsyncReadExt, AsyncWriteExt, duplex},
         net::TcpStream,
         time::sleep,
     };
@@ -3823,6 +4027,7 @@ mod tests {
             GreaseEntry, KemAdvertisement, KemId, NegotiatedCapabilities, SignatureAdvertisement,
             SignatureId,
         },
+        config::VpnConfig,
         constant_rate,
         privacy::{PrivacyAggregator, PrivacyConfig, ProxyPolicyEventBuffer},
         scheduler::CellClass,
@@ -3908,6 +4113,121 @@ mod tests {
         assert_eq!(128, snapshot.handshake_bytes);
         assert_eq!(0, snapshot.vpn_bytes);
         assert_eq!(0, snapshot.vpn_ingress_bytes);
+    }
+
+    #[tokio::test]
+    async fn vpn_backend_bridge_forwards_backend_payloads_into_vpn_frames() {
+        let metrics = Arc::new(Metrics::new());
+        metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig {
+            enabled: true,
+            ..VpnConfig::default()
+        }));
+        let session = overlay.start_session(Arc::clone(&metrics));
+        let handle = overlay.bind_session(session, [0xA1; 16]);
+        let adapter = VpnAdapter::new(handle.session().clone(), overlay.as_ref().clone());
+        let bridge = VpnBridge::new(
+            adapter.clone(),
+            [0xA1; 16],
+            vpn_flow_label_from_session_id([0xA1; 16]),
+        );
+        let (vpn_runtime, mut vpn_peer) = duplex(VPN_CELL_LEN * 8);
+        let (mut vpn_read, mut vpn_write) = tokio::io::split(vpn_runtime);
+        let (backend_runtime, mut backend_peer) = duplex(VPN_CELL_LEN * 8);
+        let (mut backend_read, mut backend_write) = tokio::io::split(backend_runtime);
+        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
+
+        let bridge_task = tokio::spawn(async move {
+            RelayRuntime::bridge_vpn_backend_streams(
+                &mut vpn_write,
+                &mut vpn_read,
+                bridge,
+                &adapter,
+                &mut backend_read,
+                &mut backend_write,
+                VpnCellV1::max_payload_len(),
+            )
+            .await
+            .expect("bridge should forward backend payload");
+        });
+
+        backend_peer
+            .write_all(&payload)
+            .await
+            .expect("write backend payload");
+        backend_peer
+            .shutdown()
+            .await
+            .expect("shutdown backend peer");
+
+        let parsed = crate::vpn::read_frame(overlay.as_ref(), &mut vpn_peer)
+            .await
+            .expect("vpn frame");
+        assert_eq!(payload, parsed.payload);
+
+        bridge_task.await.expect("bridge task joined");
+    }
+
+    #[tokio::test]
+    async fn vpn_backend_bridge_forwards_vpn_payloads_into_backend_stream() {
+        let metrics = Arc::new(Metrics::new());
+        metrics.set_vpn_meter_labels("vpn.session", "vpn.egress.bytes");
+        let overlay = Arc::new(VpnOverlay::from_config(VpnConfig {
+            enabled: true,
+            ..VpnConfig::default()
+        }));
+        let session = overlay.start_session(Arc::clone(&metrics));
+        let handle = overlay.bind_session(session, [0xB2; 16]);
+        let adapter = VpnAdapter::new(handle.session().clone(), overlay.as_ref().clone());
+        let bridge = VpnBridge::new(
+            adapter.clone(),
+            [0xB2; 16],
+            vpn_flow_label_from_session_id([0xB2; 16]),
+        );
+        let (vpn_runtime, mut vpn_peer) = duplex(VPN_CELL_LEN * 8);
+        let (mut vpn_read, mut vpn_write) = tokio::io::split(vpn_runtime);
+        let (backend_runtime, mut backend_peer) = duplex(VPN_CELL_LEN * 8);
+        let (mut backend_read, mut backend_write) = tokio::io::split(backend_runtime);
+        let payload = vec![0xFA, 0xCE, 0xB0, 0x0C];
+
+        let bridge_task = tokio::spawn(async move {
+            RelayRuntime::bridge_vpn_backend_streams(
+                &mut vpn_write,
+                &mut vpn_read,
+                bridge,
+                &adapter,
+                &mut backend_read,
+                &mut backend_write,
+                VpnCellV1::max_payload_len(),
+            )
+            .await
+            .expect("bridge should forward vpn payload");
+        });
+
+        let cell = overlay
+            .data_cell(
+                [0xB2; 16],
+                vpn_flow_label_from_session_id([0xB2; 16]),
+                0,
+                0,
+                VpnCellFlagsV1::new(false, false, false, false),
+                payload.clone(),
+            )
+            .expect("vpn cell");
+        let frame = overlay.pad_cell(cell).expect("vpn frame");
+        crate::vpn::write_frame(&mut vpn_peer, &frame)
+            .await
+            .expect("write vpn frame");
+        vpn_peer.shutdown().await.expect("shutdown vpn peer");
+
+        let mut actual = vec![0u8; payload.len()];
+        backend_peer
+            .read_exact(&mut actual)
+            .await
+            .expect("read backend payload");
+        assert_eq!(payload, actual);
+
+        bridge_task.await.expect("bridge task joined");
     }
 
     #[test]
