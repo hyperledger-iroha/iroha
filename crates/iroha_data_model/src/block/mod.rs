@@ -1311,6 +1311,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1330,6 +1331,7 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: None,
             previous_roster_evidence: None,
+            external_entrypoints: Vec::new(),
         };
         let key_pair =
             iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
@@ -1394,6 +1396,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: Some(result),
         };
@@ -1414,6 +1417,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1436,6 +1440,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1528,6 +1533,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1583,6 +1589,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1626,6 +1633,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1671,6 +1679,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1709,6 +1718,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1744,6 +1754,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1808,6 +1819,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1892,6 +1904,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1924,6 +1937,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1951,6 +1965,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -1985,6 +2000,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };
@@ -2061,6 +2077,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                external_entrypoints: Vec::new(),
             },
             result: None,
         };

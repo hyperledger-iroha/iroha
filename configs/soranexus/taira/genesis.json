@@ -118,6 +118,13 @@
         {
           "Register": {
             "AssetDefinition": {
+              "confidential_policy": {
+                "mode": "Convertible",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
               "id": "xor#universal",
               "logo": null,
               "metadata": {
