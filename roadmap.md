@@ -2,6 +2,28 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 Taira shared-roster deploy bundle):
+the checked-in Taira deploy path no longer assumes operators will hand-edit one
+peer-1 config into a full validator set.
+
+- `scripts/render_taira_validator_bundle.py` now renders one validator
+  `config.toml` per host from a single roster, with focused coverage in
+  `scripts/tests/render_taira_validator_bundle_test.py`;
+- `configs/soranexus/taira/validator_roster.example.toml` and
+  `taira-irohad.env.example` now document the supported user-local inputs; and
+- `check_mcp_rollout.sh` now requires at least four validators in the commit QC
+  set before Taira rollout can pass on the public path.
+
+Open work for this slice now remains:
+- fix the remaining live public write-path failure so the signed canary no
+  longer returns
+  `503 route_unavailable: no reachable authoritative peers are available for lane 0 dataspace 0`;
+- once that passes, capture a successful
+  `bash configs/soranexus/taira/check_mcp_rollout.sh --write-config /run/secrets/taira-canary-client.toml`
+  transcript in the rollout ticket; and
+- if operators want less manual secret handling, add a follow-up renderer input
+  format that splits public roster data from per-validator private key files.
+
 Latest sync (2026-03-29 Torii transparent ingress + early-shed slice):
 the server-side Torii slice now fixes the old permissioned over-admission
 failure class, but permissioned still misses the preserved-peer stable latency
@@ -87,6 +109,27 @@ Open work for this slice now remains:
 - if the public ingress is intentionally non-authoritative, document or expose a
   stable authoritative-write path for Codex users instead of advertising the
   current public endpoint as write-ready.
+
+Latest sync (2026-03-28 `NewAccount` accessor compile follow-up):
+the immediate compile break from the account-domain cleanup is closed for the
+current `iroha_data_model` and `iroha_kagami` callers.
+
+- `crates/iroha_data_model/src/account.rs` no longer moves the test
+  `DomainId` before asserting on it;
+- `crates/iroha_kagami/src/genesis/sign.rs` and
+  `crates/iroha_kagami/src/localnet.rs` now use `NewAccount::domain()` instead
+  of the removed field access; and
+- focused validation is green again for
+  `cargo test -p iroha_data_model new_account_json_roundtrip_defaults -- --nocapture`
+  and `cargo check -p iroha_kagami --tests`.
+
+Open work from this slice:
+- continue the broader `ScopedAccountId` / domain-linked account registration
+  cleanup across CLI, Torii tests, bridge helpers, IVM, and docs so remaining
+  callers converge on the current account-domain API shape; and
+- decide whether future call sites that need to retain a caller-owned
+  `DomainId` should prefer helpers such as `NewAccount::new_in_domain(...)`
+  over materializing a temporary `ScopedAccountId`.
 
 Latest sync (2026-03-28 Taira Sorafs upload proxy fix):
 the public edge on this machine no longer rejects larger Sorafs uploads with
@@ -586,30 +629,86 @@ Open work for this routed-read integration slice now remains:
 - keep pushing toward proof-backed routed reads once the underlying committed
   state inclusion-proof plumbing exists.
 
-Latest sync (2026-03-28 `irohad` relay / Torii proxy exhaustiveness):
+Latest sync (2026-03-28 shared Torii proxy-plane classification + dispatch tests):
+`crates/iroha_core/src/lib.rs`
+and
 `crates/irohad/src/main.rs`
-now keeps the generic relay aligned with Torii’s dedicated control-plane
-subscriber for proxy request/response traffic.
+and
+`crates/iroha_torii/src/lib.rs`
+now share the Torii/Soracloud proxy-plane message contract instead of keeping
+that classification implicit in multiple places.
 
-- `NetworkMessage::ToriiProxyRequest` and `ToriiProxyResponse` are now
-  explicitly classified as relay-ignored dedicated-subscriber messages
-  alongside the existing Soracloud proxy / genesis / health / connect frames;
-- a focused relay regression now covers both Torii proxy variants so future
-  control-plane enum additions fail in tests before they break `irohad`
-  compilation again; and
-- targeted `irohad` formatting, check, and unit-test validation now pass for
-  this slice.
+- `NetworkMessage::is_torii_proxy_control_message()` now defines the shared
+  Torii/Soracloud proxy-plane message set once in `iroha_core`;
+- `irohad` now uses that shared classifier when deciding which messages bypass
+  the generic relay, while Torii now routes the same classified frames through
+  a dedicated proxy-plane dispatcher helper before invoking the concrete
+  request/response handlers; and
+- focused tests now cover both the shared classifier and the Torii subscriber
+  dispatch path for pending `ToriiProxyResponse` resolution.
 
 Validation:
 - `cargo fmt --all`
-- `cargo check -p irohad --message-format short`
-- `cargo test -p irohad dedicated_subscriber_message_set_includes_torii_proxy_frames -- --nocapture`
+- `cargo test -p iroha_core torii_proxy_control_message_classification_covers_shared_proxy_variants --lib -- --nocapture`
+- `cargo test -p iroha_torii torii_proxy_network_message_dispatch_resolves_pending_response --lib -- --nocapture`
 
 Open work for this relay-control-plane slice now remains:
-- keep `irohad`’s dedicated-subscriber ignore set synchronized with the actual
-  Torii control-plane subscriber whenever new `NetworkMessage` control variants
-  are added, so enum evolution does not regress back into relay exhaustiveness
-  failures.
+- rerun the targeted `irohad` validation once the unrelated already-running
+  repository `cargo test` process releases the shared cargo artifact lock, so
+  the post-refactor `irohad` binary path is rechecked on top of the new shared
+  classifier.
+
+Latest sync (2026-03-28 managed C# transaction build/sign/submit slice):
+`csharp/` now contains the first managed `.NET 8` preview of
+`Hyperledger.Iroha.Sdk` plus a dedicated C# CI lane.
+
+- shipped in this slice:
+  - canonical I105 account-address parsing/rendering against the shared address
+    vectors, including multisig round-trips;
+  - Norm v1 domain normalization helpers for SDK boundary validation;
+  - managed Norito/hash building blocks for the SDK's offline transaction path,
+    including CRC64, BLAKE2b-256, and deterministic Iroha transaction hashing;
+  - managed Ed25519 canonical-request signing helpers;
+  - `IrohaClient` plus typed `ToriiClient` wrappers for node capabilities,
+    runtime ABI/hash/metrics, account pages, explorer QR snapshots, account
+    asset balances, account transaction summaries, permissions, identifier
+    policy listing, typed identifier resolution, reverse alias lookup by
+    account, account/asset/contract alias resolution, alias-index resolution,
+    UAID portfolio reads, space-directory bindings and manifest inventory
+    reads, account faucet puzzle/claim helpers, and JSON onboarding helpers
+    including multisig onboarding, while retaining generic JSON/text request
+    plumbing for uncovered routes;
+  - managed `scrypt-leading-zero-bits-v1` faucet PoW solving with deterministic
+    challenge and digest helpers, plus higher-level `ToriiClient` methods that
+    can fetch the current puzzle and prepare or submit a faucet claim for a
+    canonical account literal;
+  - `ToriiApiException` so non-success responses preserve HTTP status and body
+    rather than collapsing into generic transport errors;
+  - `LedgerClient`, `TransactionBuilder`, and
+    `SignedTransactionEnvelope` so the preview package can now build, sign,
+    submit, and poll canonical asset `Transfer`, `Mint`, and `Burn`
+    transactions instead of stopping at read/request-signing helpers;
+  - source-generated serialization for typed Torii request models instead of
+    raw dictionary payloads; and
+  - package/test/sample scaffolding with `dotnet build`, `dotnet test`, and
+    `dotnet pack` all succeeding locally, with an opt-in live smoke against
+    `https://taira.sora.org`, now including `/v1/explorer/accounts/{account_id}/qr`,
+    `/v1/identifier-policies`, `/v1/aliases/by_account`, and
+    `/v1/accounts/faucet/puzzle` plus empty-state coverage for
+    `/v1/space-directory/uaids/{uaid}` and `/v1/space-directory/uaids/{uaid}/manifests`.
+
+Validation:
+- `cd csharp && dotnet build Hyperledger.Iroha.Sdk.sln -c Release`
+- `cd csharp && dotnet test Hyperledger.Iroha.Sdk.sln -c Release`
+
+Open work for the C# SDK now remains:
+- extend the ledger surface past asset `Transfer`/`Mint`/`Burn` into the rest
+  of the instruction families and signed `/query` envelopes;
+- add richer paged query abstractions plus SSE/WebSocket streaming clients;
+- move the opt-in Taira smoke into a more complete live-network matrix without
+  making default CI depend on external testnet availability; and
+- extend the SDK into Connect, offline, Nexus, SoraFS, and the remaining
+  parity families before promoting the package beyond preview.
 
 Latest sync (2026-03-27 full preserved-peer stable soaks on the workload-tracking cut keep consensus liveness clean, but NPoS is still contaminated by one repeated missing-asset failure):
 the rebuilt 4-peer preserved-peer stable envelopes on
@@ -644,45 +743,76 @@ Open work from this soak result:
   stable envelope again before using its p95 number as a clean consensus-only
   performance signal.
 
-Latest sync (2026-03-27 Nexus cross-dataspace Torii routed reads):
-`crates/iroha_core/src/torii_proxy.rs`
+Latest sync (2026-03-27 Nexus cross-dataspace Torii ingress proxying):
+`crates/iroha_core/src/{lib.rs,queue.rs,queue/router.rs,torii_proxy.rs}`
 and
 `crates/iroha_torii/src/{lib.rs,routing.rs}`
 and
 `integration_tests/tests/nexus/cross_dataspace_localnet.rs`
-now cover the broader routed-read slice for Nexus ingress, not just
-authoritative tx / signed-query forwarding.
+now cover the first authoritative-forwarding slice for Nexus ingress routing.
 
-- Torii now routes dataspace-backed app and Nexus reads through the same
-  control-plane proxy layer across account, asset-definition, domain, NFT,
-  RWA, portfolio, and Nexus summary endpoints;
-- multi-dataspace list / aggregate reads now fan out across dataspaces and
-  merge deterministically at ingress, while singleton fan-out reads return a
-  deterministic conflict instead of silently choosing one dataspace reply;
-- the earlier `iroha_torii` baseline compile blockers are fixed, targeted
-  routed-read tests pass, and the Nexus integration test harness compiles and
-  still passes the cheap genesis pre-execution smoke; but
-- full `cargo test -p iroha_torii --lib` remains red in this branch because of
-  unrelated pre-existing failures outside the Nexus routing slice.
+- Torii now has versioned P2P proxy envelopes for signed transactions and
+  signed queries, local-peer attribution for ingress routing decisions, and a
+  control-plane subscriber that can dispatch Torii proxy requests/responses
+  alongside the existing Soracloud proxy traffic;
+- `POST /transaction` now resolves the Nexus lane/dataspace at ingress and
+  forwards to an authoritative peer when the local node is outside the target
+  lane, while preserving route headers plus `x-iroha-routed-by`;
+- signed `POST /query` requests now resolve the same authority-based routing
+  policy and proxy to an authoritative peer when the ingress node is not
+  authoritative, and the cross-dataspace localnet regression now submits/query
+  checks through Nexus-lane peers instead of leader-targeting the destination
+  dataspace directly; and
+- the focused verification path is unblocked from an unrelated macOS cfg issue
+  in `fastpq_prover`, but targeted `iroha_torii` compilation is still blocked
+  by existing `routing.rs`/`ivm` baseline errors outside this slice.
 
 Validation:
 - `cargo fmt --all`
-- `cargo test -p iroha_torii torii_routed_read_tests --lib --message-format short`
-- `cargo test -p integration_tests --test mod --no-run --message-format short`
-- `cargo test -p integration_tests --test mod cross_dataspace_localnet_genesis_preexecution_smoke -- --nocapture`
+- `cargo test -p iroha_core resolve_query_routing_decision --lib --message-format short`
 
 Open work for this Nexus ingress-routing slice now remains:
-- add proof-backed routed reads if the project still wants ingress to verify
-  returned state against committed roots instead of trusting authoritative peer
-  responses;
-- extend the normalized routed-read layer to any remaining dataspace-backed
-  singleton/convenience endpoints that are still answered from local state
+- extend the same proxy path beyond signed `POST /query` into the remaining
+  dataspace-aware Torii convenience reads that still answer from local state
   only;
-- stabilize the end-to-end multi-peer integration coverage that now exercises
-  routed reads through wrong-dataspace ingress nodes, since the current
-  full-scenario validation is blocked by an unrelated peer-startup flake; and
-- return to a whole-crate green `cargo test -p iroha_torii --lib` baseline so
-  future routing regressions can be validated without unrelated test noise.
+- implement the planned fan-out/merge behavior for multi-dataspace reads where
+  a single authoritative dataspace cannot be inferred deterministically from
+  the request authority/selectors;
+- add focused Torii unit coverage for proxy request/response handling once the
+  existing baseline `crates/iroha_torii/src/routing.rs` compile failures are
+  repaired upstream; and
+- rerun the targeted Torii and `integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+  verification once those pre-existing Torii compile blockers are cleared.
+
+Latest sync (2026-03-27 universal-account / alias-model clarification for reverse alias lookup):
+`AGENTS.md`,
+`docs/source/{data_model.md,universal_accounts_guide.md}`,
+`docs/account_structure.hy.md`,
+and
+`crates/iroha_core/src/smartcontracts/isi/account.rs`
+now pin the canonical account/alias split more explicitly.
+
+- the contributor and public docs now state unambiguously that `AccountId` is
+  always the canonical domainless subject, while `ScopedAccountId` is only
+  explicit domain context for operations that truly require a domain-linked
+  view or registration;
+- the docs now also spell out that aliases are a separate SNS/account-label
+  layer, so both domain-qualified aliases like `merchant@hbl.sbp` and
+  dataspace-root aliases like `merchant@sbp` resolve to the same canonical
+  `AccountId`; and
+- focused `FindAliasesByAccountId` coverage now includes the dataspace-root
+  alias case so the documentation is backed by a live regression.
+
+Validation:
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/.cache/cargo-target-alias-core cargo test -p iroha_core find_aliases_by_account_id --lib --quiet`
+
+Open work for this clarification slice now remains:
+- propagate the same explicit universal-account / alias-model wording into the
+  translated `docs/source/data_model.*.md` set so non-English references do not
+  drift back toward domain-scoped identity language; and
+- audit older examples and helper docs that still imply “account in a domain”
+  as identity rather than materialized link state, and rewrite them to use the
+  universal-account-first wording.
 
 Latest sync (2026-03-27 FASTPQ BN254 CUDA bench/report wiring):
 `crates/fastpq_prover/src/bin/fastpq_cuda_bench.rs`

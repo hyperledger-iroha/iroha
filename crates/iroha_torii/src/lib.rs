@@ -33782,7 +33782,7 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let account_id = authority.clone().to_account_id(domain_id);
-        let account = Account::new(account_id.clone().into())
+        let account = Account::from_scoped_id(account_id.clone())
             .with_label(Some(alias_label))
             .build(&authority);
         let world = World::with([domain], [authority_account, account], []);

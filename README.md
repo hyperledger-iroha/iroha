@@ -116,6 +116,11 @@ python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/ins
 
 Restart Codex after installation so the skill appears in the Skills tab.
 
+If you are operating the public Taira deployment itself, render per-validator
+configs from `configs/soranexus/taira/validator_roster.example.toml` with
+`python3 scripts/render_taira_validator_bundle.py --roster ... --output-dir ...`
+instead of cloning the checked-in peer-1 `config.toml` by hand.
+
 ## Core Crates
 
 - [`crates/iroha`](./crates/iroha): client library.

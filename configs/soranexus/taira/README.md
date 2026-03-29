@@ -11,7 +11,10 @@ network online quickly.
 
 ## Included artifacts
 
-- `config.toml`: baseline validator config for peer 1.
+- `config.toml`: baseline validator config for peer 1 and the shared template
+  source for rendered per-validator configs.
+- `validator_roster.example.toml`: copy-me roster template for all validator
+  public addresses, keypairs, and PoPs. Keep the populated file user-local.
 - `genesis.json`: NPoS genesis with DA enabled.
 - `dns_records.json`: DNS targets for public Torii + Explorer hostnames.
 - `explorer.runtime-config.json`: runtime config for the Explorer frontend.
@@ -21,11 +24,30 @@ network online quickly.
 - `sorafs_gateway_denylist.global-emergency.json`: emergency-response denylist pack.
 - `taira-irohad.service`: sample systemd unit that starts the validator from
   the shipped Taira config and genesis.
+- `taira-irohad.env.example`: sample `/etc/default/taira-irohad` overrides for
+  pointing the systemd unit at a rendered validator config.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, including the optional signed write
   canary for final public cutover.
 - `taira-explorer.nginx.conf`: multi-domain nginx edge config for
   `taira.sora.org` and `taira-explorer.sora.org`.
+
+## Render validator configs
+
+Do not hand-edit `config.toml` into multiple validator copies. Instead:
+
+1. Copy `validator_roster.example.toml` to a user-local path such as
+   `configs/soranexus/taira/validator_roster.local.toml`.
+2. Fill in every validator's real `public_key`, `private_key`, `pop_hex`, and
+   `public_address`.
+3. Render the per-validator bundle:
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --output-dir dist/taira-validators`
+4. Point each validator host at its own generated
+   `dist/taira-validators/<validator-slug>/config.toml`.
+
+The renderer rewrites the checked-in peer-1 baseline with the full
+`trusted_peers` / `trusted_peers_pop` roster so every validator starts from the
+same source of truth.
 
 ## Minimum viable topology
 
@@ -131,6 +153,10 @@ both the public endpoint and a runtime-only canary signer config:
 
 - `bash configs/soranexus/taira/check_mcp_rollout.sh --write-config /run/secrets/taira-canary-client.toml`
 
+The rollout script now also requires the live `/status` snapshot to show at
+least 4 validators in the commit QC set. If it fails that check, rebuild the
+validator configs from the shared roster before debugging ingress or MCP.
+
 That config must be a normal `iroha` client TOML with a pre-provisioned low-risk
 signer. Keep it out of the repo and out of shell history where possible.
 
@@ -178,29 +204,40 @@ away from the shipped MCP-enabled config:
 
 1. Check out this repository on the validator host, for example at
    `/opt/iroha`.
-2. Install the sample systemd unit from
+2. Render the per-validator config bundle from a user-local roster file, then
+   copy the correct validator config onto the host, for example:
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --output-dir dist/taira-validators`
+   - `sudo install -d -o iroha -g iroha /etc/iroha/taira-validator-1`
+   - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
+3. Install the sample systemd unit from
    `configs/soranexus/taira/taira-irohad.service`:
    - `sudo cp configs/soranexus/taira/taira-irohad.service /etc/systemd/system/`
+   - copy `configs/soranexus/taira/taira-irohad.env.example` to
+     `/etc/default/taira-irohad` and adjust `IROHA_TAIRA_CONFIG=` if you want
+     the unit to use a generated config path without editing `ExecStart=`
+   - add `/etc/default/taira-irohad` if you want the unit to use a generated
+     config path without editing `ExecStart=`, for example:
+     `IROHA_TAIRA_CONFIG=/etc/iroha/taira-validator-1/config.toml`
    - if your repo checkout or binary path differs from `/opt/iroha` and
      `/usr/local/bin/irohad`, adjust `WorkingDirectory=` and `ExecStart=`
      before enabling the unit
-3. Reload systemd and restart the validator:
+4. Reload systemd and restart the validator:
    - `sudo systemctl daemon-reload`
    - `sudo systemctl enable --now taira-irohad.service`
    - `sudo systemctl restart taira-irohad.service`
-4. Capture the resolved config in the rollout ticket:
+5. Capture the resolved config in the rollout ticket:
    - `sudo journalctl -u taira-irohad.service -n 200 --no-pager`
-   - `cd /opt/iroha && /usr/local/bin/irohad --sora --config configs/soranexus/taira/config.toml --genesis configs/soranexus/taira/genesis.json --trace-config | tee /tmp/taira-trace-config.txt`
+   - `cd /opt/iroha && /usr/local/bin/irohad --sora --config "${IROHA_TAIRA_CONFIG:-configs/soranexus/taira/config.toml}" --genesis "${IROHA_TAIRA_GENESIS:-configs/soranexus/taira/genesis.json}" --trace-config | tee /tmp/taira-trace-config.txt`
    - verify `/tmp/taira-trace-config.txt` includes `nexus.fees.fee_asset_id = "xor#universal"`
-5. Prove the validator's loopback Torii endpoint exposes MCP before reloading
+6. Prove the validator's loopback Torii endpoint exposes MCP before reloading
    nginx or cutting public traffic:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public`
    - for a full local write-path check, use a runtime-only canary signer:
      `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --write-config /run/secrets/taira-canary-client.toml --write-target local`
-6. After the public node is back, prove contract lifecycle writes can commit:
+7. After the public node is back, prove contract lifecycle writes can commit:
    - `curl -sS https://taira.sora.org/v1/contracts/instances/universal | jq '.total'`
    - if the total is `0`, redeploy SoraSwap with the updated `../soraswap` `deploy-testnet` flow before blaming the frontend
-7. Before declaring public Codex/Torii rollout complete, require the signed
+8. Before declaring public Codex/Torii rollout complete, require the signed
    write canary to pass:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --write-config /run/secrets/taira-canary-client.toml`
    - if you only need a read-only check for debugging, opt into that mode

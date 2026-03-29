@@ -1,0 +1,40 @@
+# Copy this file to a user-local path such as
+# `configs/soranexus/taira/validator_roster.local.toml`, replace every
+# placeholder, and keep the populated file out of the repo.
+#
+# Then render one config.toml per validator:
+#   python3 scripts/render_taira_validator_bundle.py \
+#     --roster configs/soranexus/taira/validator_roster.local.toml \
+#     --output-dir dist/taira-validators
+
+torii_public_address = "https://taira.sora.org"
+network_address = "0.0.0.0:1337"
+torii_address = "0.0.0.0:18080"
+
+[[validators]]
+slug = "taira-validator-1"
+public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_1"
+private_key = "REPLACE_WITH_BLS_PRIVATE_KEY_1"
+pop_hex = "REPLACE_WITH_BLS_POP_HEX_1"
+public_address = "taira-validator-1.sora.org:1337"
+
+[[validators]]
+slug = "taira-validator-2"
+public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_2"
+private_key = "REPLACE_WITH_BLS_PRIVATE_KEY_2"
+pop_hex = "REPLACE_WITH_BLS_POP_HEX_2"
+public_address = "taira-validator-2.sora.org:1337"
+
+[[validators]]
+slug = "taira-validator-3"
+public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_3"
+private_key = "REPLACE_WITH_BLS_PRIVATE_KEY_3"
+pop_hex = "REPLACE_WITH_BLS_POP_HEX_3"
+public_address = "taira-validator-3.sora.org:1337"
+
+[[validators]]
+slug = "taira-validator-4"
+public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_4"
+private_key = "REPLACE_WITH_BLS_PRIVATE_KEY_4"
+pop_hex = "REPLACE_WITH_BLS_POP_HEX_4"
+public_address = "taira-validator-4.sora.org:1337"

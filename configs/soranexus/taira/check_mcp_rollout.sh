@@ -7,6 +7,7 @@ IROHA_BIN="${IROHA_BIN:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
 WRITE_TARGET="${WRITE_TARGET:-}"
 WRITE_MESSAGE_PREFIX="${WRITE_MESSAGE_PREFIX:-taira-rollout-canary}"
+MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
 SKIP_LOCAL=0
 SKIP_PUBLIC=0
 SKIP_WRITE_CANARY=0
@@ -24,6 +25,7 @@ The check fails unless:
   - the tool list includes curated iroha.* names, including write-ready aliases
   - the tool list does not expose raw torii.* names
   - GET /status returns healthy Torii/Sumeragi counters
+  - /status reports at least 4 validators in the commit QC set
 
 For final public rollout, also pass --write-config with a runtime-only
 pre-provisioned canary signer config. Without that, public checks are rejected
@@ -224,12 +226,13 @@ check_status_snapshot() {
     sed -n '1,20p' "$last_headers" >&2 || true
     exit 1
   fi
-  python3 - "$label" "$last_body" <<'PY'
+  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" <<'PY'
 import json
 import sys
 
 label = sys.argv[1]
 path = sys.argv[2]
+min_validator_set_len = int(sys.argv[3])
 with open(path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 
@@ -246,6 +249,15 @@ if not isinstance(blocks, int) or blocks < 1:
 if not isinstance(validator_set_len, int) or validator_set_len < 1:
     print(
         f"{label}: /status reported an empty Sumeragi commit validator set: {validator_set_len!r}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if validator_set_len < min_validator_set_len:
+    print(
+        f"{label}: /status reported only {validator_set_len} validators in the commit QC set; "
+        f"Taira rollout expects at least {min_validator_set_len}. "
+        "Render per-validator configs from configs/soranexus/taira/validator_roster.example.toml "
+        "with scripts/render_taira_validator_bundle.py before cutting traffic.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -418,6 +430,7 @@ run_write_canary() {
       >"$output_file" 2>&1; then
     if grep -q 'route_unavailable' "$output_file"; then
       echo "write canary failed: Torii is reachable but no authoritative peers accepted the lane route" >&2
+      echo "hint: re-render every validator config from configs/soranexus/taira/validator_roster.example.toml using scripts/render_taira_validator_bundle.py and confirm the ingress node is running one of those generated configs with the full trusted_peers/trusted_peers_pop roster" >&2
     else
       echo "write canary failed" >&2
     fi

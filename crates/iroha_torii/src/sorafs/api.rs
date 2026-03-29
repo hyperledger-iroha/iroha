@@ -2858,24 +2858,402 @@ fn resolve_bound_site_manifest(
     Ok((binding, stored))
 }
 
-fn resolve_local_site_manifest_by_cid(
+#[derive(Debug, Clone)]
+struct RemoteCidSource {
+    manifest_digest_hex: String,
+    provider_id: [u8; 32],
+    provider_id_hex: String,
+    torii_base_url: reqwest::Url,
+}
+
+#[derive(Debug)]
+struct RemoteSiteBundle {
+    manifest: ManifestV1,
+    payload: Vec<u8>,
+    files: Option<Vec<StorageFileEntryDto>>,
+}
+
+fn find_local_site_manifest_by_cid(
     state: &SharedAppState,
-    cid: &str,
-) -> Result<StoredManifest, Response> {
+    cid_bytes: &[u8],
+) -> Result<Option<StoredManifest>, Response> {
     if !state.sorafs_node.is_enabled() {
         return Err(storage_disabled_response());
     }
 
-    let cid_bytes = decode_content_cid(cid)
-        .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid content CID"))?;
     let manifests = state
         .sorafs_node
         .stored_manifests()
         .map_err(node_storage_error_response)?;
-    let stored = manifests
+    Ok(manifests
         .into_iter()
-        .find(|manifest| manifest.manifest_cid() == cid_bytes.as_slice())
-        .ok_or_else(|| StatusCode::NOT_FOUND.into_response())?;
+        .find(|manifest| manifest.manifest_cid() == cid_bytes))
+}
+
+fn normalize_provider_torii_base_url(host_pattern: &str) -> Result<reqwest::Url, String> {
+    let trimmed = host_pattern.trim();
+    if trimmed.is_empty() {
+        return Err("provider advert endpoint host pattern must not be empty".to_string());
+    }
+
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        let lower = trimmed.to_ascii_lowercase();
+        let scheme = if lower.starts_with("localhost")
+            || lower.starts_with("127.")
+            || lower.starts_with("[::1]")
+            || lower.starts_with("::1")
+        {
+            "http"
+        } else {
+            "https"
+        };
+        format!("{scheme}://{trimmed}")
+    };
+
+    let mut url = reqwest::Url::parse(&with_scheme)
+        .map_err(|err| format!("invalid provider advert endpoint `{trimmed}`: {err}"))?;
+    if !url.path().ends_with('/') {
+        let normalized = format!("{}/", url.path());
+        url.set_path(&normalized);
+    }
+    Ok(url)
+}
+
+fn storage_file_entries_from_manifest_response(
+    files: &[StorageStoredFileDto],
+) -> Result<Option<Vec<StorageFileEntryDto>>, String> {
+    if files.is_empty() {
+        return Ok(None);
+    }
+
+    let mut cursor = 0_u64;
+    let mut entries = Vec::with_capacity(files.len());
+    for file in files {
+        if file.offset != cursor {
+            return Err(format!(
+                "remote manifest layout is non-contiguous at `{}`: expected offset {cursor}, found {}",
+                file.path.join("/"),
+                file.offset,
+            ));
+        }
+        entries.push(StorageFileEntryDto {
+            path: file.path.clone(),
+            size: file.size,
+        });
+        cursor = cursor.saturating_add(file.size);
+    }
+
+    Ok(Some(entries))
+}
+
+async fn resolve_remote_cid_sources(
+    state: &SharedAppState,
+    cid_bytes: &[u8],
+) -> Result<Option<Vec<RemoteCidSource>>, Response> {
+    let snapshot = match pin_snapshot_with_attestation(state) {
+        Ok((_, snapshot)) => snapshot,
+        Err(err) => return Err(err.into_response()),
+    };
+
+    let mut provider_specs = Vec::<(String, String)>::new();
+    for prefer_completed in [true, false] {
+        for order in &snapshot.replication_orders {
+            if order.manifest_cid() != cid_bytes {
+                continue;
+            }
+            if order.is_expired() {
+                continue;
+            }
+            if prefer_completed != order.completion_epoch().is_some() {
+                continue;
+            }
+            let Some(manifest) = snapshot.manifest_by_digest(order.manifest_digest_hex()) else {
+                continue;
+            };
+            if manifest.status_label() != "approved" {
+                continue;
+            }
+            for provider_id_hex in order.providers() {
+                if provider_specs.iter().any(|existing| {
+                    existing.0 == order.manifest_digest_hex() && existing.1 == *provider_id_hex
+                }) {
+                    continue;
+                }
+                provider_specs.push((
+                    order.manifest_digest_hex().to_owned(),
+                    provider_id_hex.clone(),
+                ));
+            }
+        }
+    }
+
+    if provider_specs.is_empty() {
+        return Ok(None);
+    }
+
+    let Some(cache) = state.sorafs_cache.clone() else {
+        return Err(json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SoraFS discovery cache is not available for CID gateway fetch",
+        ));
+    };
+    let cache = cache.read().await;
+
+    let mut sources = Vec::new();
+    for (manifest_digest_hex, provider_id_hex) in provider_specs {
+        let provider_id = match decode_hex_32(&provider_id_hex) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let Some(record) = cache.record_by_provider(&provider_id) else {
+            continue;
+        };
+        let Some(endpoint) = record
+            .advert()
+            .body
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.kind == EndpointKind::Torii)
+        else {
+            continue;
+        };
+        let torii_base_url = match normalize_provider_torii_base_url(&endpoint.host_pattern) {
+            Ok(url) => url,
+            Err(err) => {
+                warn!(
+                    provider_id_hex = %provider_id_hex,
+                    manifest_digest_hex = %manifest_digest_hex,
+                    %err,
+                    "ignoring invalid Torii endpoint advertised for CID gateway fetch"
+                );
+                continue;
+            }
+        };
+        sources.push(RemoteCidSource {
+            manifest_digest_hex,
+            provider_id,
+            provider_id_hex,
+            torii_base_url,
+        });
+    }
+
+    if sources.is_empty() {
+        return Err(json_error(
+            StatusCode::BAD_GATEWAY,
+            "no SoraFS Torii provider routes are available for the requested CID",
+        ));
+    }
+
+    Ok(Some(sources))
+}
+
+async fn fetch_remote_site_bundle_from_source(
+    client: &reqwest::Client,
+    source: &RemoteCidSource,
+    cid_bytes: &[u8],
+) -> Result<RemoteSiteBundle, String> {
+    let manifest_url = source
+        .torii_base_url
+        .join(&format!(
+            "v1/sorafs/storage/manifest/{}",
+            source.manifest_digest_hex
+        ))
+        .map_err(|err| format!("failed to build remote manifest URL: {err}"))?;
+    let manifest_response = client
+        .get(manifest_url)
+        .send()
+        .await
+        .map_err(|err| format!("failed to fetch remote manifest metadata: {err}"))?;
+    let manifest_status = manifest_response.status();
+    let manifest_body = manifest_response
+        .bytes()
+        .await
+        .map_err(|err| format!("failed to read remote manifest metadata: {err}"))?;
+    if !manifest_status.is_success() {
+        let details = String::from_utf8_lossy(&manifest_body);
+        return Err(format!(
+            "remote manifest endpoint returned {manifest_status}: {}",
+            details.trim()
+        ));
+    }
+    let manifest_response =
+        norito::json::from_slice::<StorageManifestResponseDto>(&manifest_body).map_err(|err| {
+            format!("failed to decode remote manifest metadata response: {err}")
+        })?;
+    if manifest_response.manifest_digest_hex != source.manifest_digest_hex {
+        return Err(format!(
+            "remote manifest digest mismatch: expected {}, found {}",
+            source.manifest_digest_hex, manifest_response.manifest_digest_hex
+        ));
+    }
+
+    let manifest_bytes = BASE64_STANDARD
+        .decode(manifest_response.manifest_b64.as_bytes())
+        .map_err(|err| format!("failed to decode remote manifest payload: {err}"))?;
+    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
+        .map_err(|err| format!("failed to decode remote manifest bytes: {err}"))?;
+    if manifest.root_cid != cid_bytes {
+        return Err("remote manifest CID does not match requested CID".to_string());
+    }
+    let manifest_digest_hex = hex::encode(manifest.digest().map_err(|err| err.to_string())?);
+    if manifest_digest_hex != source.manifest_digest_hex {
+        return Err(format!(
+            "decoded remote manifest digest mismatch: expected {}, found {manifest_digest_hex}",
+            source.manifest_digest_hex
+        ));
+    }
+    if manifest_response.content_length > usize::MAX as u64 {
+        return Err("remote payload exceeds host limits".to_string());
+    }
+
+    let fetch_body = norito::json::to_vec(&StorageFetchRequestDto {
+        manifest_id_hex: manifest_response.manifest_id_hex.clone(),
+        offset: 0,
+        length: manifest_response.content_length,
+        provider_id_hex: Some(source.provider_id_hex.clone()),
+    })
+    .map_err(|err| format!("failed to encode remote fetch request: {err}"))?;
+    let fetch_url = source
+        .torii_base_url
+        .join("v1/sorafs/storage/fetch")
+        .map_err(|err| format!("failed to build remote payload URL: {err}"))?;
+    let fetch_response = client
+        .post(fetch_url)
+        .header(header::CONTENT_TYPE.as_str(), "application/json")
+        .header(HEADER_SORA_MANIFEST_ENVELOPE, "cid-gateway-fetch")
+        .body(fetch_body)
+        .send()
+        .await
+        .map_err(|err| format!("failed to fetch remote site payload: {err}"))?;
+    let fetch_status = fetch_response.status();
+    let fetch_body = fetch_response
+        .bytes()
+        .await
+        .map_err(|err| format!("failed to read remote site payload response: {err}"))?;
+    if !fetch_status.is_success() {
+        let details = String::from_utf8_lossy(&fetch_body);
+        return Err(format!(
+            "remote payload endpoint returned {fetch_status}: {}",
+            details.trim()
+        ));
+    }
+    let fetch_response =
+        norito::json::from_slice::<StorageFetchResponseDto>(&fetch_body).map_err(|err| {
+            format!("failed to decode remote site payload response: {err}")
+        })?;
+    let payload = BASE64_STANDARD
+        .decode(fetch_response.data_b64.as_bytes())
+        .map_err(|err| format!("failed to decode remote site payload bytes: {err}"))?;
+    if payload.len() as u64 != manifest_response.content_length {
+        return Err(format!(
+            "remote payload length mismatch: expected {}, found {}",
+            manifest_response.content_length,
+            payload.len()
+        ));
+    }
+
+    let files = storage_file_entries_from_manifest_response(&manifest_response.files)?;
+    Ok(RemoteSiteBundle {
+        manifest,
+        payload,
+        files,
+    })
+}
+
+async fn fetch_remote_site_bundle(
+    state: &SharedAppState,
+    cid_bytes: &[u8],
+) -> Result<Option<RemoteSiteBundle>, Response> {
+    let Some(sources) = resolve_remote_cid_sources(state, cid_bytes).await? else {
+        return Ok(None);
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|err| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to build CID gateway fetch client: {err}"),
+            )
+        })?;
+
+    let mut last_error = None;
+    for source in &sources {
+        match fetch_remote_site_bundle_from_source(&client, source, cid_bytes).await {
+            Ok(bundle) => return Ok(Some(bundle)),
+            Err(err) => {
+                warn!(
+                    provider_id_hex = %source.provider_id_hex,
+                    manifest_digest_hex = %source.manifest_digest_hex,
+                    %err,
+                    "failed to hydrate CID gateway cache from remote provider"
+                );
+                last_error = Some(err);
+            }
+        }
+    }
+
+    Err(json_error(
+        StatusCode::BAD_GATEWAY,
+        format!(
+            "failed to fetch the requested CID from remote SoraFS providers{}",
+            last_error
+                .as_deref()
+                .map(|err| format!(": {err}"))
+                .unwrap_or_default()
+        ),
+    ))
+}
+
+fn cache_remote_site_bundle(
+    state: &SharedAppState,
+    bundle: RemoteSiteBundle,
+) -> Result<StoredManifest, Response> {
+    let profile = chunk_profile_for_manifest(&bundle.manifest).map_err(ResponseError::into_response)?;
+    let plan = build_plan_for_storage_pin_request(&bundle.payload, profile, bundle.files.as_deref())
+        .map_err(|err| json_error(StatusCode::BAD_GATEWAY, err))?;
+    let manifest_digest: [u8; 32] = bundle
+        .manifest
+        .digest()
+        .map_err(|err| {
+            json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to digest remote manifest: {err}"),
+            )
+        })?
+        .into();
+
+    let mut reader = bundle.payload.as_slice();
+    match state
+        .sorafs_node
+        .ingest_manifest(&bundle.manifest, &plan, &mut reader)
+    {
+        Ok(_) => {}
+        Err(NodeStorageError::Storage(StorageBackendError::ManifestExists { .. })) => {}
+        Err(err) => return Err(node_storage_error_response(err)),
+    }
+
+    state
+        .sorafs_node
+        .manifest_metadata_by_digest(&manifest_digest)
+        .map_err(node_storage_error_response)
+}
+
+async fn resolve_site_manifest_by_cid(
+    state: &SharedAppState,
+    cid: &str,
+) -> Result<StoredManifest, Response> {
+    let cid_bytes = decode_content_cid(cid)
+        .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid content CID"))?;
+    let stored = if let Some(stored) = find_local_site_manifest_by_cid(state, &cid_bytes)? {
+        stored
+    } else if let Some(bundle) = fetch_remote_site_bundle(state, &cid_bytes).await? {
+        cache_remote_site_bundle(state, bundle)?
+    } else {
+        return Err(StatusCode::NOT_FOUND.into_response());
+    };
 
     enforce_site_denylist(state, &stored)?;
 
@@ -3061,7 +3439,7 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
     State(state): State<SharedAppState>,
     Path(cid): Path<String>,
 ) -> Response {
-    let stored = match resolve_local_site_manifest_by_cid(&state, &cid) {
+    let stored = match resolve_site_manifest_by_cid(&state, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -3120,7 +3498,7 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     State(state): State<SharedAppState>,
     Path((cid, raw_path)): Path<(String, String)>,
 ) -> Response {
-    let stored = match resolve_local_site_manifest_by_cid(&state, &cid) {
+    let stored = match resolve_site_manifest_by_cid(&state, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -8339,9 +8717,22 @@ pub(crate) fn init_cache(
 
 #[cfg(test)]
 mod advert_tests {
-    use std::{io::Write, str::FromStr, sync::Arc};
+    use std::{
+        io::Write,
+        str::FromStr,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
-    use axum::body::{self, Bytes};
+    use axum::{
+        Router,
+        body::{self, Bytes},
+        extract::Path as AxumPath,
+        response::IntoResponse,
+        routing::{get, post},
+    };
     use base64::Engine as _;
     use blake3;
     use ed25519_dalek::{Signer, SigningKey};
@@ -8389,6 +8780,7 @@ mod advert_tests {
     };
     use sorafs_node::config::StorageConfig;
     use tempfile::{NamedTempFile, TempDir};
+    use tokio::net::TcpListener;
 
     use super::*;
     use crate::{
@@ -8781,6 +9173,24 @@ mod advert_tests {
         }
     }
 
+    fn encode_replication_order_bytes_with_providers(
+        order_id: &ReplicationOrderId,
+        manifest_digest: &ManifestDigest,
+        manifest_cid: &[u8],
+        providers: Vec<[u8; 32]>,
+        deadline_epoch: u64,
+    ) -> Vec<u8> {
+        let order = sorafs_manifest::pin_registry::ReplicationOrderV1 {
+            order_id: *order_id.as_bytes(),
+            manifest_cid: manifest_cid.to_vec(),
+            providers,
+            redundancy: 1,
+            deadline: deadline_epoch,
+            policy_hash: [0x51; 32],
+        };
+        norito::to_bytes(&order).expect("encode replication order")
+    }
+
     fn encode_replication_order_bytes(
         order_id: &ReplicationOrderId,
         manifest_digest: &ManifestDigest,
@@ -8788,15 +9198,70 @@ mod advert_tests {
     ) -> Vec<u8> {
         let id_bytes = *order_id.as_bytes();
         let providers = vec![[id_bytes[0]; 32], [id_bytes[0].wrapping_add(1); 32]];
-        let order = sorafs_manifest::pin_registry::ReplicationOrderV1 {
-            order_id: id_bytes,
-            manifest_cid: manifest_digest.as_bytes().to_vec(),
+        encode_replication_order_bytes_with_providers(
+            order_id,
+            manifest_digest,
+            manifest_digest.as_bytes(),
             providers,
-            redundancy: 1,
-            deadline: deadline_epoch,
-            policy_hash: [0x51; 32],
-        };
-        norito::to_bytes(&order).expect("encode replication order")
+            deadline_epoch,
+        )
+    }
+
+    fn seed_registry_manifest_for_gateway(
+        state: &State,
+        manifest: &ManifestV1,
+        provider_id: [u8; 32],
+    ) {
+        let mut block = state.block(default_block_header());
+        let mut tx = block.transaction();
+
+        let manifest_digest = ManifestDigest::new(
+            manifest
+                .digest()
+                .expect("compute manifest digest for registry seed")
+                .into(),
+        );
+        let issuer = test_account();
+        let mut manifest_record = PinManifestRecord::new(
+            manifest_digest.clone(),
+            default_chunker_handle(),
+            [0xAB; 32],
+            RegistryPinPolicy::default(),
+            issuer.clone(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        );
+        manifest_record.approve(7, None);
+        tx.world_mut_for_testing()
+            .pin_manifests_mut_for_testing()
+            .insert(manifest_digest.clone(), manifest_record);
+
+        let order_id = ReplicationOrderId::new([0x51; 32]);
+        tx.world_mut_for_testing()
+            .replication_orders_mut_for_testing()
+            .insert(
+                order_id,
+                ReplicationOrderRecord {
+                    order_id,
+                    manifest_digest: manifest_digest.clone(),
+                    issued_by: issuer,
+                    issued_epoch: 8,
+                    deadline_epoch: 24,
+                    canonical_order: encode_replication_order_bytes_with_providers(
+                        &order_id,
+                        &manifest_digest,
+                        &manifest.root_cid,
+                        vec![provider_id],
+                        24,
+                    ),
+                    status: ReplicationOrderStatus::Completed(9),
+                },
+            );
+
+        tx.apply();
+        block.commit().expect("commit registry seed block");
     }
 
     fn make_state() -> State {

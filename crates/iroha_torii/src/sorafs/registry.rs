@@ -902,6 +902,7 @@ pub(crate) struct RegistryAlias {
 pub(crate) struct RegistryReplicationOrder {
     order_id_hex: String,
     manifest_digest_hex: String,
+    manifest_cid: Vec<u8>,
     issued_by: String,
     issued_epoch: u64,
     deadline_epoch: u64,
@@ -1658,6 +1659,7 @@ impl RegistryReplicationOrder {
         Ok(Self {
             order_id_hex,
             manifest_digest_hex: record.manifest_digest.as_bytes().encode_hex::<String>(),
+            manifest_cid: order.manifest_cid.clone(),
             issued_by: record.issued_by.to_string(),
             issued_epoch: record.issued_epoch,
             deadline_epoch: record.deadline_epoch,
@@ -1675,6 +1677,14 @@ impl RegistryReplicationOrder {
 
     pub(crate) fn manifest_digest_hex(&self) -> &str {
         &self.manifest_digest_hex
+    }
+
+    pub(crate) fn manifest_cid(&self) -> &[u8] {
+        &self.manifest_cid
+    }
+
+    pub(crate) fn providers(&self) -> &[String] {
+        &self.providers
     }
 
     /// Epoch when the replication order was issued.

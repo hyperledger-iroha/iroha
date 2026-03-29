@@ -150,6 +150,11 @@ Note: First release policy
 - For Taira rollout/debug work, do not trust MCP discovery alone. Use
   `configs/soranexus/taira/check_mcp_rollout.sh`, and for final public cutover
   require the signed canary path with `--write-config <runtime-only client.toml>`.
+- For multi-validator Taira deploy changes, do not hand-edit
+  `configs/soranexus/taira/config.toml` into separate copies. Render per-host
+  configs from `configs/soranexus/taira/validator_roster.example.toml` with
+  `python3 scripts/render_taira_validator_bundle.py ...` and point the unit at
+  the generated config path.
 - If a live public Taira write fails with `route_unavailable`, treat it as an
   ingress or authoritative-peer routing failure first, not a user payload bug.
 

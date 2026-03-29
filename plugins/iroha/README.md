@@ -90,4 +90,8 @@ Those values are runtime-only inputs:
 When live Taira writes fail with `route_unavailable`, treat that as an ingress
 or authoritative-peer deployment issue and rerun
 `configs/soranexus/taira/check_mcp_rollout.sh --write-config <runtime-only client.toml>`
-rather than debugging the plugin surface first.
+rather than debugging the plugin surface first. If the deploy still relies on
+hand-edited validator configs, rebuild them from
+`configs/soranexus/taira/validator_roster.example.toml` with
+`python3 scripts/render_taira_validator_bundle.py --roster ... --output-dir ...`
+before cutting traffic again.

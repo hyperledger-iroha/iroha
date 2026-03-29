@@ -1,6 +1,9 @@
 # Sora Taira (testnet) validator configuration
 # Network prefix: `taira`
 # Start with: `irohad --sora --config configs/soranexus/taira/config.toml`
+# This is the checked-in peer-1 baseline. For real multi-validator deploys,
+# render per-validator configs from `validator_roster.example.toml` with
+# `python3 scripts/render_taira_validator_bundle.py --roster ... --output-dir ...`.
 
 chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
 chain_discriminant = 369
