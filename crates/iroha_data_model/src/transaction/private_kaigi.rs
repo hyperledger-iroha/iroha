@@ -351,8 +351,10 @@ mod tests {
                 proof: vec![0xAA, 0xBB, 0xCC],
             },
             fee_spend: PrivateKaigiFeeSpend {
-                asset_definition_id: AssetDefinitionId::from_str("xor#wonderland")
-                    .expect("asset definition"),
+                asset_definition_id: AssetDefinitionId::new(
+                    DomainId::from_str("wonderland").expect("domain"),
+                    Name::from_str("xor").expect("name"),
+                ),
                 anchor_root: Hash::new(b"anchor-root"),
                 nullifiers: vec![[0x11; 32]],
                 output_commitments: vec![[0x22; 32]],
@@ -367,7 +369,7 @@ mod tests {
         let tx = sample_transaction();
         let bytes = norito::codec::encode_adaptive(&tx);
         let decoded: PrivateKaigiTransaction =
-            norito::core::decode_from_bytes(&bytes).expect("decode private tx");
+            norito::codec::decode_adaptive(&bytes).expect("decode private tx");
         assert_eq!(decoded, tx);
     }
 
@@ -383,7 +385,7 @@ mod tests {
 
         first.metadata.insert(
             Name::from_str("answer").expect("metadata key"),
-            "ciphertext".to_owned(),
+            "ciphertext",
         );
         assert_ne!(first.action_hash(), second.action_hash());
     }

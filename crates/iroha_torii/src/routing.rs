@@ -1831,26 +1831,26 @@ fn kaigi_signal_from_transaction(
     tx: &iroha_data_model::query::CommittedTransaction,
     reveal_authorities: bool,
 ) -> Option<KaigiCallSignalDto> {
-    let TransactionEntrypoint::External(signed) = tx.entrypoint() else {
-        return None;
+    let (metadata, authority, timestamp_ms) = match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => (
+            signed.metadata(),
+            reveal_authorities.then(|| crate::account_literal::display_literal(signed.authority())),
+            u64::try_from(signed.creation_time().as_millis()).ok(),
+        ),
+        TransactionEntrypoint::PrivateKaigi(private) => (&private.metadata, None, Some(private.creation_time_ms)),
+        TransactionEntrypoint::Time(_) => return None,
     };
     let key: Name = "kaigi_signal".parse().ok()?;
-    let signal_json = signed
-        .metadata()
-        .get(&key)?
-        .try_into_any_norito::<Value>()
-        .ok()?;
+    let signal_json = metadata.get(&key)?.try_into_any_norito::<Value>().ok()?;
     let call_id = kaigi_metadata_string(&signal_json, &["callId", "call_id"])?;
     let signal_kind = kaigi_metadata_string(&signal_json, &["signalKind", "signal_kind"])
         .unwrap_or_else(|| "signal".to_owned())
         .to_ascii_lowercase();
     let created_at_ms = kaigi_metadata_u64(&signal_json, &["createdAtMs", "created_at_ms"])?;
-    let timestamp_ms = u64::try_from(signed.creation_time().as_millis()).ok();
 
     Some(KaigiCallSignalDto {
         entrypoint_hash: tx.entrypoint_hash().to_string(),
-        authority: reveal_authorities
-            .then(|| crate::account_literal::display_literal(signed.authority())),
+        authority,
         timestamp_ms,
         call_id,
         signal_kind,
@@ -20413,6 +20413,7 @@ pub async fn handle_p2p_ws(
 struct TxProjection {
     authority: Option<String>,
     timestamp_ms: Option<u64>,
+    entrypoint_kind: String,
     entrypoint_hash: String,
     result_ok: bool,
 }
@@ -20423,6 +20424,17 @@ fn tx_field_value(
     field: &str,
 ) -> Option<String> {
     match field {
+        "entrypoint_kind" => Some(match tx.entrypoint() {
+            iroha_data_model::transaction::signed::TransactionEntrypoint::External(_) => {
+                "external".to_owned()
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
+                "private_kaigi".to_owned()
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::Time(_) => {
+                "time".to_owned()
+            }
+        }),
         // authority account id string if External entrypoint
         "authority" => match &tx.entrypoint() {
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
@@ -20430,6 +20442,7 @@ fn tx_field_value(
                 // transparent_api feature. The response projection still controls visibility.
                 Some(signed.payload().authority.to_string())
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => None,
             _ => None,
         },
         // creation timestamp if External entrypoint
@@ -20437,6 +20450,9 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                 // Use API method to avoid relying on internal payload field names
                 Some(format!("{}", signed.creation_time().as_millis()))
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+                Some(tx.creation_time_ms.to_string())
             }
             _ => None,
         },
@@ -20457,6 +20473,9 @@ fn tx_field_value(
             match &tx.entrypoint() {
                 iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                     signed.metadata().get(&name).map(|json| json.get().clone())
+                }
+                iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+                    tx.metadata.get(&name).map(|json| json.get().clone())
                 }
                 _ => None,
             }
@@ -20797,6 +20816,7 @@ fn tx_references_account_id(
             signed.authority() == expected
                 || executable_contains_account_id(signed.instructions(), expected)
         }
+        TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(entry) => entry
             .instructions
             .iter()
@@ -20813,6 +20833,17 @@ fn tx_references_domain_id(
         TransactionEntrypoint::External(signed) => {
             executable_contains_domain_id(signed.instructions(), expected)
         }
+        TransactionEntrypoint::PrivateKaigi(private) => match &private.action {
+            iroha_data_model::transaction::PrivateKaigiAction::Create(create) => {
+                create.call.id.domain_id == *expected
+            }
+            iroha_data_model::transaction::PrivateKaigiAction::Join(join) => {
+                join.call_id.domain_id == *expected
+            }
+            iroha_data_model::transaction::PrivateKaigiAction::End(end) => {
+                end.call_id.domain_id == *expected
+            }
+        },
         TransactionEntrypoint::Time(entry) => entry
             .instructions
             .iter()
@@ -20967,6 +20998,7 @@ fn tx_collect_asset_ids(
                 }
             }
         }
+        TransactionEntrypoint::PrivateKaigi(_) => {}
         TransactionEntrypoint::Time(entry) => {
             for instr in entry.instructions.iter() {
                 visit_instruction(instr);
@@ -21185,11 +21217,17 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
             Some(format!("{}", signed.authority())),
             Some(signed.authority().clone()),
         ),
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
+            (None, None)
+        }
         _ => (None, None),
     };
     let ts_ms_opt: Option<i128> = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.creation_time().as_millis() as i128)
+        }
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+            Some(i128::from(tx.creation_time_ms))
         }
         _ => None,
     };
@@ -21208,6 +21246,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                     _ => false,
                 }
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => false,
             _ => false,
         };
         if default_ok {
@@ -21235,6 +21274,9 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
     let metadata_map = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.metadata())
+        }
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+            Some(&tx.metadata)
         }
         _ => None,
     };
@@ -21546,6 +21588,7 @@ fn tx_matches_account_history_subject(
         TransactionEntrypoint::External(signed) => {
             signed.authority().controller() == account_id.controller()
         }
+        TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(_) => false,
     }
 }
@@ -21581,6 +21624,7 @@ fn project_tx(
     // Use shared extractor to ensure parity with other filter/projection logic
     let authority = tx_field_value(tx, "authority");
     let timestamp_ms = tx_field_value(tx, "timestamp_ms").and_then(|s| s.parse::<u64>().ok());
+    let entrypoint_kind = tx_field_value(tx, "entrypoint_kind").unwrap_or_else(|| "unknown".to_owned());
     let entry_hash = format!("{}", tx.entrypoint_hash());
     let result_ok = {
         let default_ok = match tx.entrypoint() {
@@ -21592,6 +21636,7 @@ fn project_tx(
                     _ => false,
                 }
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => false,
             _ => false,
         };
         if default_ok {
@@ -21608,8 +21653,12 @@ fn project_tx(
             match fp.0.as_str() {
                 "authority" => proj.authority.clone_from(&authority),
                 "timestamp_ms" => proj.timestamp_ms = timestamp_ms,
+                "entrypoint_kind" => proj.entrypoint_kind.clone_from(&entrypoint_kind),
                 _ => {}
             }
+        }
+        if proj.entrypoint_kind.is_empty() {
+            proj.entrypoint_kind = entrypoint_kind;
         }
         proj.entrypoint_hash = entry_hash;
         proj.result_ok = result_ok;
@@ -21618,6 +21667,7 @@ fn project_tx(
         TxProjection {
             authority,
             timestamp_ms,
+            entrypoint_kind,
             entrypoint_hash: entry_hash,
             result_ok,
         }
