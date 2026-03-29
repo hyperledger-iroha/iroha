@@ -123,30 +123,15 @@ pub enum CommittedTxPredicate {
 
 impl CommittedTxPredicate {
     fn authority_of(tx: &CommittedTransaction) -> Option<crate::account::AccountId> {
-        match &tx.entrypoint {
-            crate::transaction::signed::TransactionEntrypoint::External(signed) => {
-                Some(signed.authority().clone())
-            }
-            _ => None,
-        }
+        tx.entrypoint.authority_opt().cloned()
     }
 
     fn timestamp_ms_of(tx: &CommittedTransaction) -> Option<u64> {
-        match &tx.entrypoint {
-            crate::transaction::signed::TransactionEntrypoint::External(s) => {
-                u64::try_from(s.creation_time().as_millis()).ok()
-            }
-            crate::transaction::signed::TransactionEntrypoint::Time(_) => None,
-        }
+        tx.entrypoint.creation_time_ms()
     }
 
     fn metadata_value<'tx>(tx: &'tx CommittedTransaction, key: &Name) -> Option<&'tx Json> {
-        match &tx.entrypoint {
-            crate::transaction::signed::TransactionEntrypoint::External(signed) => {
-                signed.metadata().get(key)
-            }
-            _ => None,
-        }
+        tx.entrypoint.metadata().and_then(|metadata| metadata.get(key))
     }
 
     fn metadata_json_value(json: &Json) -> Option<norito::json::Value> {

@@ -27,6 +27,7 @@ pub use self::model::*;
 use super::{
     error,
     executable::{Executable, IvmBytecode},
+    private_kaigi::PrivateKaigiTransaction,
 };
 use crate::{
     ChainId,
@@ -183,6 +184,8 @@ mod model {
     pub enum TransactionEntrypoint {
         /// User request that initiates a transaction.
         External(SignedTransaction),
+        /// Authority-free private Kaigi request.
+        PrivateKaigi(PrivateKaigiTransaction),
         /// Scheduled time trigger that initiates a transaction.
         Time(TimeTriggerEntrypoint),
     }
@@ -670,6 +673,11 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(tx, out);
             }
+            TransactionEntrypoint::PrivateKaigi(tx) => {
+                norito::json::write_json_string("PrivateKaigi", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(tx, out);
+            }
             TransactionEntrypoint::Time(trigger) => {
                 norito::json::write_json_string("Time", out);
                 out.push(':');
@@ -692,6 +700,10 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
             "External" => {
                 let tx = SignedTransaction::json_deserialize(parser)?;
                 TransactionEntrypoint::External(tx)
+            }
+            "PrivateKaigi" => {
+                let tx = PrivateKaigiTransaction::json_deserialize(parser)?;
+                TransactionEntrypoint::PrivateKaigi(tx)
             }
             "Time" => {
                 let trigger = TimeTriggerEntrypoint::json_deserialize(parser)?;
@@ -1741,12 +1753,52 @@ mod attachments_tests {
 }
 
 impl TransactionEntrypoint {
+    /// Account authorized to initiate this transaction when one exists.
+    #[inline]
+    pub fn authority_opt(&self) -> Option<&AccountId> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => Some(entrypoint.authority()),
+            TransactionEntrypoint::PrivateKaigi(_) => None,
+            TransactionEntrypoint::Time(entrypoint) => Some(&entrypoint.authority),
+        }
+    }
+
     /// Account authorized to initiate this transaction.
+    ///
+    /// # Panics
+    ///
+    /// Panics for authority-free private Kaigi entrypoints. Call
+    /// [`Self::authority_opt`] when the entrypoint kind is not known in advance.
     #[inline]
     pub fn authority(&self) -> &AccountId {
         match self {
             TransactionEntrypoint::External(entrypoint) => entrypoint.authority(),
+            TransactionEntrypoint::PrivateKaigi(_) => {
+                panic!("private kaigi entrypoints do not carry a public authority")
+            }
             TransactionEntrypoint::Time(entrypoint) => &entrypoint.authority,
+        }
+    }
+
+    /// Creation timestamp in milliseconds when the entrypoint carries one.
+    #[inline]
+    pub fn creation_time_ms(&self) -> Option<u64> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => {
+                u64::try_from(entrypoint.creation_time().as_millis()).ok()
+            }
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(entrypoint.creation_time_ms),
+            TransactionEntrypoint::Time(_) => None,
+        }
+    }
+
+    /// Metadata attached to the entrypoint when one exists.
+    #[inline]
+    pub fn metadata(&self) -> Option<&Metadata> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => Some(entrypoint.metadata()),
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(&entrypoint.metadata),
+            TransactionEntrypoint::Time(_) => None,
         }
     }
 

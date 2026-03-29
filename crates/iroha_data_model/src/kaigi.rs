@@ -508,6 +508,8 @@ pub struct KaigiRecord {
     pub room_policy: KaigiRoomPolicy,
     /// Relay manifest snapshot carrying structured relay metadata.
     pub relay_manifest: Option<KaigiRelayManifest>,
+    /// Host commitment used to authorize privacy-mode host actions.
+    pub host_commitment: Option<KaigiParticipantCommitment>,
     /// Deterministic Merkle root of the roster commitment tree.
     pub roster_root: Hash,
     /// Participant roster commitments used in privacy mode.
@@ -555,6 +557,7 @@ impl KaigiRecord {
             privacy_mode: template.privacy_mode,
             room_policy: template.room_policy,
             relay_manifest: template.relay_manifest.clone(),
+            host_commitment: None,
             roster_root: empty_roster_root(),
             roster_commitments: Vec::new(),
             nullifier_log: Vec::new(),

@@ -138,6 +138,10 @@ export function verifySm2() {
   return unsupported("verifySm2");
 }
 
+export function buildKaigiRosterJoinProof() {
+  return unsupported("buildKaigiRosterJoinProof");
+}
+
 export function deriveConfidentialKeyset() {
   return unsupported("deriveConfidentialKeyset");
 }

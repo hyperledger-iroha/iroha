@@ -4938,6 +4938,10 @@ export interface CreateKaigiInput {
   privacyMode?: KaigiPrivacyModeInput;
   roomPolicy?: KaigiRoomPolicyInput;
   relayManifest?: KaigiRelayManifestInput | null;
+  commitment?: KaigiParticipantCommitmentInput | null;
+  nullifier?: KaigiParticipantNullifierInput | null;
+  rosterRoot?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
+  proof?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
 }
 
 export interface JoinKaigiInput {
@@ -4954,6 +4958,10 @@ export interface LeaveKaigiInput extends JoinKaigiInput {}
 export interface EndKaigiInput {
   callId: KaigiIdLike;
   endedAtMs?: NumericLike | null;
+  commitment?: KaigiParticipantCommitmentInput | null;
+  nullifier?: KaigiParticipantNullifierInput | null;
+  rosterRoot?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
+  proof?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
 }
 
 export interface RecordKaigiUsageInput {

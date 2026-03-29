@@ -452,9 +452,15 @@ fn kaigi_privacy_join_and_leave_flow_updates_record() {
     template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
     template.metadata = Metadata::default();
 
-    CreateKaigi { call: template }
-        .execute(&host, &mut tx1)
-        .expect("create kaigi");
+    CreateKaigi {
+        call: template,
+        commitment: None,
+        nullifier: None,
+        roster_root: None,
+        proof: None,
+    }
+    .execute(&host, &mut tx1)
+    .expect("create kaigi");
 
     JoinKaigi {
         call_id: call_id.clone(),
@@ -605,9 +611,15 @@ fn usage_summary_emitted_on_record_usage() {
         .execute(&ALICE_ID, &mut tx)
         .expect("register host");
 
-    CreateKaigi { call: template }
-        .execute(&host, &mut tx)
-        .expect("create kaigi");
+    CreateKaigi {
+        call: template,
+        commitment: None,
+        nullifier: None,
+        roster_root: None,
+        proof: None,
+    }
+    .execute(&host, &mut tx)
+    .expect("create kaigi");
 
     tx.world.take_external_events();
 
