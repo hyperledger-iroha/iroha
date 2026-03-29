@@ -968,12 +968,14 @@ fn generate_localnet_with_line<T: Write>(
             chain_discriminant,
             (&hosts.bind, &hosts.public),
             opts.consensus_mode,
-            mcp_enabled,
-            nexus_enabled,
-            npos_bootstrap,
+            RenderPeerFeatures {
+                mcp_enabled,
+                nexus_enabled,
+                npos_bootstrap,
+                da_rbc_enabled,
+            },
             dataspace_fault_tolerance,
             gas_account_id.as_deref(),
-            da_rbc_enabled,
             redundant_send_r,
             collectors_k,
             commit_inflight_timeout_ms,
@@ -1194,6 +1196,14 @@ fn configured_chain_id() -> String {
         .unwrap_or_else(|| DEFAULT_CHAIN_ID.to_owned())
 }
 
+#[derive(Clone, Copy)]
+struct RenderPeerFeatures {
+    mcp_enabled: bool,
+    nexus_enabled: bool,
+    npos_bootstrap: bool,
+    da_rbc_enabled: bool,
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn render_peer_config(
     peer: &Peer,
@@ -1209,12 +1219,9 @@ fn render_peer_config(
     chain_discriminant: Option<u16>,
     hosts: (&CanonicalHost, &CanonicalHost),
     consensus_mode: SumeragiConsensusMode,
-    mcp_enabled: bool,
-    nexus_enabled: bool,
-    npos_bootstrap: bool,
+    features: RenderPeerFeatures,
     dataspace_fault_tolerance: Option<u32>,
     gas_account_id: Option<&str>,
-    da_rbc_enabled: bool,
     redundant_send_r: Option<u8>,
     collectors_k: Option<u16>,
     commit_inflight_timeout_ms: u64,
@@ -1226,6 +1233,12 @@ fn render_peer_config(
     use toml::{Table, Value};
 
     let (bind_host, public_host) = hosts;
+    let RenderPeerFeatures {
+        mcp_enabled,
+        nexus_enabled,
+        npos_bootstrap,
+        da_rbc_enabled,
+    } = features;
 
     let trusted_list = trusted_peers
         .iter()

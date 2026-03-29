@@ -1500,7 +1500,7 @@ impl Queue {
                         .map(|entry| *entry.value())
                         .unwrap_or_else(|| Self::compute_tx_encoded_len(tx_ref.as_accepted()));
                     let mut buf = Vec::with_capacity(encoded_len);
-                    tx_ref.as_accepted().entrypoint().encode_to(&mut buf);
+                    tx_ref.as_accepted().as_ref().encode_to(&mut buf);
                     let payload = Arc::new(buf);
                     self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
                     payload
@@ -5307,6 +5307,24 @@ pub mod tests {
 
         let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
         assert_eq!(stored_payload.as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn queue_generated_gossip_payload_uses_signed_transaction_encoding() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let expected_payload = tx.as_ref().encode();
+
+        queue.push(tx, state.view()).expect("push tx");
+
+        let batch = queue.gossip_batch(1, &state.view());
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].payload.as_slice(), expected_payload.as_slice());
     }
 
     #[test]

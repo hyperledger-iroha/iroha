@@ -1827,7 +1827,7 @@ enum ChaosUpdate {
         message: String,
     },
     Finished {
-        supervisor: Supervisor,
+        supervisor: Box<Supervisor>,
         report: ChaosReport,
         error: Option<String>,
     },
@@ -3012,7 +3012,7 @@ impl MochiApp {
         )
     }
 
-    fn recipe_peer<'a>(peer_rows: &'a [PeerRow]) -> Option<&'a PeerRow> {
+    fn recipe_peer(peer_rows: &[PeerRow]) -> Option<&PeerRow> {
         peer_rows
             .iter()
             .find(|row| row.api_base.is_some())

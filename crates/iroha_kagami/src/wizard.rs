@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
     io::{BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
 };
 
@@ -303,9 +303,7 @@ fn gather_answers(args: &Args) -> Result<Answers> {
 
     let relay_mode = resolve_relay_mode(args.relay_mode, args.non_interactive)?;
     let relay_hub_addresses = if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist) {
-        if !args.relay_hub_addresses.is_empty() {
-            args.relay_hub_addresses.clone()
-        } else {
+        if args.relay_hub_addresses.is_empty() {
             let raw = resolve_text(
                 "Relay hub addresses (comma separated host:port)",
                 None,
@@ -317,6 +315,8 @@ fn gather_answers(args: &Args) -> Result<Answers> {
                 .filter(|s| !s.is_empty())
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>()
+        } else {
+            args.relay_hub_addresses.clone()
         }
     } else {
         Vec::new()
@@ -589,12 +589,12 @@ fn resolve_number(
 }
 
 fn write_wizard_readme(
-    path: &PathBuf,
+    path: &Path,
     profile: Profile,
     chain_id: &str,
     public_key: &PublicKey,
-    config_path: &PathBuf,
-    genesis_path: &PathBuf,
+    config_path: &Path,
+    genesis_path: &Path,
     next_command: &str,
 ) -> Result<()> {
     let rendered = format!(

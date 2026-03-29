@@ -38,17 +38,13 @@ use iroha_data_model::{
     proof::{ProofAttachment, ProofBox},
     query::error::FindError,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
-    transaction::{
-        PrivateKaigiAction, PrivateKaigiTransaction, error::TransactionLimitError,
-        signed::TransactionSignatureError,
-    },
+    transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
     zk::OpenVerifyEnvelope,
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
-use iroha_primitives::{numeric::Numeric, numeric::NumericSpec};
 use iroha_schema::Ident;
 use mv::storage::StorageReadOnly;
 

@@ -76,6 +76,9 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
                     assert!(prev_timestamp > curr_timestamp);
                     curr_timestamp
                 }
+                TransactionEntrypoint::PrivateKaigi(_) => {
+                    panic!("unexpected private Kaigi entrypoint");
+                }
                 TransactionEntrypoint::Time(_) => {
                     panic!("unexpected time-triggered entrypoint");
                 }

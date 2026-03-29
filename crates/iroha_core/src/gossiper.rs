@@ -2123,21 +2123,21 @@ impl NoritoSerialize for GossipTransaction {
             writer.write_all(encoded)?;
             return Ok(());
         }
-        self.signed.serialize(writer)
+        self.signed.as_ref().serialize(writer)
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded
             .as_ref()
             .map(|bytes| bytes.len())
-            .or_else(|| self.signed.encoded_len_hint())
+            .or_else(|| self.signed.as_ref().encoded_len_hint())
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
         self.encoded
             .as_ref()
             .map(|bytes| bytes.len())
-            .or_else(|| self.signed.encoded_len_exact())
+            .or_else(|| self.signed.as_ref().encoded_len_exact())
     }
 }
 
@@ -2379,10 +2379,18 @@ mod tests {
         },
     };
     use iroha_config_base::WithOrigin;
+    use iroha_crypto::{
+        Algorithm, BfvParameters, KeyPair, RamLfeBackend, RamLfeVerificationMode,
+        bfv_programmed_policy_commitment_with_program,
+        bfv_programmed_public_parameters_with_program, default_bfv_programmed_hidden_program,
+        derive_identifier_key_material_from_seed,
+    };
     use iroha_data_model::{
         ChainId, DataSpaceId, Level,
-        isi::Log,
+        identifier::IdentifierPolicyId,
+        isi::{Instruction, InstructionBox, Log, ram_lfe::RegisterRamLfeProgramPolicy},
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneId, LaneVisibility},
+        ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
         transaction::TransactionBuilder,
     };
     use iroha_primitives::{addr::socket_addr, time::TimeSource};
@@ -2414,6 +2422,65 @@ mod tests {
 
     fn payload_for(tx: &SignedTransaction) -> Arc<Vec<u8>> {
         Arc::new(norito::codec::Encode::encode(tx))
+    }
+
+    fn identifier_bfv_parameters() -> BfvParameters {
+        BfvParameters {
+            polynomial_degree: 64,
+            ciphertext_modulus: 1_u64 << 52,
+            plaintext_modulus: 256,
+            decomposition_base_log: 12,
+        }
+    }
+
+    fn register_ram_lfe_program_policy_tx() -> SignedTransaction {
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let owner = (*ALICE_ID).clone();
+        let signer = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let policy_id = "email#retail"
+            .parse::<IdentifierPolicyId>()
+            .expect("valid policy id");
+        let program_id = policy_id
+            .to_string()
+            .replace('#', "_")
+            .parse::<RamLfeProgramId>()
+            .expect("valid program id");
+        let hidden_program = default_bfv_programmed_hidden_program();
+        let (public_parameters, _, _) = derive_identifier_key_material_from_seed(
+            &identifier_bfv_parameters(),
+            63,
+            b"email-secret",
+            &norito::to_bytes(&program_id).expect("encode program id"),
+        )
+        .expect("derive key material");
+        let programmed_public_parameters = bfv_programmed_public_parameters_with_program(
+            public_parameters,
+            &hidden_program,
+            RamLfeVerificationMode::Signed,
+            None,
+        );
+        let encoded_public_parameters =
+            norito::to_bytes(&programmed_public_parameters).expect("encode public parameters");
+        let commitment = bfv_programmed_policy_commitment_with_program(
+            b"email-secret",
+            &encoded_public_parameters,
+            &hidden_program,
+        )
+        .expect("policy commitment");
+        let policy = RamLfeProgramPolicy::new(
+            program_id,
+            owner.clone(),
+            RamLfeBackend::BfvProgrammedSha3_256V1,
+            RamLfeVerificationMode::Signed,
+            commitment,
+            signer.public_key().clone(),
+        );
+        let instructions: [InstructionBox; 1] =
+            [Box::new(RegisterRamLfeProgramPolicy { policy }).into_instruction_box()];
+
+        TransactionBuilder::new(chain_id, owner)
+            .with_instructions(instructions)
+            .sign(ALICE_KEYPAIR.private_key())
     }
 
     #[test]
@@ -2986,6 +3053,36 @@ mod tests {
         let err =
             ncore::decode_field_canonical::<GossipTransaction>(&encoded).expect_err("bad bytes");
         assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn gossip_roundtrip_preserves_large_ram_lfe_policy_transaction() {
+        let signed = register_ram_lfe_program_policy_tx();
+        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
+        let signed_encoded = signed.encode();
+        let signed_decoded: SignedTransaction =
+            Decode::decode(&mut signed_encoded.as_slice()).expect("decode signed transaction");
+        assert_eq!(signed_decoded.hash(), signed.hash());
+        let gossip_tx = GossipTransaction::new(accepted.clone());
+        let gossip_tx_encoded = gossip_tx.encode();
+        let gossip_tx_decoded: GossipTransaction =
+            Decode::decode(&mut gossip_tx_encoded.as_slice()).expect("decode gossip transaction");
+        assert_eq!(gossip_tx_decoded.as_signed().hash(), signed.hash());
+        let message = TransactionGossip {
+            txs: vec![gossip_tx],
+            routes: vec![GossipRoute {
+                lane_id: LaneId::SINGLE,
+                dataspace_id: DataSpaceId::GLOBAL,
+            }],
+            plane: GossipPlane::Public,
+        };
+
+        let encoded = message.encode();
+        let decoded: TransactionGossip =
+            Decode::decode(&mut encoded.as_slice()).expect("decode gossip");
+
+        assert_eq!(decoded.txs.len(), 1);
+        assert_eq!(decoded.txs[0].as_signed().hash(), signed.hash());
     }
 
     #[test]

@@ -21272,7 +21272,6 @@ fn tx_references_account_id(
             .instructions
             .iter()
             .any(|instruction| instruction_matches_account_id(instruction, expected)),
-        TransactionEntrypoint::PrivateKaigi(_) => false,
     }
 }
 
@@ -21300,7 +21299,6 @@ fn tx_references_domain_id(
             .instructions
             .iter()
             .any(|instruction| instruction_matches_domain_id(instruction, expected)),
-        TransactionEntrypoint::PrivateKaigi(_) => false,
     }
 }
 
@@ -21457,7 +21455,6 @@ fn tx_collect_asset_ids(
                 visit_instruction(instr);
             }
         }
-        TransactionEntrypoint::PrivateKaigi(_) => {}
     }
 
     out
@@ -22044,7 +22041,6 @@ fn tx_matches_account_history_subject(
         }
         TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(_) => false,
-        TransactionEntrypoint::PrivateKaigi(_) => false,
     }
 }
 

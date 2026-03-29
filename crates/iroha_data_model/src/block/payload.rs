@@ -237,7 +237,7 @@ impl SignedBlock {
     pub fn set_external_entrypoints(&mut self, entrypoints: Vec<TransactionEntrypoint>) {
         let merkle = entrypoints
             .iter()
-            .map(|entrypoint| entrypoint.hash())
+            .map(TransactionEntrypoint::hash)
             .collect::<MerkleTree<TransactionEntrypoint>>();
         self.payload.external_entrypoints.clone_from(&entrypoints);
         self.payload.header.merkle_root = merkle.root();
@@ -246,7 +246,7 @@ impl SignedBlock {
             result.merkle = result
                 .external_entrypoints
                 .iter()
-                .map(|entrypoint| entrypoint.hash())
+                .map(TransactionEntrypoint::hash)
                 .chain(
                     result
                         .time_triggers

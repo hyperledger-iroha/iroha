@@ -575,48 +575,50 @@ fn collect_operations(
 
     #[cfg(feature = "fastpq-gpu")]
     if config.operation.includes(BenchOperation::Poseidon) {
-        let poseidon_domains = poseidon_domains(config.column_count);
-        let poseidon_domain_refs: Vec<&str> = poseidon_domains.iter().map(String::as_str).collect();
-        let poseidon_input_len = poseidon_input_len(columns.coeff.first().map_or(0, Vec::len));
-        let poseidon = OperationTimings {
-            cpu: measure_map(
-                &columns.coeff,
-                config.warmups,
-                config.iterations,
-                |coeffs| {
-                    hash_columns_cpu_batch_inputs(&poseidon_domain_refs, coeffs)
-                        .expect("cpu poseidon batch shape")
-                },
-            ),
-            gpu: if probe.gpu_available {
-                measure_map_optional(
-                    &columns.coeff,
-                    config.warmups,
-                    config.iterations,
-                    |coeffs| {
-                        let batch = PoseidonColumnBatch::from_domains_and_columns(
-                            &poseidon_domain_refs,
-                            coeffs,
-                        )
-                        .expect("gpu poseidon batch shape");
-                        hash_columns_gpu_batch(&batch)
-                    },
-                )
-            } else {
-                None
-            },
-        };
-        entries.push(operation_entry(
-            BenchOperation::Poseidon.as_str(),
-            poseidon_input_len,
-            1,
-            config.column_count,
-            &poseidon.cpu,
-            poseidon.gpu.as_ref(),
-        ));
+        entries.push(collect_poseidon_entry(config, columns, probe));
     }
 
     entries
+}
+
+#[cfg(feature = "fastpq-gpu")]
+fn collect_poseidon_entry(
+    config: &Config,
+    columns: &ColumnSets,
+    probe: &ExecutionProbe,
+) -> OperationEntry {
+    let poseidon_domains = poseidon_domains(config.column_count);
+    let poseidon_domain_refs: Vec<&str> = poseidon_domains.iter().map(String::as_str).collect();
+    let poseidon_input_len = poseidon_input_len(columns.coeff.first().map_or(0, Vec::len));
+    let poseidon = OperationTimings {
+        cpu: measure_map(
+            &columns.coeff,
+            config.warmups,
+            config.iterations,
+            |coeffs| {
+                hash_columns_cpu_batch_inputs(&poseidon_domain_refs, coeffs)
+                    .expect("cpu poseidon batch shape")
+            },
+        ),
+        gpu: if probe.gpu_available {
+            measure_map_optional(&columns.coeff, config.warmups, config.iterations, |coeffs| {
+                let batch =
+                    PoseidonColumnBatch::from_domains_and_columns(&poseidon_domain_refs, coeffs)
+                        .expect("gpu poseidon batch shape");
+                hash_columns_gpu_batch(&batch)
+            })
+        } else {
+            None
+        },
+    };
+    operation_entry(
+        BenchOperation::Poseidon.as_str(),
+        poseidon_input_len,
+        1,
+        config.column_count,
+        &poseidon.cpu,
+        poseidon.gpu.as_ref(),
+    )
 }
 
 fn collect_bn254_metrics(
@@ -645,91 +647,130 @@ fn collect_bn254_metrics(
     let mut warnings = Vec::new();
 
     if config.operation.includes(BenchOperation::Fft) {
-        let fft = Bn254MetricEntry {
-            operation: "fft",
-            cpu: measure_in_place(
-                &columns.coeff_scalars,
-                config.warmups,
-                config.iterations,
-                |cols| bn254_cpu_fft(cols, trace_log, &fft_twiddles),
-            ),
-            gpu: if probe.gpu_available {
-                match measure_flat_in_place_result(
-                    &columns.coeff_limbs,
-                    config.warmups,
-                    config.iterations,
-                    |data| fastpq_bn254_fft(data, config.column_count, trace_log),
-                ) {
-                    Ok(summary) => Some(summary),
-                    Err(err) => {
-                        warnings.push(format!("bn254 fft gpu timing skipped: {err}"));
-                        None
-                    }
-                }
-            } else {
-                None
-            },
-        };
-        entries.push(fft);
+        entries.push(collect_bn254_fft_entry(
+            config,
+            trace_log,
+            &columns,
+            &fft_twiddles,
+            probe,
+            &mut warnings,
+        ));
     }
 
     if config.operation.includes(BenchOperation::Lde) {
-        let eval_len = 1usize << eval_log;
-        let output_len = config
-            .column_count
-            .checked_mul(eval_len)
-            .and_then(|values| values.checked_mul(BN254_LIMBS))
-            .ok_or_else(|| "BN254 output extent overflow".to_owned())?;
-        let lde = Bn254MetricEntry {
-            operation: "lde",
-            cpu: measure_map(
-                &columns.coeff_scalars,
-                config.warmups,
-                config.iterations,
-                |coeffs| {
-                    bn254_cpu_lde(
-                        coeffs,
-                        trace_log,
-                        blowup_log,
-                        &lde_twiddles,
-                        columns.coset_scalar,
-                    )
-                },
-            ),
-            gpu: if probe.gpu_available {
-                match measure_flat_map_result(
-                    &columns.coeff_limbs,
-                    config.warmups,
-                    config.iterations,
-                    |coeffs| {
-                        let mut out = vec![0u64; output_len];
-                        fastpq_bn254_lde(
-                            coeffs,
-                            config.column_count,
-                            trace_log,
-                            blowup_log,
-                            columns.coset_limbs,
-                            &mut out,
-                        )?;
-                        Ok::<_, CudaBackendError>(out)
-                    },
-                ) {
-                    Ok(summary) => Some(summary),
-                    Err(err) => {
-                        warnings.push(format!("bn254 lde gpu timing skipped: {err}"));
-                        None
-                    }
-                }
-            } else {
-                None
-            },
-        };
-        entries.push(lde);
+        entries.push(collect_bn254_lde_entry(
+            config,
+            trace_log,
+            blowup_log,
+            &columns,
+            &lde_twiddles,
+            probe,
+            &mut warnings,
+        )?);
     }
 
     Ok(Bn254BenchCapture {
         metrics: bn254_metrics_value(&entries, &probe.backend_label),
         warnings,
+    })
+}
+
+fn collect_bn254_fft_entry(
+    config: &Config,
+    trace_log: u32,
+    columns: &Bn254ColumnSets,
+    fft_twiddles: &[Bn254Scalar],
+    probe: &ExecutionProbe,
+    warnings: &mut Vec<String>,
+) -> Bn254MetricEntry {
+    Bn254MetricEntry {
+        operation: "fft",
+        cpu: measure_in_place(
+            &columns.coeff_scalars,
+            config.warmups,
+            config.iterations,
+            |cols| bn254_cpu_fft(cols, trace_log, fft_twiddles),
+        ),
+        gpu: if probe.gpu_available {
+            match measure_flat_in_place_result(
+                &columns.coeff_limbs,
+                config.warmups,
+                config.iterations,
+                |data| fastpq_bn254_fft(data, config.column_count, trace_log),
+            ) {
+                Ok(summary) => Some(summary),
+                Err(err) => {
+                    warnings.push(format!("bn254 fft gpu timing skipped: {err}"));
+                    None
+                }
+            }
+        } else {
+            None
+        },
+    }
+}
+
+fn collect_bn254_lde_entry(
+    config: &Config,
+    trace_log: u32,
+    blowup_log: u32,
+    columns: &Bn254ColumnSets,
+    lde_twiddles: &[Bn254Scalar],
+    probe: &ExecutionProbe,
+    warnings: &mut Vec<String>,
+) -> Result<Bn254MetricEntry, String> {
+    let eval_log = trace_log
+        .checked_add(blowup_log)
+        .expect("eval log validated before helper call");
+    let eval_len = 1usize << eval_log;
+    let output_len = config
+        .column_count
+        .checked_mul(eval_len)
+        .and_then(|values| values.checked_mul(BN254_LIMBS))
+        .ok_or_else(|| "BN254 output extent overflow".to_owned())?;
+    Ok(Bn254MetricEntry {
+        operation: "lde",
+        cpu: measure_map(
+            &columns.coeff_scalars,
+            config.warmups,
+            config.iterations,
+            |coeffs| {
+                bn254_cpu_lde(
+                    coeffs,
+                    trace_log,
+                    blowup_log,
+                    lde_twiddles,
+                    columns.coset_scalar,
+                )
+            },
+        ),
+        gpu: if probe.gpu_available {
+            match measure_flat_map_result(
+                &columns.coeff_limbs,
+                config.warmups,
+                config.iterations,
+                |coeffs| {
+                    let mut out = vec![0u64; output_len];
+                    fastpq_bn254_lde(
+                        coeffs,
+                        config.column_count,
+                        trace_log,
+                        blowup_log,
+                        columns.coset_limbs,
+                        &mut out,
+                    )?;
+                    Ok::<_, CudaBackendError>(out)
+                },
+            ) {
+                Ok(summary) => Some(summary),
+                Err(err) => {
+                    warnings.push(format!("bn254 lde gpu timing skipped: {err}"));
+                    None
+                }
+            }
+        } else {
+            None
+        },
     })
 }
 

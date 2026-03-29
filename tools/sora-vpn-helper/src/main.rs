@@ -167,6 +167,8 @@ struct ExcludedRouteSnapshot {
     previous_route: Option<String>,
 }
 
+type RouteViaDev = (Option<String>, Option<String>);
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 enum IpFamily {
     V4,
@@ -318,14 +320,12 @@ fn connect_command(raw_payload: Option<&str>) -> Result<(), ControllerError> {
         let _ = wait_for_pid_exit(existing_pid, Duration::from_secs(2));
     }
 
-    let mut state = State::default();
-    state.message = "starting".to_owned();
-    state.session_id = Some(payload.session_id.clone());
-    state.relay_endpoint = Some(payload.relay_endpoint.clone());
-    state.repair_required = false;
-    state.applied_network = None;
-    state.bytes_in = 0;
-    state.bytes_out = 0;
+    let mut state = State {
+        message: "starting".to_owned(),
+        session_id: Some(payload.session_id.clone()),
+        relay_endpoint: Some(payload.relay_endpoint.clone()),
+        ..State::default()
+    };
     persist_state(&state)?;
 
     let current_exe = env::current_exe()?;
@@ -1076,7 +1076,7 @@ fn apply_excluded_routes(routes: &[String]) -> Result<Vec<ExcludedRouteSnapshot>
 
 fn capture_default_route(
     family: IpFamily,
-) -> Result<Option<(Option<String>, Option<String>)>, ControllerError> {
+) -> Result<Option<RouteViaDev>, ControllerError> {
     let output = run_command(
         DEFAULT_ROUTE_CMD,
         vec![
@@ -1506,7 +1506,7 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, ControllerError> {
         .strip_prefix("0x")
         .or_else(|| trimmed.strip_prefix("0X"))
         .unwrap_or(trimmed);
-    if normalized.is_empty() || normalized.len() % 2 != 0 {
+    if normalized.is_empty() || !normalized.len().is_multiple_of(2) {
         return Err(ControllerError::InvalidPayload(
             "helper ticket must be an even-length hex string".to_owned(),
         ));

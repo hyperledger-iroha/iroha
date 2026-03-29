@@ -222,7 +222,7 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
         None
     };
 
-    for (_index, item) in items.iter().enumerate() {
+    for item in items {
         let Ok(sig) = Ed25519Signature::from_slice(&item.signature) else {
             parsed.push(None);
             continue;
@@ -241,7 +241,7 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
             ));
             sigs.push(item.signature);
             pks.push(item.public_key);
-            map.push(_index);
+            map.push(parsed.len());
         }
 
         #[cfg(feature = "cuda")]
@@ -253,7 +253,7 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
             ));
             sigs.push(item.signature);
             pks.push(item.public_key);
-            map.push(_index);
+            map.push(parsed.len());
         }
 
         parsed.push(Some((sig, pk)));

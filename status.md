@@ -2,6 +2,26 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: strict workspace clippy is green after the cross-crate cleanup sweep
+- Cleared the remaining strict workspace lint/compile blockers across the late
+  sweep crates:
+  - `crates/iroha_js_host/src/lib.rs` now finishes the private Kaigi fee-spend
+    helper cleanup, removes leftover placeholder code, and keeps the NAPI
+    entrypoints aligned with strict `clippy`;
+  - `crates/izanami/src/faults.rs` now documents the fallible fault-harness
+    entrypoints and narrows the only remaining argument-count exception to the
+    public scenario runner;
+  - `integration_tests/tests/tx_history.rs`,
+    `mochi/mochi-core/src/chaos.rs`, and
+    `mochi/mochi-ui-egui/src/{chaos_view.rs,dashboard_view.rs,main.rs}` now
+    cover the current `TransactionEntrypoint::PrivateKaigi` surface and remove
+    the final MOCHI chaos/UI lint blockers without changing intended behavior.
+- Validation completed:
+  - `cargo clippy -p iroha_js_host --all-targets -- -D warnings` (pass)
+  - `cargo clippy -p izanami --all-targets -- -D warnings` (pass)
+  - `cargo clippy -p mochi-ui-egui --all-targets -- -D warnings` (pass)
+  - `cargo clippy --workspace --all-targets -- -D warnings` (pass)
+
 ## 2026-03-29 Torii public SignedTransaction ingress contract correction + full preserved-peer stable reruns
 - Corrected the first-release public Torii transaction-ingress contract so
   `POST /transaction` now accepts only a versioned `SignedTransaction` on the

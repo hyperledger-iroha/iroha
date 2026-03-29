@@ -2837,6 +2837,20 @@ Open work for this slice now remains:
   resurfaces; and
 - no additional strict workspace `clippy` blockers are known after this sweep.
 
+Latest sync (2026-03-29 strict workspace clippy closure follow-up):
+- strict workspace `clippy` is green again after a follow-up March 29 cleanup
+  across `crates/iroha_js_host/src/lib.rs`, `crates/izanami/src/faults.rs`,
+  `integration_tests/tests/tx_history.rs`, `mochi/mochi-core/src/chaos.rs`,
+  and `mochi/mochi-ui-egui/src/{chaos_view.rs,dashboard_view.rs,main.rs}`;
+- the sweep closed the remaining NAPI helper drift, Izanami docs/signature
+  nits, `TransactionEntrypoint::PrivateKaigi` test fallout, and the last MOCHI
+  chaos/UI style blockers without changing intended runtime behavior; and
+- validation passed with:
+  - `cargo clippy -p iroha_js_host --all-targets -- -D warnings`
+  - `cargo clippy -p izanami --all-targets -- -D warnings`
+  - `cargo clippy -p mochi-ui-egui --all-targets -- -D warnings`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+
 Latest sync (2026-03-26 Torii account-alias selector consistency + OpenAPI refresh):
 `crates/iroha_core/src/state.rs`,
 `crates/iroha_torii/src/app_auth.rs`,

@@ -1281,7 +1281,7 @@ fn instruction_box_from_object(
 ) -> Result<InstructionBox, norito::json::Error> {
     use std::str::FromStr as _;
 
-    let name = json_required_string(&map, "name")?;
+    let name = json_required_string(map, "name")?;
     let params = map
         .get("params")
         .and_then(norito::json::Value::as_object)

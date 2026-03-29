@@ -91,7 +91,7 @@ pub enum QueryEnvelopeJson {
 
 impl Eq for QueryEnvelopeJson {}
 
-fn singular_payload<'a>(map: &'a Map) -> Result<&'a Map, QueryJsonError> {
+fn singular_payload(map: &Map) -> Result<&Map, QueryJsonError> {
     map.get("payload")
         .and_then(Value::as_object)
         .ok_or(QueryJsonError::MissingField("singular", "payload"))

@@ -986,11 +986,15 @@ mod tests {
     }
 
     fn nexus_profile_with_validator_modes(public_mode: &str, restricted_mode: &str) -> PathBuf {
+        use std::fmt::Write as _;
+
         let mut config =
             fs::read_to_string(nexus_profile_config_path()).expect("read nexus profile config");
-        config.push_str(&format!(
-            "\n[nexus.staking]\npublic_validator_mode = \"{public_mode}\"\nrestricted_validator_mode = \"{restricted_mode}\"\n"
-        ));
+        writeln!(
+            config,
+            "\n[nexus.staking]\npublic_validator_mode = \"{public_mode}\"\nrestricted_validator_mode = \"{restricted_mode}\""
+        )
+        .expect("append validator mode overrides");
         let mut temp = tempfile::Builder::new()
             .prefix("kagami-nexus-profile-")
             .suffix(".toml")

@@ -4691,16 +4691,18 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         )
     } else if should_fallback_manifest_submit_status(status) {
         let fallback = submit_manifest_via_transaction_endpoint(
-            &client,
-            &torii_base_url,
-            &authority,
-            &private_key,
+            &ManifestSubmitRequest {
+                client: &client,
+                torii_base_url: &torii_base_url,
+                authority: &authority,
+                private_key: &private_key,
+                alias_inputs: alias_inputs.as_ref(),
+                api_version_hint: api_version_hint.as_deref(),
+            },
             &manifest,
             chunk_digest,
             submitted_epoch,
-            alias_inputs.as_ref(),
             successor_digest,
-            api_version_hint.as_deref(),
         )
         .map_err(|err| {
             format!(
@@ -4841,17 +4843,21 @@ struct TransactionConfirmation {
     rejection_message: Option<String>,
 }
 
+struct ManifestSubmitRequest<'a> {
+    client: &'a HttpClient,
+    torii_base_url: &'a Url,
+    authority: &'a AccountId,
+    private_key: &'a PrivateKey,
+    alias_inputs: Option<&'a AliasInputs>,
+    api_version_hint: Option<&'a str>,
+}
+
 fn submit_manifest_via_transaction_endpoint(
-    client: &HttpClient,
-    torii_base_url: &Url,
-    authority: &AccountId,
-    private_key: &PrivateKey,
+    request: &ManifestSubmitRequest<'_>,
     manifest: &ManifestV1,
     chunk_digest: [u8; 32],
     submitted_epoch: u64,
-    alias_inputs: Option<&AliasInputs>,
     successor_digest: Option<[u8; 32]>,
-    api_version_hint: Option<&str>,
 ) -> Result<ManifestSubmitFallback, String> {
     use iroha_data_model::{
         ChainId,
@@ -4859,13 +4865,14 @@ fn submit_manifest_via_transaction_endpoint(
         sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
     };
 
-    let chain_id = resolve_chain_id_from_sorafs_registry(client, torii_base_url)?;
+    let chain_id =
+        resolve_chain_id_from_sorafs_registry(request.client, request.torii_base_url)?;
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let chunker = chunker_handle_from_profile(&manifest.chunking);
     let policy = convert_pin_policy(&manifest.pin_policy);
-    let alias = alias_inputs.map(|inputs| ManifestAliasBinding {
+    let alias = request.alias_inputs.map(|inputs| ManifestAliasBinding {
         namespace: inputs.namespace.clone(),
         name: inputs.name.clone(),
         proof: inputs.proof.clone(),
@@ -4880,23 +4887,27 @@ fn submit_manifest_via_transaction_endpoint(
         alias,
         successor_of,
     };
-    let transaction = TransactionBuilder::new(ChainId::from(chain_id.clone()), authority.clone())
-        .with_instructions([InstructionBox::from(instruction)])
-        .sign(private_key);
+    let transaction =
+        TransactionBuilder::new(ChainId::from(chain_id.clone()), request.authority.clone())
+            .with_instructions([InstructionBox::from(instruction)])
+            .sign(request.private_key);
     let tx_hash_hex = hex_encode(transaction.hash().as_ref());
-    let tx_endpoint = torii_base_url
+    let tx_endpoint = request
+        .torii_base_url
         .join("transaction")
         .map_err(|err| format!("failed to build Torii transaction endpoint URL: {err}"))?;
-    let mut request = client
+    let mut request_builder = request
+        .client
         .post(tx_endpoint.as_str())
         .header(CONTENT_TYPE, "application/x-norito");
-    if let Some(version) = api_version_hint
+    if let Some(version) = request
+        .api_version_hint
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        request = request.header("x-iroha-api-version", version);
+        request_builder = request_builder.header("x-iroha-api-version", version);
     }
-    let response = request
+    let response = request_builder
         .body(transaction.encode_versioned())
         .send()
         .map_err(|err| format!("failed to submit fallback transaction to Torii: {err}"))?;
@@ -4913,8 +4924,12 @@ fn submit_manifest_via_transaction_endpoint(
         ));
     }
 
-    let confirmation =
-        wait_for_transaction_confirmation(client, torii_base_url, &tx_hash_hex).map_err(|err| {
+    let confirmation = wait_for_transaction_confirmation(
+        request.client,
+        request.torii_base_url,
+        &tx_hash_hex,
+    )
+    .map_err(|err| {
             format!(
                 "submitted fallback transaction `{tx_hash_hex}` but failed to confirm the result: {err}"
             )

@@ -868,7 +868,7 @@ pub mod genesis_instructions_json {
         let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
             None | Some(Value::Null) => None,
             Some(Value::Number(Number::U64(value))) => Some(value),
-            Some(Value::Number(Number::I64(value))) if value >= 0 => Some(value as u64),
+            Some(Value::Number(Number::I64(value))) if value >= 0 => Some(value.cast_unsigned()),
             Some(other) => {
                 return Err(json::Error::Message(format!(
                     "expected unsigned integer or null for SetAssetDefinitionAlias.lease_expiry_ms, found {other:?}"
@@ -1138,17 +1138,16 @@ pub mod genesis_instructions_json {
             );
             fields.insert(
                 "alias".to_string(),
-                match set_asset_definition_alias.alias() {
-                    Some(alias) => Value::String(alias.to_string()),
-                    None => Value::Null,
-                },
+                set_asset_definition_alias.alias().as_ref().map_or(Value::Null, |alias| {
+                    Value::String(alias.to_string())
+                }),
             );
             fields.insert(
                 "lease_expiry_ms".to_string(),
-                match set_asset_definition_alias.lease_expiry_ms() {
-                    Some(value) => Value::Number(Number::U64(*value)),
-                    None => Value::Null,
-                },
+                set_asset_definition_alias
+                    .lease_expiry_ms()
+                    .as_ref()
+                    .map_or(Value::Null, |value| Value::Number(Number::U64(*value))),
             );
             let mut outer = Map::new();
             outer.insert("SetAssetDefinitionAlias".to_string(), Value::Object(fields));

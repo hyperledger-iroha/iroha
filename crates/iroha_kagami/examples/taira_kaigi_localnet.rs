@@ -131,7 +131,7 @@ fn relay_feedback(
 
 fn append_kaigi_overlay(
     manifest: RawGenesisTransaction,
-    relay_domain: DomainId,
+    relay_domain: &DomainId,
     host: &AccountId,
     call_id: &KaigiId,
     relay_specs: &[RelaySpec],
@@ -158,7 +158,7 @@ fn append_kaigi_overlay(
     Ok(builder.build_raw())
 }
 
-fn run(args: Args) -> Result<()> {
+fn run(args: &Args) -> Result<()> {
     ensure!(
         !args.relay_specs.is_empty(),
         "at least one --relay-spec is required"
@@ -181,7 +181,7 @@ fn run(args: Args) -> Result<()> {
         .wrap_err("failed to load base genesis manifest")?;
     let signed = append_kaigi_overlay(
         manifest,
-        relay_domain,
+        &relay_domain,
         &host,
         &call_id,
         &relay_specs,
@@ -210,7 +210,7 @@ fn run(args: Args) -> Result<()> {
 
 fn main() -> Result<()> {
     color_eyre::install()?;
-    run(Args::parse())
+    run(&Args::parse())
 }
 
 #[cfg(test)]

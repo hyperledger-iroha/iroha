@@ -18,7 +18,7 @@ impl MochiApp {
                     report,
                     error,
                 }) => {
-                    *supervisor_slot = Some(supervisor);
+                    *supervisor_slot = Some(*supervisor);
                     self.chaos_inflight = false;
                     self.chaos_cancel = None;
                     self.chaos_report = Some(report);
@@ -66,7 +66,7 @@ impl MochiApp {
                 });
             });
             let _ = tx.send(ChaosUpdate::Finished {
-                supervisor: run.supervisor,
+                supervisor: Box::new(run.supervisor),
                 report: run.report,
                 error: run.error.map(|err| err.to_string()),
             });
@@ -163,10 +163,9 @@ impl MochiApp {
                     Button::new("Cancel after current action"),
                 )
                 .clicked()
+                && let Some(cancel) = self.chaos_cancel.as_ref()
             {
-                if let Some(cancel) = self.chaos_cancel.as_ref() {
-                    cancel.store(true, Ordering::Relaxed);
-                }
+                cancel.store(true, Ordering::Relaxed);
             }
         });
 

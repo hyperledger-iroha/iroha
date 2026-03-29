@@ -193,32 +193,6 @@ pub fn verify_roster_join(
     Err(privacy_error("kaigi privacy mode unavailable"))
 }
 
-pub fn verify_roster_leave(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    artifacts: &PrivacyArtifacts<'_>,
-    expected_root: &Hash,
-) -> Result<(), Error> {
-    #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
-    {
-        let _ = state_transaction;
-        return verify_roster_stub(artifacts, expected_root);
-    }
-
-    #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
-    {
-        let proof_bytes = validate_roster_artifacts(artifacts, expected_root)?;
-        let vk_cfg = state_transaction
-            .zk
-            .kaigi_roster_leave_vk
-            .clone()
-            .or_else(|| state_transaction.zk.kaigi_roster_join_vk.clone());
-        return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi roster leave");
-    }
-
-    #[allow(unreachable_code)]
-    Err(privacy_error("kaigi privacy mode unavailable"))
-}
-
 pub fn verify_usage_commitment(
     state_transaction: &mut StateTransaction<'_, '_>,
     proof: Option<&[u8]>,
