@@ -2,6 +2,23 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: fault injection now covers private Kaigi committed entrypoints
+- Fixed `crates/iroha_data_model/src/query/mod.rs` so
+  `CommittedTransaction::inject_instructions(...)` now handles
+  `TransactionEntrypoint::PrivateKaigi(_)` instead of failing the match under
+  `fault_injection`.
+- Added a dedicated `PrivateKaigiTransaction::inject_instructions(...)` helper
+  in `crates/iroha_data_model/src/transaction/private_kaigi.rs` that reuses the
+  existing metadata-overlay fault-injection path used for instruction-less
+  payloads.
+- Added focused regression coverage for both the direct private Kaigi
+  transaction helper and the committed-transaction wrapper, while keeping the
+  existing time-entrypoint fault-injection path green.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model --features fault_injection private_kaigi_ -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model --features fault_injection time_entrypoint_injection_appends_instructions -- --nocapture` (pass)
+
 ## 2026-03-29 Follow-up: Kaigi CLI privacy-artifact parity and merge-drift cleanup
 - Updated `crates/iroha_cli/src/commands/kaigi.rs` so `kaigi create` and
   `kaigi end` now accept and forward the optional privacy artifacts required by

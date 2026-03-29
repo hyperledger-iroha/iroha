@@ -9,6 +9,8 @@ use iroha_schema::IntoSchema;
 use iroha_version::Version;
 use norito::codec::{Decode, DecodeAll, Encode};
 
+#[cfg(feature = "fault_injection")]
+use crate::isi::InstructionBox;
 use crate::{
     AssetDefinitionId, ChainId,
     kaigi::{
@@ -222,6 +224,27 @@ impl PrivateKaigiTransaction {
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
         HashOf::new(&TransactionEntrypoint::PrivateKaigi(self.clone()))
     }
+
+    /// Injects a set of fictitious instructions into the transaction metadata for testing.
+    ///
+    /// Only available when the `fault_injection` feature is enabled.
+    #[cfg(feature = "fault_injection")]
+    pub fn inject_instructions(
+        &mut self,
+        extra_instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
+    ) {
+        let additions: Vec<InstructionBox> =
+            extra_instructions.into_iter().map(Into::into).collect();
+
+        if additions.is_empty() {
+            return;
+        }
+
+        super::signed::SignedTransaction::apply_fault_injection_overlay(
+            &mut self.metadata,
+            additions,
+        );
+    }
 }
 
 impl Version for PrivateKaigiTransaction {
@@ -289,9 +312,17 @@ impl<'a> norito::core::DecodeFromSlice<'a> for PrivateKaigiTransaction {
 mod tests {
     use std::str::FromStr;
 
+    #[cfg(feature = "fault_injection")]
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::KeyPair;
 
     use super::*;
+    #[cfg(feature = "fault_injection")]
+    use crate::{
+        Level,
+        isi::{InstructionBox, Log},
+        transaction::signed::SignedTransaction,
+    };
     use crate::{domain::DomainId, kaigi::KaigiRelayHop, name::Name};
 
     fn sample_template() -> PrivateKaigiTemplate {
@@ -390,5 +421,32 @@ mod tests {
         assert_eq!(HashOf::new(&entry), entry.hash());
         assert_eq!(tx.hash_as_entrypoint(), entry.hash());
         assert_eq!(Hash::from(tx.hash()), Hash::from(tx.hash_as_entrypoint()));
+    }
+
+    #[cfg(feature = "fault_injection")]
+    #[test]
+    fn private_kaigi_injection_records_overlay_in_metadata() {
+        let mut tx = sample_transaction();
+        let original_hash = tx.hash_as_entrypoint();
+        let injected: InstructionBox = Log {
+            level: Level::WARN,
+            msg: "private kaigi fault".into(),
+        }
+        .into();
+
+        tx.inject_instructions([injected.clone()]);
+
+        assert_ne!(
+            tx.hash_as_entrypoint(),
+            original_hash,
+            "hash must change after fault injection"
+        );
+
+        let overlay = SignedTransaction::fault_injection_overlay(&tx.metadata).unwrap_or_default();
+        assert_eq!(overlay.len(), 1);
+        assert_eq!(
+            overlay[0],
+            BASE64_STANDARD.encode(norito::to_bytes(&injected).expect("encode overlay payload"))
+        );
     }
 }
