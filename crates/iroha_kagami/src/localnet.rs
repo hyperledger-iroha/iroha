@@ -1756,10 +1756,9 @@ fn extend_genesis(
         let domain_id: DomainId = "wonderland"
             .parse()
             .expect("default genesis must include wonderland domain");
-        builder = builder.append_instruction(Register::account(Account::new_in_domain(
-            AccountId::new(pk.clone()),
-            domain_id,
-        )));
+        builder = builder.append_instruction(Register::account(
+            Account::new(AccountId::new(pk.clone())).with_linked_domain(domain_id),
+        ));
     }
 
     for asset in assets {
@@ -2061,10 +2060,9 @@ fn append_localnet_npos_bootstrap(
         registrations.domains.insert(universal_domain.clone());
     }
     if !registrations.accounts.contains(gas_account_id) {
-        builder = builder.append_instruction(Register::account(Account::new_in_domain(
-            gas_account_id.clone(),
-            ivm_domain.clone(),
-        )));
+        builder = builder.append_instruction(Register::account(
+            Account::new(gas_account_id.clone()).with_linked_domain(ivm_domain.clone()),
+        ));
         registrations.accounts.insert(gas_account_id.clone());
     }
 
@@ -2086,10 +2084,9 @@ fn append_localnet_npos_bootstrap(
     for peer in peers {
         let validator_id = AccountId::new(peer.public_key.clone());
         if !registrations.accounts.contains(&validator_id) {
-            builder = builder.append_instruction(Register::account(Account::new_in_domain(
-                validator_id.clone(),
-                nexus_domain.clone(),
-            )));
+            builder = builder.append_instruction(Register::account(
+                Account::new(validator_id.clone()).with_linked_domain(nexus_domain.clone()),
+            ));
             registrations.accounts.insert(validator_id.clone());
         }
         builder = builder.append_instruction(Mint::asset_numeric(

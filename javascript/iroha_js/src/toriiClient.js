@@ -21654,10 +21654,9 @@ function normalizeKaigiCallView(payload) {
       record.roster_root_hex,
       "kaigi call.roster_root_hex",
     ),
-    participant_count: ToriiClient._normalizeUnsignedInteger(
-      record.participant_count ?? 0,
+    participant_count: normalizeOptionalUnsignedInteger(
+      record.participant_count,
       "kaigi call.participant_count",
-      { allowZero: true },
     ),
     commitment_count: ToriiClient._normalizeUnsignedInteger(
       record.commitment_count ?? 0,
@@ -21791,10 +21790,9 @@ function normalizeKaigiCallEventData(payload) {
       record.privacy_mode,
       "kaigi call event.privacy_mode",
     ).toLowerCase(),
-    participant_count: ToriiClient._normalizeUnsignedInteger(
-      record.participant_count ?? 0,
+    participant_count: normalizeOptionalUnsignedInteger(
+      record.participant_count,
       "kaigi call event.participant_count",
-      { allowZero: true },
     ),
     commitment_count: ToriiClient._normalizeUnsignedInteger(
       record.commitment_count ?? 0,

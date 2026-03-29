@@ -32,20 +32,29 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode, RemoveSmartContractBytes,
         },
+        zk,
     },
     nexus::UniversalAccountId,
+    proof::{ProofAttachment, ProofBox},
     query::error::FindError,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
-    transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
+    transaction::{
+        PrivateKaigiAction, PrivateKaigiTransaction, error::TransactionLimitError,
+        signed::TransactionSignatureError,
+    },
+    zk::OpenVerifyEnvelope,
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
+use iroha_primitives::{numeric::Numeric, numeric::NumericSpec};
+use iroha_schema::Ident;
 use mv::storage::StorageReadOnly;
 
 use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
+    gas as isi_gas,
     governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
     interlane::verify_lane_privacy_proofs,
     nexus::space_directory::{
@@ -53,6 +62,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     queue::evaluate_policy_with_catalog,
+    smartcontracts::Execute,
     smartcontracts::ivm::cache::IvmCache,
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -140,7 +150,7 @@ use iroha_data_model::{metadata::Metadata as TelemetryMetadata, name::Name as Te
 /// `AcceptedTransaction` — a transaction accepted by Iroha peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct AcceptedTransaction<'tx>(Cow<'tx, SignedTransaction>);
+pub struct AcceptedTransaction<'tx>(Cow<'tx, TransactionEntrypoint>);
 
 /// Accepted transaction that has been verified to be absent from the blockchain.
 ///
@@ -255,6 +265,99 @@ fn ensure_metadata_depth(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PrivateKaigiFeeBinding {
+    action_hash_hex: String,
+    chain_id: String,
+    asset_definition_id: String,
+    fee_amount: Numeric,
+}
+
+fn json_object_string(
+    map: &norito::json::Map,
+    key: &str,
+    context: &str,
+) -> Result<String, TransactionRejectionReason> {
+    map.get(key)
+        .and_then(norito::json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "{context} must include non-empty `{key}`"
+            )))
+        })
+}
+
+fn decode_private_kaigi_fee_binding(
+    proof_bytes: &[u8],
+) -> Result<PrivateKaigiFeeBinding, TransactionRejectionReason> {
+    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes).map_err(|_| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
+        ))
+    })?;
+    if envelope.aux.is_empty() {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "private Kaigi fee spend proof is missing binding metadata".into(),
+            ),
+        ));
+    }
+    let aux = std::str::from_utf8(&envelope.aux).map_err(|_| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private Kaigi fee spend aux payload must be valid UTF-8 JSON".into(),
+        ))
+    })?;
+    let aux_value: norito::json::Value = norito::json::from_str(aux).map_err(|_| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private Kaigi fee spend aux payload must be valid JSON".into(),
+        ))
+    })?;
+    let norito::json::Value::Object(map) = aux_value else {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "private Kaigi fee spend aux payload must be a JSON object".into(),
+            ),
+        ));
+    };
+    let schema = json_object_string(&map, "schema", "private Kaigi fee spend aux payload")?;
+    if schema != "iroha.private_kaigi.fee.v1" {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "private Kaigi fee spend aux payload has unsupported schema".into(),
+            ),
+        ));
+    }
+    let fee_amount = Numeric::from_str(&json_object_string(
+        &map,
+        "fee_amount",
+        "private Kaigi fee spend aux payload",
+    )?)
+    .map_err(|err| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+            "private Kaigi fee amount is invalid: {err}"
+        )))
+    })?
+    .trim_trailing_zeros();
+
+    Ok(PrivateKaigiFeeBinding {
+        action_hash_hex: json_object_string(
+            &map,
+            "action_hash_hex",
+            "private Kaigi fee spend aux payload",
+        )?,
+        chain_id: json_object_string(&map, "chain_id", "private Kaigi fee spend aux payload")?,
+        asset_definition_id: json_object_string(
+            &map,
+            "asset_definition_id",
+            "private Kaigi fee spend aux payload",
+        )?,
+        fee_amount,
+    })
 }
 
 /// Verification failed of some signature due to following reason
@@ -632,6 +735,12 @@ pub(crate) fn build_heartbeat_transaction_with_time_source(
 }
 
 impl<'tx> AcceptedTransaction<'tx> {
+    fn compat_signed_hash(
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> HashOf<SignedTransaction> {
+        HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
+    }
+
     fn validate_common(
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
@@ -787,6 +896,301 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<CheckedTransaction<'tx>, (AcceptedTransaction<'tx>, TransactionAlreadyCommitted)>
     {
         CheckedTransaction::new(self, state)
+    }
+
+    fn validate_private_kaigi_with_now(
+        tx: &PrivateKaigiTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        now: Duration,
+    ) -> Result<(), AcceptTransactionFail> {
+        if tx.chain != *expected_chain_id {
+            return Err(AcceptTransactionFail::ChainIdMismatch(Mismatch {
+                expected: expected_chain_id.clone(),
+                actual: tx.chain.clone(),
+            }));
+        }
+
+        let creation_time = tx.creation_time();
+        if creation_time.saturating_sub(now) > max_clock_drift {
+            return Err(AcceptTransactionFail::TransactionInTheFuture);
+        }
+
+        let entrypoint = TransactionEntrypoint::PrivateKaigi(tx.clone());
+        let tx_encoded_len = norito::to_bytes(&entrypoint)
+            .map(|bytes| bytes.len())
+            .map_err(|err| {
+                AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                    reason: format!("Failed to encode private Kaigi transaction: {err}"),
+                })
+            })?;
+        let tx_encoded_len = u64::try_from(tx_encoded_len).unwrap_or(u64::MAX);
+        let max_tx_bytes = limits.max_tx_bytes().get();
+        if tx_encoded_len > max_tx_bytes {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: format!(
+                        "Transaction size {tx_encoded_len} bytes exceeds limit {max_tx_bytes} bytes"
+                    ),
+                },
+            ));
+        }
+
+        let decompressed_len = tx
+            .artifacts
+            .proof
+            .len()
+            .saturating_add(tx.fee_spend.proof.len())
+            .saturating_add(
+                tx.fee_spend
+                    .encrypted_change_payloads
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>(),
+            );
+        let decompressed_len = u64::try_from(decompressed_len).unwrap_or(u64::MAX);
+        let max_decompressed_bytes = limits.max_decompressed_bytes().get();
+        if decompressed_len > max_decompressed_bytes {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: format!(
+                        "Private Kaigi artifacts expand to {decompressed_len} bytes which exceeds limit {max_decompressed_bytes} bytes"
+                    ),
+                },
+            ));
+        }
+
+        let max_metadata_depth = usize::from(limits.max_metadata_depth().get());
+        ensure_metadata_depth(&tx.metadata, max_metadata_depth)
+            .map_err(AcceptTransactionFail::TransactionLimit)?;
+
+        if tx.artifacts.proof.is_empty() {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi proof payload must be non-empty".into(),
+                },
+            ));
+        }
+        if tx.fee_spend.proof.is_empty() {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi fee spend proof must be non-empty".into(),
+                },
+            ));
+        }
+        if tx.fee_spend.nullifiers.is_empty() {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi fee spend must consume at least one nullifier".into(),
+                },
+            ));
+        }
+        if tx.fee_spend.output_commitments.len() != tx.fee_spend.encrypted_change_payloads.len() {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason:
+                        "private Kaigi fee spend outputs must match encrypted change payload count"
+                            .into(),
+                },
+            ));
+        }
+        if tx.fee_spend.asset_definition_id.to_string() != "xor#universal" {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi fee spend asset must be xor#universal".into(),
+                },
+            ));
+        }
+
+        match &tx.action {
+            PrivateKaigiAction::Create(create) => {
+                if create.call.privacy_mode != iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1
+                {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "private Kaigi create must use ZkRosterV1 privacy mode".into(),
+                        },
+                    ));
+                }
+            }
+            PrivateKaigiAction::Join(_) | PrivateKaigiAction::End(_) => {}
+        }
+
+        Ok(())
+    }
+
+    fn private_fee_numeric_add(
+        lhs: Numeric,
+        rhs: Numeric,
+        context: &'static str,
+    ) -> Result<Numeric, TransactionRejectionReason> {
+        lhs.checked_add(rhs).ok_or_else(|| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "{context} exceeds supported numeric bounds"
+            )))
+        })
+    }
+
+    fn private_fee_numeric_mul_u64(
+        value: &Numeric,
+        multiplier: u64,
+        context: &'static str,
+    ) -> Result<Numeric, TransactionRejectionReason> {
+        value
+            .clone()
+            .checked_mul(Numeric::from(multiplier), NumericSpec::unconstrained())
+            .ok_or_else(|| {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                    "{context} exceeds supported numeric bounds"
+                )))
+            })
+    }
+
+    fn private_kaigi_instruction_gas(
+        tx: &PrivateKaigiTransaction,
+    ) -> Result<u64, TransactionRejectionReason> {
+        let instruction =
+            crate::smartcontracts::isi::kaigi::private_instruction_box(tx).map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+            })?;
+        Ok(isi_gas::meter_instruction(&instruction))
+    }
+
+    fn compute_private_kaigi_fee_amount(
+        tx: &PrivateKaigiTransaction,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Numeric, TransactionRejectionReason> {
+        if !state_transaction.nexus.enabled {
+            return Ok(Numeric::zero());
+        }
+
+        let cfg = state_transaction.nexus.fees.clone();
+        let entrypoint = TransactionEntrypoint::PrivateKaigi(tx.clone());
+        let tx_bytes_len = norito::to_bytes(&entrypoint)
+            .map(|bytes| bytes.len())
+            .map_err(|err| {
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+                    "failed to encode private Kaigi transaction for fee metering: {err}"
+                )))
+            })?;
+        let tx_bytes_len = u64::try_from(tx_bytes_len).unwrap_or(u64::MAX);
+        let gas_used = Self::private_kaigi_instruction_gas(tx)?;
+
+        let mut fee = cfg.base_fee.clone();
+        fee = Self::private_fee_numeric_add(
+            fee,
+            Self::private_fee_numeric_mul_u64(&cfg.per_byte_fee, tx_bytes_len, "fee amount")?,
+            "fee amount",
+        )?;
+        fee = Self::private_fee_numeric_add(
+            fee,
+            Self::private_fee_numeric_mul_u64(&cfg.per_instruction_fee, 1, "fee amount")?,
+            "fee amount",
+        )?;
+        fee = Self::private_fee_numeric_add(
+            fee,
+            Self::private_fee_numeric_mul_u64(&cfg.per_gas_unit_fee, gas_used, "fee amount")?,
+            "fee amount",
+        )?;
+        Ok(fee.trim_trailing_zeros())
+    }
+
+    fn execute_private_kaigi_fee_spend(
+        tx: &PrivateKaigiTransaction,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), TransactionRejectionReason> {
+        let binding = decode_private_kaigi_fee_binding(&tx.fee_spend.proof)?;
+        let expected_action_hash = hex::encode(tx.action_hash().as_ref());
+        if binding.action_hash_hex != expected_action_hash {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "private Kaigi fee spend proof is not bound to this action hash".into(),
+                ),
+            ));
+        }
+        if binding.chain_id != tx.chain.to_string() {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "private Kaigi fee spend proof is not bound to this chain id".into(),
+                ),
+            ));
+        }
+        if binding.asset_definition_id != tx.fee_spend.asset_definition_id.to_string() {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "private Kaigi fee spend proof is not bound to xor#universal".into(),
+                ),
+            ));
+        }
+
+        let expected_fee = Self::compute_private_kaigi_fee_amount(tx, state_transaction)?;
+        if binding.fee_amount != expected_fee {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(format!(
+                    "private Kaigi fee spend amount mismatch: expected {expected_fee}, observed {}",
+                    binding.fee_amount
+                )),
+            ));
+        }
+
+        let zk_asset = state_transaction
+            .world
+            .zk_assets
+            .get(&tx.fee_spend.asset_definition_id)
+            .cloned()
+            .ok_or_else(|| {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    "private Kaigi fee asset is not configured for confidential transfers".into(),
+                ))
+            })?;
+        let Some(vk_binding) = zk_asset.vk_transfer.clone() else {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "private Kaigi fee asset is missing a confidential transfer verifier".into(),
+                ),
+            ));
+        };
+        let backend_ident = Ident::from_str(vk_binding.id.backend.as_str()).map_err(|_| {
+            TransactionRejectionReason::Validation(ValidationFail::InternalError(
+                "invalid transfer verifier backend identifier".into(),
+            ))
+        })?;
+        let mut attachment = ProofAttachment::new_ref(
+            backend_ident.clone(),
+            ProofBox::new(backend_ident, tx.fee_spend.proof.clone()),
+            vk_binding.id,
+        );
+        attachment.vk_commitment = Some(vk_binding.commitment);
+
+        let transfer = zk::ZkTransfer::new(
+            tx.fee_spend.asset_definition_id.clone(),
+            tx.fee_spend.nullifiers.clone(),
+            tx.fee_spend.output_commitments.clone(),
+            attachment,
+            Some(tx.fee_spend.anchor_root.into()),
+        );
+
+        let fee_payer = crate::smartcontracts::isi::kaigi::private_instruction_box(tx)
+            .ok()
+            .and_then(|_| {
+                let digest = iroha_crypto::Hash::new(tx.action_hash().as_ref());
+                PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref())
+                    .ok()
+                    .map(AccountId::new)
+            })
+            .unwrap_or_else(|| {
+                let digest = iroha_crypto::Hash::new(tx.action_hash().as_ref());
+                let public_key = PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref())
+                    .expect("32-byte digest must form an Ed25519 public key");
+                AccountId::new(public_key)
+            });
+
+        transfer
+            .execute(&fee_payer, state_transaction)
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+            })
     }
 
     /// Like [`Self::accept_genesis`], but without wrapping.
@@ -1426,21 +1830,80 @@ impl<'tx> AcceptedTransaction<'tx> {
         Ok(())
     }
 
-    /// Create [`Self`] assuming the transaction is acceptable.
+    /// Create [`Self`] assuming the signed transaction is acceptable.
     pub fn new_unchecked(tx: impl Into<Cow<'tx, SignedTransaction>>) -> Self {
+        let tx = tx.into();
+        let entrypoint = match tx {
+            Cow::Borrowed(signed) => Cow::Owned(TransactionEntrypoint::External(signed.clone())),
+            Cow::Owned(signed) => Cow::Owned(TransactionEntrypoint::External(signed)),
+        };
+        Self(entrypoint)
+    }
+
+    /// Create [`Self`] assuming the entrypoint is acceptable.
+    pub fn new_unchecked_entrypoint(tx: impl Into<Cow<'tx, TransactionEntrypoint>>) -> Self {
         Self(tx.into())
+    }
+
+    /// Borrow the underlying entrypoint.
+    #[must_use]
+    pub fn entrypoint(&self) -> &TransactionEntrypoint {
+        self.0.as_ref()
+    }
+
+    /// Borrow the wrapped signed transaction when present.
+    #[must_use]
+    pub fn external(&self) -> Option<&SignedTransaction> {
+        match self.entrypoint() {
+            TransactionEntrypoint::External(entrypoint) => Some(entrypoint),
+            TransactionEntrypoint::PrivateKaigi(_) | TransactionEntrypoint::Time(_) => None,
+        }
     }
 
     /// Return the canonical hash of the wrapped transaction.
     #[must_use]
     pub fn hash(&self) -> HashOf<SignedTransaction> {
-        self.as_ref().hash()
+        Self::compat_signed_hash(self.hash_as_entrypoint())
+    }
+
+    /// Return the canonical entrypoint hash of the wrapped transaction.
+    #[must_use]
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        self.entrypoint().hash()
+    }
+
+    /// Borrow the transaction authority account identifier when present.
+    #[must_use]
+    pub fn authority_opt(&self) -> Option<&AccountId> {
+        self.entrypoint().authority_opt()
     }
 
     /// Borrow the transaction authority account identifier.
     #[must_use]
     pub fn authority(&self) -> &AccountId {
-        self.as_ref().authority()
+        self.entrypoint().authority()
+    }
+
+    /// Entry-point metadata when present.
+    #[must_use]
+    pub fn metadata(&self) -> Option<&Metadata> {
+        self.entrypoint().metadata()
+    }
+
+    /// Creation timestamp for queue expiry and projections.
+    #[must_use]
+    pub fn creation_time(&self) -> Duration {
+        match self.entrypoint() {
+            TransactionEntrypoint::External(entrypoint) => entrypoint.creation_time(),
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => entrypoint.creation_time(),
+            TransactionEntrypoint::Time(_) => Duration::ZERO,
+        }
+    }
+
+    /// Entry-point TTL when one exists.
+    #[must_use]
+    pub fn time_to_live(&self) -> Option<Duration> {
+        self.external().and_then(SignedTransaction::time_to_live)
     }
 }
 
@@ -1464,7 +1927,7 @@ impl AcceptedTransaction<'static> {
             genesis_account,
             crypto,
         )
-        .map(|()| Self(Cow::Owned(tx)))
+        .map(|()| Self(Cow::Owned(TransactionEntrypoint::External(tx))))
     }
 
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
@@ -1480,7 +1943,7 @@ impl AcceptedTransaction<'static> {
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
         Self::validate(&tx, expected_chain_id, max_clock_drift, limits, crypto)
-            .map(|()| Self(Cow::Owned(tx)))
+            .map(|()| Self(Cow::Owned(TransactionEntrypoint::External(tx))))
     }
 
     /// Accept transaction using a caller-provided [`TimeSource`] for admission-time checks.
@@ -1499,25 +1962,79 @@ impl AcceptedTransaction<'static> {
         let now = time_source.get_unix_time();
         Self::validate_with_now(&tx, expected_chain_id, max_clock_drift, limits, crypto, now)?;
         enforce_nts_health_for_time_sensitive(&tx)?;
+        Ok(Self(Cow::Owned(TransactionEntrypoint::External(tx))))
+    }
+
+    /// Accept any directly submitted transaction entrypoint.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    pub fn accept_entrypoint(
+        tx: TransactionEntrypoint,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+    ) -> Result<Self, AcceptTransactionFail> {
+        let now = current_unix_time();
+        match &tx {
+            TransactionEntrypoint::External(signed) => {
+                Self::validate_with_now(
+                    signed,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    crypto,
+                    now,
+                )?;
+                enforce_nts_health_for_time_sensitive(signed)?;
+            }
+            TransactionEntrypoint::PrivateKaigi(private) => {
+                Self::validate_private_kaigi_with_now(
+                    private,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    now,
+                )?;
+            }
+            TransactionEntrypoint::Time(_) => {
+                return Err(AcceptTransactionFail::TransactionLimit(
+                    TransactionLimitError {
+                        reason: "direct time entrypoints are not accepted on ingress".into(),
+                    },
+                ));
+            }
+        }
         Ok(Self(Cow::Owned(tx)))
     }
 }
 
 impl<'tx> From<AcceptedTransaction<'tx>> for SignedTransaction {
     fn from(source: AcceptedTransaction<'tx>) -> Self {
-        source.0.into_owned()
+        match source.0.into_owned() {
+            TransactionEntrypoint::External(entrypoint) => entrypoint,
+            TransactionEntrypoint::PrivateKaigi(_) => {
+                panic!("private Kaigi entrypoints are not signed transactions")
+            }
+            TransactionEntrypoint::Time(_) => {
+                panic!("time entrypoints are not signed transactions")
+            }
+        }
     }
 }
 
 impl<'tx> From<AcceptedTransaction<'tx>> for (AccountId, Executable) {
     fn from(source: AcceptedTransaction<'tx>) -> Self {
-        source.0.into_owned().into()
+        SignedTransaction::from(source).into()
     }
 }
 
 impl AsRef<SignedTransaction> for AcceptedTransaction<'_> {
     fn as_ref(&self) -> &SignedTransaction {
-        self.0.as_ref()
+        self.external()
+            .expect("private Kaigi entrypoints do not expose SignedTransaction access")
     }
 }
 
@@ -1594,6 +2111,17 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
     ) -> TransactionResultInner {
+        if let TransactionEntrypoint::PrivateKaigi(private_tx) = tx.entrypoint() {
+            return Self::validate_private_kaigi_transaction(private_tx, state_transaction);
+        }
+        if matches!(tx.entrypoint(), TransactionEntrypoint::Time(_)) {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "time entrypoints cannot be executed via transaction admission".into(),
+                ),
+            ));
+        }
+
         let authority = tx.as_ref().authority().clone();
         let is_heartbeat = is_heartbeat_transaction(tx.as_ref());
         let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
@@ -1832,6 +2360,21 @@ impl StateBlock<'_> {
         }
 
         Ok(trigger_sequence)
+    }
+
+    fn validate_private_kaigi_transaction(
+        tx: &PrivateKaigiTransaction,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> TransactionResultInner {
+        state_transaction.tx_call_hash = Some(tx.action_hash());
+        AcceptedTransaction::execute_private_kaigi_fee_spend(tx, state_transaction)?;
+        state_transaction.last_tx_gas_used =
+            AcceptedTransaction::private_kaigi_instruction_gas(tx)?;
+        crate::smartcontracts::isi::kaigi::execute_private_transaction(tx, state_transaction)
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+            })?;
+        Ok(DataTriggerSequence::default())
     }
 
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]

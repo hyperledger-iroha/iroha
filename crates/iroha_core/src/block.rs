@@ -1911,13 +1911,24 @@ pub fn check_genesis_block(
     }
 
     let transactions = block.transactions_vec().as_slice();
+    let external_entrypoints: Vec<_> = block.external_entrypoints_cloned().collect();
     if transactions.is_empty() || transactions.len() > MAX_GENESIS_TRANSACTIONS {
+        return Err(InvalidGenesisError::BadTransactionsAmount);
+    }
+    if external_entrypoints.len() != transactions.len()
+        || external_entrypoints.iter().any(|entrypoint| {
+            !matches!(
+                entrypoint,
+                iroha_data_model::transaction::TransactionEntrypoint::External(_)
+            )
+        })
+    {
         return Err(InvalidGenesisError::BadTransactionsAmount);
     }
     let mut chain_id: Option<ChainId> = None;
     let expected_merkle_root = block
-        .external_transactions()
-        .map(SignedTransaction::hash_as_entrypoint)
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
         .collect::<MerkleTree<_>>()
         .root();
     if block.header().merkle_root() != expected_merkle_root {
@@ -2336,17 +2347,21 @@ mod new {
 
     impl From<NewBlock> for SignedBlock {
         fn from(block: NewBlock) -> Self {
-            let transactions: Vec<SignedTransaction> = block
-                .transactions
-                .into_iter()
-                .map(SignedTransaction::from)
-                .collect();
+            let mut transactions = Vec::new();
+            let mut external_entrypoints = Vec::with_capacity(block.transactions.len());
+            for accepted in block.transactions {
+                external_entrypoints.push(accepted.entrypoint().clone());
+                if let Some(signed) = accepted.external().cloned() {
+                    transactions.push(signed);
+                }
+            }
             let mut signed_block = SignedBlock::presigned_with_da(
                 block.signature,
                 block.header,
                 transactions,
                 block.da_commitments,
             );
+            signed_block.set_external_entrypoints(external_entrypoints);
             signed_block.set_da_proof_policies(block.da_proof_policies);
             signed_block.set_da_pin_intents(block.da_pin_intents);
             signed_block.set_previous_roster_evidence(block.previous_roster_evidence);

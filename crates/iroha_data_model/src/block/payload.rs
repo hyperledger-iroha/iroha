@@ -37,6 +37,13 @@ mod model {
         pub header: BlockHeader,
         /// External transactions as source of the state, forming the first half of the transaction entrypoints.
         pub transactions: Vec<SignedTransaction>,
+        /// External transaction entrypoints in consensus order.
+        ///
+        /// Older blocks omit this field and reconstruct the order from the legacy
+        /// signed-transaction payload vector.
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Vec::is_empty")]
+        pub external_entrypoints: Vec<TransactionEntrypoint>,
         /// Optional DA commitment bundle embedded in this block.
         #[norito(default)]
         #[norito(skip_serializing_if = "Option::is_none")]
@@ -104,10 +111,14 @@ impl fmt::Display for BlockResult {
 
 impl SignedBlock {
     fn external_entrypoints_slice(&self) -> Option<&[TransactionEntrypoint]> {
-        self.result.as_ref().and_then(|result| {
-            (!result.external_entrypoints.is_empty())
-                .then_some(result.external_entrypoints.as_slice())
-        })
+        if !self.payload.external_entrypoints.is_empty() {
+            Some(self.payload.external_entrypoints.as_slice())
+        } else {
+            self.result.as_ref().and_then(|result| {
+                (!result.external_entrypoints.is_empty())
+                    .then_some(result.external_entrypoints.as_slice())
+            })
+        }
     }
 
     /// Number of external entrypoints (signed or authority-free) recorded in the block.
@@ -220,6 +231,34 @@ impl SignedBlock {
     /// Set or clear the SCCP commitment root finalized in this block.
     pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
         self.payload.header.set_sccp_commitment_root(root);
+    }
+
+    /// Replace the ordered external entrypoints and update Merkle material accordingly.
+    pub fn set_external_entrypoints(&mut self, entrypoints: Vec<TransactionEntrypoint>) {
+        let merkle = entrypoints
+            .iter()
+            .cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<MerkleTree<TransactionEntrypoint>>();
+        self.payload.external_entrypoints = entrypoints.clone();
+        self.payload.header.merkle_root = merkle.root();
+        if let Some(result) = self.result.as_mut() {
+            result.external_entrypoints = entrypoints;
+            result.merkle = result
+                .external_entrypoints
+                .iter()
+                .cloned()
+                .map(|entrypoint| entrypoint.hash())
+                .chain(
+                    result
+                        .time_triggers
+                        .iter()
+                        .cloned()
+                        .map(TransactionEntrypoint::from)
+                        .map(|entrypoint| entrypoint.hash()),
+                )
+                .collect();
+        }
     }
 
     /// Check whether the block has entrypoints or deterministic artifacts.

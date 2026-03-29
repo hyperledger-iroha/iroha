@@ -2,6 +2,53 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 linked-domain account builder cleanup):
+the `NewAccount` compatibility constructor is gone from the active data-model
+API, and the low-risk scaffolding/generator crates no longer use
+`Account::new_in_domain(...)` either.
+
+- removed `NewAccount::new_in_domain(...)` from
+  `crates/iroha_data_model/src/account.rs`;
+- converted `crates/iroha_kagami`, `crates/iroha_test_network`,
+  `mochi/mochi-core`, and `python/iroha_python/iroha_python_rs` to
+  `Account::new(account_id).with_linked_domain(domain_id)` for explicit
+  linked-domain registration;
+- updated the remaining in-file Norito/registration roundtrip tests to use the
+  canonical builder chain; and
+- revalidated with `cargo check -p iroha_data_model`,
+  `cargo check -p mochi-core`, `cargo check -p iroha_kagami --tests`, and
+  `cargo check -p iroha_test_network`.
+
+Open work for this slice now remains:
+- remove the larger scoped-registration compatibility layer itself:
+  `ScopedAccountId`, `Account::new_in_domain(...)`, stored `linked_domains`,
+  and the scoped `REGISTER_ACCOUNT` ABI surface; and
+- keep collapsing the remaining higher-churn callsites in `iroha_cli`,
+  `iroha_torii`, `iroha_core`, and `integration_tests` before removing
+  `Account::new_in_domain(...)` itself.
+
+Latest sync (2026-03-29 bound quorum recovery + hedged Torii authority routing + best-effort RBC status persistence):
+the requested internal node-side recovery slice is in place without changing
+public HTTP APIs, consensus semantics, or configuration surface.
+
+- `crates/iroha_core/src/sumeragi/main_loop.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
+  `crates/iroha_core/src/sumeragi/mod.rs` now gate quorum-timeout deferral on
+  fresh same-height block-local progress, re-arm terminal-height recovery, and
+  prioritize vote draining once commit-quorum recovery is already urgent;
+- `crates/iroha_torii/src/lib.rs` now uses authoritative-first hedged proxy
+  execution with first-success semantics while keeping the existing candidate
+  ordering, loop prevention, and hop-budget rules; and
+- `crates/iroha_core/src/sumeragi/rbc_status.rs` now degrades to memory-only
+  status snapshots after fatal disk-capacity persistence faults and exposes the
+  degraded state through telemetry.
+
+Open work for this slice now remains:
+- run the remaining heavier validation from the implementation checklist,
+  especially `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`; and
+- run the preserved-peer stable permissioned soak and preserved-peer stable
+  NPoS soak on this patch set.
+
 Latest sync (2026-03-29 Taira signed rollout canary auto-faucet bootstrap):
 the public Taira rollout smoke no longer fails just because the chosen canary
 signer is unfunded for the fee asset; it can now bootstrap that signer through
@@ -23,6 +70,33 @@ Open work for this slice now remains:
 - wire the strict `check_mcp_rollout.sh --write-config ...` path into the
   actual Taira deploy/restart checklist or CI job so the public canary is
   enforced automatically instead of relying on a manual operator run.
+
+Latest sync (2026-03-29 Taira reset on updated irohad + explorer rebuild):
+the served Taira testnet is healthy again on the updated checkout, and the
+rebuilt explorer is live, but the reset had to fall back to the last known
+good signed genesis because fresh `kagami localnet` output is not bootable on
+this checkout.
+
+- rebuilt `irohad` / `kagami` from `f3de5b11b01e`, rebuilt the explorer from
+  `/Users/administrator/dev/iroha2-block-explorer-web` commit
+  `8f2c52f70ad2`, and restarted the served `dist/taira-localnet` on fresh
+  storage under the updated `irohad` binary;
+- verified live recovery through `http://127.0.0.1:29080/status`,
+  `https://taira.sora.org/status`, `https://taira.sora.org/v1/accounts/faucet/puzzle`,
+  `https://taira.sora.org/v1/mcp`, `https://taira.sora.org/v1/kaigi/relays`,
+  and `https://taira-explorer.sora.org/`; and
+- isolated the current generator/startup regression: an untouched fresh
+  `kagami localnet` bundle fails at genesis decode with
+  `Norito (de)serialization issue: length mismatch`, and a Norito trace points
+  at `RegisterBox::Account` genesis decoding in the account metadata
+  `Vec<(Name, Json)>` path.
+
+Open work for this slice now remains:
+- fix the current `kagami localnet` / genesis encoding regression so a freshly
+  generated Taira bundle boots without falling back to
+  `dist/taira-localnet.prev-20260329-151827`; and
+- rerun the Taira reset from a newly generated signed genesis once that
+  decoder/encoder mismatch is fixed, then remove the deployment workaround.
 
 Latest sync (2026-03-29 Taira frame-cap + Torii core-lane fallback fix):
 the served Taira localnet is accepting public writes again, including payloads

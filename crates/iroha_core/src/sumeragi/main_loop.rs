@@ -47,7 +47,7 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
     sorafs::pin_registry::ManifestDigest,
-    transaction::{Executable, SignedTransaction},
+    transaction::{Executable, SignedTransaction, TransactionEntrypoint},
 };
 use iroha_logger::prelude::*;
 use iroha_p2p::network::data_frame_wire_len;
@@ -464,15 +464,15 @@ fn realign_qcs_after_failed_commit(
 fn requeue_block_transactions(
     queue: &Queue,
     state: &State,
-    txs: Vec<SignedTransaction>,
+    txs: Vec<TransactionEntrypoint>,
 ) -> (usize, usize, usize, Vec<HashOf<SignedTransaction>>) {
     let mut requeued = 0usize;
     let mut failures = 0usize;
     let mut duplicate_failures = 0usize;
     let mut gossip_hashes: Vec<_> = Vec::new();
     for tx in txs {
-        let tx_hash = tx.hash();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let accepted = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(tx));
+        let tx_hash = accepted.hash();
         let routing_decision = if let Some(decision) = crate::queue::routing_ledger::get(&tx_hash) {
             decision
         } else if let Some(decision) = match queue.route_for_gossip_without_state(&accepted) {
@@ -544,7 +544,7 @@ fn drop_pending_block_and_requeue(
     state: &State,
 ) -> Option<(usize, usize, usize, usize)> {
     let pending = pending_blocks.remove(&pending_hash)?;
-    let txs = pending.block.transactions_vec().clone();
+    let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
     let tx_count = txs.len();
     let (requeued, failures, duplicate_failures, _) = requeue_block_transactions(queue, state, txs);
     Some((tx_count, requeued, failures, duplicate_failures))
@@ -587,8 +587,11 @@ fn handle_commit_failure_with_qc_quorum(
     latest_committed: Option<crate::sumeragi::consensus::QcHeaderRef>,
 ) -> QcCommitFailureOutcome {
     pending.tx_batch = None;
-    let (requeued, failed_requeues, duplicate_requeues, _) =
-        requeue_block_transactions(queue, state, failed_block.transactions_vec().clone());
+    let (requeued, failed_requeues, duplicate_requeues, _) = requeue_block_transactions(
+        queue,
+        state,
+        failed_block.external_entrypoints_cloned().collect(),
+    );
     let (new_locked, new_highest) =
         realign_qcs_after_failed_commit(locked_qc, highest_qc, block_hash, latest_committed);
     pending.block = failed_block;
@@ -609,7 +612,7 @@ fn handle_commit_failure_with_qc_quorum(
 fn handle_prev_block_mismatch(
     queue: &Queue,
     state: &State,
-    txs: Vec<SignedTransaction>,
+    txs: Vec<TransactionEntrypoint>,
 ) -> PrevBlockMismatchOutcome {
     let (requeued, failures, _duplicates, _) = requeue_block_transactions(queue, state, txs);
     PrevBlockMismatchOutcome { requeued, failures }

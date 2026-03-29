@@ -100112,7 +100112,10 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
     let mut tx_b_builder = TransactionBuilder::new(chain_id, account);
     tx_b_builder.set_nonce(NonZeroU32::new(2).expect("nonce must be non-zero"));
     let tx_b = tx_b_builder.sign(kp.private_key());
-    let txs = vec![tx_a.clone(), tx_b.clone()];
+    let txs = vec![
+        TransactionEntrypoint::External(tx_a.clone()),
+        TransactionEntrypoint::External(tx_b.clone()),
+    ];
 
     let (requeued, failures, duplicate_failures, gossip_hashes) =
         super::requeue_block_transactions(&queue, &state, txs);
@@ -100180,8 +100183,11 @@ fn prev_block_mismatch_requeues_payload() {
     );
     let tx = sample_transaction();
     let block = block_with_txs(9, 3, None, vec![tx.clone()]);
-    let outcome =
-        super::handle_prev_block_mismatch(&queue, &state, block.transactions_vec().clone());
+    let outcome = super::handle_prev_block_mismatch(
+        &queue,
+        &state,
+        block.external_entrypoints_cloned().collect(),
+    );
 
     assert_eq!(outcome.requeued, 1, "payload should be requeued");
     assert_eq!(outcome.failures, 0, "requeue should succeed under capacity");

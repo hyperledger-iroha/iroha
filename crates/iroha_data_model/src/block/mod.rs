@@ -114,6 +114,7 @@ impl SignedBlock {
             payload: BlockPayload {
                 header,
                 transactions,
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -139,6 +140,7 @@ impl SignedBlock {
             payload: BlockPayload {
                 header,
                 transactions,
+                external_entrypoints: Vec::new(),
                 da_commitments,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -193,13 +195,8 @@ impl SignedBlock {
         let merkle = MerkleTree::from_iter(hashes.to_owned());
 
         // Ensure the consensus merkle root covering only external transactions remains intact.
-        let external_entrypoints: Vec<TransactionEntrypoint> = self
-            .payload
-            .transactions
-            .iter()
-            .cloned()
-            .map(TransactionEntrypoint::from)
-            .collect();
+        let external_entrypoints: Vec<TransactionEntrypoint> =
+            self.external_entrypoints_cloned().collect();
         let external_hashes = external_entrypoints.iter().map(TransactionEntrypoint::hash);
         let external_merkle: MerkleTree<TransactionEntrypoint> =
             external_hashes.collect::<MerkleTree<_>>();
@@ -467,6 +464,7 @@ impl SignedBlock {
         let payload = BlockPayload {
             header,
             transactions,
+            external_entrypoints: external_entrypoints.clone(),
             da_commitments: None,
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
@@ -1304,6 +1302,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1322,6 +1321,7 @@ mod tests {
         let payload = BlockPayload {
             header,
             transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
@@ -1385,6 +1385,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1404,6 +1405,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1425,6 +1427,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1516,6 +1519,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1570,6 +1574,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: vec![tx],
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1612,6 +1617,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1656,6 +1662,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1693,6 +1700,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1727,6 +1735,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1790,6 +1799,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1873,6 +1883,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1904,6 +1915,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1930,6 +1942,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1963,6 +1976,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -2038,6 +2052,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,

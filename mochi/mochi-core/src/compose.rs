@@ -984,7 +984,8 @@ impl InstructionDraft {
                 Register::domain(Domain::new(domain.clone())).into()
             }
             InstructionDraft::RegisterAccount { account } => Register::account(
-                Account::new_in_domain(account.account().clone(), account.domain().clone()),
+                Account::new(account.account().clone())
+                    .with_linked_domain(account.domain().clone()),
             )
             .into(),
             InstructionDraft::RegisterAssetDefinition {

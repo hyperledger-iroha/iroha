@@ -1615,9 +1615,13 @@ mod tests {
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use norito::codec::{decode_adaptive, encode_adaptive};
 
     use super::*;
-    use crate::{account::address, metadata::Metadata, name::Name, nexus::UniversalAccountId};
+    use crate::{
+        account::address, metadata::Metadata, name::Name, nexus::UniversalAccountId,
+        prelude::Register,
+    };
 
     fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
         address::ChainDiscriminantGuard::enter(address::chain_discriminant())
@@ -1776,6 +1780,45 @@ mod json_tests {
         assert!(decoded.label.is_none());
         assert!(decoded.uaid.is_none());
         assert_eq!(decoded.metadata, Metadata::default());
+    }
+
+    #[test]
+    fn new_account_norito_roundtrip_preserves_packed_self_delimiting_fields() {
+        let _guard = guard_chain_discriminant();
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let id = AccountId::new(keypair.public_key().clone());
+        let mut metadata = Metadata::default();
+        metadata.insert("title".parse().expect("metadata key"), "queen");
+        let label =
+            rekey::AccountLabel::new(domain.clone(), "alice".parse::<Name>().expect("label"));
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0xAB; 32]));
+        let opaque_id = OpaqueAccountId::from_hash(Hash::prehashed([0xCD; 32]));
+
+        let new_account = NewAccount::new_in_domain(id, domain)
+            .with_metadata(metadata)
+            .with_label(Some(label))
+            .with_uaid(Some(uaid))
+            .with_opaque_ids(vec![opaque_id]);
+
+        let bytes = encode_adaptive(&new_account);
+        let decoded: NewAccount = decode_adaptive(&bytes).expect("decode new account");
+
+        assert_eq!(decoded, new_account);
+    }
+
+    #[test]
+    fn register_account_norito_roundtrip_matches_kagami_genesis_shape() {
+        let _guard = guard_chain_discriminant();
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let id = AccountId::new(keypair.public_key().clone());
+        let register = Register::account(NewAccount::new_in_domain(id, domain));
+
+        let bytes = encode_adaptive(&register);
+        let decoded: Register<Account> = decode_adaptive(&bytes).expect("decode register account");
+
+        assert_eq!(decoded, register);
     }
 
     #[test]

@@ -1005,7 +1005,7 @@ impl Actor {
                 let vote_count = qc
                     .as_ref()
                     .map_or(0, |qc| qc_voting_signer_count(qc, roster_len));
-                let txs: Vec<SignedTransaction> = pending.block.transactions_vec().clone();
+                let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
                 let (requeued, failures, _duplicate_failures, _gossip_hashes) =
                     requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
                 if relay_backpressure {
@@ -1342,7 +1342,7 @@ impl Actor {
             if !effective_has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
                 // already retried with availability evidence and need to unblock proposal assembly.
-                let txs: Vec<SignedTransaction> = pending.block.transactions_vec().clone();
+                let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
                 requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs)
             } else {
                 (0, 0, 0, Vec::new())

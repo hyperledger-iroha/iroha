@@ -2,6 +2,65 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: linked-domain account builders keep collapsing toward the canonical chain
+- Removed the remaining `NewAccount::new_in_domain(...)` compatibility
+  constructor from `crates/iroha_data_model/src/account.rs`; the canonical
+  explicit-domain registration path is now
+  `NewAccount::new(account_id).with_linked_domain(domain_id)`.
+- Converted the lower-risk scaffolding/generator crates off
+  `Account::new_in_domain(...)` and onto
+  `Account::new(account_id).with_linked_domain(domain_id)`:
+  - `crates/iroha_kagami`
+  - `crates/iroha_test_network`
+  - `mochi/mochi-core`
+  - `python/iroha_python/iroha_python_rs`
+- Updated the remaining in-file account Norito/registration roundtrip tests to
+  use the canonical builder chain instead of the removed helper.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_data_model` (pass)
+  - `cargo check -p mochi-core` (pass)
+  - `cargo check -p iroha_kagami --tests` (pass)
+  - `cargo check -p iroha_test_network` (pass)
+  - direct search under `crates/iroha_kagami`, `crates/iroha_test_network`,
+    `mochi`, and `python` returned no remaining `Account::new_in_domain(...)`
+    callsites
+
+## 2026-03-29 Bound quorum recovery, hedged Torii authority routing, and best-effort RBC status persistence
+- Kept the public APIs, consensus semantics, and config surface unchanged while
+  tightening the internal node behavior for the reported permissioned and NPoS
+  stalls:
+  - `crates/iroha_core/src/sumeragi/main_loop.rs`,
+    `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
+    `crates/iroha_core/src/sumeragi/mod.rs` now bound quorum-timeout recovery
+    to fresh same-height, block-local progress, re-arm recovery at the
+    terminal stalled height, and let the worker drain `PriorityTier::Votes`
+    ahead of payload tiers when commit-quorum recovery is already urgent; and
+  - unrelated consensus/vote/RBC backlog from other heights no longer defers a
+    contiguous-frontier stalled block forever once the existing
+    backlog-extended deadline has expired.
+- Replaced the internal Torii proxy candidate walk with authoritative-first
+  hedged execution in `crates/iroha_torii/src/lib.rs`:
+  - the first candidate launches immediately, later candidates hedge after
+    `clamp(block_time / 2, 50ms, 250ms)`;
+  - the first acceptable non-retryable response wins;
+  - retryable `502` / `503` / `504` responses stay fallback-eligible; and
+  - late responses are ignored and logged once.
+- Hardened `crates/iroha_core/src/sumeragi/rbc_status.rs` so fatal snapshot
+  persistence faults now disable only the disk-backed operator snapshot handle,
+  preserve the live in-memory map, and surface the degraded state through new
+  telemetry in `crates/iroha_telemetry/src/metrics.rs`.
+- Focused verification completed:
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-slice-check cargo test -p iroha_torii --lib torii_proxy -- --nocapture` (pass)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-slice-check cargo test -p iroha_core rbc_status -- --nocapture` (pass)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-slice-check cargo test -p iroha_core --lib sumeragi::main_loop::tests::reschedule_ignores_vote_backed_quorum_timeout_rbc_queue_backlog -- --exact --nocapture` (pass)
+  - fresh exact `iroha_core` libtest reruns also passed for
+    `run_worker_iteration_prioritizes_votes_when_quorum_recovery_is_urgent`,
+    `reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_height`,
+    `reschedule_defers_first_vote_backed_quorum_timeout_during_frontier_settle_window`,
+    `reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned`,
+    and `reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window`.
+
 ## 2026-03-29 Follow-up: Taira rollout smoke now auto-bootstrap funds an unfunded canary signer
 - Fixed the new public-rollout regression in
   `configs/soranexus/taira/check_mcp_rollout.sh` and
@@ -31,6 +90,34 @@ Last updated: 2026-03-29
   - `python3 -m py_compile scripts/taira_faucet_canary.py scripts/tests/taira_faucet_canary_test.py` (pass)
   - `python3` manual execution of `scripts/tests/taira_faucet_canary_test.py` test functions (pass; `pytest` is not installed here)
   - `bash -n configs/soranexus/taira/check_mcp_rollout.sh` (pass)
+
+## 2026-03-29 Taira reset recovered on updated irohad via last known good signed genesis
+- Reset the served Taira localnet and kept the updated explorer live after the
+  latest local checkout updates:
+  - rebuilt `irohad` / `kagami` from `f3de5b11b01e`;
+  - kept the rebuilt explorer from
+    `/Users/administrator/dev/iroha2-block-explorer-web` commit
+    `8f2c52f70ad2` serving through nginx; and
+  - restarted `dist/taira-localnet` under detached `screen` session
+    `taira-localnet` on fresh storage.
+- The current `kagami localnet` output on this checkout is not bootable yet:
+  both an untouched fresh bundle and a re-signed served bundle fail during
+  startup with `Error occurred while reading genesis block` /
+  `Norito (de)serialization issue: length mismatch`.
+- A focused Norito trace narrowed the current decode failure to
+  `RegisterBox::Account` genesis instructions while decoding account metadata
+  as `Vec<(Name, Json)>`, so the reset used the last known good Taira signed
+  genesis from `dist/taira-localnet.prev-20260329-151827` as a deployment
+  workaround.
+- Live verification on March 29, 2026 after the reset:
+  - `GET http://127.0.0.1:29080/status` returned `200`;
+  - `GET https://taira.sora.org/status` returned `200` with
+    `peers=3`, `blocks=1`, `txs_approved=11`, `txs_rejected=0`;
+  - `GET https://taira.sora.org/v1/accounts/faucet/puzzle` returned `200`;
+  - `GET https://taira.sora.org/v1/mcp` returned `200`;
+  - `GET https://taira.sora.org/v1/kaigi/relays` returned `total=3`; and
+  - `GET https://taira-explorer.sora.org/` returned `200` with the rebuilt
+    bundle and `config.json` still pointing at `https://taira.sora.org`.
 
 ## 2026-03-29 Taira localnet frame-cap + Torii core-lane fallback fix restored public writes
 - Raised the generated Nexus localnet tx-gossip frame cap so Taira-sized public

@@ -219,7 +219,9 @@ fn rule_matches(
     let matcher = &rule.matcher;
 
     if let Some(account) = matcher.account.as_deref()
-        && !account_matches(account, tx.as_ref().authority(), state_view)
+        && !tx
+            .authority_opt()
+            .is_some_and(|authority| account_matches(account, authority, state_view))
     {
         return false;
     }
@@ -302,19 +304,36 @@ fn instructions_match(
         return false;
     }
 
-    let executable = tx.as_ref().instructions();
-    let Executable::Instructions(batch) = executable else {
-        return false;
-    };
+    match tx.entrypoint() {
+        iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+            let executable = signed.instructions();
+            let Executable::Instructions(batch) = executable else {
+                return false;
+            };
 
-    batch.iter().any(|instruction| {
-        instruction_matches(
-            matcher_label,
-            destination_domain,
-            &**instruction,
-            state_view,
-        )
-    })
+            batch.iter().any(|instruction| {
+                instruction_matches(
+                    matcher_label,
+                    destination_domain,
+                    &**instruction,
+                    state_view,
+                )
+            })
+        }
+        iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
+            crate::smartcontracts::isi::kaigi::private_instruction_box(private)
+                .map(|instruction| {
+                    instruction_matches(
+                        matcher_label,
+                        destination_domain,
+                        &*instruction,
+                        state_view,
+                    )
+                })
+                .unwrap_or(false)
+        }
+        iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
+    }
 }
 
 fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {

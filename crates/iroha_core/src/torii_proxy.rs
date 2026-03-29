@@ -4,7 +4,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
-    transaction::SignedTransaction,
+    transaction::TransactionEntrypoint,
 };
 use norito::codec::{Decode, Encode};
 
@@ -121,8 +121,8 @@ pub struct ToriiReadProxyRequestV1 {
 pub enum ToriiProxyRequestKindV1 {
     /// Submit a signed transaction to the authoritative lane validator.
     SubmitTransaction {
-        /// Original signed transaction from the client.
-        transaction: SignedTransaction,
+        /// Original transaction entrypoint from the client.
+        transaction: TransactionEntrypoint,
         /// Route resolved by the ingress node.
         expected_route: ToriiRouteHintV1,
     },
