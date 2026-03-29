@@ -1394,7 +1394,12 @@ pub struct StoragePinRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, PartialEq, Eq,
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    PartialEq,
+    Eq,
 )]
 /// File entry describing how a logical dataset file maps into the concatenated payload.
 pub struct StorageFileEntryDto {
@@ -3078,10 +3083,8 @@ async fn fetch_remote_site_bundle_from_source(
             details.trim()
         ));
     }
-    let manifest_response =
-        norito::json::from_slice::<StorageManifestResponseDto>(&manifest_body).map_err(|err| {
-            format!("failed to decode remote manifest metadata response: {err}")
-        })?;
+    let manifest_response = norito::json::from_slice::<StorageManifestResponseDto>(&manifest_body)
+        .map_err(|err| format!("failed to decode remote manifest metadata response: {err}"))?;
     if manifest_response.manifest_digest_hex != source.manifest_digest_hex {
         return Err(format!(
             "remote manifest digest mismatch: expected {}, found {}",
@@ -3097,7 +3100,8 @@ async fn fetch_remote_site_bundle_from_source(
     if manifest.root_cid != cid_bytes {
         return Err("remote manifest CID does not match requested CID".to_string());
     }
-    let manifest_digest_hex = hex::encode(manifest.digest().map_err(|err| err.to_string())?);
+    let manifest_digest_hex =
+        hex::encode(manifest.digest().map_err(|err| err.to_string())?.as_bytes());
     if manifest_digest_hex != source.manifest_digest_hex {
         return Err(format!(
             "decoded remote manifest digest mismatch: expected {}, found {manifest_digest_hex}",
@@ -3139,10 +3143,8 @@ async fn fetch_remote_site_bundle_from_source(
             details.trim()
         ));
     }
-    let fetch_response =
-        norito::json::from_slice::<StorageFetchResponseDto>(&fetch_body).map_err(|err| {
-            format!("failed to decode remote site payload response: {err}")
-        })?;
+    let fetch_response = norito::json::from_slice::<StorageFetchResponseDto>(&fetch_body)
+        .map_err(|err| format!("failed to decode remote site payload response: {err}"))?;
     let payload = BASE64_STANDARD
         .decode(fetch_response.data_b64.as_bytes())
         .map_err(|err| format!("failed to decode remote site payload bytes: {err}"))?;
@@ -3211,9 +3213,11 @@ fn cache_remote_site_bundle(
     state: &SharedAppState,
     bundle: RemoteSiteBundle,
 ) -> Result<StoredManifest, Response> {
-    let profile = chunk_profile_for_manifest(&bundle.manifest).map_err(ResponseError::into_response)?;
-    let plan = build_plan_for_storage_pin_request(&bundle.payload, profile, bundle.files.as_deref())
-        .map_err(|err| json_error(StatusCode::BAD_GATEWAY, err))?;
+    let profile =
+        chunk_profile_for_manifest(&bundle.manifest).map_err(ResponseError::into_response)?;
+    let plan =
+        build_plan_for_storage_pin_request(&bundle.payload, profile, bundle.files.as_deref())
+            .map_err(|err| json_error(StatusCode::BAD_GATEWAY, err))?;
     let manifest_digest: [u8; 32] = bundle
         .manifest
         .digest()
