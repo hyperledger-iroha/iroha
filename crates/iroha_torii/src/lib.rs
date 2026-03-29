@@ -5604,6 +5604,12 @@ fn parse_domain_id(raw: &str) -> Result<DomainId, Error> {
 }
 
 #[cfg(feature = "app_api")]
+fn parse_kaigi_call_id(raw: &str) -> Result<iroha_data_model::kaigi::KaigiId, Error> {
+    raw.parse::<iroha_data_model::kaigi::KaigiId>()
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
+}
+
+#[cfg(feature = "app_api")]
 fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitionId, Error> {
     let trimmed = raw.trim();
     let world = app.state.world_view();
@@ -13933,6 +13939,101 @@ async fn handler_kaigi_relays(
     )
     .await
     .map(axum::response::IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_kaigi_call(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(call_raw): AxPath<String>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/kaigi/calls/{call_id}").await?;
+    }
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    routing::handle_v1_kaigi_call(app.state.clone(), call_id).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_kaigi_call_signals(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(call_raw): AxPath<String>,
+    AxQuery(params): AxQuery<routing::KaigiCallSignalsParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/kaigi/calls/{call_id}/signals",
+        )
+        .await?;
+    }
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    routing::handle_v1_kaigi_call_signals(app.state.clone(), call_id, AxQuery(params)).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_kaigi_call_events_sse(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(call_raw): AxPath<String>,
+    AxQuery(params): AxQuery<routing::KaigiCallEventsParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let call_id = parse_kaigi_call_id(&call_raw)?;
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return Ok(
+            routing::handle_v1_kaigi_call_events_sse(
+                app.events.clone(),
+                call_id,
+                AxQuery(params),
+            )
+            .into_response(),
+        );
+    }
+
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/kaigi/calls/{call_id}/events",
+        app.api_token_enforced(),
+    );
+    if !app.rate_limiter.allow(&key).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+
+    Ok(routing::handle_v1_kaigi_call_events_sse(
+        app.events.clone(),
+        call_id,
+        AxQuery(params),
+    )
+    .into_response())
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -23057,6 +23158,14 @@ impl Torii {
                     "/v1/explorer/instructions/{hash}/{index}/contract-view",
                     get(handler_explorer_instruction_contract_view),
                 );
+
+            let router = router
+                .route("/v1/kaigi/calls/{call_id}", get(handler_kaigi_call))
+                .route(
+                    "/v1/kaigi/calls/{call_id}/signals",
+                    get(handler_kaigi_call_signals),
+                )
+                .route("/v1/kaigi/calls/{call_id}/events", get(handler_kaigi_call_events_sse));
 
             #[cfg(feature = "telemetry")]
             let router = router

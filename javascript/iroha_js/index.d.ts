@@ -4281,6 +4281,90 @@ export interface KaigiRelayEventsOptions {
   signal?: AbortSignal;
 }
 
+export interface KaigiCallEventRef {
+  call_id: string;
+  domain: string;
+  call_name: string;
+}
+
+export interface KaigiCallView {
+  call_id: string;
+  domain: string;
+  call_name: string;
+  host_account_id: string;
+  billing_account_id?: string | null;
+  title?: string | null;
+  description?: string | null;
+  max_participants?: number | null;
+  gas_rate_per_minute: number;
+  metadata: Record<string, unknown>;
+  scheduled_start_ms?: number | null;
+  privacy_mode: string;
+  room_policy: string;
+  relay_manifest?: Record<string, unknown> | null;
+  roster_root_hex: string;
+  participant_count: number;
+  commitment_count: number;
+  nullifier_count: number;
+  usage_commitment_count: number;
+  status: string;
+  created_at_ms: number;
+  ended_at_ms?: number | null;
+  total_duration_ms: number;
+  total_billed_gas: number;
+  segments_recorded: number;
+}
+
+export interface KaigiCallSignal {
+  entrypoint_hash: string;
+  authority: string;
+  timestamp_ms?: number | null;
+  call_id: string;
+  signal_kind: string;
+  host_account_id?: string | null;
+  participant_account_id?: string | null;
+  created_at_ms: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface KaigiCallSignalsList {
+  total: number;
+  items: ReadonlyArray<KaigiCallSignal>;
+}
+
+export interface KaigiCallSignalsOptions {
+  afterTimestampMs?: NumericLike;
+  after_timestamp_ms?: NumericLike;
+  limit?: NumericLike;
+  offset?: NumericLike;
+  signal?: AbortSignal;
+}
+
+export interface KaigiCallRosterUpdatedEvent {
+  kind: "roster_updated";
+  call: KaigiCallEventRef;
+  privacy_mode: string;
+  participant_count: number;
+  commitment_count: number;
+  nullifier_count: number;
+  roster_root_hex?: string | null;
+}
+
+export interface KaigiCallEndedEvent {
+  kind: "ended";
+  call: KaigiCallEventRef;
+  status: string;
+  ended_at_ms: number;
+}
+
+export type KaigiCallEventPayload = KaigiCallRosterUpdatedEvent | KaigiCallEndedEvent;
+
+export interface KaigiCallEventsOptions {
+  kind?: string | ReadonlyArray<string>;
+  lastEventId?: string;
+  signal?: AbortSignal;
+}
+
 type ExclusiveSingleOrMany<
   SingleKey extends PropertyKey,
   SingleValue,
@@ -7044,6 +7128,18 @@ export declare class ToriiClient {
   streamSumeragiStatus<T = ToriiSumeragiStatus>(
     options?: Omit<EventStreamOptions, "filter">,
   ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
+  getKaigiCall(
+    callId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KaigiCallView | null>;
+  listKaigiCallSignals(
+    callId: string,
+    options?: KaigiCallSignalsOptions,
+  ): Promise<KaigiCallSignalsList>;
+  streamKaigiCallEvents(
+    callId: string,
+    options?: KaigiCallEventsOptions,
+  ): AsyncGenerator<ToriiSseEvent<KaigiCallEventPayload>, void, unknown>;
   listKaigiRelays(
     options?: { signal?: AbortSignal },
   ): Promise<KaigiRelaySummaryList>;

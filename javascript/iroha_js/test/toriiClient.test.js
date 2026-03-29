@@ -13553,6 +13553,133 @@ test("streamKaigiRelayEvents rejects unsupported options", () => {
   );
 });
 
+test("getKaigiCall returns null on 404 and normalizes call views", async () => {
+  const callId = "kaigi:demo-room";
+  const missingClient = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => createResponse({ status: 404 }),
+  });
+  const missing = await missingClient.getKaigiCall(callId);
+  assert.equal(missing, null);
+
+  let requested;
+  const fetchImpl = async (url) => {
+    requested = url;
+    return createResponse({
+      status: 200,
+      jsonData: {
+        call_id: callId,
+        domain: "kaigi",
+        call_name: "demo-room",
+        host_account_id: FIXTURE_ALICE_ID,
+        title: "Weekly Sync",
+        gas_rate_per_minute: 0,
+        metadata: {
+          kaigi_call: {
+            schema: "iroha-demo-kaigi-call/v1",
+          },
+        },
+        scheduled_start_ms: "1700000000000",
+        privacy_mode: "private",
+        room_policy: "authenticated",
+        relay_manifest: {
+          expiryMs: 1700000001000,
+        },
+        roster_root_hex: "aa".repeat(32),
+        participant_count: 1,
+        commitment_count: 1,
+        nullifier_count: 0,
+        usage_commitment_count: 0,
+        status: "active",
+        created_at_ms: "1699999999000",
+        total_duration_ms: 0,
+        total_billed_gas: 0,
+        segments_recorded: 0,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const call = await client.getKaigiCall(callId);
+  assert.equal(requested, `${BASE_URL}/v1/kaigi/calls/${encodeURIComponent(callId)}`);
+  assert.equal(call?.call_id, callId);
+  assert.equal(call?.privacy_mode, "private");
+  assert.equal(call?.participant_count, 1);
+  assert.equal(call?.relay_manifest?.expiryMs, 1700000001000);
+});
+
+test("listKaigiCallSignals encodes filters and normalizes payloads", async () => {
+  const callId = "kaigi:demo-room";
+  let requested;
+  const fetchImpl = async (url, init) => {
+    requested = url;
+    assert.strictEqual(init.signal, undefined);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        total: 1,
+        items: [
+          {
+            entrypoint_hash: "deadbeef",
+            authority: FIXTURE_BOB_ID,
+            timestamp_ms: "1700000000100",
+            call_id: callId,
+            signal_kind: "answer",
+            host_account_id: FIXTURE_ALICE_ID,
+            participant_account_id: FIXTURE_BOB_ID,
+            created_at_ms: "1700000000000",
+            metadata: {
+              schema: "iroha-demo-kaigi-chain-signal/v1",
+            },
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const signals = await client.listKaigiCallSignals(callId, {
+    afterTimestampMs: 1700000000000,
+    limit: 10,
+    offset: 2,
+  });
+  assert.ok(requested?.includes(`/v1/kaigi/calls/${encodeURIComponent(callId)}/signals`));
+  assert.ok(requested?.includes("after_timestamp_ms=1700000000000"));
+  assert.ok(requested?.includes("limit=10"));
+  assert.ok(requested?.includes("offset=2"));
+  assert.equal(signals.total, 1);
+  assert.equal(signals.items[0].signal_kind, "answer");
+  assert.equal(signals.items[0].created_at_ms, 1700000000000);
+});
+
+test("streamKaigiCallEvents encodes filters and normalizes payloads", async () => {
+  const callId = "kaigi:demo-room";
+  let requested;
+  const fetchImpl = async (url, init) => {
+    requested = url;
+    assert.equal(init.headers["Last-Event-ID"], "cursor");
+    return createSseResponse([
+      "event: kaigi.call\n",
+      `data: {"kind":"roster_updated","call":{"call_id":"${callId}","domain":"kaigi","call_name":"demo-room"},"privacy_mode":"private","participant_count":1,"commitment_count":1,"nullifier_count":0,"roster_root_hex":"${"aa".repeat(32)}"}\n`,
+      "\n",
+      "event: kaigi.call\n",
+      `data: {"kind":"ended","call":{"call_id":"${callId}","domain":"kaigi","call_name":"demo-room"},"status":"ended","ended_at_ms":1700000001000}\n`,
+      "\n",
+    ]);
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const iterator = client.streamKaigiCallEvents(callId, {
+    kind: ["roster_updated", "ended"],
+    lastEventId: "cursor",
+  });
+  const first = await iterator.next();
+  assert.equal(first.value?.data?.kind, "roster_updated");
+  assert.equal(first.value?.data?.call.call_name, "demo-room");
+  const second = await iterator.next();
+  assert.equal(second.value?.data?.kind, "ended");
+  assert.equal(second.value?.data?.ended_at_ms, 1700000001000);
+  assert.ok(requested?.includes("kind=roster_updated%2Cended"));
+});
+
 test("listKaigiRelays rejects unsupported option keys", async () => {
   const fetchImpl = async () => {
     throw new Error("should not fetch");
