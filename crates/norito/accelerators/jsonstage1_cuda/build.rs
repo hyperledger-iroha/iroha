@@ -57,7 +57,7 @@ fn main() {
             host_compiler.display()
         );
         build.ccbin(false);
-        build.flag(&format!("-ccbin={}", host_compiler.display()));
+        build.flag(format!("-ccbin={}", host_compiler.display()));
     } else if target_os == "linux" && !explicit_cxx_configured() {
         println!(
             "cargo:warning=letting nvcc choose the CUDA host compiler to avoid unsupported default CXX"

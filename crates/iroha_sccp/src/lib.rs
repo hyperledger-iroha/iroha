@@ -10,7 +10,7 @@ use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
 };
-use codec::{Decode, Encode};
+use codec::{Decode, Encode, Error as CodecError, Input, Output};
 use scale_info::TypeInfo;
 use tiny_keccak::Hasher;
 
@@ -79,12 +79,58 @@ pub struct TokenControlPayloadV1 {
     pub sora_asset_id: H256,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum GovernancePayloadV1 {
+    #[codec(index = 0)]
     Add(TokenAddPayloadV1),
+    #[codec(index = 1)]
     Pause(TokenControlPayloadV1),
+    #[codec(index = 2)]
     Resume(TokenControlPayloadV1),
+}
+
+impl GovernancePayloadV1 {
+    const ADD_DISCRIMINANT: u8 = 0;
+    const PAUSE_DISCRIMINANT: u8 = 1;
+    const RESUME_DISCRIMINANT: u8 = 2;
+}
+
+impl Encode for GovernancePayloadV1 {
+    fn size_hint(&self) -> usize {
+        1 + match self {
+            Self::Add(payload) => payload.size_hint(),
+            Self::Pause(payload) | Self::Resume(payload) => payload.size_hint(),
+        }
+    }
+
+    fn encode_to<T: Output + ?Sized>(&self, dest: &mut T) {
+        match self {
+            Self::Add(payload) => {
+                Self::ADD_DISCRIMINANT.encode_to(dest);
+                payload.encode_to(dest);
+            }
+            Self::Pause(payload) => {
+                Self::PAUSE_DISCRIMINANT.encode_to(dest);
+                payload.encode_to(dest);
+            }
+            Self::Resume(payload) => {
+                Self::RESUME_DISCRIMINANT.encode_to(dest);
+                payload.encode_to(dest);
+            }
+        }
+    }
+}
+
+impl Decode for GovernancePayloadV1 {
+    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
+        match u8::decode(input)? {
+            Self::ADD_DISCRIMINANT => Ok(Self::Add(TokenAddPayloadV1::decode(input)?)),
+            Self::PAUSE_DISCRIMINANT => Ok(Self::Pause(TokenControlPayloadV1::decode(input)?)),
+            Self::RESUME_DISCRIMINANT => Ok(Self::Resume(TokenControlPayloadV1::decode(input)?)),
+            _ => Err("invalid GovernancePayloadV1 discriminant".into()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
@@ -257,8 +303,9 @@ pub fn governance_message_id(payload: &GovernancePayloadV1) -> H256 {
 pub fn governance_target_domain(payload: &GovernancePayloadV1) -> u32 {
     match payload {
         GovernancePayloadV1::Add(payload) => payload.target_domain,
-        GovernancePayloadV1::Pause(payload) => payload.target_domain,
-        GovernancePayloadV1::Resume(payload) => payload.target_domain,
+        GovernancePayloadV1::Pause(payload) | GovernancePayloadV1::Resume(payload) => {
+            payload.target_domain
+        }
     }
 }
 
@@ -702,6 +749,41 @@ mod tests {
             finality_proof: sample_finality_proof(commitment_root),
         };
         assert!(!verify_governance_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn governance_payload_scale_roundtrip_preserves_discriminants() {
+        let add = GovernancePayloadV1::Add(TokenAddPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_SORA,
+            nonce: 1,
+            sora_asset_id: [0x11; 32],
+            decimals: 18,
+            name: [0x22; 32],
+            symbol: [0x33; 32],
+        });
+        let pause = GovernancePayloadV1::Pause(TokenControlPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_ETH,
+            nonce: 2,
+            sora_asset_id: [0x44; 32],
+        });
+        let resume = GovernancePayloadV1::Resume(TokenControlPayloadV1 {
+            version: 1,
+            target_domain: SCCP_DOMAIN_BSC,
+            nonce: 3,
+            sora_asset_id: [0x55; 32],
+        });
+
+        for (payload, discriminant) in [
+            (add, GovernancePayloadV1::ADD_DISCRIMINANT),
+            (pause, GovernancePayloadV1::PAUSE_DISCRIMINANT),
+            (resume, GovernancePayloadV1::RESUME_DISCRIMINANT),
+        ] {
+            let encoded = payload.encode();
+            assert_eq!(encoded.first(), Some(&discriminant));
+            assert_eq!(GovernancePayloadV1::decode(&mut &encoded[..]).unwrap(), payload);
+        }
     }
 
     #[test]

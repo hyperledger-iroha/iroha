@@ -1261,7 +1261,9 @@ fn json_numeric_opt(
                 "asset transfer cap_amount must be non-negative".to_owned(),
             ));
         }
-        return Ok(Some(iroha_primitives::numeric::Numeric::from(value as u64)));
+        return Ok(Some(iroha_primitives::numeric::Numeric::from(
+            value.cast_unsigned(),
+        )));
     }
     if let Some(value) = value.as_str() {
         let parsed = iroha_primitives::numeric::Numeric::from_str(value.trim())
@@ -1275,7 +1277,7 @@ fn json_numeric_opt(
 
 #[cfg(feature = "json")]
 fn instruction_box_from_object(
-    map: norito::json::Map,
+    map: &norito::json::Map,
 ) -> Result<InstructionBox, norito::json::Error> {
     use std::str::FromStr as _;
 
@@ -1380,7 +1382,7 @@ impl norito::json::JsonDeserialize for InstructionBox {
     ) -> Result<Self, norito::json::Error> {
         match norito::json::Value::json_deserialize(parser)? {
             norito::json::Value::String(encoded) => instruction_box_from_base64_literal(&encoded),
-            norito::json::Value::Object(map) => instruction_box_from_object(map),
+            norito::json::Value::Object(map) => instruction_box_from_object(&map),
             other => Err(norito::json::Error::Message(format!(
                 "instruction JSON must be either a base64 string or an object, found {other:?}"
             ))),

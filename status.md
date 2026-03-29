@@ -66,6 +66,38 @@ Last updated: 2026-03-29
     attempt failed ... timed out` warnings during the stall window on top of
     the same `PRTRY:QUEUE_FULL` / `no ingress endpoints available` pressure.
 
+## 2026-03-29 Follow-up: duplicate `external_entrypoints` test fixture fields removed in `iroha_data_model`
+- Fixed `crates/iroha_data_model/src/block/mod.rs` test-only `BlockPayload`
+  literals that initialized `external_entrypoints` twice after the DA-related
+  fields, which was causing `error[E0062]: field \`external_entrypoints\`
+  specified more than once`.
+- Kept the production constructors unchanged; the fix only removes the stale
+  duplicate initializer from the affected signed-block/block-wire regression
+  tests.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model block::tests:: -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model` (fails on 21 pre-existing non-block tests
+    under `account`, `offline::poseidon`, `oracle`, `smart_contract`, and
+    `transaction::signed`; the edited `block::tests` slice passes)
+
+## 2026-03-29 Follow-up: fault injection now covers private Kaigi committed entrypoints
+- Fixed `crates/iroha_data_model/src/query/mod.rs` so
+  `CommittedTransaction::inject_instructions(...)` now handles
+  `TransactionEntrypoint::PrivateKaigi(_)` instead of failing the match under
+  `fault_injection`.
+- Added a dedicated `PrivateKaigiTransaction::inject_instructions(...)` helper
+  in `crates/iroha_data_model/src/transaction/private_kaigi.rs` that reuses the
+  existing metadata-overlay fault-injection path used for instruction-less
+  payloads.
+- Added focused regression coverage for both the direct private Kaigi
+  transaction helper and the committed-transaction wrapper, while keeping the
+  existing time-entrypoint fault-injection path green.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model --features fault_injection private_kaigi_ -- --nocapture` (pass)
+  - `cargo test -p iroha_data_model --features fault_injection time_entrypoint_injection_appends_instructions -- --nocapture` (pass)
+
 ## 2026-03-29 Taira testnet prefix/config rollout fixed
 - Fixed Taira’s served/testnet account-literal rollout so the generated and
   live configs no longer mix Sora-prefixed defaults into a Taira
