@@ -22,8 +22,8 @@ use iroha_version::{UnsupportedVersion, Version};
 use norito::{
     codec::{Decode, Encode},
     core::{
-        Compression, Error as NoritoFrameError, MAGIC, VERSION_MAJOR, VERSION_MINOR,
-        default_encode_flags, hardware_crc64 as norito_crc64,
+        default_encode_flags, hardware_crc64 as norito_crc64, Compression,
+        Error as NoritoFrameError, MAGIC, VERSION_MAJOR, VERSION_MINOR,
     },
 };
 
@@ -195,9 +195,8 @@ impl SignedBlock {
         let merkle = MerkleTree::from_iter(hashes.to_owned());
 
         // Ensure the consensus merkle root covering only external transactions remains intact.
-        let external_entrypoints: Vec<TransactionEntrypoint> = self
-            .external_entrypoints_cloned()
-            .collect();
+        let external_entrypoints: Vec<TransactionEntrypoint> =
+            self.external_entrypoints_cloned().collect();
         let external_hashes = external_entrypoints.iter().map(TransactionEntrypoint::hash);
         let external_merkle: MerkleTree<TransactionEntrypoint> =
             external_hashes.collect::<MerkleTree<_>>();
@@ -1189,24 +1188,28 @@ pub fn decode_framed_signed_block(
     decode_versioned_signed_block_inner(deframed.bare_versioned.as_ref(), deframed.bytes.as_ref())
 }
 
-struct RootGuard;
-
-impl Drop for RootGuard {
-    fn drop(&mut self) {
-        norito::core::clear_decode_root();
-    }
-}
-
 type VersionError = iroha_version::error::Error;
 
 fn decode_signed_block_exact(bytes: &[u8]) -> Result<SignedBlock, iroha_version::error::Error> {
-    norito::core::set_decode_root(bytes);
-    let _root_guard = RootGuard;
-    let (block, used) = <SignedBlock as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
+    // `SignedBlock` versioned payloads are canonical bare Norito archives. The archived
+    // `NoritoDeserialize` path is currently more robust than the derive-generated
+    // `DecodeFromSlice` fast path for large genesis-shaped payloads, so decode through the
+    // archived view and then verify exact consumption by roundtripping the canonical payload.
+    //
+    // TODO: Remove the roundtrip check once the remaining `DecodeFromSlice` regression is
+    // fixed at the derive level and the exact slice decoder is trustworthy for these payloads.
+    let block = norito::codec::decode_adaptive::<SignedBlock>(bytes)
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
-    let remaining = bytes.len().saturating_sub(used);
-    if remaining != 0 {
-        return Err(VersionError::ExtraBytesLeft(remaining as u64));
+    let canonical_len = encode_signed_block_payload(&block).len();
+    if canonical_len < bytes.len() {
+        return Err(VersionError::ExtraBytesLeft(
+            bytes.len().saturating_sub(canonical_len) as u64,
+        ));
+    }
+    if canonical_len != bytes.len() {
+        return Err(VersionError::NoritoCodec(
+            norito::Error::LengthMismatch.to_string(),
+        ));
     }
     Ok(block)
 }
@@ -1241,7 +1244,7 @@ fn decode_versioned_signed_block_inner(
 
 pub mod prelude {
     //! For glob-import
-    pub use super::{BlockHeader, BlockSignature, SignedBlock, error::BlockRejectionReason};
+    pub use super::{error::BlockRejectionReason, BlockHeader, BlockSignature, SignedBlock};
 }
 
 #[cfg(test)]
@@ -1255,13 +1258,13 @@ mod tests {
     use super::*;
     // Bring commonly used types referenced in transparent API tests.
     #[cfg(feature = "transparent_api")]
-    use crate::ValidationFail;
-    #[cfg(feature = "transparent_api")]
     use crate::transaction::signed::{TransactionEntrypoint, TransactionResultInner};
     #[cfg(feature = "transparent_api")]
     use crate::trigger::DataTriggerSequence;
     #[cfg(feature = "transparent_api")]
     use crate::trigger::TimeTriggerEntrypoint;
+    #[cfg(feature = "transparent_api")]
+    use crate::ValidationFail;
     use crate::{
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
@@ -1302,6 +1305,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1320,6 +1324,7 @@ mod tests {
         let payload = BlockPayload {
             header,
             transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
@@ -1383,6 +1388,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1402,6 +1408,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1423,6 +1430,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1488,7 +1496,7 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
+            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder, ChainId,
         };
 
         let chain: ChainId = "genesis-default-conf-digest".parse().expect("chain id");
@@ -1513,6 +1521,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1533,10 +1542,10 @@ mod tests {
     #[test]
     fn versioned_block_roundtrip_preserves_instruction_order() {
         use crate::{
-            ChainId,
             account::AccountId,
-            parameter::{Parameter, system::SumeragiParameter},
-            transaction::{Executable, signed::TransactionBuilder},
+            parameter::{system::SumeragiParameter, Parameter},
+            transaction::{signed::TransactionBuilder, Executable},
+            ChainId,
         };
 
         let key_pair = iroha_crypto::KeyPair::random();
@@ -1566,7 +1575,8 @@ mod tests {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
                 header,
-                transactions: vec![tx],
+                transactions: vec![tx.clone()],
+                external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1609,6 +1619,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1653,6 +1664,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1690,6 +1702,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1724,6 +1737,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1751,7 +1765,7 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
+            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder, ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -1787,6 +1801,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1825,8 +1840,8 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
-            transaction::signed::TransactionBuilder,
+            account::AccountId, domain::DomainId, isi::InstructionBox,
+            transaction::signed::TransactionBuilder, ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -1870,6 +1885,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1901,6 +1917,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1927,6 +1944,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1960,6 +1978,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1997,7 +2016,7 @@ mod tests {
         use nonzero_ext::nonzero;
 
         use crate::consensus::{
-            PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
+            PreviousRosterEvidence, ValidatorSetCheckpoint, VALIDATOR_SET_HASH_VERSION_V1,
         };
         use crate::peer::PeerId;
 
@@ -2035,6 +2054,7 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -2072,8 +2092,8 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
-            transaction::signed::TransactionBuilder,
+            account::AccountId, domain::DomainId, isi::InstructionBox,
+            transaction::signed::TransactionBuilder, ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2099,13 +2119,13 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            ChainId,
             account::AccountId,
             da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
             domain::DomainId,
             isi::InstructionBox,
             nexus::{DataSpaceId, LaneId},
             transaction::signed::TransactionBuilder,
+            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2245,12 +2265,12 @@ mod tests {
         use iroha_primitives::numeric::Numeric;
 
         use crate::{
-            ChainId,
             account::AccountId,
             asset::id::AssetDefinitionId,
             domain::DomainId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
-            transaction::{TransactionResultInner, signed::TransactionBuilder},
+            transaction::{signed::TransactionBuilder, TransactionResultInner},
+            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2359,14 +2379,14 @@ mod tests {
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
-            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::{
-                ExecutionStep,
                 signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
+                ExecutionStep,
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
+            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2427,10 +2447,10 @@ mod tests {
         use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
 
         use crate::{
-            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
+            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2501,14 +2521,14 @@ mod tests {
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
-            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::{
-                ExecutionStep,
                 signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
+                ExecutionStep,
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
+            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2582,10 +2602,10 @@ mod tests {
         use iroha_crypto::{Hash, KeyPair, SignatureOf};
 
         use crate::{
-            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
+            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2622,8 +2642,8 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            ChainId, account::AccountId, block::deframe_versioned_signed_block_bytes,
-            domain::DomainId, transaction::signed::TransactionBuilder,
+            account::AccountId, block::deframe_versioned_signed_block_bytes, domain::DomainId,
+            transaction::signed::TransactionBuilder, ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2657,7 +2677,7 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
+            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder, ChainId,
         };
 
         let keypair = KeyPair::random();

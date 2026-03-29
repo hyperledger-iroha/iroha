@@ -5,7 +5,7 @@ use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use super::{SignedBlock, header::BlockHeader};
+use super::{header::BlockHeader, SignedBlock};
 use crate::{
     consensus::PreviousRosterEvidence,
     da::{

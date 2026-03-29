@@ -1949,7 +1949,7 @@ fn derive_struct_deserialize(
                                         &slice[..preview_len]
                                     );
                                 }
-                                match norito::core::decode_field_canonical::<#ty>(slice) {
+                                match norito::core::decode_field_prefix::<#ty>(slice) {
                                     Ok((compat, used)) => {
                                         __data_off += used;
                                         compat
@@ -1994,7 +1994,7 @@ fn derive_struct_deserialize(
                                             preview
                                         );
                                     }
-                                    let (value, used) = norito::core::decode_field_canonical::<#ty>(field_data)?;
+                                    let (value, used) = norito::core::decode_field_prefix::<#ty>(field_data)?;
                                     __data_off += used;
                                     value
                                 }
@@ -2599,7 +2599,7 @@ fn derive_struct_deserialize(
                                             .checked_sub(__data_off)
                                             .ok_or(norito::core::Error::LengthMismatch)?;
                                         let slice = unsafe { std::slice::from_raw_parts(ptr2, remaining) };
-                                        let (value, used) = norito::core::decode_field_canonical::<#ty>(slice)?;
+                                        let (value, used) = norito::core::decode_field_prefix::<#ty>(slice)?;
                                         __data_off += used;
                                         value
                                     }
@@ -3308,24 +3308,15 @@ fn derive_enum_deserialize(
                                         quote! {
                                             let #idx_var = {
                                                 if norito::core::use_packed_struct() {
-                                                    // Self-delimiting: inner header present; read it and decode exact window.
-                                                    let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                        Ok(res) => res,
-                                                        Err(err) => return Err(err),
-                                                    };
-                                                    let data_ptr = unsafe { ptr.add(offset) };
-                                                    let layout = std::alloc::Layout::from_size_align(hdr + field_len, core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                    let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                    if tmp_ptr.is_null() {
-                                                        std::alloc::handle_alloc_error(layout);
-                                                    }
-                                                    unsafe { std::ptr::copy(data_ptr, tmp_ptr, hdr + field_len); }
-                                                    let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, hdr + field_len) };
-                                                    let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                    let val_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                    unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                    let val = val_res?;
-                                                    offset += hdr + field_len;
+                                                    // Self-delimiting fields in packed enums do not carry an outer
+                                                    // size header. Decode from the remaining payload and advance by
+                                                    // the exact number of bytes the field consumed.
+                                                    let __payload = norito::core::payload_slice_from_ptr(ptr)?;
+                                                    let field_data = __payload
+                                                        .get(offset..)
+                                                        .ok_or(norito::core::Error::LengthMismatch)?;
+                                                    let (val, used) = norito::core::decode_field_prefix::<#ty>(field_data)?;
+                                                    offset += used;
                                                     val
                                                 } else {
                                                     // AoS: length-prefixed outer framing (pointer-based)
@@ -3682,25 +3673,15 @@ fn derive_enum_deserialize(
                                     quote! {
                                         let #name = {
                                             if norito::core::use_packed_struct() {
-                                                // Packed: inner header lives at the current offset.
-                                                let (field_len, hdr) = match unsafe { norito::core::try_read_len_ptr_unchecked(ptr.add(offset)) } {
-                                                    Ok(res) => res,
-                                                    Err(err) => return Err(err),
-                                                };
-                                                let total = hdr + field_len;
-                                                let data_ptr = unsafe { ptr.add(offset) };
-                                                let layout = std::alloc::Layout::from_size_align(total.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                                let tmp_ptr = unsafe { std::alloc::alloc(layout) };
-                                                if tmp_ptr.is_null() {
-                                                    std::alloc::handle_alloc_error(layout);
-                                                }
-                                                unsafe { std::ptr::copy(data_ptr, tmp_ptr, total); }
-                                                let tmp_slice = unsafe { std::slice::from_raw_parts(tmp_ptr as *const u8, total) };
-                                                let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                                let value_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(unsafe { &*(tmp_ptr as *const norito::core::Archived<#ty>) });
-                                                unsafe { std::alloc::dealloc(tmp_ptr, layout); }
-                                                let value = value_res?;
-                                                offset += total;
+                                                // Packed enum fields that are self-delimiting own their boundary.
+                                                // There is no outer size header here, so decode from the remaining
+                                                // payload and use the canonical consumed byte count.
+                                                let __payload = norito::core::payload_slice_from_ptr(ptr)?;
+                                                let field_data = __payload
+                                                    .get(offset..)
+                                                    .ok_or(norito::core::Error::LengthMismatch)?;
+                                                let (value, used) = norito::core::decode_field_prefix::<#ty>(field_data)?;
+                                                offset += used;
                                                 value
                                             } else {
                                                 // AoS: outer field length wraps the self-delimiting payload.

@@ -581,7 +581,7 @@ mod tests {
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
     use norito::{
-        codec::{DecodeAll as _, decode_adaptive, encode_with_header_flags},
+        codec::{decode_adaptive, encode_with_header_flags, DecodeAll as _},
         core::NoritoSerialize,
     };
 

@@ -15,10 +15,10 @@ use crate::{
         pin_intent::DaPinIntentBundle,
     },
     transaction::{
-        PrivateKaigiTransaction,
         signed::{
             SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner,
         },
+        PrivateKaigiTransaction,
     },
     trigger::TimeTriggerEntrypoint,
 };
