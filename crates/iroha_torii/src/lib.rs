@@ -16213,6 +16213,88 @@ async fn handler_bridge_finality_bundle(
     )
 }
 
+async fn handler_sccp_burn_proof(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(message_id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/proofs/burn/{message_id}",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/proofs/burn");
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(routing::handle_v1_sccp_burn_bundle(message_id, accept)
+        .await?
+        .into_response())
+}
+
+async fn handler_sccp_governance_proof(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(message_id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/proofs/governance/{message_id}",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/sccp/proofs/governance",
+        );
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(
+        routing::handle_v1_sccp_governance_bundle(message_id, accept)
+            .await?
+            .into_response(),
+    )
+}
+
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_validator_sets(
     State(app): State<SharedAppState>,
@@ -22143,7 +22225,15 @@ impl Torii {
                     "/v1/sumeragi/evidence/count",
                     get(handler_sumeragi_evidence_count),
                 )
-                .route("/v1/sumeragi/evidence", get(handler_sumeragi_evidence));
+                .route("/v1/sumeragi/evidence", get(handler_sumeragi_evidence))
+                .route(
+                    "/v1/sccp/proofs/burn/{message_id}",
+                    get(handler_sccp_burn_proof),
+                )
+                .route(
+                    "/v1/sccp/proofs/governance/{message_id}",
+                    get(handler_sccp_governance_proof),
+                );
 
             #[cfg(feature = "telemetry")]
             let sumeragi = sumeragi
@@ -26553,6 +26643,7 @@ pub(crate) mod tests_runtime_handlers {
     };
     use base64::Engine as _;
     use futures::executor;
+    use parity_scale_codec::Encode;
     use iroha_config::{
         client_api::ConfigGetDTO,
         parameters::{
@@ -28898,7 +28989,7 @@ pub(crate) mod tests_runtime_handlers {
         height: u64,
         view: u64,
         epoch: u64,
-    ) -> Qc {
+    ) -> (Qc, Vec<u8>) {
         let chain_id: ChainId = "chain".parse().expect("chain id");
         let parent_state_root = iroha_crypto::Hash::prehashed([0x11; 32]);
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -28920,27 +29011,32 @@ pub(crate) mod tests_runtime_handlers {
         let sig_refs = vec![sig_bytes.as_slice()];
         let aggregate_signature =
             iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signatures");
+        let validator_pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+            .expect("generate validator pop");
 
         let peer_id = PeerId::from(keypair.public_key().clone());
         let validator_set = vec![peer_id];
-        Qc {
-            phase: Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root,
-            post_state_root,
-            height,
-            view,
-            epoch,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0b0000_0001],
-                bls_aggregate_signature: aggregate_signature,
+        (
+            Qc {
+                phase: Phase::Commit,
+                subject_block_hash: block_hash,
+                parent_state_root,
+                post_state_root,
+                height,
+                view,
+                epoch,
+                mode_tag: PERMISSIONED_TAG.to_string(),
+                highest_qc: None,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set,
+                aggregate: QcAggregate {
+                    signers_bitmap: vec![0b0000_0001],
+                    bls_aggregate_signature: aggregate_signature,
+                },
             },
-        }
+            validator_pop,
+        )
     }
 
     fn record_commit_cert(height: u64) -> Qc {
@@ -29234,7 +29330,7 @@ pub(crate) mod tests_runtime_handlers {
         let block_hash = block.hash();
         store_block(&app, block);
 
-        let qc = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
+        let (qc, _) = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
         let mut app = app;
         let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
         Arc::get_mut(&mut app_mut.state)
@@ -29314,7 +29410,7 @@ pub(crate) mod tests_runtime_handlers {
         let block_hash = block.hash();
         store_block(&app, block);
 
-        let qc = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
+        let (qc, _) = sample_commit_qc(block_hash, expected_root, 1, 2, 0);
         let mut app = Arc::into_inner(app).unwrap_or_else(|| panic!("unique app state for test"));
         let mut state =
             Arc::into_inner(app.state).unwrap_or_else(|| panic!("unique core state for test"));
@@ -29397,6 +29493,168 @@ pub(crate) mod tests_runtime_handlers {
         let proofs: BlockProofs = norito::core::NoritoDeserialize::deserialize(archived);
         assert_eq!(proofs.block_height.get(), 1);
         assert_eq!(proofs.entry_hash, entry_hash);
+    }
+
+    fn app_with_commit_qc_for_test(height: u64) -> SharedAppState {
+        let app = mk_app_state_for_tests();
+        let (mut block, _) = make_signed_block(height, None);
+        let entry_hashes = [block
+            .payload()
+            .transactions
+            .first()
+            .expect("tx")
+            .hash_as_entrypoint()];
+        block.set_transaction_results(
+            Vec::new(),
+            &entry_hashes,
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let expected_root = block
+            .header()
+            .result_merkle_root()
+            .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
+            .expect("result root");
+        let block_hash = block.hash();
+        store_block(&app, block);
+
+        let (qc, validator_pop) =
+            sample_commit_qc(block_hash, expected_root, height, height.saturating_add(1), 0);
+        record_commit_qc(qc.clone());
+        let mut app = app;
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for test");
+        state
+            .world
+            .register_validator_pop_for_testing(qc.validator_set[0].public_key().clone(), validator_pop);
+        state.insert_commit_qc_for_testing(block_hash, qc);
+        app
+    }
+
+    #[tokio::test]
+    async fn sccp_burn_bundle_endpoint_roundtrips_json_and_scale() {
+        routing::clear_sccp_bundles_for_tests();
+        let app = app_with_commit_qc_for_test(1);
+        let payload = iroha_sccp::BurnPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce: 7,
+            sora_asset_id: [0x11; 32],
+            amount: 42,
+            recipient: [0x22; 32],
+        };
+        let bundle =
+            routing::publish_sccp_burn_bundle(app.state.as_ref(), 1, payload).expect("publish");
+
+        let response = routing::handle_v1_sccp_burn_bundle(
+            hex::encode(bundle.commitment.message_id),
+            None,
+        )
+        .await
+        .expect("json response");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded: iroha_sccp::NexusSccpBurnProofV1 =
+            serde_json::from_slice(&bytes).expect("decode json bundle");
+        assert_eq!(decoded, bundle);
+
+        let scale_response = routing::handle_v1_sccp_burn_bundle(
+            hex::encode(bundle.commitment.message_id),
+            Some(HeaderValue::from_static("application/x-parity-scale")),
+        )
+        .await
+        .expect("scale response");
+        assert_eq!(
+            scale_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/x-parity-scale".as_slice())
+        );
+        let scale_bytes = axum::body::to_bytes(scale_response.into_body(), usize::MAX)
+            .await
+            .expect("scale body");
+        let decoded_scale =
+            <iroha_sccp::NexusSccpBurnProofV1 as parity_scale_codec::Decode>::decode(
+                &mut &scale_bytes[..],
+            )
+            .expect("decode scale bundle");
+        assert_eq!(decoded_scale, bundle);
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_governance_bundle_endpoint_roundtrips_json() {
+        routing::clear_sccp_bundles_for_tests();
+        let app = app_with_commit_qc_for_test(1);
+        let payload = iroha_sccp::GovernancePayloadV1::Pause(iroha_sccp::TokenControlPayloadV1 {
+            version: 1,
+            target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 9,
+            sora_asset_id: [0x44; 32],
+        });
+        let keypair = iroha_crypto::KeyPair::random();
+        let signer = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+        let enactment = iroha_data_model::governance::types::ParliamentEnactment {
+            preimage_hash: iroha_sccp::payload_hash(&payload.encode()),
+            at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 3 },
+        };
+        let certificate = iroha_data_model::governance::types::ParliamentEnactmentCertificate {
+            payload: enactment.clone(),
+            signatures:
+                iroha_data_model::governance::types::ParliamentEnactmentSignatureSet {
+                    scheme:
+                        iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold,
+                    signatures: vec![
+                        iroha_data_model::governance::types::ParliamentEnactmentSignature {
+                            signer,
+                            public_key: keypair.public_key().clone(),
+                            signature: iroha_crypto::SignatureOf::new(
+                                keypair.private_key(),
+                                &enactment,
+                            ),
+                        },
+                    ],
+                },
+        };
+        let bundle = routing::publish_sccp_governance_bundle(
+            app.state.as_ref(),
+            1,
+            payload.clone(),
+            certificate,
+        )
+        .expect("publish");
+
+        let response = routing::handle_v1_sccp_governance_bundle(
+            hex::encode(bundle.commitment.message_id),
+            None,
+        )
+        .await
+        .expect("json response");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded: iroha_sccp::NexusSccpGovernanceProofV1 =
+            serde_json::from_slice(&bytes).expect("decode json bundle");
+        assert_eq!(decoded, bundle);
+
+        routing::clear_sccp_bundles_for_tests();
     }
 
     fn clone_private_key(

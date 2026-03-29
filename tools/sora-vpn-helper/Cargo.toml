@@ -12,6 +12,7 @@ name = "sora-vpn-controller"
 path = "src/main.rs"
 
 [dependencies]
+blake3 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
 iroha_crypto = { workspace = true }
