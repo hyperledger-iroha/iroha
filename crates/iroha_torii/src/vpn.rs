@@ -1,4 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashSet,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     http::{HeaderMap, Method, StatusCode, Uri},
@@ -21,6 +24,7 @@ use crate::{Error, SharedAppState};
 const SUPPORTED_EXIT_CLASSES: [&str; 3] = ["standard", "low-latency", "high-security"];
 const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2/128"];
 const MAX_RECEIPTS_PER_ACCOUNT: usize = 24;
+const MAX_SESSION_ADDRESS_ALLOCATION_ATTEMPTS: u32 = 4_096;
 
 #[derive(
     Debug,
@@ -267,6 +271,13 @@ fn build_session_id(account_id: &AccountId, exit_class: &str, nonce: &str, now_m
     )
 }
 
+fn normalize_allocation_nonce(base_nonce: &str, attempt: u32) -> String {
+    if attempt == 0 {
+        return base_nonce.to_owned();
+    }
+    format!("{base_nonce}:vpn-attempt-{attempt}")
+}
+
 fn relay_session_id_from_session_id(session_id: &str) -> [u8; 16] {
     let digest = blake3::hash(session_id.as_bytes());
     let mut session_key = [0u8; 16];
@@ -287,6 +298,48 @@ fn build_helper_ticket_hex(
         .to_hex(secret),
         None => hex::encode(blake3::hash(format!("{session_id}:helper").as_bytes()).as_bytes()),
     }
+}
+
+fn address_plan_fingerprint(client_tunnel_addresses: &[String]) -> String {
+    client_tunnel_addresses.join("|")
+}
+
+fn allocate_session_id_and_address_plan(
+    app: &SharedAppState,
+    account_id: &AccountId,
+    exit_class: &str,
+    base_nonce: &str,
+    current_ms: u64,
+) -> Result<
+    (
+        String,
+        iroha_data_model::soranet::vpn::VpnSessionAddressPlanV1,
+    ),
+    Error,
+> {
+    let used_fingerprints = app
+        .vpn_sessions
+        .iter()
+        .map(|entry| {
+            let record = entry.value();
+            address_plan_fingerprint(&record.tunnel_addresses)
+        })
+        .collect::<HashSet<_>>();
+
+    for attempt in 0..MAX_SESSION_ADDRESS_ALLOCATION_ATTEMPTS {
+        let allocation_nonce = normalize_allocation_nonce(base_nonce, attempt);
+        let session_id = build_session_id(account_id, exit_class, &allocation_nonce, current_ms);
+        let address_plan =
+            derive_vpn_session_address_plan_v1(relay_session_id_from_session_id(&session_id));
+        let fingerprint = address_plan_fingerprint(&address_plan.client_tunnel_addresses);
+        if !used_fingerprints.contains(&fingerprint) {
+            return Ok((session_id, address_plan));
+        }
+    }
+
+    Err(not_permitted_error(
+        "vpn address allocation exhausted for the current active session set",
+    ))
 }
 
 fn response_from_record(record: &VpnSessionRecord) -> VpnSessionResponseDto {
@@ -438,6 +491,7 @@ pub(crate) async fn handle_create_vpn_session(
     }
     let exit_class = normalize_exit_class(&request.exit_class, &profile.default_exit_class)?;
     let current_ms = now_ms();
+    let _vpn_guard = app.vpn_state_lock.lock().await;
     prune_expired_sessions(&app, current_ms);
     remove_existing_sessions_for_account(&app, &account_id, current_ms);
 
@@ -445,9 +499,8 @@ pub(crate) async fn handle_create_vpn_session(
         .get(crate::HEADER_NONCE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("vpn");
-    let session_id = build_session_id(&account_id, &exit_class, nonce, current_ms);
-    let address_plan =
-        derive_vpn_session_address_plan_v1(relay_session_id_from_session_id(&session_id));
+    let (session_id, address_plan) =
+        allocate_session_id_and_address_plan(&app, &account_id, &exit_class, nonce, current_ms)?;
     let expires_at_ms = current_ms.saturating_add(profile.lease_secs.saturating_mul(1_000));
     let helper_ticket_hex = build_helper_ticket_hex(
         &session_id,
@@ -486,6 +539,7 @@ pub(crate) async fn handle_get_vpn_session(
 ) -> Result<Response, Error> {
     let account_id = require_signed_request(&app, headers, method, uri, &[])?;
     let current_ms = now_ms();
+    let _vpn_guard = app.vpn_state_lock.lock().await;
     prune_expired_sessions(&app, current_ms);
     let normalized_session_id = session_id.trim();
     if normalized_session_id.is_empty() {
@@ -511,6 +565,7 @@ pub(crate) async fn handle_delete_vpn_session(
 ) -> Result<Response, Error> {
     let account_id = require_signed_request(&app, headers, method, uri, &[])?;
     let current_ms = now_ms();
+    let _vpn_guard = app.vpn_state_lock.lock().await;
     prune_expired_sessions(&app, current_ms);
     let normalized_session_id = session_id.trim();
     if normalized_session_id.is_empty() {
@@ -545,6 +600,7 @@ pub(crate) async fn handle_list_vpn_receipts(
     headers: &HeaderMap,
 ) -> Result<Response, Error> {
     let account_id = require_signed_request(&app, headers, method, uri, &[])?;
+    let _vpn_guard = app.vpn_state_lock.lock().await;
     prune_expired_sessions(&app, now_ms());
     let items = list_receipts_for_account(&app, &account_id);
     let total = u64::try_from(items.len()).unwrap_or(u64::MAX);
@@ -890,5 +946,115 @@ mod tests {
         assert_eq!(receipts_body.total, 1);
         assert_eq!(receipts_body.items[0].status, "replaced");
         assert_eq!(app.vpn_sessions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn vpn_address_allocator_avoids_collisions_and_reuses_released_plan() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let first_keys = KeyPair::random();
+        let second_keys = KeyPair::random();
+        let third_keys = KeyPair::random();
+        let first_account = account_id_for(&first_keys);
+        let second_account = account_id_for(&second_keys);
+        let third_account = account_id_for(&third_keys);
+        let world = world_with_accounts(&[
+            first_account.clone(),
+            second_account.clone(),
+            third_account.clone(),
+        ]);
+        let app = mk_app_state_for_tests_with_world(world);
+        let create_method = Method::POST;
+        let create_uri: Uri = "/v1/vpn/sessions".parse().expect("uri");
+        let create_body = norito::json::to_vec(&VpnSessionCreateRequestDto {
+            exit_class: "standard".to_owned(),
+        })
+        .expect("body");
+
+        let first_headers = signed_app_headers(
+            &first_account,
+            &first_keys,
+            &create_method,
+            &create_uri,
+            create_body.as_ref(),
+        );
+        let first_created = handle_create_vpn_session(
+            app.clone(),
+            &create_method,
+            &create_uri,
+            &first_headers,
+            create_body.as_ref(),
+        )
+        .await
+        .expect("first created")
+        .into_response();
+        let first_session: VpnSessionResponseDto = read_json(first_created).await;
+
+        let second_headers = signed_app_headers(
+            &second_account,
+            &second_keys,
+            &create_method,
+            &create_uri,
+            create_body.as_ref(),
+        );
+        let second_created = handle_create_vpn_session(
+            app.clone(),
+            &create_method,
+            &create_uri,
+            &second_headers,
+            create_body.as_ref(),
+        )
+        .await
+        .expect("second created")
+        .into_response();
+        let second_session: VpnSessionResponseDto = read_json(second_created).await;
+
+        assert_ne!(
+            first_session.tunnel_addresses,
+            second_session.tunnel_addresses
+        );
+        let delete_method = Method::DELETE;
+        let delete_uri: Uri = format!("/v1/vpn/sessions/{}", first_session.session_id)
+            .parse()
+            .expect("delete uri");
+        let delete_headers = signed_app_headers(
+            &first_account,
+            &first_keys,
+            &delete_method,
+            &delete_uri,
+            &[],
+        );
+        handle_delete_vpn_session(
+            app.clone(),
+            &delete_method,
+            &delete_uri,
+            &delete_headers,
+            &first_session.session_id,
+        )
+        .await
+        .expect("deleted first session");
+
+        let third_headers = signed_app_headers(
+            &third_account,
+            &third_keys,
+            &create_method,
+            &create_uri,
+            create_body.as_ref(),
+        );
+        let third_created = handle_create_vpn_session(
+            app,
+            &create_method,
+            &create_uri,
+            &third_headers,
+            create_body.as_ref(),
+        )
+        .await
+        .expect("third created")
+        .into_response();
+        let third_session: VpnSessionResponseDto = read_json(third_created).await;
+
+        assert_eq!(
+            third_session.tunnel_addresses,
+            first_session.tunnel_addresses
+        );
     }
 }

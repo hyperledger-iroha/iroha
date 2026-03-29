@@ -462,7 +462,8 @@ impl Actor {
                 Self::near_quorum_queue_depth_threshold(self.config.queues.block_payload);
             let rbc_chunk_threshold =
                 Self::near_quorum_queue_depth_threshold(self.config.queues.rbc_chunks);
-            let block_threshold = Self::near_quorum_queue_depth_threshold(self.config.queues.blocks);
+            let block_threshold =
+                Self::near_quorum_queue_depth_threshold(self.config.queues.blocks);
             let near_quorum_queue_backlog = queue_depths.rbc_chunk_rx >= rbc_chunk_threshold
                 || queue_depths.block_payload_rx >= block_payload_threshold
                 || queue_depths.block_rx >= block_threshold
@@ -553,10 +554,8 @@ impl Actor {
                     now,
                 );
             let same_height_rbc_sender_activity_active = contiguous_frontier
-                && self.frontier_recovery_same_height_rbc_sender_activity_active(
-                    pending.height,
-                    now,
-                );
+                && self
+                    .frontier_recovery_same_height_rbc_sender_activity_active(pending.height, now);
             let same_height_fresh_missing_block_request = contiguous_frontier
                 && self
                     .pending
@@ -571,9 +570,12 @@ impl Actor {
                                     | crate::sumeragi::consensus::Phase::Commit
                             )
                             && (now.saturating_duration_since(request.last_requested)
-                                < self.frontier_recovery_window().max(Duration::from_millis(1))
+                                < self
+                                    .frontier_recovery_window()
+                                    .max(Duration::from_millis(1))
                                 || now.saturating_duration_since(request.last_dependency_progress)
-                                    < self.frontier_recovery_window()
+                                    < self
+                                        .frontier_recovery_window()
                                         .max(Duration::from_millis(1)))
                             && self.missing_block_request_has_actionable_dependency(
                                 *hash,
