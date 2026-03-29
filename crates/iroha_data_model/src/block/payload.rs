@@ -217,6 +217,11 @@ impl SignedBlock {
         self.payload.header.set_prev_roster_evidence_hash(hash);
     }
 
+    /// Set or clear the SCCP commitment root finalized in this block.
+    pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
+        self.payload.header.set_sccp_commitment_root(root);
+    }
+
     /// Check whether the block has entrypoints or deterministic artifacts.
     #[inline]
     pub fn is_empty(&self) -> bool {
@@ -247,6 +252,9 @@ impl SignedBlock {
             return false;
         }
         if self.payload.previous_roster_evidence.is_some() {
+            return false;
+        }
+        if self.payload.header.sccp_commitment_root().is_some() {
             return false;
         }
         true

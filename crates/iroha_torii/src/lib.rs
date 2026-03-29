@@ -29717,7 +29717,7 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(proofs.entry_hash, entry_hash);
     }
 
-    fn app_with_commit_qc_for_test(height: u64) -> SharedAppState {
+    fn app_with_commit_qc_for_test(height: u64, sccp_commitment_root: [u8; 32]) -> SharedAppState {
         let app = mk_app_state_for_tests();
         let (mut block, _) = make_signed_block(height, None);
         let entry_hashes = [block
@@ -29731,6 +29731,7 @@ pub(crate) mod tests_runtime_handlers {
             &entry_hashes,
             vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
         );
+        block.set_sccp_commitment_root(Some(sccp_commitment_root));
         let expected_root = block
             .header()
             .result_merkle_root()
@@ -29761,7 +29762,6 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn sccp_burn_bundle_endpoint_roundtrips_json_and_scale() {
         routing::clear_sccp_bundles_for_tests();
-        let app = app_with_commit_qc_for_test(1);
         let payload = iroha_sccp::BurnPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
@@ -29771,6 +29771,15 @@ pub(crate) mod tests_runtime_handlers {
             amount: 42,
             recipient: [0x22; 32],
         };
+        let commitment = iroha_sccp::SccpHubCommitmentV1 {
+            version: 1,
+            kind: iroha_sccp::SccpHubMessageKind::Burn,
+            target_domain: payload.dest_domain,
+            message_id: iroha_sccp::burn_message_id(&payload),
+            payload_hash: iroha_sccp::payload_hash(&payload.encode()),
+            parliament_certificate_hash: None,
+        };
+        let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
         let bundle =
             routing::publish_sccp_burn_bundle(app.state.as_ref(), 1, payload).expect("publish");
 
@@ -29821,7 +29830,10 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn sccp_governance_bundle_endpoint_roundtrips_json() {
         routing::clear_sccp_bundles_for_tests();
-        let app = app_with_commit_qc_for_test(1);
+        let roster_epoch = {
+            let seed_app = mk_app_state_for_tests();
+            1 / seed_app.state.gov.parliament_term_blocks.max(1)
+        };
         let payload = iroha_sccp::GovernancePayloadV1::Pause(iroha_sccp::TokenControlPayloadV1 {
             version: 1,
             target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
@@ -29834,28 +29846,94 @@ pub(crate) mod tests_runtime_handlers {
             preimage_hash: iroha_sccp::payload_hash(&payload.encode()),
             at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 3 },
         };
-        let certificate = iroha_data_model::governance::types::ParliamentEnactmentCertificate {
-            payload: enactment.clone(),
-            signatures: iroha_data_model::governance::types::ParliamentEnactmentSignatureSet {
-                scheme:
-                    iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold,
-                signatures: vec![
-                    iroha_data_model::governance::types::ParliamentEnactmentSignature {
-                        signer,
-                        public_key: keypair.public_key().clone(),
+        let parliament_certificate = {
+            let certificate = iroha_data_model::governance::types::ParliamentEnactmentCertificate {
+                payload: enactment.clone(),
+                signatures: iroha_data_model::governance::types::ParliamentEnactmentSignatureSet {
+                    scheme:
+                        iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold,
+                    signatures: vec![
+                        iroha_data_model::governance::types::ParliamentEnactmentSignature {
+                            signer: signer.clone(),
+                            public_key: keypair.public_key().clone(),
+                            signature: iroha_crypto::SignatureOf::new(
+                                keypair.private_key(),
+                                &enactment,
+                            ),
+                        },
+                    ],
+                },
+            };
+            let encoded =
+                parity_scale_codec::Encode::encode(&iroha_sccp::NexusParliamentCertificateV1 {
+                    version: 1,
+                    preimage_hash: enactment.preimage_hash,
+                    enactment_window_start: enactment.at_window.lower,
+                    enactment_window_end: enactment.at_window.upper,
+                    payload_bytes: norito::to_bytes(&enactment).expect("encode enactment"),
+                    signature_scheme: iroha_sccp::NexusParliamentSignatureSchemeV1::SimpleThreshold,
+                    roster_epoch,
+                    roster_members: vec![iroha_sccp::NexusParliamentRosterMemberV1 {
+                        signer: signer.to_string(),
+                        public_keys: vec![keypair.public_key().to_string()],
+                    }],
+                    required_signatures: 1,
+                    signatures: vec![iroha_sccp::NexusParliamentSignatureV1 {
+                        signer: signer.to_string(),
+                        public_key: keypair.public_key().to_string(),
                         signature: iroha_crypto::SignatureOf::new(
                             keypair.private_key(),
                             &enactment,
-                        ),
-                    },
-                ],
-            },
+                        )
+                        .payload()
+                        .to_vec(),
+                    }],
+                });
+            (certificate, encoded)
         };
+        let commitment = iroha_sccp::SccpHubCommitmentV1 {
+            version: 1,
+            kind: iroha_sccp::SccpHubMessageKind::TokenPause,
+            target_domain: iroha_sccp::governance_target_domain(&payload),
+            message_id: iroha_sccp::governance_message_id(&payload),
+            payload_hash: iroha_sccp::payload_hash(&payload.encode()),
+            parliament_certificate_hash: Some(iroha_sccp::parliament_certificate_hash(
+                &parliament_certificate.1,
+            )),
+        };
+        let mut app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state for governance test");
+            let state =
+                Arc::get_mut(&mut app_mut.state).expect("unique core state for governance test");
+            let mut block = state.block(iroha_data_model::block::BlockHeader::new(
+                nonzero_ext::nonzero!(2_u64),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ));
+            let mut tx = block.transaction();
+            tx.world.council_mut().insert(
+                roster_epoch,
+                iroha_core::state::CouncilState {
+                    epoch: roster_epoch,
+                    members: vec![signer.clone()],
+                    alternates: Vec::new(),
+                    verified: 1,
+                    candidate_count: 1,
+                    derived_by: iroha_data_model::isi::governance::CouncilDerivationKind::Fallback,
+                },
+            );
+            tx.apply();
+            block.commit().expect("commit council roster seed block");
+        }
         let bundle = routing::publish_sccp_governance_bundle(
             app.state.as_ref(),
             1,
             payload.clone(),
-            certificate,
+            parliament_certificate.0,
         )
         .expect("publish");
 

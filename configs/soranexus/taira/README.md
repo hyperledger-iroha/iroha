@@ -174,16 +174,23 @@ The rollout script now also requires the live `/status` snapshot to show at
 least 4 validators in the commit QC set. If it fails that check, rebuild the
 validator configs from the shared roster before debugging ingress or MCP.
 
-That config must be a normal `iroha` client TOML with a pre-provisioned low-risk
-signer. Start from `taira-canary-client.example.toml`, not `defaults/client.toml`:
-the generic repo client uses the zero chain id and is not valid for Taira.
-Keep the populated canary config out of the repo and out of shell history where
-possible.
+That config must be a normal `iroha` client TOML for a low-risk signer that
+already exists on Taira. Start from `taira-canary-client.example.toml`, not
+`defaults/client.toml`: the generic repo client uses the zero chain id and is
+not valid for Taira. If the signer still has zero balance for the live faucet
+asset, `check_mcp_rollout.sh` will now solve the public faucet puzzle, claim
+starter funds for that account, wait for the queued transfer to land, and then
+retry the signed ping automatically. Keep the populated canary config out of
+the repo and out of shell history where possible.
 
 If the script fails with `route_unavailable`, treat that as a deployment or
 topology failure, not an app-level validation issue: the public Torii ingress is
 up, but it still cannot reach an authoritative peer for lane `0` / dataspace
 `0`.
+If it fails with `Failed to find asset` even after the automatic faucet
+bootstrap path runs, treat that as a faucet-health or signer-selection issue:
+the configured account either does not exist on Taira yet or the live faucet
+could not fund it.
 
 ## Governance mode
 

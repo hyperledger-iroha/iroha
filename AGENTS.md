@@ -152,6 +152,9 @@ Note: First release policy
   require the signed canary path with `--write-config <runtime-only client.toml>`.
   Prefer `configs/soranexus/taira/taira-canary-client.example.toml` as the
   source template; `defaults/client.toml` uses the generic zero chain id.
+  The canary signer must already exist on Taira, but the rollout smoke can now
+  bootstrap the faucet asset automatically if the only failure is
+  `Failed to find asset`.
 - For multi-validator Taira deploy changes, do not hand-edit
   `configs/soranexus/taira/config.toml` into separate copies. Render per-host
   configs from `configs/soranexus/taira/validator_roster.example.toml` plus
@@ -160,6 +163,9 @@ Note: First release policy
   and point the unit at the generated config path.
 - If a live public Taira write fails with `route_unavailable`, treat it as an
   ingress or authoritative-peer routing failure first, not a user payload bug.
+- If a live Taira signed canary fails with `Failed to find asset`, check the
+  faucet/bootstrap path before changing deploy topology: the signer may simply
+  be unfunded for the fee asset.
 
 ## Navigation tips
 - Search code: `rg '<term>'` and list files: `fd <name>`.

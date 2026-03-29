@@ -5917,7 +5917,6 @@ impl Actor {
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> bool {
         queue_depths.block_payload_rx > 0
-            || queue_depths.rbc_chunk_rx > 0
             || queue_depths.block_rx > 0
             || self.has_residual_round_backlog_for_height(frontier_height)
     }
@@ -5971,35 +5970,36 @@ impl Actor {
             )
     }
 
-    fn frontier_recovery_same_slot_ingress_active(
+    fn frontier_recovery_same_slot_payload_progress_recent(
         &self,
         frontier_height: u64,
         frontier_view: u64,
-        queue_depths: super::status::WorkerQueueDepthSnapshot,
+        now: Instant,
     ) -> bool {
-        if !self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths) {
-            return false;
-        }
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
 
-        let frontier_slot_ingress_active = self.frontier_slot_is_exact_height(frontier_height)
+        let frontier_slot_progress_recent = self.frontier_slot_is_exact_height(frontier_height)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
+                let slot_progress_at = slot
+                    .timers
+                    .last_updated_at
+                    .max(slot.timers.last_progress_at);
                 slot.height == frontier_height
                     && slot.view <= frontier_view
                     && !matches!(slot.mode, FrontierSlotMode::Finalized)
-                    && (slot.block_created_seen
-                        || slot.body_present
-                        || matches!(
-                            slot.phase,
-                            FrontierSlotPhase::ValidateBody | FrontierSlotPhase::AwaitCommitQc
-                        ))
+                    && recent(slot_progress_at)
+                    && (slot.exact_fetch_armed || (slot.block_created_seen && !slot.body_present))
             });
 
-        frontier_slot_ingress_active
-            || self.slot_has_authoritative_payload(frontier_height, frontier_view)
+        frontier_slot_progress_recent
             || self.pending.pending_blocks.values().any(|pending| {
                 !pending.aborted
                     && pending.height == frontier_height
                     && pending.view == frontier_view
+                    && pending.progress_age(now) < window
             })
             || self
                 .subsystems
@@ -6010,34 +6010,26 @@ impl Actor {
                     !inflight.pending.aborted
                         && inflight.pending.height == frontier_height
                         && inflight.pending.view == frontier_view
+                        && inflight.pending.progress_age(now) < window
                 })
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .sessions
-                .iter()
-                .any(|(key, session)| {
-                    key.1 == frontier_height
-                        && key.2 == frontier_view
-                        && !session.is_invalid()
-                        && !session.delivered
-                })
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .pending
-                .keys()
-                .any(|key| key.1 == frontier_height && key.2 == frontier_view)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .seed_inflight
-                .keys()
-                .any(|key| key.1 == frontier_height && key.2 == frontier_view)
-            || self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
+    }
+
+    fn frontier_recovery_same_slot_ingress_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        if !self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths) {
+            return false;
+        }
+
+        self.frontier_recovery_same_slot_payload_progress_recent(
+            frontier_height,
+            frontier_view,
+            now,
+        )
     }
 
     fn frontier_recovery_same_height_rbc_sender_activity_active(
@@ -6229,11 +6221,26 @@ impl Actor {
         frontier_view: u64,
         now: Instant,
     ) -> bool {
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
         let frontier_slot_vote_backed = self.frontier_slot_is_exact_height(frontier_height)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
+                let recent_vote_progress = slot
+                    .quorum_progress
+                    .last_commit_qc_at
+                    .or(slot.quorum_progress.last_vote_at)
+                    .is_some_and(recent)
+                    || recent(
+                        slot.timers
+                            .last_progress_at
+                            .max(slot.timers.last_updated_at),
+                    );
                 slot.height == frontier_height
                     && slot.view <= frontier_view
                     && !matches!(slot.mode, FrontierSlotMode::Finalized)
+                    && recent_vote_progress
                     && (slot.quorum_progress.votes_observed
                         || slot.quorum_progress.commit_qc_observed
                         || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
@@ -6254,11 +6261,22 @@ impl Actor {
         frontier_view: u64,
         now: Instant,
     ) -> bool {
+        let window = self
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1));
+        let recent = |at: Instant| now.saturating_duration_since(at) < window;
         let frontier_slot_missing_payload = self.frontier_slot_is_exact_height(frontier_height)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
+                let recent_missing_payload_progress = slot.timers.last_fetch_at.is_some_and(recent)
+                    || recent(
+                        slot.timers
+                            .last_progress_at
+                            .max(slot.timers.last_updated_at),
+                    );
                 slot.height == frontier_height
                     && slot.view <= frontier_view
                     && matches!(slot.mode, FrontierSlotMode::Normal)
+                    && recent_missing_payload_progress
                     && slot.exact_fetch_armed
                     && !slot.body_present
                     && matches!(slot.phase, FrontierSlotPhase::AwaitBody)
@@ -6266,10 +6284,6 @@ impl Actor {
         if frontier_slot_missing_payload {
             return true;
         }
-        let window = self
-            .frontier_recovery_window()
-            .max(Duration::from_millis(1));
-        let recent = |at: Instant| now.saturating_duration_since(at) < window;
         let committed_height = self.committed_height_snapshot();
 
         self.deferred_missing_payload_qcs.values().any(|entry| {
@@ -6316,72 +6330,16 @@ impl Actor {
         let same_height_payload_dependency_backlog_active = dependency_progress_at
             .is_some_and(|progress| recent(progress))
             && payload_inbound_backlog_active;
-        let same_slot_payload_ingress_active = payload_inbound_backlog_active
-            && (self.slot_has_authoritative_payload(frontier_height, frontier_view)
-                || self.pending.pending_blocks.values().any(|pending| {
-                    !pending.aborted
-                        && pending.height == frontier_height
-                        && pending.view == frontier_view
-                })
-                || self
-                    .subsystems
-                    .commit
-                    .inflight
-                    .as_ref()
-                    .is_some_and(|inflight| {
-                        !inflight.pending.aborted
-                            && inflight.pending.height == frontier_height
-                            && inflight.pending.view == frontier_view
-                    })
-                || self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .sessions
-                    .iter()
-                    .any(|(key, session)| {
-                        key.1 == frontier_height
-                            && key.2 == frontier_view
-                            && !session.is_invalid()
-                            && !session.delivered
-                    })
-                || self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .pending
-                    .keys()
-                    .any(|key| key.1 == frontier_height && key.2 == frontier_view)
-                || self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .seed_inflight
-                    .keys()
-                    .any(|key| key.1 == frontier_height && key.2 == frontier_view));
-        let frontier_slot_reassembly_active = self.frontier_slot_is_exact_height(frontier_height)
-            && self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == frontier_height
-                    && slot.view <= frontier_view
-                    && matches!(slot.mode, FrontierSlotMode::Normal)
-                    && (slot.block_created_seen
-                        || slot.body_present
-                        || slot.exact_fetch_armed
-                        || matches!(
-                            slot.phase,
-                            FrontierSlotPhase::ValidateBody | FrontierSlotPhase::AwaitCommitQc
-                        ))
-            });
+        let same_slot_payload_ingress_active = self.frontier_recovery_same_slot_ingress_active(
+            frontier_height,
+            frontier_view,
+            now,
+            queue_depths,
+        );
 
-        frontier_slot_reassembly_active
-            || same_height_payload_dependency_backlog_active
+        same_height_payload_dependency_backlog_active
             || same_slot_payload_ingress_active
             || self.frontier_recovery_same_height_rbc_sender_activity_active(frontier_height, now)
-            || self.frontier_recovery_same_slot_missing_payload_recovery_active(
-                frontier_height,
-                frontier_view,
-                now,
-            )
             || self
                 .pending
                 .missing_block_requests
@@ -6434,14 +6392,10 @@ impl Actor {
         ) || self.frontier_recovery_same_slot_ingress_active(
             frontier_height,
             frontier_view,
+            now,
             queue_depths,
         ) || self.frontier_recovery_same_height_rbc_sender_activity_active(frontier_height, now)
             || self.frontier_recovery_same_slot_vote_backed_recovery_active(
-                frontier_height,
-                frontier_view,
-                now,
-            )
-            || self.frontier_recovery_same_slot_missing_payload_recovery_active(
                 frontier_height,
                 frontier_view,
                 now,
@@ -27933,8 +27887,12 @@ impl Actor {
                 now,
                 queue_depths,
             );
-        let same_slot_ingress_active =
-            self.frontier_recovery_same_slot_ingress_active(frontier_height, view, queue_depths);
+        let same_slot_ingress_active = self.frontier_recovery_same_slot_ingress_active(
+            frontier_height,
+            view,
+            now,
+            queue_depths,
+        );
         let same_slot_missing_payload_recovery_active = self
             .frontier_recovery_same_slot_missing_payload_recovery_active(
                 frontier_height,

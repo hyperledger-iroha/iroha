@@ -84,8 +84,10 @@ fn prepare_state() -> (
                 .execute_instruction(
                     &mut stx,
                     &owner,
-                    Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone()))
-                        .into(),
+                    Register::account(
+                        NewAccount::new(owner.clone()).with_linked_domain(domain_id.clone()),
+                    )
+                    .into(),
                 )
                 .expect("register account");
             executor

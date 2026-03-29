@@ -4892,7 +4892,8 @@ mod tests {
             .filter_map(|instruction| instruction.as_any().downcast_ref::<Register<Account>>())
             .filter(|register| {
                 register.object.id == genesis_account_id
-                    && register.object.domain() == Some(&ivm_domain)
+                    && register.object.linked_domains().len() == 1
+                    && register.object.linked_domains().contains(&ivm_domain)
             })
             .count();
 

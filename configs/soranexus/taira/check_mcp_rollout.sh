@@ -31,7 +31,10 @@ The check fails unless:
   - /status reports at least 4 validators in the commit QC set
 
 For final public rollout, also pass --write-config with a runtime-only
-pre-provisioned canary signer config. Without that, public checks are rejected
+canary signer config. The signer must already exist on Taira; if it is missing
+the faucet asset, this script will try to bootstrap it through
+POST /v1/accounts/faucet before retrying the write canary. Without
+--write-config, public checks are rejected
 unless --skip-write-canary is provided explicitly for read-only validation.
 EOF
 }
@@ -432,6 +435,56 @@ ensure_iroha_bin() {
   fi
 }
 
+extract_authority_from_cli_output() {
+  local output_path="$1"
+  python3 - "$output_path" <<'PY'
+import re
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as handle:
+    payload = handle.read()
+
+match = re.search(r"authority:\s*([^,]+),\s*creation_time_ms:", payload)
+if not match:
+    raise SystemExit(
+        "could not extract the canary authority account id from the failed CLI output"
+    )
+print(match.group(1).strip())
+PY
+}
+
+claim_faucet_for_canary() {
+  local target_url="$1"
+  local account_id="$2"
+  echo "==> faucet bootstrap: ${account_id}" >&2
+  python3 "${REPO_ROOT}/scripts/taira_faucet_canary.py" \
+    --account-id "$account_id" \
+    --torii-root "$target_url"
+}
+
+retry_write_canary() {
+  local temp_config="$1"
+  local output_file="$2"
+  local write_msg="$3"
+  local attempts="${4:-10}"
+  local delay_seconds="${5:-2}"
+  local attempt
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if "${IROHA_RUNNER[@]}" --machine -c "$temp_config" ledger transaction ping --msg "${write_msg}-retry-${attempt}" \
+        >"$output_file" 2>&1; then
+      return 0
+    fi
+    if ! grep -q 'Failed to find asset' "$output_file"; then
+      return 1
+    fi
+    if [[ $attempt -lt $attempts ]]; then
+      sleep "$delay_seconds"
+    fi
+  done
+  return 1
+}
+
 run_write_canary() {
   local target_url="$1"
   local output_file temp_config write_msg
@@ -454,9 +507,28 @@ run_write_canary() {
     if grep -q 'route_unavailable' "$output_file"; then
       echo "write canary failed: Torii is reachable but no authoritative peers accepted the lane route" >&2
       echo "hint: re-render every validator config from configs/soranexus/taira/validator_roster.example.toml using scripts/render_taira_validator_bundle.py and confirm the ingress node is running one of those generated configs with the full trusted_peers/trusted_peers_pop roster" >&2
-    else
-      echo "write canary failed" >&2
+      sed -n '1,80p' "$output_file" >&2 || true
+      exit 1
     fi
+    if grep -q 'Failed to find asset' "$output_file"; then
+      local canary_account_id
+      canary_account_id="$(extract_authority_from_cli_output "$output_file" | tr -d '\r\n')"
+      if ! claim_faucet_for_canary "$target_url" "$canary_account_id" >&2; then
+        echo "write canary failed: canary signer is unfunded and the automatic faucet bootstrap did not succeed" >&2
+        sed -n '1,80p' "$output_file" >&2 || true
+        exit 1
+      fi
+      echo "==> retrying write canary after faucet bootstrap" >&2
+      if ! retry_write_canary "$temp_config" "$output_file" "$write_msg"; then
+        echo "write canary failed after faucet bootstrap" >&2
+        sed -n '1,80p' "$output_file" >&2 || true
+        exit 1
+      fi
+      rm -f "$temp_config" "$output_file"
+      trap cleanup EXIT
+      return 0
+    fi
+    echo "write canary failed" >&2
     sed -n '1,80p' "$output_file" >&2 || true
     exit 1
   fi

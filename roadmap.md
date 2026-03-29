@@ -2,6 +2,28 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 Taira signed rollout canary auto-faucet bootstrap):
+the public Taira rollout smoke no longer fails just because the chosen canary
+signer is unfunded for the fee asset; it can now bootstrap that signer through
+the live faucet and then complete the signed ping automatically.
+
+- `configs/soranexus/taira/check_mcp_rollout.sh` now parses the failed signed
+  ping output to recover the authority account id, invokes
+  `scripts/taira_faucet_canary.py` when the only write failure is
+  `Failed to find asset`, and retries the signed canary long enough for the
+  queued faucet transfer to land; and
+- `scripts/taira_faucet_canary.py` now tolerates non-UTF8 HTTP error bodies,
+  while the Taira README, canary example config, skill instructions, and
+  `AGENTS.md` all document the new bootstrap path and the remaining
+  requirement that the signer already exist on Taira; and
+- live validation against `https://taira.sora.org` succeeded end to end,
+  including a real solved faucet claim and a successful signed retry.
+
+Open work for this slice now remains:
+- wire the strict `check_mcp_rollout.sh --write-config ...` path into the
+  actual Taira deploy/restart checklist or CI job so the public canary is
+  enforced automatically instead of relying on a manual operator run.
+
 Latest sync (2026-03-29 Taira frame-cap + Torii core-lane fallback fix):
 the served Taira localnet is accepting public writes again, including payloads
 large enough to exceed the old 256 KiB tx-gossip frame cap.
@@ -352,8 +374,8 @@ current `iroha_data_model` and `iroha_kagami` callers.
 - `crates/iroha_data_model/src/account.rs` no longer moves the test
   `DomainId` before asserting on it;
 - `crates/iroha_kagami/src/genesis/sign.rs` and
-  `crates/iroha_kagami/src/localnet.rs` now use `NewAccount::domain()` instead
-  of the removed field access; and
+  `crates/iroha_kagami/src/localnet.rs` now check `linked_domains()` instead of
+  the removed field access; and
 - focused validation is green again for
   `cargo test -p iroha_data_model new_account_json_roundtrip_defaults -- --nocapture`
   and `cargo check -p iroha_kagami --tests`.
@@ -363,8 +385,9 @@ Open work from this slice:
   cleanup across CLI, Torii tests, bridge helpers, IVM, and docs so remaining
   callers converge on the current account-domain API shape; and
 - decide whether future call sites that need to retain a caller-owned
-  `DomainId` should prefer helpers such as `NewAccount::new_in_domain(...)`
-  over materializing a temporary `ScopedAccountId`.
+  `DomainId` should prefer builder chains such as
+  `NewAccount::new(id).with_linked_domain(domain)` over materializing a
+  temporary `ScopedAccountId`.
 
 Latest sync (2026-03-28 Taira Kaigi local bootstrap landed and is live):
 the served Taira localnet on this machine now exposes real Kaigi relay data
@@ -453,7 +476,8 @@ the local Taira validator set and explorer are back on the latest checkouts,
 and the fresh-genesis redeploy is healthy again on this machine.
 
 - `iroha_kagami` now compiles against the updated account/domain API after the
-  `Account::new_in_domain(...)` and `register.object.domain()` fixes; and
+  `Account::new_in_domain(...)` and `register.object.linked_domains()` fixes;
+  and
 - the reset flow again regenerates `dist/taira-localnet`, restarts the detached
   `taira-localnet` screen session, serves a live faucet puzzle, returns valid
   Connect sessions, and points the rebuilt explorer bundle at
@@ -734,7 +758,7 @@ Open work from this slice:
   cleanup across CLI, Torii tests, bridge helpers, IVM, and docs so account
   creation and account-targeting ABIs stop depending on scoped account IDs;
 - remove the remaining `ScopedAccountId` compatibility builders/views from the
-  data model (`new_in_domain`, `domain()`)
+  data model (`new_in_domain`)
   once downstream consumers stop depending on them;
 - decide whether `linked_domains` remains a transient internal projection only
   or is removed entirely from stored account records once the remaining

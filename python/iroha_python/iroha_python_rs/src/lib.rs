@@ -3886,7 +3886,8 @@ mod tests {
                 register.object.id,
                 parse_account_id(&account_id).expect("account parses")
             );
-            assert_eq!(register.object.domain(), Some(&default_domain));
+            assert_eq!(register.object.linked_domains().len(), 1);
+            assert!(register.object.linked_domains().contains(&default_domain));
         });
     }
 

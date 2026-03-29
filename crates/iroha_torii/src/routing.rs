@@ -141,10 +141,10 @@ use iroha_data_model::soranet::privacy_metrics::{
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_sccp::{
     BurnPayloadV1, GovernancePayloadV1, NexusBridgeFinalityProofV1, NexusCommitQcV1,
-    NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentSignatureV1,
-    NexusSccpBurnProofV1, NexusSccpGovernanceProofV1, SccpHubCommitmentV1, SccpHubMessageKind,
-    SccpMerkleProofV1, burn_message_id, commitment_leaf_hash, parliament_certificate_hash,
-    payload_hash,
+    NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentRosterMemberV1,
+    NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
+    NexusSccpGovernanceProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
+    burn_message_id, commitment_leaf_hash, parliament_certificate_hash, payload_hash,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
@@ -4504,13 +4504,30 @@ fn sccp_consensus_phase(
 fn build_sccp_finality_proof_bytes(
     finality_proof: &iroha_data_model::bridge::BridgeFinalityProof,
     commitment_root: [u8; 32],
-) -> Vec<u8> {
-    ScaleEncode::encode(&NexusBridgeFinalityProofV1 {
+) -> Result<Vec<u8>> {
+    let Some(block_root) = finality_proof.block_header.sccp_commitment_root() else {
+        return Err(sccp_bad_request(
+            "requested Nexus block does not anchor an SCCP commitment root",
+        ));
+    };
+    if block_root != commitment_root {
+        return Err(sccp_bad_request(
+            "requested SCCP commitment root does not match the finalized Nexus block header",
+        ));
+    }
+    let block_header_bytes = to_bytes(&finality_proof.block_header).map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode finalized Nexus block header for SCCP proof: {err}"
+        ))
+    })?;
+
+    Ok(ScaleEncode::encode(&NexusBridgeFinalityProofV1 {
         version: 1,
         chain_id: finality_proof.chain_id.as_str().to_owned(),
         height: finality_proof.height,
         block_hash: hash_of_to_h256(&finality_proof.block_hash),
         commitment_root,
+        block_header_bytes,
         commit_qc: NexusCommitQcV1 {
             version: 1,
             phase: sccp_consensus_phase(finality_proof.commit_qc.phase),
@@ -4534,10 +4551,37 @@ fn build_sccp_finality_proof_bytes(
                 .bls_aggregate_signature
                 .clone(),
         },
-    })
+    }))
+}
+
+fn min_votes_for_len(len: usize) -> u16 {
+    if len > 3 {
+        u16::try_from(((len.saturating_sub(1)) / 3) * 2 + 1).unwrap_or(u16::MAX)
+    } else {
+        u16::try_from(len).unwrap_or(u16::MAX)
+    }
+}
+
+fn parliament_epoch_for_height(state: &CoreState, height: u64) -> u64 {
+    let term_blocks = state.gov.parliament_term_blocks.max(1);
+    height / term_blocks
+}
+
+fn parliament_member_public_keys(account_id: &iroha_data_model::account::AccountId) -> Vec<String> {
+    match &account_id.controller {
+        iroha_data_model::account::controller::AccountController::Single(public_key) => {
+            vec![public_key.to_string()]
+        }
+        iroha_data_model::account::controller::AccountController::Multisig(policy) => policy
+            .members()
+            .iter()
+            .map(|member| member.public_key().to_string())
+            .collect(),
+    }
 }
 
 fn validate_parliament_certificate(
+    state: &CoreState,
     certificate: &iroha_data_model::governance::types::ParliamentEnactmentCertificate,
     payload: &GovernancePayloadV1,
     height: u64,
@@ -4566,12 +4610,60 @@ fn validate_parliament_certificate(
             "parliament certificate must include at least one signature",
         ));
     }
+    if certificate.signatures.scheme
+        != iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold
+    {
+        return Err(sccp_bad_request(
+            "unsupported parliament signature scheme for SCCP governance proof",
+        ));
+    }
+
+    let roster_epoch = parliament_epoch_for_height(state, height);
+    let world = state.world_view();
+    let Some(council_term) = world.council().get(&roster_epoch) else {
+        return Err(sccp_bad_request(format!(
+            "no persisted council roster found for parliament epoch {roster_epoch}"
+        )));
+    };
+    if council_term.members.is_empty() {
+        return Err(sccp_bad_request(
+            "persisted council roster for SCCP governance proof is empty",
+        ));
+    }
+
+    let roster_members: Vec<_> = council_term
+        .members
+        .iter()
+        .map(|member| NexusParliamentRosterMemberV1 {
+            signer: member.to_string(),
+            public_keys: parliament_member_public_keys(member),
+        })
+        .collect();
+    let roster_by_signer = roster_members
+        .iter()
+        .map(|member| (member.signer.as_str(), &member.public_keys))
+        .collect::<BTreeMap<_, _>>();
+    let required_signatures = min_votes_for_len(roster_members.len());
 
     let mut seen_signers = BTreeSet::new();
     for signature in &certificate.signatures.signatures {
         if !seen_signers.insert(signature.signer.clone()) {
             return Err(sccp_bad_request(
                 "parliament certificate contains duplicate signers",
+            ));
+        }
+        let signer_key = signature.signer.to_string();
+        let Some(allowed_public_keys) = roster_by_signer.get(signer_key.as_str()) else {
+            return Err(sccp_bad_request(
+                "parliament certificate signer is not a member of the anchored council roster",
+            ));
+        };
+        if !allowed_public_keys
+            .iter()
+            .any(|public_key| public_key == &signature.public_key.to_string())
+        {
+            return Err(sccp_bad_request(
+                "parliament certificate signer key is not authorized by the anchored council roster",
             ));
         }
         signature
@@ -4582,6 +4674,13 @@ fn validate_parliament_certificate(
                     "parliament certificate contains an invalid signature: {err}"
                 ))
             })?;
+    }
+    if certificate.signatures.signatures.len() < usize::from(required_signatures) {
+        return Err(sccp_bad_request(format!(
+            "parliament certificate has {} signatures but requires {}",
+            certificate.signatures.signatures.len(),
+            required_signatures
+        )));
     }
 
     let payload_bytes = to_bytes(&certificate.payload).map_err(|err| {
@@ -4596,11 +4695,16 @@ fn validate_parliament_certificate(
         enactment_window_start: certificate.payload.at_window.lower,
         enactment_window_end: certificate.payload.at_window.upper,
         payload_bytes,
+        signature_scheme: NexusParliamentSignatureSchemeV1::SimpleThreshold,
+        roster_epoch,
+        roster_members,
+        required_signatures,
         signatures: certificate
             .signatures
             .signatures
             .iter()
             .map(|signature| NexusParliamentSignatureV1 {
+                signer: signature.signer.to_string(),
                 public_key: signature.public_key.to_string(),
                 signature: signature.signature.payload().to_vec(),
             })
@@ -4630,7 +4734,7 @@ pub fn publish_sccp_burn_bundle(
         commitment,
         merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
         payload,
-        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root),
+        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root)?,
     };
     SCCP_BURN_BUNDLES
         .write()
@@ -4647,7 +4751,8 @@ pub fn publish_sccp_governance_bundle(
 ) -> Result<NexusSccpGovernanceProofV1> {
     let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
         .map_err(map_bridge_finality_error)?;
-    let parliament_certificate = validate_parliament_certificate(&certificate, &payload, height)?;
+    let parliament_certificate =
+        validate_parliament_certificate(state, &certificate, &payload, height)?;
     let commitment = SccpHubCommitmentV1 {
         version: 1,
         kind: sccp_governance_message_kind(&payload),
@@ -4664,7 +4769,7 @@ pub fn publish_sccp_governance_bundle(
         merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
         payload,
         parliament_certificate,
-        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root),
+        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root)?,
     };
     SCCP_GOVERNANCE_BUNDLES
         .write()
@@ -38639,6 +38744,7 @@ mod tx_projection_display_tests {
             authority: Some(account.to_string()),
             timestamp_ms: Some(123),
             entrypoint_hash: "deadbeef".into(),
+            entrypoint_kind: "unknown".into(),
             result_ok: true,
         };
         let items = tx_projections_to_json(&[projection]);
@@ -38656,6 +38762,7 @@ mod tx_projection_display_tests {
             authority: Some(account.to_string()),
             timestamp_ms: None,
             entrypoint_hash: "cafebabe".into(),
+            entrypoint_kind: "unknown".into(),
             result_ok: false,
         };
         let items = tx_projections_to_json(&[projection]);
@@ -38672,6 +38779,7 @@ mod tx_projection_display_tests {
             authority: Some("operator1@hbl".to_string()),
             timestamp_ms: Some(123),
             entrypoint_hash: "deadbeef".into(),
+            entrypoint_kind: "unknown".into(),
             result_ok: true,
         };
         let items = tx_projections_to_json(&[projection]);
@@ -58571,6 +58679,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -58591,6 +58700,7 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,
@@ -58608,6 +58718,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -58628,6 +58739,7 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,

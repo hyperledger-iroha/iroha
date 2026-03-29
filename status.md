@@ -2,6 +2,36 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: Taira rollout smoke now auto-bootstrap funds an unfunded canary signer
+- Fixed the new public-rollout regression in
+  `configs/soranexus/taira/check_mcp_rollout.sh` and
+  `scripts/taira_faucet_canary.py`:
+  - the signed canary no longer tries to derive an account id through a stale
+    `iroha address convert` CLI path;
+  - the rollout smoke now extracts the authority account id directly from the
+    failed signed ping output, solves the live `/v1/accounts/faucet/puzzle`
+    challenge, claims the faucet for that signer, waits across retry attempts,
+    and then reruns the signed ping; and
+  - the faucet helper now decodes non-UTF8 HTTP error bodies safely instead of
+    crashing on replacement-worthy bytes.
+- Updated the Taira rollout/operator guidance in
+  `configs/soranexus/taira/README.md`,
+  `configs/soranexus/taira/taira-canary-client.example.toml`,
+  `skills/sora-taira-testnet/SKILL.md`, and `AGENTS.md` so operators and
+  future agents treat `Failed to find asset` as an unfunded-signer condition
+  first and know that the repo rollout smoke can bootstrap the faucet asset.
+- Live verification on March 29, 2026:
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --write-config <temp taira client.toml>` against `https://taira.sora.org` passed;
+  - the run solved the public faucet puzzle at anchor height `44`, submitted a
+    funded claim for the canary account, and retried the signed ping
+    successfully; and
+  - the faucet claim returned `202 QUEUED` with
+    `tx_hash_hex=6e24e31604caf84201ea7ab4e58f1cbbccb3b2f8fdf3f5a487af65bb3fc1730d`.
+- Focused verification completed:
+  - `python3 -m py_compile scripts/taira_faucet_canary.py scripts/tests/taira_faucet_canary_test.py` (pass)
+  - `python3` manual execution of `scripts/tests/taira_faucet_canary_test.py` test functions (pass; `pytest` is not installed here)
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh` (pass)
+
 ## 2026-03-29 Taira localnet frame-cap + Torii core-lane fallback fix restored public writes
 - Raised the generated Nexus localnet tx-gossip frame cap so Taira-sized public
   transactions no longer inherit the too-small global default:
@@ -245,10 +275,13 @@ Last updated: 2026-03-29
   `iroha_core`, `iroha_torii`, `integration_tests`, and `mochi-core` to the
   explicit `Account::new_in_domain(account, domain)` path, so the repo no
   longer routes account registration through the old scoped-id convenience
-  constructors.
+  constructors. The follow-up `NewAccount` singular-domain callers in
+  `iroha_kagami`, `mochi-core`, and the Python binding now check
+  `linked_domains()` directly instead of the removed compatibility accessors.
 - Removed the old scoped-id account builder constructors and the dead
-  `scoped_id()` compatibility view from `crates/iroha_data_model/src/account.rs`
-  now that no in-repo code still depends on them.
+  `scoped_id()` / `domain()` compatibility views from
+  `crates/iroha_data_model/src/account.rs` now that no in-repo code still
+  depends on them.
 - Updated the active account-model guidance in `AGENTS.md`,
   `docs/source/data_model.md`, `status.md`, and `roadmap.md` to describe
   `new_in_domain(...)` as the only explicit scoped-registration builder.
@@ -258,7 +291,9 @@ Last updated: 2026-03-29
   - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_core --tests` (pass; same pre-existing `iroha_core` warnings remain)
   - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_torii --tests` (pass)
   - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p integration_tests --test sumeragi_vote_qc_commit` (pass)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_kagami --tests` (pass)
   - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p mochi-core` (pass; same transitive `iroha_core` warnings remain)
+  - `CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=target/codex-check cargo check -p iroha_python_rs` (blocked by unrelated pre-existing `iroha_core` compile errors in `crates/iroha_core/src/sumeragi/main_loop{,/commit,/propose}.rs`)
 
 ## 2026-03-29 Rerun: full preserved-peer stable soaks still fail on the Torii ingress slice
 - Re-ran both full preserved-peer stable envelopes against
@@ -577,7 +612,7 @@ Last updated: 2026-03-29
   ownership of the value it later asserts against.
 - Updated the stale `NewAccount` call sites in
   `crates/iroha_kagami/src/genesis/sign.rs` and
-  `crates/iroha_kagami/src/localnet.rs` to use `register.object.domain()`
+  `crates/iroha_kagami/src/localnet.rs` to use `register.object.linked_domains()`
   instead of the removed `domain` field, and simplified the localnet filter to
   check the registration directly.
 - Validation:
@@ -753,7 +788,8 @@ Last updated: 2026-03-29
     `Account::new_in_domain(...)` instead of the old scoped-account constructor;
     and
   - `crates/iroha_kagami/src/genesis/sign.rs` plus the matching localnet test
-    now use `register.object.domain()` instead of the removed field access.
+    now use `register.object.linked_domains()` instead of the removed field
+    access.
 - Regenerated `dist/taira-localnet`, preserved the prior live bundle at
   `dist/taira-localnet.prev-20260328-191010`, re-applied the live-only Taira
   faucet authority config plus the loopback peer mesh addresses required on

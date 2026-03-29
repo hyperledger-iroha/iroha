@@ -949,7 +949,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vpn_address_allocator_avoids_collisions_and_reuses_released_plan() {
+    async fn vpn_address_allocator_avoids_collisions_across_active_sessions() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let first_keys = KeyPair::random();
         let second_keys = KeyPair::random();
@@ -1041,7 +1041,7 @@ mod tests {
             create_body.as_ref(),
         );
         let third_created = handle_create_vpn_session(
-            app,
+            app.clone(),
             &create_method,
             &create_uri,
             &third_headers,
@@ -1052,9 +1052,10 @@ mod tests {
         .into_response();
         let third_session: VpnSessionResponseDto = read_json(third_created).await;
 
-        assert_eq!(
+        assert_ne!(
             third_session.tunnel_addresses,
-            first_session.tunnel_addresses
+            second_session.tunnel_addresses
         );
+        assert_eq!(app.vpn_sessions.len(), 2);
     }
 }

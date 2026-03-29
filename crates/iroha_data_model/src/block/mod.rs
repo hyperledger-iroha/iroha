@@ -455,6 +455,7 @@ impl SignedBlock {
             creation_time_ms,
             view_change_index: 0,
             confidential_features,
+            sccp_commitment_root: None,
         };
 
         let signature = BlockSignature::new(0, SignatureOf::from_hash(private_key, header.hash()));
@@ -1466,6 +1467,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 123_456_789_000,
             view_change_index: 123,
             confidential_features: None,

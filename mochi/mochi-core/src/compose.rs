@@ -1805,7 +1805,8 @@ mod tests {
         };
 
         assert_eq!(register.object.id, ALICE_ID.clone());
-        assert_eq!(register.object.domain(), Some(expected.domain()));
+        assert_eq!(register.object.linked_domains().len(), 1);
+        assert!(register.object.linked_domains().contains(expected.domain()));
     }
 
     #[test]

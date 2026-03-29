@@ -412,7 +412,8 @@ mod tests {
         domain_id: DomainId,
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
-        iroha_data_model::account::NewAccount::new_in_domain(account_id.clone(), domain_id)
+        iroha_data_model::account::NewAccount::new(account_id.clone())
+            .with_linked_domain(domain_id)
             .build(authority)
     }
 
