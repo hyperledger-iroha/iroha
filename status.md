@@ -2,6 +2,34 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: SoraFS storage-pin integration tests match the current client API again
+- Updated the two direct single-file SoraFS pin callsites in
+  `integration_tests/tests/soranet_web_deploy.rs` and
+  `integration_tests/tests/sorafs_reconciliation.rs` to pass `None` for the
+  new optional `files` argument on
+  `Client::post_sorafs_storage_pin(...)`.
+- This closes the immediate `error[E0061]` compile break on the affected
+  integration-test targets without changing the manifest or payload bytes that
+  those tests submit.
+- Verification:
+  - `cargo check -p integration_tests --test soranet_web_deploy --test sorafs_reconciliation --message-format short` (pass)
+  - `cargo fmt --all` (pass)
+
+## 2026-03-29 Follow-up: `iroha_core`/`iroha_torii` compile hygiene for contract-runtime visibility and SoraFS manifest helpers
+- Removed the last dead contiguous-frontier phase from
+  `crates/iroha_core/src/sumeragi/main_loop.rs` by dropping the unused
+  `AwaitVotes` state and updating the active frontier-owner predicates to only
+  reference runtime phases that are still reachable on the current path.
+- Cleaned up one remaining `iroha_torii` test-helper warning in
+  `crates/iroha_torii/src/sorafs/api.rs` by marking the unused
+  `manifest_digest` parameter intentionally unused.
+- Revalidated the previously reported contract-runtime visibility warnings and
+  SoraFS manifest compile errors on the current tree: the targeted crate check
+  is now clean.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_core -p iroha_torii --all-targets` (pass)
+
 ## 2026-03-29 Follow-up: Torii ingress now uses bounded multi-hop proxying and latency-aware admission
 - Implemented the remaining ingress-layer fixes directly in the server path
   instead of widening Sumeragi scope:

@@ -2,6 +2,23 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 SoraFS storage-pin integration-test callers):
+the two direct single-file SoraFS pin integration tests now match the current
+three-argument `Client::post_sorafs_storage_pin(...)` API again, so the
+reported `error[E0061]` compile break on those targets is closed.
+
+- updated `integration_tests/tests/soranet_web_deploy.rs` and
+  `integration_tests/tests/sorafs_reconciliation.rs` to pass `None` for the
+  new optional `files` parameter without changing the submitted
+  manifest/payload bytes; and
+- revalidated the affected targets with
+  `cargo check -p integration_tests --test soranet_web_deploy --test sorafs_reconciliation --message-format short`.
+
+Open work for this slice now remains:
+- rerun a broader `integration_tests` or workspace validation pass when the
+  next compile window is available; this fix only revalidated the two affected
+  targets.
+
 Latest sync (2026-03-29 Torii multi-hop ingress + latency-aware admission implementation):
 the remaining ingress fixes are now implemented in the Torii/queue layer:
 NPoS routing now has bounded transparent multi-hop forwarding, and

@@ -3173,7 +3173,6 @@ enum FrontierSlotPhase {
     AwaitBlockCreated,
     AwaitBody,
     ValidateBody,
-    AwaitVotes,
     AwaitCommitQc,
 }
 
@@ -5991,9 +5990,7 @@ impl Actor {
                         || slot.body_present
                         || matches!(
                             slot.phase,
-                            FrontierSlotPhase::ValidateBody
-                                | FrontierSlotPhase::AwaitVotes
-                                | FrontierSlotPhase::AwaitCommitQc
+                            FrontierSlotPhase::ValidateBody | FrontierSlotPhase::AwaitCommitQc
                         ))
             });
 
@@ -6133,10 +6130,7 @@ impl Actor {
                     && !matches!(slot.mode, FrontierSlotMode::Finalized)
                     && (slot.quorum_progress.votes_observed
                         || slot.quorum_progress.commit_qc_observed
-                        || matches!(
-                            slot.phase,
-                            FrontierSlotPhase::AwaitVotes | FrontierSlotPhase::AwaitCommitQc
-                        ))
+                        || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
             });
         if frontier_slot_vote_backed {
             return true;
@@ -6362,9 +6356,7 @@ impl Actor {
                         || slot.exact_fetch_armed
                         || matches!(
                             slot.phase,
-                            FrontierSlotPhase::ValidateBody
-                                | FrontierSlotPhase::AwaitVotes
-                                | FrontierSlotPhase::AwaitCommitQc
+                            FrontierSlotPhase::ValidateBody | FrontierSlotPhase::AwaitCommitQc
                         ))
             });
 
@@ -6529,10 +6521,7 @@ impl Actor {
                     && !matches!(slot.mode, FrontierSlotMode::Finalized)
                     && (slot.quorum_progress.votes_observed
                         || slot.quorum_progress.commit_qc_observed
-                        || matches!(
-                            slot.phase,
-                            FrontierSlotPhase::AwaitVotes | FrontierSlotPhase::AwaitCommitQc
-                        ))
+                        || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
             })
         {
             return true;
@@ -6587,7 +6576,6 @@ impl Actor {
                         slot.phase,
                         FrontierSlotPhase::AwaitBody
                             | FrontierSlotPhase::ValidateBody
-                            | FrontierSlotPhase::AwaitVotes
                             | FrontierSlotPhase::AwaitCommitQc
                     )
                     || slot.block_created_seen
