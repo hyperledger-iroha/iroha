@@ -31,7 +31,7 @@ fn active_slot() -> &'static Mutex<Option<Arc<Store>>> {
 #[derive(Default)]
 struct Inner {
     map: BTreeMap<(HashOf<BlockHeader>, u64, u64), Entry>,
-    disk: Option<DiskStore>,
+    disk: Option<DiskPersistenceState>,
 }
 
 #[derive(Clone)]
@@ -43,6 +43,12 @@ struct Entry {
 struct Store {
     inner: Mutex<Inner>,
     active_count: AtomicU64,
+}
+
+struct DiskPersistenceState {
+    store: DiskStore,
+    disabled: bool,
+    disable_logged: bool,
 }
 
 impl Default for Store {
@@ -69,6 +75,16 @@ impl Store {
     }
 }
 
+impl DiskPersistenceState {
+    fn new(store: DiskStore) -> Self {
+        Self {
+            store,
+            disabled: false,
+            disable_logged: false,
+        }
+    }
+}
+
 /// Handle bound to a single Sumeragi instance.
 #[derive(Clone, Default)]
 pub struct Handle {
@@ -92,10 +108,9 @@ impl Handle {
             Some(cfg) => match DiskStore::new(&cfg) {
                 Ok(disk) => {
                     load_into_map(&disk, &mut inner.map);
-                    if let Err(err) = disk.persist(&inner.map) {
-                        warn!(?err, "failed to persist RBC session store during configure");
-                    }
-                    inner.disk = Some(disk);
+                    inner.disk = Some(DiskPersistenceState::new(disk));
+                    set_persistence_disabled_metric(false);
+                    persist_if_needed(&mut inner, "configure");
                 }
                 Err(err) => {
                     warn!(
@@ -103,10 +118,12 @@ impl Handle {
                         "failed to initialise RBC session store; persistence disabled"
                     );
                     inner.disk = None;
+                    set_persistence_disabled_metric(false);
                 }
             },
             None => {
                 inner.disk = None;
+                set_persistence_disabled_metric(false);
             }
         }
         self.store
@@ -139,19 +156,12 @@ impl Handle {
         let disk_config = inner
             .disk
             .as_ref()
-            .map(|disk| (disk.file.clone(), disk.ttl, disk.capacity));
-        if let Some((file, ttl, capacity)) = disk_config {
+            .map(|disk| (disk.store.ttl, disk.store.capacity));
+        if let Some((ttl, capacity)) = disk_config {
             let should_persist = persist_needed || ttl > Duration::ZERO || capacity > 0;
             if should_persist {
                 enforce_map_limits(&mut inner.map, ttl, capacity);
-                let disk = DiskStore {
-                    file,
-                    ttl,
-                    capacity,
-                };
-                if let Err(err) = disk.persist(&inner.map) {
-                    warn!(?err, "failed to persist RBC session store after update");
-                }
+                persist_if_needed(&mut inner, "update");
             }
         }
         self.store
@@ -221,14 +231,10 @@ impl Handle {
                     .disk
                     .as_ref()
                     .expect("disk store should exist when checked");
-                (disk.ttl, disk.capacity)
+                (disk.store.ttl, disk.store.capacity)
             };
             enforce_map_limits(&mut inner.map, ttl, capacity);
-            if let Some(disk) = inner.disk.as_ref() {
-                if let Err(err) = disk.persist(&inner.map) {
-                    warn!(?err, "failed to persist RBC session store after remove");
-                }
-            }
+            persist_if_needed(&mut inner, "remove");
         }
         self.store
             .active_count
@@ -239,11 +245,7 @@ impl Handle {
     pub fn clear(&self) {
         let mut inner = self.store.inner.lock().expect("rbc status lock poisoned");
         inner.map.clear();
-        if let Some(disk) = inner.disk.as_ref() {
-            if let Err(err) = disk.persist(&inner.map) {
-                warn!(?err, "failed to persist RBC session store after clear");
-            }
-        }
+        persist_if_needed(&mut inner, "clear");
         self.store.active_count.store(0, Ordering::Relaxed);
     }
 
@@ -345,11 +347,7 @@ impl Handle {
                 updated_at,
             },
         );
-        if let Some(disk) = inner.disk.as_ref()
-            && let Err(err) = disk.persist(&inner.map)
-        {
-            warn!(?err, "failed to persist RBC session store after update_at");
-        }
+        persist_if_needed(&mut inner, "update_at");
         self.store
             .active_count
             .store(inner.map.len() as u64, Ordering::Relaxed);
@@ -438,10 +436,13 @@ pub fn read_persisted_snapshot(dir: impl AsRef<Path>) -> Vec<Summary> {
 
 const FILE_NAME: &str = "sessions.norito";
 
+#[derive(Clone)]
 struct DiskStore {
     file: PathBuf,
     ttl: Duration,
     capacity: usize,
+    #[cfg(test)]
+    fail_persist_with: Option<io::ErrorKind>,
 }
 
 #[derive(Clone, Encode, Decode)]
@@ -457,6 +458,8 @@ impl DiskStore {
             file: cfg.dir.join(FILE_NAME),
             ttl: cfg.ttl,
             capacity: cfg.capacity,
+            #[cfg(test)]
+            fail_persist_with: None,
         })
     }
 
@@ -464,6 +467,10 @@ impl DiskStore {
         &self,
         map: &BTreeMap<(HashOf<BlockHeader>, u64, u64), Entry>,
     ) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(kind) = self.fail_persist_with {
+            return Err(io::Error::from(kind));
+        }
         let mut entries: Vec<StoredEntry> = map
             .values()
             .map(|entry| StoredEntry {
@@ -497,6 +504,66 @@ impl DiskStore {
             }
         }
         Ok(())
+    }
+}
+
+fn is_fatal_persist_error(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::StorageFull
+            | io::ErrorKind::WriteZero
+            | io::ErrorKind::OutOfMemory
+            | io::ErrorKind::FileTooLarge
+            | io::ErrorKind::QuotaExceeded
+    )
+}
+
+fn set_persistence_disabled_metric(disabled: bool) {
+    #[cfg(feature = "telemetry")]
+    if let Some(metrics) = iroha_telemetry::metrics::global() {
+        metrics
+            .sumeragi_rbc_status_persistence_disabled
+            .set(u64::from(disabled));
+    }
+    #[cfg(not(feature = "telemetry"))]
+    let _ = disabled;
+}
+
+fn record_fatal_persist_failure() {
+    #[cfg(feature = "telemetry")]
+    if let Some(metrics) = iroha_telemetry::metrics::global() {
+        metrics.sumeragi_rbc_status_persist_failures_total.inc();
+    }
+}
+
+fn persist_if_needed(inner: &mut Inner, context: &'static str) {
+    let Some(disk_state) = inner.disk.as_ref() else {
+        return;
+    };
+    if disk_state.disabled {
+        return;
+    }
+    let disk = disk_state.store.clone();
+
+    if let Err(err) = disk.persist(&inner.map) {
+        if is_fatal_persist_error(&err) {
+            if let Some(disk_state) = inner.disk.as_mut() {
+                disk_state.disabled = true;
+                if !disk_state.disable_logged {
+                    disk_state.disable_logged = true;
+                    warn!(
+                        ?err,
+                        context = context,
+                        "fatal RBC status persist error; disabling disk persistence and keeping in-memory status snapshots active"
+                    );
+                }
+            }
+            record_fatal_persist_failure();
+            set_persistence_disabled_metric(true);
+            return;
+        }
+
+        warn!(?err, context = context, "failed to persist RBC session store");
     }
 }
 
@@ -1092,5 +1159,169 @@ mod tests {
         let heights: Vec<u64> = items.iter().map(|s| s.height).collect();
         assert!(heights.contains(&2));
         assert!(heights.contains(&3));
+    }
+
+    #[test]
+    fn fatal_persist_error_disables_disk_but_keeps_memory_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let handle = register_handle();
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::from_secs(60),
+            capacity: 8,
+        }));
+        let key = (hash(7), 7, 0);
+        let summary = Summary {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            total_chunks: 4,
+            received_chunks: 2,
+            ready_count: 1,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(summary.clone(), SystemTime::now());
+        let path = dir.path().join(FILE_NAME);
+        let persisted_before_fault = fs::read(&path).expect("persisted snapshot");
+
+        {
+            let mut inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+            inner
+                .disk
+                .as_mut()
+                .expect("disk store configured")
+                .store
+                .fail_persist_with = Some(io::ErrorKind::StorageFull);
+        }
+
+        let updated = Summary {
+            received_chunks: 3,
+            ..summary
+        };
+        handle.update(updated.clone(), SystemTime::now() + Duration::from_secs(1));
+
+        assert_eq!(handle.get(&key), Some(updated));
+        let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+        assert!(
+            inner
+                .disk
+                .as_ref()
+                .is_some_and(|disk| disk.disabled),
+            "fatal persist errors must disable future disk writes"
+        );
+        drop(inner);
+
+        let persisted_after_fault = fs::read(&path).expect("persisted snapshot");
+        assert_eq!(
+            persisted_after_fault, persisted_before_fault,
+            "fatal persist errors must not clobber the last successful on-disk snapshot"
+        );
+    }
+
+    #[test]
+    fn disabled_persistence_stops_future_disk_writes_until_reconfigure() {
+        let dir = tempdir().expect("tempdir");
+        let handle = register_handle();
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::from_secs(60),
+            capacity: 8,
+        }));
+        let key = (hash(8), 8, 0);
+        let summary = Summary {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            total_chunks: 2,
+            received_chunks: 1,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(summary.clone(), SystemTime::now());
+        let path = dir.path().join(FILE_NAME);
+
+        {
+            let mut inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+            inner
+                .disk
+                .as_mut()
+                .expect("disk store configured")
+                .store
+                .fail_persist_with = Some(io::ErrorKind::WriteZero);
+        }
+        handle.update(
+            Summary {
+                received_chunks: 2,
+                ..summary.clone()
+            },
+            SystemTime::now() + Duration::from_secs(1),
+        );
+        let persisted_after_disable = fs::read(&path).expect("persisted snapshot");
+
+        handle.update(
+            Summary {
+                delivered: true,
+                ..summary.clone()
+            },
+            SystemTime::now() + Duration::from_secs(2),
+        );
+        handle.remove(&key);
+        assert_eq!(
+            fs::read(&path).expect("persisted snapshot"),
+            persisted_after_disable,
+            "memory-only mode must stop future persist attempts until reconfigured"
+        );
+
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::from_secs(60),
+            capacity: 8,
+        }));
+        {
+            let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+            assert!(
+                inner
+                    .disk
+                    .as_ref()
+                    .is_some_and(|disk| !disk.disabled),
+                "explicit configure(Some(...)) must re-enable persistence"
+            );
+        }
+
+        let replacement = Summary {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            total_chunks: 3,
+            received_chunks: 3,
+            ready_count: 2,
+            delivered: true,
+            payload_hash: Some(Hash::new(b"re-enabled")),
+            recovered_from_disk: false,
+            invalid: false,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(replacement.clone(), SystemTime::now() + Duration::from_secs(3));
+
+        assert!(
+            read_persisted_snapshot(dir.path())
+                .iter()
+                .any(|entry| entry.block_hash == replacement.block_hash
+                    && entry.height == replacement.height
+                    && entry.received_chunks == replacement.received_chunks
+                    && entry.delivered == replacement.delivered),
+            "reconfigured persistence should write fresh snapshots again"
+        );
     }
 }

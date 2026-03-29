@@ -7,15 +7,19 @@ use axum::{
 use iroha_config::client_api::ConfigGetDTO;
 use iroha_core::kiso::KisoHandle;
 use iroha_data_model::{
-    ValidationFail, account::AccountId, query::error::QueryExecutionFail,
-    soranet::vpn::VpnExitClassV1,
+    ValidationFail,
+    account::AccountId,
+    query::error::QueryExecutionFail,
+    soranet::vpn::{
+        VPN_DEFAULT_TUNNEL_MTU_BYTES, VpnExitClassV1, VpnHelperTicketV1,
+        derive_vpn_session_address_plan_v1,
+    },
 };
 
 use crate::{Error, SharedAppState};
 
 const SUPPORTED_EXIT_CLASSES: [&str; 3] = ["standard", "low-latency", "high-security"];
 const DEFAULT_TUNNEL_ADDRESSES: [&str; 2] = ["10.208.0.2/32", "fd53:7261:6574::2/128"];
-const DEFAULT_VPN_MTU_BYTES: u64 = 1280;
 const MAX_RECEIPTS_PER_ACCOUNT: usize = 24;
 
 #[derive(
@@ -235,7 +239,7 @@ fn build_profile(dto: &ConfigGetDTO) -> VpnProfileResponseDto {
         excluded_routes: Vec::new(),
         dns_servers: Vec::new(),
         tunnel_addresses: default_tunnel_addresses(),
-        mtu_bytes: DEFAULT_VPN_MTU_BYTES,
+        mtu_bytes: u64::from(VPN_DEFAULT_TUNNEL_MTU_BYTES),
         display_billing_label: format!("{default_exit_class} · {}", vpn.meter_family),
     }
 }
@@ -263,8 +267,26 @@ fn build_session_id(account_id: &AccountId, exit_class: &str, nonce: &str, now_m
     )
 }
 
-fn build_helper_ticket_hex(session_id: &str) -> String {
-    hex::encode(blake3::hash(format!("{session_id}:helper").as_bytes()).as_bytes())
+fn relay_session_id_from_session_id(session_id: &str) -> [u8; 16] {
+    let digest = blake3::hash(session_id.as_bytes());
+    let mut session_key = [0u8; 16];
+    session_key.copy_from_slice(&digest.as_bytes()[..16]);
+    session_key
+}
+
+fn build_helper_ticket_hex(
+    session_id: &str,
+    expires_at_ms: u64,
+    secret: Option<&[u8; 32]>,
+) -> String {
+    match secret {
+        Some(secret) => VpnHelperTicketV1 {
+            session_id: relay_session_id_from_session_id(session_id),
+            expires_at_ms,
+        }
+        .to_hex(secret),
+        None => hex::encode(blake3::hash(format!("{session_id}:helper").as_bytes()).as_bytes()),
+    }
 }
 
 fn response_from_record(record: &VpnSessionRecord) -> VpnSessionResponseDto {
@@ -424,8 +446,14 @@ pub(crate) async fn handle_create_vpn_session(
         .and_then(|value| value.to_str().ok())
         .unwrap_or("vpn");
     let session_id = build_session_id(&account_id, &exit_class, nonce, current_ms);
-    let helper_ticket_hex = build_helper_ticket_hex(&session_id);
+    let address_plan =
+        derive_vpn_session_address_plan_v1(relay_session_id_from_session_id(&session_id));
     let expires_at_ms = current_ms.saturating_add(profile.lease_secs.saturating_mul(1_000));
+    let helper_ticket_hex = build_helper_ticket_hex(
+        &session_id,
+        expires_at_ms,
+        app.vpn_helper_ticket_secret.as_ref(),
+    );
     let record = VpnSessionRecord {
         session_id: session_id.clone(),
         account_id,
@@ -438,7 +466,7 @@ pub(crate) async fn handle_create_vpn_session(
         route_pushes: profile.route_pushes,
         excluded_routes: profile.excluded_routes,
         dns_servers: profile.dns_servers,
-        tunnel_addresses: profile.tunnel_addresses,
+        tunnel_addresses: address_plan.client_tunnel_addresses,
         mtu_bytes: profile.mtu_bytes,
         helper_ticket_hex,
         bytes_in: 0,
@@ -593,8 +621,23 @@ mod tests {
             vec!["standard", "low-latency", "high-security"]
         );
         assert!(!body.relay_endpoint.trim().is_empty());
-        assert_eq!(body.mtu_bytes, DEFAULT_VPN_MTU_BYTES);
+        assert_eq!(body.mtu_bytes, u64::from(VPN_DEFAULT_TUNNEL_MTU_BYTES));
         assert_eq!(body.tunnel_addresses, default_tunnel_addresses());
+    }
+
+    #[test]
+    fn helper_ticket_uses_versioned_ticket_when_secret_is_present() {
+        let secret = [0x5A; 32];
+        let session_id = "sess_live";
+        let expires_at_ms = 50_000;
+        let encoded = build_helper_ticket_hex(session_id, expires_at_ms, Some(&secret));
+        let parsed =
+            VpnHelperTicketV1::parse_hex(&encoded, &secret, 1).expect("ticket should parse");
+        assert_eq!(
+            relay_session_id_from_session_id(session_id),
+            parsed.session_id
+        );
+        assert_eq!(expires_at_ms, parsed.expires_at_ms);
     }
 
     #[tokio::test]
@@ -643,6 +686,8 @@ mod tests {
         assert_eq!(session.account_id, account.to_string());
         assert_eq!(session.exit_class, "low-latency");
         assert_eq!(session.status, "active");
+        assert_ne!(session.tunnel_addresses, default_tunnel_addresses());
+        assert_eq!(session.tunnel_addresses.len(), 2);
         assert_eq!(app.vpn_sessions.len(), 1);
 
         let get_method = Method::GET;

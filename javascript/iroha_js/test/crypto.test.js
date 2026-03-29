@@ -13,6 +13,7 @@ import {
   sm2PublicKeyMultihash,
   signSm2,
   verifySm2,
+  buildKaigiRosterJoinProof,
   SM2_PRIVATE_KEY_LENGTH,
   SM2_PUBLIC_KEY_LENGTH,
   SM2_SIGNATURE_LENGTH,
@@ -30,6 +31,9 @@ const SM2_FIXTURE = hasSm2Binding()
 
 const MESSAGE = Buffer.from("hyperledger iroha");
 const nativeTest = makeNativeTest(test, { require: sm2RequiredMethods });
+const kaigiNativeTest = makeNativeTest(test, {
+  require: "buildKaigiRosterJoinProof",
+});
 
 test("generateKeyPair produces unique keys and valid lengths", () => {
   const kp1 = generateKeyPair();
@@ -211,6 +215,37 @@ test("deriveConfidentialKeyset delegates to native binding when available", () =
     assert.deepEqual(keyset.skSpend, expected.sk_spend);
     assert.equal(keyset.nkHex, expected.nk.toString("hex"));
   });
+});
+
+test("buildKaigiRosterJoinProof delegates to native binding", () => {
+  const expected = {
+    commitment: Buffer.alloc(32, 0x11),
+    nullifier: Buffer.alloc(32, 0x22),
+    roster_root: Buffer.alloc(32, 0x33),
+    proof: Buffer.from("proof-bytes"),
+  };
+
+  withNativeBinding({ buildKaigiRosterJoinProof: () => expected }, () => {
+    const proof = buildKaigiRosterJoinProof({
+      seed: Buffer.from("seed"),
+      rosterRootHex: "44".repeat(32),
+    });
+    assert.equal(proof.commitmentHex, expected.commitment.toString("hex"));
+    assert.equal(proof.nullifierHex, expected.nullifier.toString("hex"));
+    assert.equal(proof.rosterRootHex, expected.roster_root.toString("hex"));
+    assert.equal(proof.proofBase64, expected.proof.toString("base64"));
+  });
+});
+
+kaigiNativeTest("buildKaigiRosterJoinProof returns a native proof envelope", () => {
+  const proof = buildKaigiRosterJoinProof({
+    seed: Buffer.alloc(32, 0x44),
+    rosterRootHex: "00".repeat(32),
+  });
+  assert.equal(proof.commitment.length, 32);
+  assert.equal(proof.nullifier.length, 32);
+  assert.equal(proof.rosterRoot.length, 32);
+  assert.ok(proof.proof.length > 0);
 });
 
 function withNativeBinding(binding, fn) {

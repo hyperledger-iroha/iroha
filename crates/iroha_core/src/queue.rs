@@ -224,6 +224,8 @@ pub struct Queue {
     tx_gas_cost: DashMap<SignedTxHash, u64>,
     /// Local enqueue timestamp in milliseconds for tracked transactions.
     tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
+    /// Local enqueue timestamp in milliseconds for hashes still waiting in `tx_hashes`.
+    queued_tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
     /// Cached Norito-encoded transaction payloads for gossip retransmit.
     tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
@@ -311,11 +313,11 @@ pub struct QueuePressureSnapshot {
     pub queued_tx_count: usize,
     /// Maximum queue capacity configured for the peer.
     pub capacity: NonZeroUsize,
-    /// Age in milliseconds of the oldest tracked transaction's local queue residence.
-    pub oldest_tracked_tx_age_ms: u64,
+    /// Age in milliseconds of the oldest queue-resident transaction's local queue residence.
+    pub oldest_queued_tx_age_ms: u64,
     /// Whether the queue saturated because the tracked count hit capacity.
     pub saturated_by_count: bool,
-    /// Whether the queue saturated because the oldest tracked age exceeded the budget.
+    /// Whether the queue saturated because the oldest queued age exceeded the budget.
     pub saturated_by_age: bool,
 }
 
@@ -331,12 +333,12 @@ impl QueuePressureSnapshot {
     pub const fn into_backpressure(self) -> BackpressureState {
         if self.is_saturated() {
             BackpressureState::Saturated {
-                queued: self.tracked_tx_count,
+                queued: self.queued_tx_count,
                 capacity: self.capacity,
             }
         } else {
             BackpressureState::Healthy {
-                queued: self.tracked_tx_count,
+                queued: self.queued_tx_count,
                 capacity: self.capacity,
             }
         }
@@ -349,14 +351,14 @@ impl QueuePressureSnapshot {
 pub enum BackpressureState {
     /// Queue has room for new transactions.
     Healthy {
-        /// Number of transactions tracked by the queue (queued + in-flight).
+        /// Number of transactions still waiting in the queue.
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
     },
     /// Queue exceeded a capacity or latency budget; callers should defer submissions.
     Saturated {
-        /// Number of transactions tracked by the queue when saturation triggered.
+        /// Number of transactions still waiting in the queue when saturation triggered.
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
@@ -371,7 +373,7 @@ impl BackpressureState {
     }
 
     #[must_use]
-    /// Number of transactions tracked by the queue in the snapshot.
+    /// Number of transactions still waiting in the queue in the snapshot.
     pub const fn queued(self) -> usize {
         match self {
             Self::Healthy { queued, .. } | Self::Saturated { queued, .. } => queued,
@@ -1319,6 +1321,7 @@ impl Queue {
                 tx_encoded_len: DashMap::new(),
                 tx_gas_cost: DashMap::new(),
                 tx_enqueued_at_ms: DashMap::new(),
+                queued_tx_enqueued_at_ms: DashMap::new(),
                 tx_gossip_payloads: DashMap::new(),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
@@ -1988,6 +1991,7 @@ impl Queue {
         self.routing_decisions.insert(hash, routing_decision);
         routing_ledger::record(hash, routing_decision);
         self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
+        self.queued_tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
         // Drop the local holder before attempting to unwrap on push failure.
         drop(tx_arc);
         let mut pushed = self.tx_hashes.push(hash).is_ok();
@@ -2004,6 +2008,7 @@ impl Queue {
                 routing_ledger::discard_if_matches(&hash, decision);
             }
             self.tx_enqueued_at_ms.remove(&hash);
+            self.queued_tx_enqueued_at_ms.remove(&hash);
             self.decrease_per_user_tx_count(err_tx.as_ref().as_ref().authority());
             self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
             return Err(Failure {
@@ -2291,6 +2296,7 @@ impl Queue {
         self.routing_decisions.insert(hash, routing_decision);
         routing_ledger::record(hash, routing_decision);
         self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
+        self.queued_tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
         // Drop the local holder before attempting to unwrap on push failure.
         drop(tx_arc);
         let mut pushed = self.tx_hashes.push(hash).is_ok();
@@ -2307,6 +2313,7 @@ impl Queue {
                 routing_ledger::discard_if_matches(&hash, decision);
             }
             self.tx_enqueued_at_ms.remove(&hash);
+            self.queued_tx_enqueued_at_ms.remove(&hash);
             self.decrease_per_user_tx_count(err_tx.as_ref().as_ref().authority());
             self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
             return Err(Failure {
@@ -2383,6 +2390,7 @@ impl Queue {
         self.tx_encoded_len.clear();
         self.tx_gas_cost.clear();
         self.tx_enqueued_at_ms.clear();
+        self.queued_tx_enqueued_at_ms.clear();
         self.tx_gossip_payloads.clear();
         #[cfg(feature = "telemetry")]
         {
@@ -2421,6 +2429,7 @@ impl Queue {
                 }
                 return None;
             };
+            self.queued_tx_enqueued_at_ms.remove(&hash);
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
@@ -2459,6 +2468,7 @@ impl Queue {
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
                     self.tx_enqueued_at_ms.remove(&hash);
+                    self.queued_tx_enqueued_at_ms.remove(&hash);
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
@@ -2468,6 +2478,7 @@ impl Queue {
                 self.tx_encoded_len.remove(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
+                self.queued_tx_enqueued_at_ms.remove(&hash);
                 self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
@@ -2530,6 +2541,7 @@ impl Queue {
                 }
                 return None;
             };
+            self.queued_tx_enqueued_at_ms.remove(&hash);
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
@@ -2567,6 +2579,7 @@ impl Queue {
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(telemetry_handle));
                     self.tx_enqueued_at_ms.remove(&hash);
+                    self.queued_tx_enqueued_at_ms.remove(&hash);
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
@@ -2576,6 +2589,7 @@ impl Queue {
                 self.tx_encoded_len.remove(&hash);
                 self.tx_gas_cost.remove(&hash);
                 self.tx_enqueued_at_ms.remove(&hash);
+                self.queued_tx_enqueued_at_ms.remove(&hash);
                 self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
@@ -2638,6 +2652,7 @@ impl Queue {
         hashes.sort();
 
         let mut inserted = 0usize;
+        let mut inserted_hashes = Vec::new();
         for hash in hashes {
             if self.tx_hashes.push(hash).is_err() {
                 warn!(
@@ -2648,10 +2663,12 @@ impl Queue {
                 break;
             }
             self.removed_hashes.remove(&hash);
+            inserted_hashes.push(hash);
             inserted = inserted.saturating_add(1);
         }
 
         if inserted > 0 {
+            self.rebuild_queued_age_index(inserted_hashes);
             self.removed_hashes.clear();
             self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
             warn!(
@@ -2920,30 +2937,45 @@ impl Queue {
         )
     }
 
-    fn oldest_tracked_tx_age_ms(&self) -> u64 {
+    fn oldest_queued_tx_age_ms(&self) -> u64 {
         let now_ms = Self::duration_to_millis(self.time_source.get_unix_time());
-        self.tx_enqueued_at_ms
+        self.queued_tx_enqueued_at_ms
             .iter()
             .map(|entry| now_ms.saturating_sub(*entry.value()))
             .max()
             .unwrap_or(0)
     }
 
+    fn rebuild_queued_age_index(&self, queued_hashes: impl IntoIterator<Item = SignedTxHash>) {
+        self.queued_tx_enqueued_at_ms.clear();
+        for hash in queued_hashes {
+            let Some(enqueued_at_ms) = self
+                .tx_enqueued_at_ms
+                .get(&hash)
+                .map(|entry| *entry.value())
+            else {
+                continue;
+            };
+            self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+        }
+    }
+
     fn pressure_snapshot_with_tracked_count(
         &self,
         tracked_tx_count: usize,
     ) -> QueuePressureSnapshot {
-        let oldest_tracked_tx_age_ms = self.oldest_tracked_tx_age_ms();
+        let queued_tx_count = self.queued_len();
+        let oldest_queued_tx_age_ms = self.oldest_queued_tx_age_ms();
         let saturated_by_count = tracked_tx_count >= self.capacity.get();
         let age_budget_ms = self.pressure_age_budget_ms.load(Ordering::Relaxed);
         let saturated_by_age =
-            tracked_tx_count > 0 && oldest_tracked_tx_age_ms >= age_budget_ms && age_budget_ms > 0;
+            queued_tx_count > 0 && oldest_queued_tx_age_ms >= age_budget_ms && age_budget_ms > 0;
 
         QueuePressureSnapshot {
             tracked_tx_count,
-            queued_tx_count: self.queued_len(),
+            queued_tx_count,
             capacity: self.capacity,
-            oldest_tracked_tx_age_ms,
+            oldest_queued_tx_age_ms,
             saturated_by_count,
             saturated_by_age,
         }
@@ -2970,7 +3002,7 @@ impl Queue {
         if let Some(tel) = telemetry {
             crate::telemetry::record_state_tx_queue_backpressure(
                 tel,
-                tracked_tx_count as u64,
+                snapshot.queued_tx_count as u64,
                 self.capacity.get() as u64,
                 state.is_saturated(),
             );
@@ -3045,6 +3077,7 @@ impl Queue {
                 #[cfg(feature = "telemetry")]
                 self.record_teu_dequeue(&hash, None);
                 self.tx_enqueued_at_ms.remove(&hash);
+                self.queued_tx_enqueued_at_ms.remove(&hash);
                 if let Ok(tx) = Arc::try_unwrap(tx_arc) {
                     let accepted = tx.into_accepted();
                     if self.is_expired_at(&accepted, now) {
@@ -3097,6 +3130,7 @@ impl Queue {
     fn compact_hash_queue_locked(&self) -> usize {
         let mut retained = Vec::with_capacity(self.txs.len());
         let mut dropped = 0usize;
+        let mut inserted_hashes = Vec::new();
         while let Some(hash) = self.tx_hashes.pop() {
             self.removed_hashes.remove(&hash);
             if self.txs.contains_key(&hash) {
@@ -3114,7 +3148,9 @@ impl Queue {
                 );
                 break;
             }
+            inserted_hashes.push(hash);
         }
+        self.rebuild_queued_age_index(inserted_hashes);
         self.removed_hashes.clear();
         dropped
     }
@@ -3149,6 +3185,7 @@ impl Queue {
         self.tx_encoded_len.remove(&hash);
         self.tx_gas_cost.remove(&hash);
         self.tx_enqueued_at_ms.remove(&hash);
+        self.queued_tx_enqueued_at_ms.remove(&hash);
         self.tx_gossip_payloads.remove(&hash);
         // Transaction guards always represent popped hashes; clear any stale marker even if
         // the entry was culled while the guard was in-flight.
@@ -3175,6 +3212,7 @@ impl Queue {
             self.tx_encoded_len.remove(&hash);
             self.tx_gas_cost.remove(&hash);
             self.tx_enqueued_at_ms.remove(&hash);
+            self.queued_tx_enqueued_at_ms.remove(&hash);
             self.tx_gossip_payloads.remove(&hash);
             if let Some(tx_arc) = tx_arc {
                 self.removed_hashes.insert(hash, ());
@@ -3857,6 +3895,7 @@ pub mod tests {
                     tx_encoded_len: DashMap::new(),
                     tx_gas_cost: DashMap::new(),
                     tx_enqueued_at_ms: DashMap::new(),
+                    queued_tx_enqueued_at_ms: DashMap::new(),
                     tx_gossip_payloads: DashMap::new(),
                     removed_hashes: DashMap::new(),
                     txs_per_user: DashMap::new(),
@@ -7023,7 +7062,7 @@ pub mod tests {
         let initial = queue.pressure_snapshot();
         assert_eq!(initial.tracked_tx_count, 2);
         assert_eq!(initial.queued_tx_count, 2);
-        assert_eq!(initial.oldest_tracked_tx_age_ms, 10);
+        assert_eq!(initial.oldest_queued_tx_age_ms, 10);
 
         let mut expired = Vec::new();
         let guard = queue
@@ -7032,14 +7071,14 @@ pub mod tests {
         let inflight = queue.pressure_snapshot();
         assert_eq!(inflight.tracked_tx_count, 2);
         assert_eq!(inflight.queued_tx_count, 1);
-        assert_eq!(inflight.oldest_tracked_tx_age_ms, 10);
+        assert_eq!(inflight.oldest_queued_tx_age_ms, 0);
 
         drop(guard);
 
         let after_drop = queue.pressure_snapshot();
         assert_eq!(after_drop.tracked_tx_count, 1);
         assert_eq!(after_drop.queued_tx_count, 1);
-        assert_eq!(after_drop.oldest_tracked_tx_age_ms, 0);
+        assert_eq!(after_drop.oldest_queued_tx_age_ms, 0);
     }
 
     #[tokio::test]
@@ -7060,7 +7099,7 @@ pub mod tests {
         queue
             .push(accepted_tx_by_someone(&time_source), state.view())
             .expect("push succeeds");
-        assert_eq!(queue.pressure_snapshot().oldest_tracked_tx_age_ms, 0);
+        assert_eq!(queue.pressure_snapshot().oldest_queued_tx_age_ms, 0);
 
         time_handle.advance(Duration::from_millis(2));
         assert_eq!(queue.cull_expired_entries_if_due(), 1);
@@ -7068,7 +7107,7 @@ pub mod tests {
         let snapshot = queue.pressure_snapshot();
         assert_eq!(snapshot.tracked_tx_count, 0);
         assert_eq!(snapshot.queued_tx_count, 0);
-        assert_eq!(snapshot.oldest_tracked_tx_age_ms, 0);
+        assert_eq!(snapshot.oldest_queued_tx_age_ms, 0);
     }
 
     #[tokio::test]
@@ -7090,6 +7129,36 @@ pub mod tests {
         assert!(!snapshot.saturated_by_count);
         assert!(snapshot.saturated_by_age);
         assert!(queue.current_backpressure().is_saturated());
+    }
+
+    #[tokio::test]
+    async fn backpressure_state_excludes_inflight_transactions_from_age_and_depth() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue.set_pressure_age_budget_for_tests(Duration::from_millis(5));
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+        assert_eq!(guards.len(), 1, "queue should return an in-flight guard");
+
+        time_handle.advance(Duration::from_millis(6));
+        let snapshot = queue.pressure_snapshot();
+        assert_eq!(snapshot.tracked_tx_count, 1);
+        assert_eq!(snapshot.queued_tx_count, 0);
+        assert_eq!(snapshot.oldest_queued_tx_age_ms, 0);
+        assert!(!snapshot.saturated_by_age);
+        assert_eq!(queue.current_backpressure().queued(), 0);
+
+        drop(guards);
+        assert_eq!(queue.current_backpressure().queued(), 0);
     }
 
     #[tokio::test]

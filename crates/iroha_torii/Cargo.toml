@@ -86,6 +86,7 @@ iroha_logger = { workspace = true }
 iroha_data_model = { workspace = true, features = ["http", "json", "bridge"] }
 iroha_executor_data_model = { workspace = true }
 iroha_crypto = { workspace = true }
+iroha_sccp = { path = "../iroha_sccp", features = ["serde"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_chunker = { workspace = true }
 sorafs_node = { path = "../sorafs_node" }
@@ -102,6 +103,7 @@ sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 reqwest = { workspace = true, features = ["json", "rustls-tls-native-roots"] }
 url = { workspace = true }
 prometheus = { workspace = true, optional = true }
+parity-scale-codec = { version = "3.7.5", default-features = false, features = ["derive"] }
 
 thiserror = { workspace = true }
 displaydoc = { workspace = true }

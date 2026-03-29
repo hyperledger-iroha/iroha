@@ -40,6 +40,132 @@ Last updated: 2026-03-29
   - `cargo build -p irohad --release` with
     `CARGO_TARGET_DIR=/tmp/iroha_target_torii_routefix_release` (pass)
 
+## 2026-03-29 Follow-up: Kaigi CLI privacy-artifact parity and merge-drift cleanup
+- Updated `crates/iroha_cli/src/commands/kaigi.rs` so `kaigi create` and
+  `kaigi end` now accept and forward the optional privacy artifacts required by
+  the current `CreateKaigi` / `EndKaigi` instructions
+  (`commitment`, `nullifier`, `roster_root`, `proof`), and `quickstart` now
+  populates explicit `None` values for those fields.
+- Added shared optional Kaigi privacy-artifact parsing in the CLI plus focused
+  parser tests covering `create`, `end`, and artifact decoding.
+- Fixed two additional merge-drift compile breaks found while revalidating the
+  CLI path:
+  - `crates/iroha_core/src/sumeragi/mod.rs` no longer calls the removed
+    `quorum_recovery_vote_drain_urgent` hook from the worker bridge; and
+  - `crates/iroha/src/client.rs` now handles
+    `TransactionEntrypoint::PrivateKaigi(_)` in committed-transaction hash
+    matching.
+- Resolved the outstanding merge markers in `status.md` and `roadmap.md` while
+  preserving both branches' notes.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_cli kaigi -- --nocapture` (pass)
+  - `cargo check -p iroha_cli --bins --tests` (pass)
+
+## 2026-03-29 Follow-up: routed GET filters keep JSON literals as query strings during Torii proxying
+- Fixed the routed read proxy query decoder in `crates/iroha_torii/src/lib.rs`
+  so proxied GET parameters now use the same scalar coercion rules as the
+  normal `NoritoQuery` path instead of eagerly decoding each value as JSON.
+- This restores the intended validation flow for compact `filter=` query
+  parameters on proxied list endpoints such as `/v1/accounts`: JSON filter
+  literals now stay strings until the route handler canonicalizes and validates
+  them, so dotted/non-canonical I105 account literals are rejected with the
+  underlying canonical-account error instead of `failed to decode proxied query
+  params`.
+- Added a focused routed-read regression in `crates/iroha_torii/src/lib.rs`
+  that locks in round-tripping JSON filter literals as strings across
+  `encode_torii_proxy_query(...)` and `decode_torii_proxy_query(...)`.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib torii_proxy_query_roundtrip_preserves_json_filter_literals_as_strings -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation accounts_listing_filter_rejects_dotted_i105_literals -- --nocapture` (pass)
+
+## 2026-03-29 Full preserved-peer stable reruns on the queued-only / local-trigger-query patch set
+- Reran the full preserved-peer stable permissioned and NPoS izanami soaks on
+  the exact tree that makes queue pressure queued-only and keeps trigger
+  inventory queries local on ingress peers:
+  - permissioned log:
+    `/tmp/izanami_permissioned_queued_only_local_triggers_20260329T125350Z.log`;
+  - NPoS log:
+    `/tmp/izanami_npos_queued_only_local_triggers_20260329T130941Z.log`.
+- Permissioned still failed the strict-progress envelope:
+  - the run stalled at `strict_min_height=364` /
+    `quorum_min_height=364` with `strict_reference_height=367` and no lagging
+    peers, then failed on `no strict block height progress for 600s`;
+  - final summary was `successes=1084`, `failures=402`,
+    `izanami_ingress_failover_total=188`, and
+    `izanami_ingress_endpoint_unhealthy_total=501`; and
+  - the queued-only admission change did eliminate the earlier latent-queue
+    symptom family on this run
+    (`transaction queued for too long=0`,
+    `haven't got tx confirmation within 20s=0`), but the failure mode shifted
+    to immediate ingress churn instead:
+    `PRTRY:QUEUE_FULL=1042`,
+    `no ingress endpoints available=881`,
+    and `plan submission failed=401`.
+- NPoS also still failed the strict-progress envelope, but with a different
+  residual failure shape than the earlier ingress-routing bug:
+  - the run stalled at `strict_min_height=983` /
+    `quorum_min_height=983` with `strict_reference_height=983` and no lagging
+    peers, then failed on `no strict block height progress for 600s`;
+  - final summary was `successes=3020`, `failures=365`,
+    `izanami_ingress_failover_total=289`, and
+    `izanami_ingress_endpoint_unhealthy_total=235`; and
+  - the targeted routing/query symptoms stayed collapsed on this run
+    (`route_unavailable=0`,
+    `operation timed out=0`,
+    `Torii proxy request exhausted hop budget=0`), but the stall still ended
+    with peer HTTP endpoints dropping out instead:
+    `failed to reconcile repeatable trigger state from pinned ingress endpoint=38`
+    and `Connection refused (os error 61)=362`.
+- Net: the queued-only admission fix and local trigger-inventory execution both
+  look real, but they are not sufficient for acceptance. Permissioned now dies
+  as ingress backpressure churn plus converged-height stall, and NPoS now dies
+  as converged-height stall plus endpoint disappearance rather than routed
+  Torii/query timeout collapse.
+
+## 2026-03-29 Follow-up: queue pressure is now queued-only and trigger inventory queries stay local
+- Narrowed the permissioned admission fix to queue-resident work only:
+  - `crates/iroha_core/src/queue.rs` now maintains a queued-hash age index,
+    reports `oldest_queued_tx_age_ms` instead of tracked lifetime age, clears
+    queued age as soon as a transaction leaves the queue for in-flight
+    execution, and rebuilds that index across commit removal / expiry / cull /
+    compaction / queue-hash resync paths; and
+  - `QueuePressureSnapshot::into_backpressure()` plus Torii admission/logging
+    now use `queued_tx_count` for depth and only age-saturate when queued work
+    is still present, so an in-flight-only transaction no longer trips
+    permissioned early shed.
+- Narrowed the NPoS ingress fix to the trigger-reconciliation query path:
+  - `crates/iroha_torii/src/lib.rs` now classifies signed queries internally as
+    `LocalReplicated`, `AuthorityRouted`, or `CrossDataspaceFanout`;
+  - `FindTriggers` and `FindActiveTriggerIds` now execute on the ingress peer
+    with the existing local signed-query handler even when multiple dataspace
+    routes exist, while `Continue` stays on the routed path and all other start
+    queries keep their existing routing/fanout behavior.
+- Added focused regression coverage for the intended root-cause fixes:
+  - queued-age snapshots drop to `0` immediately after dequeue to in-flight
+    while tracked observability stays intact;
+  - in-flight-only transactions no longer keep backpressure depth/age
+    saturated;
+  - local `POST /transaction` admission stays open when the only old work is
+    already in-flight; and
+  - multi-dataspace `FindTriggers` / `FindActiveTriggerIds` requests execute
+    locally without proxy or fanout headers.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib queue_pressure_snapshot_tracks_oldest_age_across_enqueue_and_dequeue -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib backpressure_state_saturates_on_oldest_queue_age -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_old -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib handler_post_transaction_early_sheds_when_queue_age_saturates -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib signed_query_scope_classifies_trigger_inventory_queries_as_local_replicated -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib handler_signed_query_executes_find_triggers_locally_with_multiple_dataspaces -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --lib handler_signed_query_executes_find_active_trigger_ids_locally_with_multiple_dataspaces -- --nocapture` (pass)
+  - `cargo test -p iroha_torii FindTriggers -- --nocapture` (pass)
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami` (pass)
+- Remaining verification gap:
+  - the full preserved-peer stable permissioned and NPoS soaks have not yet
+    been rerun on this exact queued-age/local-trigger-query patch set.
+
 ## 2026-03-29 Follow-up: SoraFS storage-pin integration tests match the current client API again
 - Updated the two direct single-file SoraFS pin callsites in
   `integration_tests/tests/soranet_web_deploy.rs` and

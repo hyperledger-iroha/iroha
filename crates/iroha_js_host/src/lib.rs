@@ -18,7 +18,7 @@ macro_rules! norito_json {
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
-    fmt, fs,
+    fmt, fs, mem,
     num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
@@ -29,6 +29,19 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
+use halo2_proofs::{
+    halo2curves::{
+        ff::PrimeField as _,
+        pasta::{EqAffine as Halo2Curve, Fp as Halo2Scalar},
+    },
+    plonk::{create_proof, keygen_pk, keygen_vk},
+    poly::commitment::ParamsProver,
+    poly::ipa::{
+        commitment::{IPACommitmentScheme, ParamsIPA},
+        multiopen::ProverIPA,
+    },
+    transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
+};
 use iroha::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
@@ -112,6 +125,11 @@ use iroha_primitives::{
     numeric::Numeric,
     soradns::{GatewayHostBindings, derive_gateway_hosts},
 };
+use kaigi_zk::{
+    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit, compute_commitment,
+    compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, empty_roster_root_hash,
+    roster_root_limbs,
+};
 use napi::{
     ValueType,
     bindgen_prelude::{
@@ -165,6 +183,8 @@ use tokio::runtime::Runtime;
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
 const SM2_PUBLIC_KEY_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
+const KAIGI_ROSTER_PUBLIC_INPUTS_DESC: &[u8] = br#"{"schema":"kaigi_roster_current","inputs":["commitment","nullifier","roster_root_limb0","roster_root_limb1","roster_root_limb2","roster_root_limb3"]}"#;
+const ZK1_ENVELOPE_PREFIX: &[u8] = b"ZK1\0";
 
 const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;
 const SORAFS_ALIAS_REFRESH_WINDOW_SECS: u64 = 2 * 60;
@@ -207,6 +227,19 @@ pub struct JsConfidentialKeyset {
     pub ovk: Buffer,
     /// Full view key (fvk).
     pub fvk: Buffer,
+}
+
+/// Proof artefacts required for a privacy-mode Kaigi join.
+#[napi(object)]
+pub struct JsKaigiRosterJoinProof {
+    /// Commitment digest bound into the Kaigi roster.
+    pub commitment: Buffer,
+    /// Join nullifier digest used for replay protection.
+    pub nullifier: Buffer,
+    /// Roster root that the proof binds to.
+    pub roster_root: Buffer,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
 }
 
 /// Canonical SM2 fixture describing deterministic signing outputs.
@@ -505,6 +538,186 @@ pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi:
 pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
     let digest = blake3_hash(payload.as_ref());
     Ok(Buffer::from(digest.as_bytes().to_vec()))
+}
+
+fn derive_kaigi_scalar_u64(seed: &[u8], label: &[u8]) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"iroha-js:kaigi:roster-join:v1");
+    hasher.update(label);
+    hasher.update(seed);
+    let digest = hasher.finalize();
+    let mut scalar = [0u8; 8];
+    scalar.copy_from_slice(&digest.as_bytes()[..8]);
+    let value = u64::from_le_bytes(scalar);
+    if value == 0 { 1 } else { value }
+}
+
+fn parse_kaigi_roster_root_hex(value: Option<String>) -> napi::Result<Hash> {
+    let Some(raw) = value.map(|entry| entry.trim().to_owned()) else {
+        return Ok(empty_roster_root_hash());
+    };
+    if raw.is_empty() {
+        return Ok(empty_roster_root_hash());
+    }
+    let trimmed = raw.strip_prefix("0x").unwrap_or(raw.as_str());
+    let decoded = hex::decode(trimmed).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("rosterRootHex must be valid hex: {err}"),
+        )
+    })?;
+    if decoded.len() != Hash::LENGTH {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "rosterRootHex must be {} bytes, got {}",
+                Hash::LENGTH,
+                decoded.len()
+            ),
+        ));
+    }
+    let mut bytes = [0u8; Hash::LENGTH];
+    bytes.copy_from_slice(decoded.as_slice());
+    Ok(Hash::prehashed(bytes))
+}
+
+fn zk1_append_tlv(buf: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
+    buf.extend_from_slice(tag);
+    buf.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+    buf.extend_from_slice(payload);
+}
+
+fn zk1_append_proof(buf: &mut Vec<u8>, proof: &[u8]) {
+    zk1_append_tlv(buf, b"PROF", proof);
+}
+
+fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
+    if columns.is_empty() {
+        return;
+    }
+    let rows = columns[0].len();
+    if columns.iter().any(|column| column.len() != rows) {
+        return;
+    }
+
+    let mut payload = Vec::with_capacity(8 + rows * columns.len() * mem::size_of::<Halo2Scalar>());
+    payload.extend_from_slice(&(columns.len() as u32).to_le_bytes());
+    payload.extend_from_slice(&(rows as u32).to_le_bytes());
+    for row in 0..rows {
+        for column in columns {
+            payload.extend_from_slice(column[row].to_repr().as_ref());
+        }
+    }
+    zk1_append_tlv(buf, b"I10P", payload.as_slice());
+}
+
+fn build_kaigi_roster_join_proof_bytes(
+    seed: &[u8],
+    roster_root: &Hash,
+) -> napi::Result<JsKaigiRosterJoinProof> {
+    let account_idx = derive_kaigi_scalar_u64(seed, b"account");
+    let domain_salt = derive_kaigi_scalar_u64(seed, b"domain");
+    let nullifier_seed = derive_kaigi_scalar_u64(seed, b"nullifier");
+
+    let account_scalar = Halo2Scalar::from(account_idx);
+    let domain_scalar = Halo2Scalar::from(domain_salt);
+    let nullifier_scalar = Halo2Scalar::from(nullifier_seed);
+    let root_scalars = roster_root_limbs(roster_root);
+
+    let params: ParamsIPA<Halo2Curve> = ParamsIPA::new(KAIGI_ROSTER_CIRCUIT_K);
+    let verifying_key = keygen_vk(&params, &KaigiRosterJoinCircuit::default()).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to generate Kaigi roster verifying key: {err}"),
+        )
+    })?;
+
+    let circuit = KaigiRosterJoinCircuit::new(
+        account_scalar,
+        domain_scalar,
+        nullifier_scalar,
+        root_scalars,
+    );
+    let proving_key = keygen_pk(&params, verifying_key.clone(), &circuit).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to generate Kaigi roster proving key: {err}"),
+        )
+    })?;
+
+    let commitment_scalar = compute_commitment(account_scalar, domain_scalar);
+    let nullifier_scalar_public = compute_nullifier(account_scalar, nullifier_scalar);
+    let mut instance_columns = vec![vec![commitment_scalar], vec![nullifier_scalar_public]];
+    instance_columns.extend(root_scalars.iter().map(|scalar| vec![*scalar]));
+    let instance_refs: Vec<&[Halo2Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
+    let proof_instances = vec![instance_refs.as_slice()];
+
+    let mut transcript = Blake2bWrite::<_, Halo2Curve, Challenge255<Halo2Curve>>::init(Vec::new());
+    create_proof::<
+        IPACommitmentScheme<Halo2Curve>,
+        ProverIPA<'_, Halo2Curve>,
+        Challenge255<Halo2Curve>,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &proving_key,
+        &[circuit],
+        &proof_instances,
+        OsRng,
+        &mut transcript,
+    )
+    .map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to create Kaigi roster proof: {err}"),
+        )
+    })?;
+    let proof_payload = transcript.finalize();
+
+    let mut zk1 = ZK1_ENVELOPE_PREFIX.to_vec();
+    zk1_append_proof(&mut zk1, proof_payload.as_slice());
+    zk1_append_instances_cols(&mut zk1, instance_refs.as_slice());
+
+    let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
+        backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        circuit_id: KAIGI_ROSTER_BACKEND.to_string(),
+        vk_hash: [0u8; 32],
+        public_inputs: KAIGI_ROSTER_PUBLIC_INPUTS_DESC.to_vec(),
+        proof_bytes: zk1,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&envelope).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to encode Kaigi roster proof envelope: {err}"),
+        )
+    })?;
+
+    Ok(JsKaigiRosterJoinProof {
+        commitment: Buffer::from(compute_commitment_bytes(account_idx, domain_salt).to_vec()),
+        nullifier: Buffer::from(compute_nullifier_bytes(account_idx, nullifier_seed).to_vec()),
+        roster_root: Buffer::from(<[u8; 32]>::from(*roster_root).to_vec()),
+        proof: Buffer::from(encoded),
+    })
+}
+
+/// Build a Halo2/IPA Kaigi roster-join proof for `ZkRosterV1` joins.
+#[napi(js_name = "buildKaigiRosterJoinProof")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_kaigi_roster_join_proof(
+    seed: Uint8Array,
+    roster_root_hex: Option<String>,
+) -> napi::Result<JsKaigiRosterJoinProof> {
+    if seed.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "seed must be non-empty",
+        ));
+    }
+    let roster_root = parse_kaigi_roster_root_hex(roster_root_hex)?;
+    build_kaigi_roster_join_proof_bytes(seed.as_ref(), &roster_root)
 }
 
 /// Generate an Ed25519 key pair using `iroha_crypto`.
@@ -5682,7 +5895,25 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             format!("CreateKaigi.call parse error: {err}"),
                         )
                     })?;
-                    let instruction = CreateKaigi { call };
+                    let commitment = parse_optional_commitment(
+                        create_fields.remove("commitment"),
+                        "CreateKaigi",
+                    )?;
+                    let nullifier =
+                        parse_optional_nullifier(create_fields.remove("nullifier"), "CreateKaigi")?;
+                    let roster_root = parse_optional_hash(
+                        create_fields.remove("roster_root"),
+                        "CreateKaigi.roster_root",
+                    )?;
+                    let proof =
+                        parse_optional_base64(create_fields.remove("proof"), "CreateKaigi.proof")?;
+                    let instruction = CreateKaigi {
+                        call,
+                        commitment,
+                        nullifier,
+                        roster_root,
+                        proof,
+                    };
                     return Ok(Box::new(instruction).into_instruction_box());
                 }
                 if let Some(json::Value::Object(mut join_fields)) = kaigi_map.remove("JoinKaigi") {
@@ -5767,13 +5998,27 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     })?;
                     let call_id: KaigiId =
                         json::from_value(call_id_value).map_err(norito_to_napi)?;
-                    let ended_at = end_fields
-                        .remove("ended_at_ms")
-                        .map(|value| json::from_value(value).map_err(norito_to_napi))
-                        .transpose()?;
+                    let ended_at = match end_fields.remove("ended_at_ms") {
+                        None | Some(json::Value::Null) => None,
+                        Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                    };
+                    let commitment =
+                        parse_optional_commitment(end_fields.remove("commitment"), "EndKaigi")?;
+                    let nullifier =
+                        parse_optional_nullifier(end_fields.remove("nullifier"), "EndKaigi")?;
+                    let roster_root = parse_optional_hash(
+                        end_fields.remove("roster_root"),
+                        "EndKaigi.roster_root",
+                    )?;
+                    let proof =
+                        parse_optional_base64(end_fields.remove("proof"), "EndKaigi.proof")?;
                     let end = EndKaigi {
                         call_id,
                         ended_at_ms: ended_at,
+                        commitment,
+                        nullifier,
+                        roster_root,
+                        proof,
                     };
                     return Ok(Box::new(end).into_instruction_box());
                 }
@@ -7209,6 +7454,22 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "call".to_owned(),
             json::to_value(create.call()).map_err(norito_to_napi)?,
         );
+        payload.insert(
+            "commitment".to_owned(),
+            optional_commitment_to_json(create.commitment().as_ref()),
+        );
+        payload.insert(
+            "nullifier".to_owned(),
+            optional_nullifier_to_json(create.nullifier().as_ref()),
+        );
+        payload.insert(
+            "roster_root".to_owned(),
+            optional_hash_to_json(create.roster_root().as_ref()),
+        );
+        payload.insert(
+            "proof".to_owned(),
+            optional_proof_to_json(create.proof().as_ref()),
+        );
         return Ok(kaigi_json_value(
             "CreateKaigi",
             json::Value::Object(payload),
@@ -7279,6 +7540,22 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         payload.insert(
             "ended_at_ms".to_owned(),
             json::to_value(end.ended_at_ms()).map_err(norito_to_napi)?,
+        );
+        payload.insert(
+            "commitment".to_owned(),
+            optional_commitment_to_json(end.commitment().as_ref()),
+        );
+        payload.insert(
+            "nullifier".to_owned(),
+            optional_nullifier_to_json(end.nullifier().as_ref()),
+        );
+        payload.insert(
+            "roster_root".to_owned(),
+            optional_hash_to_json(end.roster_root().as_ref()),
+        );
+        payload.insert(
+            "proof".to_owned(),
+            optional_proof_to_json(end.proof().as_ref()),
         );
         return Ok(kaigi_json_value("EndKaigi", json::Value::Object(payload)));
     }
@@ -7832,6 +8109,22 @@ mod tests {
             Value::String(s) => s,
             other => panic!("expected hash literal string, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_kaigi_roster_join_proof_emits_envelope() {
+        let proof = build_kaigi_roster_join_proof_bytes(&[0x42; 32], &empty_roster_root_hash())
+            .expect("build proof");
+
+        assert_eq!(proof.commitment.len(), Hash::LENGTH);
+        assert_eq!(proof.nullifier.len(), Hash::LENGTH);
+        assert_eq!(proof.roster_root.len(), Hash::LENGTH);
+        assert!(!proof.proof.is_empty());
+
+        let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(proof.proof.as_ref()).expect("decode envelope");
+        assert_eq!(envelope.circuit_id, KAIGI_ROSTER_BACKEND);
+        assert_eq!(envelope.public_inputs, KAIGI_ROSTER_PUBLIC_INPUTS_DESC);
     }
 
     fn sample_hash(byte: u8) -> [u8; Hash::LENGTH] {
@@ -9403,7 +9696,22 @@ mod tests {
             room_policy: KaigiRoomPolicy::Authenticated,
             relay_manifest: Some(manifest),
         };
-        let instruction: InstructionBox = Box::new(CreateKaigi { call }).into_instruction_box();
+        let commitment = KaigiParticipantCommitment {
+            commitment: Hash::new(b"commitment::host"),
+            alias_tag: Some("host".to_owned()),
+        };
+        let nullifier = KaigiParticipantNullifier {
+            digest: Hash::new(b"nullifier::host"),
+            issued_at_ms: 7,
+        };
+        let instruction: InstructionBox = Box::new(CreateKaigi {
+            call,
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
+            roster_root: Some(Hash::new(b"roster-root")),
+            proof: Some(vec![0xFA, 0xCE]),
+        })
+        .into_instruction_box();
 
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi instruction");
@@ -9545,9 +9853,21 @@ mod tests {
     #[test]
     fn end_kaigi_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
+        let commitment = KaigiParticipantCommitment {
+            commitment: Hash::new(b"commitment::host"),
+            alias_tag: Some("host".to_owned()),
+        };
+        let nullifier = KaigiParticipantNullifier {
+            digest: Hash::new(b"nullifier::end"),
+            issued_at_ms: 99,
+        };
         let end = EndKaigi {
             call_id: call_id.clone(),
             ended_at_ms: Some(1_700_222_000_000),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
+            roster_root: Some(Hash::new(b"roster-root")),
+            proof: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
         };
         let instruction: InstructionBox = Box::new(end).into_instruction_box();
 

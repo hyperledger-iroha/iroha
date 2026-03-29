@@ -32,6 +32,8 @@ sorafs_chunker = { workspace = true }
 sorafs_orchestrator = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 iroha = { workspace = true }
+kaigi_zk = { path = "../kaigi_zk" }
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 bs58 = "0.5.1"
 
 [dev-dependencies]

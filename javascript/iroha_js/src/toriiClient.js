@@ -140,6 +140,7 @@ const EVIDENCE_PHASE_VALUES = new Set(["Prepare", "Commit", "NewView"]);
 
 const KAIGI_HEALTH_STATUS_VALUES = new Set(["healthy", "degraded", "unavailable"]);
 const KAIGI_EVENT_KIND_VALUES = new Set(["registration", "health"]);
+const KAIGI_CALL_EVENT_KIND_VALUES = new Set(["roster_updated", "ended"]);
 const SORAFS_REPLICATION_STATUS_VALUES = new Set(["pending", "completed", "expired"]);
 const SORAFS_PIN_STATUS_VALUES = new Set(["pending", "approved", "retired"]);
 const UAID_MANIFEST_STATUS_VALUES = new Set(["Pending", "Active", "Expired", "Revoked"]);
@@ -5972,6 +5973,90 @@ export class ToriiClient {
       "streamSumeragiStatus",
     );
     return this._streamSse("/v1/sumeragi/status/sse", { lastEventId, signal });
+  }
+
+  /**
+   * Fetch the current Kaigi call view (`GET /v1/kaigi/calls/{call_id}`).
+   * @param {string} callId
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<KaigiCallView | null>}
+   */
+  async getKaigiCall(callId, options = {}) {
+    const normalizedCallId = requireNonEmptyString(callId, "callId");
+    const { signal } = normalizeSignalOnlyOption(options, "getKaigiCall");
+    const response = await this._request(
+      "GET",
+      `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}`,
+      { headers: { Accept: "application/json" }, signal },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("kaigi call endpoint returned no payload");
+    }
+    return normalizeKaigiCallView(payload);
+  }
+
+  /**
+   * Fetch committed Kaigi signal metadata for a call (`GET /v1/kaigi/calls/{call_id}/signals`).
+   * @param {string} callId
+   * @param {KaigiCallSignalsOptions} [options]
+   * @returns {Promise<KaigiCallSignalsList>}
+   */
+  async listKaigiCallSignals(callId, options = {}) {
+    const normalizedCallId = requireNonEmptyString(callId, "callId");
+    const { signal, params } = buildKaigiCallSignalsQuery(options);
+    const response = await this._request(
+      "GET",
+      `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}/signals`,
+      {
+        headers: { Accept: "application/json" },
+        params,
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeKaigiCallSignalsList(payload);
+  }
+
+  /**
+   * Stream Kaigi call lifecycle updates (`/v1/kaigi/calls/{call_id}/events`).
+   * @param {string} callId
+   * @param {KaigiCallEventsOptions} [options]
+   * @returns {AsyncGenerator<SseEvent<KaigiCallEventPayload>, void, unknown>}
+   */
+  streamKaigiCallEvents(callId, options) {
+    const normalizedCallId = requireNonEmptyString(callId, "callId");
+    const { signal, lastEventId } = normalizeEventStreamOptions(
+      options,
+      "streamKaigiCallEvents",
+      ["kind"],
+    );
+    const params = buildKaigiCallEventParams(options);
+    const iterator = this._streamSse(
+      `/v1/kaigi/calls/${encodeURIComponent(normalizedCallId)}/events`,
+      {
+        params,
+        lastEventId,
+        signal,
+      },
+    );
+    return (async function* mapEvents() {
+      for await (const event of iterator) {
+        let data = event.data;
+        if (data && typeof data === "object") {
+          data = normalizeKaigiCallEventData(data);
+        }
+        yield {
+          ...event,
+          data,
+        };
+      }
+    })();
   }
 
   /**
@@ -21495,6 +21580,242 @@ function normalizeKaigiRelayHealthSnapshot(payload) {
   };
 }
 
+function normalizeKaigiCallEventRef(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    call_id: requireNonEmptyString(record.call_id, `${context}.call_id`),
+    domain: requireNonEmptyString(record.domain, `${context}.domain`),
+    call_name: requireNonEmptyString(record.call_name, `${context}.call_name`),
+  };
+}
+
+function normalizeKaigiCallView(payload) {
+  const record = ensureRecord(payload ?? {}, "kaigi call");
+  const metadata = ensureRecord(record.metadata ?? {}, "kaigi call.metadata");
+  const relayManifest =
+    record.relay_manifest === null || record.relay_manifest === undefined
+      ? undefined
+      : ensureRecord(record.relay_manifest, "kaigi call.relay_manifest");
+  return {
+    call_id: requireNonEmptyString(record.call_id, "kaigi call.call_id"),
+    domain: requireNonEmptyString(record.domain, "kaigi call.domain"),
+    call_name: requireNonEmptyString(record.call_name, "kaigi call.call_name"),
+    host_account_id:
+      record.host_account_id === null || record.host_account_id === undefined
+        ? undefined
+        : requireNonEmptyString(record.host_account_id, "kaigi call.host_account_id"),
+    billing_account_id:
+      record.billing_account_id === null || record.billing_account_id === undefined
+        ? undefined
+        : requireNonEmptyString(
+            record.billing_account_id,
+            "kaigi call.billing_account_id",
+          ),
+    title:
+      record.title === null || record.title === undefined
+        ? undefined
+        : String(record.title),
+    description:
+      record.description === null || record.description === undefined
+        ? undefined
+        : String(record.description),
+    max_participants:
+      record.max_participants === null || record.max_participants === undefined
+        ? undefined
+        : ToriiClient._normalizeUnsignedInteger(
+            record.max_participants,
+            "kaigi call.max_participants",
+            { allowZero: true },
+          ),
+    gas_rate_per_minute: ToriiClient._normalizeUnsignedInteger(
+      record.gas_rate_per_minute ?? 0,
+      "kaigi call.gas_rate_per_minute",
+      { allowZero: true },
+    ),
+    metadata,
+    scheduled_start_ms:
+      record.scheduled_start_ms === null || record.scheduled_start_ms === undefined
+        ? undefined
+        : ToriiClient._normalizeUnsignedInteger(
+            record.scheduled_start_ms,
+            "kaigi call.scheduled_start_ms",
+            { allowZero: true },
+          ),
+    privacy_mode: requireNonEmptyString(
+      record.privacy_mode,
+      "kaigi call.privacy_mode",
+    ).toLowerCase(),
+    room_policy: requireNonEmptyString(
+      record.room_policy,
+      "kaigi call.room_policy",
+    ).toLowerCase(),
+    relay_manifest: relayManifest,
+    roster_root_hex: normalizeHex32String(
+      record.roster_root_hex,
+      "kaigi call.roster_root_hex",
+    ),
+    participant_count: ToriiClient._normalizeUnsignedInteger(
+      record.participant_count ?? 0,
+      "kaigi call.participant_count",
+      { allowZero: true },
+    ),
+    commitment_count: ToriiClient._normalizeUnsignedInteger(
+      record.commitment_count ?? 0,
+      "kaigi call.commitment_count",
+      { allowZero: true },
+    ),
+    nullifier_count: ToriiClient._normalizeUnsignedInteger(
+      record.nullifier_count ?? 0,
+      "kaigi call.nullifier_count",
+      { allowZero: true },
+    ),
+    usage_commitment_count: ToriiClient._normalizeUnsignedInteger(
+      record.usage_commitment_count ?? 0,
+      "kaigi call.usage_commitment_count",
+      { allowZero: true },
+    ),
+    status: requireNonEmptyString(record.status, "kaigi call.status").toLowerCase(),
+    created_at_ms: ToriiClient._normalizeUnsignedInteger(
+      record.created_at_ms ?? 0,
+      "kaigi call.created_at_ms",
+      { allowZero: true },
+    ),
+    ended_at_ms:
+      record.ended_at_ms === null || record.ended_at_ms === undefined
+        ? undefined
+        : ToriiClient._normalizeUnsignedInteger(
+            record.ended_at_ms,
+            "kaigi call.ended_at_ms",
+            { allowZero: true },
+          ),
+    total_duration_ms: ToriiClient._normalizeUnsignedInteger(
+      record.total_duration_ms ?? 0,
+      "kaigi call.total_duration_ms",
+      { allowZero: true },
+    ),
+    total_billed_gas: ToriiClient._normalizeUnsignedInteger(
+      record.total_billed_gas ?? 0,
+      "kaigi call.total_billed_gas",
+      { allowZero: true },
+    ),
+    segments_recorded: ToriiClient._normalizeUnsignedInteger(
+      record.segments_recorded ?? 0,
+      "kaigi call.segments_recorded",
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeKaigiCallSignal(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    entrypoint_hash: requireNonEmptyString(
+      record.entrypoint_hash,
+      `${context}.entrypoint_hash`,
+    ),
+    authority:
+      record.authority === null || record.authority === undefined
+        ? undefined
+        : requireNonEmptyString(record.authority, `${context}.authority`),
+    timestamp_ms:
+      record.timestamp_ms === null || record.timestamp_ms === undefined
+        ? undefined
+        : ToriiClient._normalizeUnsignedInteger(
+            record.timestamp_ms,
+            `${context}.timestamp_ms`,
+            { allowZero: true },
+          ),
+    call_id: requireNonEmptyString(record.call_id, `${context}.call_id`),
+    signal_kind: requireNonEmptyString(
+      record.signal_kind,
+      `${context}.signal_kind`,
+    ).toLowerCase(),
+    host_account_id:
+      record.host_account_id === null || record.host_account_id === undefined
+        ? undefined
+        : requireNonEmptyString(record.host_account_id, `${context}.host_account_id`),
+    participant_account_id:
+      record.participant_account_id === null || record.participant_account_id === undefined
+        ? undefined
+        : requireNonEmptyString(
+            record.participant_account_id,
+            `${context}.participant_account_id`,
+          ),
+    created_at_ms: ToriiClient._normalizeUnsignedInteger(
+      record.created_at_ms ?? 0,
+      `${context}.created_at_ms`,
+      { allowZero: true },
+    ),
+    metadata: ensureRecord(record.metadata ?? {}, `${context}.metadata`),
+  };
+}
+
+function normalizeKaigiCallSignalsList(payload) {
+  const record = ensureRecord(payload ?? {}, "kaigi call signals");
+  const rawItems = Array.isArray(record.items) ? record.items : [];
+  return {
+    total: ToriiClient._normalizeUnsignedInteger(
+      record.total ?? rawItems.length,
+      "kaigi call signals.total",
+      { allowZero: true },
+    ),
+    items: rawItems.map((entry, index) =>
+      normalizeKaigiCallSignal(entry, `kaigi call signals.items[${index}]`),
+    ),
+  };
+}
+
+function normalizeKaigiCallEventData(payload) {
+  const record = ensureRecord(payload, "kaigi call event");
+  const kind = requireNonEmptyString(record.kind, "kaigi call event.kind").toLowerCase();
+  if (!KAIGI_CALL_EVENT_KIND_VALUES.has(kind)) {
+    throw new TypeError("kaigi call event.kind must be roster_updated or ended");
+  }
+  const call = normalizeKaigiCallEventRef(record.call, "kaigi call event.call");
+  if (kind === "ended") {
+    return {
+      kind,
+      call,
+      status: requireNonEmptyString(record.status, "kaigi call event.status").toLowerCase(),
+      ended_at_ms: ToriiClient._normalizeUnsignedInteger(
+        record.ended_at_ms ?? 0,
+        "kaigi call event.ended_at_ms",
+        { allowZero: true },
+      ),
+    };
+  }
+  return {
+    kind,
+    call,
+    privacy_mode: requireNonEmptyString(
+      record.privacy_mode,
+      "kaigi call event.privacy_mode",
+    ).toLowerCase(),
+    participant_count: ToriiClient._normalizeUnsignedInteger(
+      record.participant_count ?? 0,
+      "kaigi call event.participant_count",
+      { allowZero: true },
+    ),
+    commitment_count: ToriiClient._normalizeUnsignedInteger(
+      record.commitment_count ?? 0,
+      "kaigi call event.commitment_count",
+      { allowZero: true },
+    ),
+    nullifier_count: ToriiClient._normalizeUnsignedInteger(
+      record.nullifier_count ?? 0,
+      "kaigi call event.nullifier_count",
+      { allowZero: true },
+    ),
+    roster_root_hex:
+      record.roster_root_hex === null || record.roster_root_hex === undefined
+        ? undefined
+        : normalizeHex32String(
+            record.roster_root_hex,
+            "kaigi call event.roster_root_hex",
+          ),
+  };
+}
+
 function normalizeKaigiRelayEventData(payload) {
   const record = ensureRecord(payload, "kaigi relay event");
   const kind = requireNonEmptyString(record.kind, "kaigi relay event.kind").toLowerCase();
@@ -21587,6 +21908,81 @@ function buildKaigiRelayEventParams(options = {}) {
       const token = requireNonEmptyString(entry, "kaigiRelayEvents.kind").toLowerCase();
       if (!KAIGI_EVENT_KIND_VALUES.has(token)) {
         throw new TypeError("kaigiRelayEvents.kind must be registration or health");
+      }
+      normalized.push(token);
+    }
+    if (normalized.length > 0) {
+      params.kind = normalized.join(",");
+    }
+  }
+  return Object.keys(params).length === 0 ? undefined : params;
+}
+
+function buildKaigiCallSignalsQuery(options = {}) {
+  const normalizedOptions =
+    options === undefined || options === null
+      ? undefined
+      : requirePlainObjectOption(options, "kaigi call signals options", {
+          message: "must be an object",
+        });
+  if (normalizedOptions) {
+    assertSupportedOptionKeys(
+      normalizedOptions,
+      new Set(["afterTimestampMs", "after_timestamp_ms", "limit", "offset", "signal"]),
+      "kaigi call signals options",
+    );
+  }
+  const { signal } = normalizeSignalOption(normalizedOptions, "listKaigiCallSignals");
+  const source = normalizedOptions ?? {};
+  const params = {};
+  const afterTimestampMs =
+    source.afterTimestampMs !== undefined
+      ? source.afterTimestampMs
+      : source.after_timestamp_ms;
+  if (afterTimestampMs !== undefined && afterTimestampMs !== null) {
+    params.after_timestamp_ms = ToriiClient._normalizeUnsignedInteger(
+      afterTimestampMs,
+      "kaigiCallSignals.afterTimestampMs",
+      { allowZero: true },
+    );
+  }
+  if (source.limit !== undefined && source.limit !== null) {
+    params.limit = ToriiClient._normalizeUnsignedInteger(
+      source.limit,
+      "kaigiCallSignals.limit",
+      { allowZero: false },
+    );
+  }
+  if (source.offset !== undefined && source.offset !== null) {
+    params.offset = ToriiClient._normalizeUnsignedInteger(
+      source.offset,
+      "kaigiCallSignals.offset",
+      { allowZero: true },
+    );
+  }
+  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
+}
+
+function buildKaigiCallEventParams(options = {}) {
+  const normalizedOptions =
+    options === undefined
+      ? {}
+      : requirePlainObjectOption(options, "kaigi call event options", {
+          message: "must be an object",
+        });
+  const params = {};
+  if (normalizedOptions.kind !== undefined && normalizedOptions.kind !== null) {
+    const values = Array.isArray(normalizedOptions.kind)
+      ? normalizedOptions.kind
+      : String(normalizedOptions.kind)
+          .split(",")
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0);
+    const normalized = [];
+    for (const entry of values) {
+      const token = requireNonEmptyString(entry, "kaigiCallEvents.kind").toLowerCase();
+      if (!KAIGI_CALL_EVENT_KIND_VALUES.has(token)) {
+        throw new TypeError("kaigiCallEvents.kind must be roster_updated or ended");
       }
       normalized.push(token);
     }

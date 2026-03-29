@@ -369,6 +369,7 @@ fn minimal_config_snapshot() {
                     dns_push_interval: 90s,
                     exit_class: "standard",
                     meter_family: "soranet.vpn.standard",
+                    helper_ticket_secret: None,
                 },
                 lane_profile: Core,
                 require_sm_handshake_match: true,

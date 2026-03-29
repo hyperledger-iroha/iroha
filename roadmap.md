@@ -28,6 +28,110 @@ Open work for this slice now remains:
   Taira `/status` output after restart are a telemetry/reporting bug or a
   deeper NPoS snapshot issue.
 
+Latest sync (2026-03-29 Kaigi CLI privacy-artifact parity + merge-drift cleanup):
+the reported `iroha_cli` Kaigi compile break is closed: the CLI now matches the
+privacy-aware `CreateKaigi` / `EndKaigi` ISI surface again, and the extra merge
+drift uncovered during validation is fixed too.
+
+- updated `crates/iroha_cli/src/commands/kaigi.rs` so `create` and `end`
+  accept/forward the same optional privacy artifacts as the data model, while
+  `quickstart` now fills explicit `None` values for the new fields; and
+- added focused `iroha_cli` Kaigi parser/artifact tests, then revalidated with
+  `cargo test -p iroha_cli kaigi -- --nocapture` and
+  `cargo check -p iroha_cli --bins --tests`; and
+- fixed the stale `quorum_recovery_vote_drain_urgent` worker bridge in
+  `crates/iroha_core/src/sumeragi/mod.rs` and the missing
+  `TransactionEntrypoint::PrivateKaigi(_)` match arm in
+  `crates/iroha/src/client.rs` that surfaced during the targeted validation
+  pass.
+
+Open work for this slice now remains:
+- rerun a broader workspace validation pass when the next longer compile window
+  is available; this fix was revalidated on `iroha_cli` only.
+
+Latest sync (2026-03-29 Torii proxied list-filter decoding):
+the immediate routed-read regression on `/v1/accounts` is closed: proxied GET
+query params now keep compact JSON filter literals as strings, matching the
+normal query extractor semantics instead of failing early during proxy decode.
+
+- updated `crates/iroha_torii/src/lib.rs` so `decode_torii_proxy_query(...)`
+  uses scalar query coercion for proxied GET params, which preserves
+  `ListFilterParams.filter` as a string and lets the downstream account-id
+  canonicalization path return the expected I105 validation error; and
+- added a focused regression in the Torii routed-read test module plus reran
+  the originally failing integration case
+  `accounts_listing_filter_rejects_dotted_i105_literals`.
+
+Open work for this slice now remains:
+- rerun a broader `integration_tests` or workspace validation pass when the
+  next longer test window is available; this fix was verified with the routed
+  Torii unit test and the single reported integration regression only.
+
+Latest sync (2026-03-29 full preserved-peer stable reruns on the queued-only / local-trigger-query patch set):
+the node-side root-cause fixes did land, but full-envelope acceptance still
+fails. The old symptom families stayed collapsed on these reruns, yet both
+modes still ended in converged-height stalls with different residual causes.
+
+- permissioned rerun log:
+  `/tmp/izanami_permissioned_queued_only_local_triggers_20260329T125350Z.log`
+  failed at `strict_min_height=364` with no lagging peers and
+  `successes=1084` / `failures=402`; the earlier latent-queue symptoms stayed
+  at zero, but ingress churn dominated instead with
+  `PRTRY:QUEUE_FULL=1042`,
+  `no ingress endpoints available=881`,
+  and `plan submission failed=401`; and
+- NPoS rerun log:
+  `/tmp/izanami_npos_queued_only_local_triggers_20260329T130941Z.log`
+  failed at `strict_min_height=983` with no lagging peers and
+  `successes=3020` / `failures=365`; the earlier routing/query symptoms stayed
+  at zero (`route_unavailable=0`,
+  `operation timed out=0`,
+  `Torii proxy request exhausted hop budget=0`), but the terminal stall still
+  came with endpoint loss instead:
+  `failed to reconcile repeatable trigger state from pinned ingress endpoint=38`
+  and `Connection refused (os error 61)=362`.
+
+Open work for this slice now remains:
+- diagnose why the permissioned preserved-peer stable run still collapses into
+  immediate Torii queue-full rejection and endpoint-unhealthy churn even after
+  age saturation was narrowed to queued work only; and
+- diagnose why the NPoS preserved-peer stable run now stalls with peers no
+  longer serving HTTP capabilities/query endpoints, even though the earlier
+  routed Torii/query-timeout symptom family stayed at zero; and
+- rerun both full envelopes only after that residual ingress/node-liveness
+  failure class is addressed.
+
+Latest sync (2026-03-29 queued-only queue pressure + local trigger inventory query execution):
+the node-side root-cause slice is now implemented and revalidated on focused
+tests/builds: queue pressure/backpressure describe queued work only, and
+trigger inventory queries no longer fan out or proxy across dataspace routes.
+
+- `crates/iroha_core/src/queue.rs` now tracks queued residence separately from
+  tracked lifetime, reports `oldest_queued_tx_age_ms`, clears queued age on
+  dequeue-to-in-flight, and makes backpressure depth use `queued_tx_count`
+  instead of tracked count; and
+- `crates/iroha_torii/src/lib.rs` now classifies signed queries as
+  `LocalReplicated`, `AuthorityRouted`, or `CrossDataspaceFanout`, with
+  `FindTriggers` / `FindActiveTriggerIds` executing locally on the ingress peer
+  while `Continue` stays routed and the rest of the existing routing behavior
+  remains in place; and
+- focused queue/Torii regressions plus
+  `cargo test -p iroha_torii FindTriggers -- --nocapture` and
+  `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  all passed on the current tree.
+
+Open work for this slice now remains:
+- rerun the full preserved-peer stable permissioned soak on this exact tree and
+  confirm whether queued-only age shedding materially collapses
+  `PRTRY:QUEUE_FULL`, `plan submission failed`, and
+  `no ingress endpoints available` without regressing height or cadence; and
+- rerun the full preserved-peer stable NPoS soak on this exact tree and confirm
+  whether local trigger-inventory execution materially collapses pinned-ingress
+  `/query` timeouts and hop-budget exhaustion during trigger reconciliation; and
+- only if either soak still shows a real routed-Torii timeout after trigger
+  inventory queries stay local, reopen Torii proxy timeout/candidate policy as
+  a separate follow-up slice.
+
 Latest sync (2026-03-29 SoraFS storage-pin integration-test callers):
 the two direct single-file SoraFS pin integration tests now match the current
 three-argument `Client::post_sorafs_storage_pin(...)` API again, so the
