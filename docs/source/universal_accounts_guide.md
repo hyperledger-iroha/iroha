@@ -94,6 +94,9 @@ Universal-account rollout does not change the canonical account identity model:
 - `linked_domains` on stored account records is derived state from the
   account-domain indexes. It describes currently materialized links for that
   subject; it is not part of the canonical identifier.
+- Public account lookup follows that split: alias queries stay public, while
+  raw subject-domain membership remains an internal index/detail instead of a
+  dedicated account query surface.
 
 Implementation rule for operators, SDKs, and tests: start from the canonical
 `AccountId`, then add alias leases, dataspace/domain permissions, and explicit

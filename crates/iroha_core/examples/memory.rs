@@ -22,7 +22,7 @@ fn measure_accounts_in_vec() {
 
     let v = (0..N)
         .map(|_| gen_account_in(genesis_domain.id()).0)
-        .map(|id| Account::new(id.to_account_id(domain_id.clone())).into_account())
+        .map(|id| Account::new_in_domain(id.clone(), domain_id.clone()).into_account())
         .collect::<Vec<_>>();
     done(v);
 }
@@ -33,7 +33,7 @@ fn measure_accounts_in_world() {
 
     let accounts = (0..N)
         .map(|_| gen_account_in(genesis_domain.id()).0)
-        .map(|id| Account::new(id.to_account_id(domain_id.clone())).into_account());
+        .map(|id| Account::new_in_domain(id.clone(), domain_id.clone()).into_account());
     let world = World::with_assets([], accounts, [], [], []);
     done(world);
 }
@@ -87,8 +87,9 @@ mod util {
                 .parse()
                 .unwrap();
         let genesis_account_id = AccountId::new(genesis_public_key);
-        let genesis_account = Account::new(
-            genesis_account_id.to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+        let genesis_account = Account::new_in_domain(
+            genesis_account_id.clone(),
+            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
         )
         .build(&genesis_account_id);
         let genesis_domain =

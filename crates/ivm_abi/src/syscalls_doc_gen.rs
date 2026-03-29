@@ -536,6 +536,12 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
         gas: "-",
     },
     crate::syscalls::SyscallDoc {
+        number: 128,
+        args: "-",
+        ret: "u64=0",
+        gas: "-",
+    },
+    crate::syscalls::SyscallDoc {
         number: 144,
         args: "r10=&Blob(message)",
         ret: "r10=ptr (&Blob(digest))",
@@ -610,7 +616,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc {
         number: 164,
         args: "-",
-        ret: "ptr (ScopedAccountId in INPUT)",
+        ret: "ptr (AccountId in INPUT)",
         gas: "asset:gas/G_get_auth@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
@@ -627,9 +633,15 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 167,
-        args: "r10=&Name(label), r11=&DomainId(domain)",
-        ret: "ptr (&ScopedAccountId in INPUT)",
+        args: "r10=&Blob(alias literal)",
+        ret: "ptr (&AccountId in INPUT)",
         gas: "asset:gas/G_alias_resolve@ivm.core/v2",
+    },
+    crate::syscalls::SyscallDoc {
+        number: 168,
+        args: "-",
+        ret: "u64=0",
+        gas: "-",
     },
     crate::syscalls::SyscallDoc {
         number: 176,
@@ -707,6 +719,18 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
         number: 199,
         args: "r10=&SoracloudRequest(EgressFetch)",
         ret: "r10=&SoracloudResponse(EgressFetch)",
+        gas: "-",
+    },
+    crate::syscalls::SyscallDoc {
+        number: 200,
+        args: "r10=&SoracloudRequest(ReadConfig)",
+        ret: "r10=&SoracloudResponse(ReadConfig)",
+        gas: "-",
+    },
+    crate::syscalls::SyscallDoc {
+        number: 201,
+        args: "r10=&SoracloudRequest(ReadSecretEnvelope)",
+        ret: "r10=&SoracloudResponse(ReadSecretEnvelope)",
         gas: "-",
     },
     crate::syscalls::SyscallDoc {

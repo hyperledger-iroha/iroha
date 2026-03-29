@@ -95,12 +95,12 @@ const IZANAMI_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 80;
 const IZANAMI_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 1;
 const IZANAMI_NPOS_TIMEOUT_DA_MIN_MS: u64 = 1;
 const IZANAMI_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 60;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 90;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 120;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 320;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS: u64 = 320;
-const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 20;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PROPOSE_MIN_MS: u64 = 50;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PREVOTE_MIN_MS: u64 = 70;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_PRECOMMIT_MIN_MS: u64 = 90;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_COMMIT_MIN_MS: u64 = 220;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_DA_MIN_MS: u64 = 220;
+const IZANAMI_SHARED_HOST_SOAK_NPOS_TIMEOUT_AGGREGATOR_MIN_MS: u64 = 10;
 const IZANAMI_PIPELINE_DYNAMIC_PREPASS: bool = true;
 const IZANAMI_PIPELINE_ACCESS_SET_CACHE_ENABLED: bool = true;
 const IZANAMI_PIPELINE_PARALLEL_OVERLAY: bool = true;
@@ -137,12 +137,12 @@ const IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS: u64 = 1_200;
 const IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS: u64 = 3_600;
 const IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR: f64 = 5.0;
 const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_FLOOR: usize = 8;
-const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 8;
+const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 4;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
-const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 180;
+const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 150;
 const IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 500;
+const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 300;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS: i64 = 2_000;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 800;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 2_000;
@@ -342,6 +342,23 @@ impl EndpointHealthPool {
         self.run_with_failover_at(op_name, Instant::now(), operation)
     }
 
+    fn run_with_failover_excluding<T, F>(
+        &self,
+        op_name: &'static str,
+        excluded_endpoint_idx: usize,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut(usize, &str) -> Result<T>,
+    {
+        self.run_with_failover_excluding_at(
+            op_name,
+            excluded_endpoint_idx,
+            Instant::now(),
+            operation,
+        )
+    }
+
     fn select_endpoint(&self, op_name: &'static str) -> Result<usize> {
         self.select_endpoint_at(op_name, Instant::now())
     }
@@ -486,6 +503,90 @@ impl EndpointHealthPool {
             }),
             None => Err(eyre!(
                 "ingress operation `{op_name}` failed without making an endpoint attempt"
+            )),
+        }
+    }
+
+    fn run_with_failover_excluding_at<T, F>(
+        &self,
+        op_name: &'static str,
+        excluded_endpoint_idx: usize,
+        now: Instant,
+        mut operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut(usize, &str) -> Result<T>,
+    {
+        let attempt_order: Vec<_> = self
+            .attempt_order_at(now)
+            .into_iter()
+            .filter(|idx| *idx != excluded_endpoint_idx)
+            .collect();
+        if attempt_order.is_empty() {
+            return Err(eyre!(
+                "no alternate ingress endpoints available for operation `{op_name}`"
+            ));
+        }
+        let max_attempts = self.config.max_attempts.max(1).min(attempt_order.len());
+        let mut last_error = None;
+        let mut attempted = 0usize;
+        for (attempt_idx, endpoint_idx) in attempt_order.into_iter().take(max_attempts).enumerate()
+        {
+            if attempt_idx > 0 {
+                self.ingress_stats.record_failover();
+            }
+            let label = self
+                .labels
+                .get(endpoint_idx)
+                .map(String::as_str)
+                .unwrap_or("<unknown>");
+            attempted = attempted.saturating_add(1);
+            match operation(endpoint_idx, label) {
+                Ok(value) => {
+                    self.mark_success_at(endpoint_idx, now);
+                    return Ok(value);
+                }
+                Err(err) => {
+                    let failure_class = classify_ingress_failure(&err);
+                    let retryable = failure_class.is_retryable();
+                    let transitioned_unhealthy =
+                        self.mark_failure_at(endpoint_idx, now, failure_class);
+                    if transitioned_unhealthy {
+                        self.ingress_stats.record_endpoint_unhealthy();
+                        warn!(
+                            target: "izanami::ingress",
+                            operation = op_name,
+                            endpoint = label,
+                            attempt = attempt_idx + 1,
+                            failure_class = failure_class.as_str(),
+                            "marking ingress endpoint unhealthy"
+                        );
+                    }
+                    warn!(
+                        target: "izanami::ingress",
+                        ?err,
+                        operation = op_name,
+                        endpoint = label,
+                        attempt = attempt_idx + 1,
+                        failure_class = failure_class.as_str(),
+                        retryable,
+                        "alternate ingress endpoint request failed"
+                    );
+                    last_error = Some(err);
+                    if !retryable {
+                        break;
+                    }
+                }
+            }
+        }
+        match last_error {
+            Some(err) => Err(err).wrap_err_with(|| {
+                format!(
+                    "ingress operation `{op_name}` failed after {attempted} alternate attempt(s)"
+                )
+            }),
+            None => Err(eyre!(
+                "ingress operation `{op_name}` failed without making an alternate endpoint attempt"
             )),
         }
     }
@@ -898,6 +999,28 @@ impl IngressEndpointPool {
             })
     }
 
+    fn run_with_failover_excluding<T, F>(
+        &self,
+        op_name: &'static str,
+        excluded_endpoint_idx: usize,
+        mut operation: F,
+    ) -> Result<(usize, T)>
+    where
+        F: FnMut(&NetworkPeer) -> Result<T>,
+    {
+        let endpoints = Arc::clone(&self.endpoints);
+        self.health.run_with_failover_excluding(
+            op_name,
+            excluded_endpoint_idx,
+            move |endpoint_idx, _label| {
+                let endpoint = endpoints
+                    .get(endpoint_idx)
+                    .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
+                operation(&endpoint.peer).map(|value| (endpoint_idx, value))
+            },
+        )
+    }
+
     fn select_endpoint(&self, op_name: &'static str) -> Result<usize> {
         self.health.select_endpoint(op_name)
     }
@@ -949,6 +1072,14 @@ impl IngressFailureClass {
 
 fn ingress_error_message(error: &color_eyre::Report) -> String {
     format!("{error:#}").to_ascii_lowercase()
+}
+
+fn is_route_unavailable_message(message: &str) -> bool {
+    message.contains("route_unavailable")
+}
+
+fn is_route_unavailable_error(error: &color_eyre::Report) -> bool {
+    is_route_unavailable_message(&ingress_error_message(error))
 }
 
 fn is_idempotent_duplicate_submission_message(message: &str) -> bool {
@@ -2469,7 +2600,9 @@ fn state_updates_require_applied_confirmation(state_updates: &[PlanUpdate]) -> b
     state_updates.iter().any(|update| {
         matches!(
             update,
-            PlanUpdate::RegisterTrigger(_)
+            PlanUpdate::TrackAccount(_)
+                | PlanUpdate::TrackAssetInstance(_)
+                | PlanUpdate::RegisterTrigger(_)
                 | PlanUpdate::RegisterCallTrigger(_)
                 | PlanUpdate::TrackRepeatableTrigger(_)
                 | PlanUpdate::MintTriggerRepetitions { .. }
@@ -3346,7 +3479,7 @@ async fn submit_plan(
     let effective_submission_confirmation =
         effective_submission_confirmation(submission_confirmation, &plan.state_updates);
     let run_trigger_precheck = should_run_trigger_precheck(effective_submission_confirmation);
-    let pinned_trigger_endpoint = if repeatable_trigger_target.is_some() {
+    let mut pinned_trigger_endpoint = if repeatable_trigger_target.is_some() {
         match ingress_pool.select_endpoint("submit_repeatable_trigger_plan") {
             Ok(endpoint_idx) => Some(endpoint_idx),
             Err(err) => {
@@ -3375,16 +3508,22 @@ async fn submit_plan(
     if run_trigger_precheck && let Some((trigger_id, burn_amount)) = burn_target.clone() {
         let endpoint_idx =
             pinned_trigger_endpoint.expect("repeatable trigger plan should pin ingress");
-        let precheck = evaluate_burn_precheck(
-            query_trigger_repetitions_on_endpoint(
-                &ingress_pool,
-                endpoint_idx,
-                &signer,
-                trigger_id.clone(),
-            )
-            .await,
-            burn_amount,
-        );
+        let query_result = query_trigger_repetitions_on_endpoint(
+            &ingress_pool,
+            endpoint_idx,
+            &signer,
+            trigger_id.clone(),
+        )
+        .await;
+        let precheck = match query_result {
+            Ok((resolved_endpoint_idx, on_chain)) => {
+                pinned_trigger_endpoint = Some(resolved_endpoint_idx);
+                evaluate_burn_precheck(Ok::<Option<u32>, color_eyre::Report>(on_chain), burn_amount)
+            }
+            Err(err) => {
+                evaluate_burn_precheck(Err::<Option<u32>, color_eyre::Report>(err), burn_amount)
+            }
+        };
         match precheck {
             BurnPrecheck::Proceed { on_chain } => {
                 workload
@@ -3439,15 +3578,20 @@ async fn submit_plan(
     if run_trigger_precheck && let Some((trigger_id, _mint_amount)) = mint_target.clone() {
         let endpoint_idx =
             pinned_trigger_endpoint.expect("repeatable trigger plan should pin ingress");
-        let precheck = evaluate_mint_precheck(
-            query_trigger_repetitions_on_endpoint(
-                &ingress_pool,
-                endpoint_idx,
-                &signer,
-                trigger_id.clone(),
-            )
-            .await,
-        );
+        let query_result = query_trigger_repetitions_on_endpoint(
+            &ingress_pool,
+            endpoint_idx,
+            &signer,
+            trigger_id.clone(),
+        )
+        .await;
+        let precheck = match query_result {
+            Ok((resolved_endpoint_idx, on_chain)) => {
+                pinned_trigger_endpoint = Some(resolved_endpoint_idx);
+                evaluate_mint_precheck(Ok::<Option<u32>, color_eyre::Report>(on_chain))
+            }
+            Err(err) => evaluate_mint_precheck(Err::<Option<u32>, color_eyre::Report>(err)),
+        };
         match precheck {
             MintPrecheck::Proceed { on_chain } => {
                 workload
@@ -3504,7 +3648,9 @@ async fn submit_plan(
         }
     };
 
-    let submission_result = if let Some(endpoint_idx) = pinned_trigger_endpoint {
+    let submission_result: Result<Option<usize>> = if let Some(endpoint_idx) =
+        pinned_trigger_endpoint
+    {
         let ingress_pool_for_submit = Arc::clone(&ingress_pool);
         let signer_for_submit = signer.clone();
         let instructions_for_submit = instructions.clone();
@@ -3514,31 +3660,15 @@ async fn submit_plan(
             expect_success,
             Arc::clone(&metrics),
             move || {
-                ingress_pool_for_submit.run_on_endpoint(
-                    "submit_repeatable_trigger_plan",
+                submit_repeatable_trigger_plan_on_endpoint(
+                    &ingress_pool_for_submit,
                     endpoint_idx,
-                    |peer| {
-                        let client = tune_ingress_client(
-                            peer.client_for(
-                                &signer_for_submit.id,
-                                signer_for_submit.key_pair.private_key().clone(),
-                            ),
-                            effective_submission_confirmation,
-                        );
-                        let metadata = submission_metadata(submission_counter_for_submit.as_ref());
-                        match effective_submission_confirmation {
-                            SubmissionConfirmationMode::BlockingApplied => client
-                                .submit_all_blocking_with_metadata(
-                                    instructions_for_submit.clone(),
-                                    metadata,
-                                )
-                                .map(|_| ()),
-                            SubmissionConfirmationMode::AcceptedByIngress => client
-                                .submit_all_with_metadata(instructions_for_submit.clone(), metadata)
-                                .map(|_| ()),
-                        }
-                    },
+                    &signer_for_submit,
+                    &instructions_for_submit,
+                    effective_submission_confirmation,
+                    submission_counter_for_submit.as_ref(),
                 )
+                .map(Some)
             },
         )
         .await
@@ -3594,11 +3724,15 @@ async fn submit_plan(
             },
         )
         .await
+        .map(|()| None)
     };
     drop(permit);
 
     match submission_result {
-        Ok(()) => {
+        Ok(submission_endpoint_idx) => {
+            if let Some(resolved_endpoint_idx) = submission_endpoint_idx {
+                pinned_trigger_endpoint = Some(resolved_endpoint_idx);
+            }
             workload.record_result(&plan, true).await;
             if let (Some(endpoint_idx), Some(trigger_id)) =
                 (pinned_trigger_endpoint, repeatable_trigger_target.as_ref())
@@ -3640,22 +3774,102 @@ async fn query_trigger_repetitions_on_endpoint(
     endpoint_idx: usize,
     signer: &AccountRecord,
     trigger_id: TriggerId,
-) -> Result<Option<u32>> {
+) -> Result<(usize, Option<u32>)> {
     let ingress_pool = Arc::clone(ingress_pool);
     let signer = signer.clone();
     match spawn_blocking(move || {
-        ingress_pool.run_on_endpoint("query_trigger_repetitions", endpoint_idx, |peer| {
+        match ingress_pool.run_on_endpoint("query_trigger_repetitions", endpoint_idx, |peer| {
             let client = tune_ingress_client(
                 peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
                 SubmissionConfirmationMode::AcceptedByIngress,
             );
             query_trigger_repetitions(&client, &trigger_id)
-        })
+        }) {
+            Ok(result) => Ok((endpoint_idx, result)),
+            Err(err) if is_route_unavailable_error(&err) => {
+                warn!(
+                    target: "izanami::workload",
+                    ?err,
+                    trigger = %trigger_id,
+                    endpoint_idx,
+                    "repinning repeatable trigger query after route_unavailable"
+                );
+                ingress_pool.run_with_failover_excluding(
+                    "query_trigger_repetitions_route_failover",
+                    endpoint_idx,
+                    |peer| {
+                        let client = tune_ingress_client(
+                            peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+                            SubmissionConfirmationMode::AcceptedByIngress,
+                        );
+                        query_trigger_repetitions(&client, &trigger_id)
+                    },
+                )
+            }
+            Err(err) => Err(err),
+        }
     })
     .await
     {
         Ok(result) => result,
         Err(err) => Err(err.into()),
+    }
+}
+
+fn submit_repeatable_trigger_plan_on_endpoint(
+    ingress_pool: &IngressEndpointPool,
+    endpoint_idx: usize,
+    signer: &AccountRecord,
+    instructions: &[InstructionBox],
+    submission_confirmation: SubmissionConfirmationMode,
+    submission_counter: &AtomicU64,
+) -> Result<usize> {
+    match ingress_pool.run_on_endpoint("submit_repeatable_trigger_plan", endpoint_idx, |peer| {
+        let client = tune_ingress_client(
+            peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+            submission_confirmation,
+        );
+        let metadata = submission_metadata(submission_counter);
+        match submission_confirmation {
+            SubmissionConfirmationMode::BlockingApplied => client
+                .submit_all_blocking_with_metadata(instructions.to_vec(), metadata)
+                .map(|_| ()),
+            SubmissionConfirmationMode::AcceptedByIngress => client
+                .submit_all_with_metadata(instructions.to_vec(), metadata)
+                .map(|_| ()),
+        }
+    }) {
+        Ok(()) => Ok(endpoint_idx),
+        Err(err) if is_route_unavailable_error(&err) => {
+            warn!(
+                target: "izanami::workload",
+                ?err,
+                endpoint_idx,
+                "repinning repeatable trigger submit after route_unavailable"
+            );
+            ingress_pool
+                .run_with_failover_excluding(
+                    "submit_repeatable_trigger_plan_route_failover",
+                    endpoint_idx,
+                    |peer| {
+                        let client = tune_ingress_client(
+                            peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+                            submission_confirmation,
+                        );
+                        let metadata = submission_metadata(submission_counter);
+                        match submission_confirmation {
+                            SubmissionConfirmationMode::BlockingApplied => client
+                                .submit_all_blocking_with_metadata(instructions.to_vec(), metadata)
+                                .map(|_| ()),
+                            SubmissionConfirmationMode::AcceptedByIngress => client
+                                .submit_all_with_metadata(instructions.to_vec(), metadata)
+                                .map(|_| ()),
+                        }
+                    },
+                )
+                .map(|(resolved_endpoint_idx, ())| resolved_endpoint_idx)
+        }
+        Err(err) => Err(err),
     }
 }
 
@@ -3674,12 +3888,12 @@ async fn reconcile_repeatable_trigger_with_endpoint(
     )
     .await
     {
-        Ok(Some(on_chain)) if on_chain > 0 => {
+        Ok((_resolved_endpoint_idx, Some(on_chain))) if on_chain > 0 => {
             workload
                 .sync_trigger_repetitions(trigger_id, Some(on_chain))
                 .await;
         }
-        Ok(Some(_)) | Ok(None) => {
+        Ok((_resolved_endpoint_idx, Some(_))) | Ok((_resolved_endpoint_idx, None)) => {
             workload.sync_trigger_repetitions(trigger_id, None).await;
         }
         Err(err) => {
@@ -3695,14 +3909,15 @@ async fn reconcile_repeatable_trigger_with_endpoint(
     }
 }
 
-async fn run_submission_result<F>(
+async fn run_submission_result<T, F>(
     plan_label: &'static str,
     expect_success: bool,
     metrics: Arc<Metrics>,
     blocking: F,
-) -> Result<()>
+) -> Result<T>
 where
-    F: FnOnce() -> Result<()> + Send + 'static,
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
 {
     let result = match spawn_blocking(blocking).await {
         Ok(result) => result,
@@ -3717,8 +3932,8 @@ where
         "submitted chaos transaction plan"
     );
     match (&result, expect_success) {
-        (Ok(()), true) => metrics.record_success(),
-        (Ok(()), false) => metrics.record_unexpected_success(),
+        (Ok(_), true) => metrics.record_success(),
+        (Ok(_), false) => metrics.record_unexpected_success(),
         (Err(_), true) => metrics.record_failure(),
         (Err(_), false) => metrics.record_expected_failure(),
     }
@@ -4826,6 +5041,35 @@ mod tests {
     }
 
     #[test]
+    fn asset_and_account_state_updates_force_blocking_confirmation() {
+        let key_pair = KeyPair::random();
+        let account = AccountRecord {
+            id: AccountId::new(key_pair.public_key().clone()),
+            key_pair,
+            uaid: None,
+        };
+        let asset = AssetId::new(
+            AssetDefinitionId::new(
+                "chaosnet".parse().expect("domain id"),
+                "chaos_coin".parse().expect("asset name"),
+            ),
+            account.id.clone(),
+        );
+        for updates in [
+            vec![PlanUpdate::TrackAccount(account)],
+            vec![PlanUpdate::TrackAssetInstance(asset)],
+        ] {
+            assert_eq!(
+                effective_submission_confirmation(
+                    SubmissionConfirmationMode::AcceptedByIngress,
+                    &updates,
+                ),
+                SubmissionConfirmationMode::BlockingApplied
+            );
+        }
+    }
+
+    #[test]
     fn non_trigger_state_updates_keep_ingress_confirmation() {
         let updates = Vec::<PlanUpdate>::new();
         assert_eq!(
@@ -4897,6 +5141,56 @@ mod tests {
             attempts,
             vec![endpoint_idx, endpoint_idx],
             "repeatable trigger precheck and submit must stay on the pinned endpoint"
+        );
+    }
+
+    #[test]
+    fn endpoint_pool_failover_excluding_skips_pinned_endpoint() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:201".to_string(),
+                "http://127.0.0.1:202".to_string(),
+                "http://127.0.0.1:203".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 2,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+        let mut attempts = Vec::new();
+        let result: Result<&'static str> = pool.run_with_failover_excluding_at(
+            "repeatable_trigger_route_failover",
+            0,
+            now,
+            |idx, _| {
+                attempts.push(idx);
+                Ok("ok")
+            },
+        );
+        assert_eq!(
+            result.expect("alternate endpoint should satisfy route failover"),
+            "ok"
+        );
+        assert_eq!(
+            attempts,
+            vec![1],
+            "alternate failover should skip the pinned endpoint that just returned route_unavailable"
+        );
+    }
+
+    #[test]
+    fn route_unavailable_error_is_detected() {
+        let err = eyre!(
+            "Unexpected query response; status: 503 Service Unavailable; reject code: route_unavailable; response body: route_unavailable: no reachable authoritative peers are available for lane 1 dataspace 1"
+        );
+        assert!(
+            is_route_unavailable_error(&err),
+            "route_unavailable should trigger repeatable-trigger repinning"
         );
     }
 

@@ -11495,8 +11495,8 @@ pub struct StoragePinArgs {
 
 impl Run for StoragePinArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, |client, manifest, payload| {
-            client.post_sorafs_storage_pin(manifest, payload)
+        self.run_with(context, |client, manifest, payload, files| {
+            client.post_sorafs_storage_pin(manifest, payload, files)
         })
     }
 }
@@ -11505,13 +11505,29 @@ impl StoragePinArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &[u8], &[u8]) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(
+            &Client,
+            &[u8],
+            &[u8],
+            Option<&[iroha::client::SorafsStorageFileEntry<'_>]>,
+        ) -> Result<Response<Vec<u8>>>,
     {
         let manifest_bytes = fs::read(&self.manifest).wrap_err("failed to read manifest file")?;
-        let payload_bytes = fs::read(&self.payload).wrap_err("failed to read payload file")?;
+        let manifest: ManifestV1 =
+            norito::decode_from_bytes(&manifest_bytes).wrap_err("failed to decode manifest payload")?;
+        let (payload_bytes, files) = load_storage_pin_payload(&self.payload, &manifest)?;
+        let borrowed_files = files.as_ref().map(|entries| {
+            entries
+                .iter()
+                .map(|entry| iroha::client::SorafsStorageFileEntry {
+                    path: entry.path.as_slice(),
+                    size: entry.size,
+                })
+                .collect::<Vec<_>>()
+        });
 
         let client = context.client_from_config();
-        let response = submit(&client, &manifest_bytes, &payload_bytes)?;
+        let response = submit(&client, &manifest_bytes, &payload_bytes, borrowed_files.as_deref())?;
         let status = response.status();
         let body = response.into_body();
         match status {
@@ -11519,6 +11535,55 @@ impl StoragePinArgs {
             status => Err(make_http_error(status, &body)),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct OwnedStorageFileEntry {
+    path: Vec<String>,
+    size: u64,
+}
+
+fn load_storage_pin_payload(
+    input: &Path,
+    manifest: &ManifestV1,
+) -> Result<(Vec<u8>, Option<Vec<OwnedStorageFileEntry>>)> {
+    let metadata =
+        fs::metadata(input).wrap_err_with(|| format!("failed to access payload `{}`", input.display()))?;
+
+    if metadata.is_dir() {
+        let profile = chunk_profile_from_manifest(manifest)?;
+        let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, profile)
+            .map_err(|err| eyre!("failed to build directory payload plan: {err}"))?;
+        let files = plan
+            .files
+            .iter()
+            .map(|file| OwnedStorageFileEntry {
+                path: file.path.clone(),
+                size: file.size,
+            })
+            .collect();
+        return Ok((payload, Some(files)));
+    }
+
+    if metadata.is_file() {
+        let payload = fs::read(input)
+            .wrap_err_with(|| format!("failed to read payload file `{}`", input.display()))?;
+        return Ok((payload, None));
+    }
+
+    Err(eyre!("payload input must be a file or directory"))
+}
+
+fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile> {
+    Ok(ChunkProfile {
+        min_size: usize::try_from(manifest.chunking.min_size)
+            .wrap_err("manifest chunking.min_size exceeds host limits")?,
+        target_size: usize::try_from(manifest.chunking.target_size)
+            .wrap_err("manifest chunking.target_size exceeds host limits")?,
+        max_size: usize::try_from(manifest.chunking.max_size)
+            .wrap_err("manifest chunking.max_size exceeds host limits")?,
+        break_mask: u64::from(manifest.chunking.break_mask),
+    })
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -13762,9 +13827,10 @@ mod tests {
         };
         let mut ctx = TestContext::new();
 
-        args.run_with(&mut ctx, |_client, manifest_bytes, payload_bytes| {
+        args.run_with(&mut ctx, |_client, manifest_bytes, payload_bytes, files| {
             assert_eq!(manifest_bytes, b"manifest-bytes");
             assert_eq!(payload_bytes, b"payload-bytes");
+            assert!(files.is_none(), "single-file payload should not include file table");
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -13772,6 +13838,60 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"ok\":true"));
+    }
+
+    #[test]
+    fn storage_pin_with_directory_payload_emits_file_table() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let manifest = NamedTempFile::new().expect("temp manifest");
+        let payload_dir = temp_dir.path().join("site");
+        fs::create_dir_all(payload_dir.join("assets")).expect("create assets directory");
+        fs::write(payload_dir.join("index.html"), b"<html>SoraFS</html>").expect("write index");
+        fs::write(payload_dir.join("assets").join("app.js"), b"console.log('ok');")
+            .expect("write asset");
+
+        let manifest_value = ManifestBuilder::new()
+            .root_cid(vec![0xAA; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .content_length(0)
+            .car_digest([0x11; 32])
+            .car_size(0)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("build manifest");
+        fs::write(
+            manifest.path(),
+            to_bytes(&manifest_value).expect("encode manifest"),
+        )
+        .expect("write manifest");
+
+        let args = StoragePinArgs {
+            manifest: manifest.path().to_path_buf(),
+            payload: payload_dir.clone(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, _manifest_bytes, payload_bytes, files| {
+            let files = files.expect("directory payload must include file table");
+            assert_eq!(files.len(), 2);
+            assert_eq!(files[0].path, ["assets".to_owned(), "app.js".to_owned()]);
+            assert_eq!(files[1].path, ["index.html".to_owned()]);
+            assert_eq!(
+                payload_bytes,
+                b"console.log('ok');<html>SoraFS</html>",
+                "payload must follow the deterministic sorted file order"
+            );
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
+                .unwrap())
+        })
+        .expect("directory run should succeed");
 
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"ok\":true"));

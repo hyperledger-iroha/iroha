@@ -15,6 +15,7 @@ pub mod por;
 pub mod quota;
 pub mod registry;
 pub mod repair;
+pub mod site;
 pub mod token;
 
 pub use admission::{AdmissionCheckError, AdmissionRegistry, AdmissionRegistryError};

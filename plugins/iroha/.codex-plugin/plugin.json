@@ -1,0 +1,47 @@
+{
+  "name": "iroha",
+  "version": "0.1.0",
+  "description": "Use native Torii MCP on deployed Iroha networks such as Taira for live account, asset, contract, governance, and transaction workflows.",
+  "author": {
+    "name": "Hyperledger Iroha contributors",
+    "url": "https://github.com/hyperledger-iroha/iroha/graphs/contributors"
+  },
+  "homepage": "https://docs.iroha.tech",
+  "repository": "https://github.com/hyperledger-iroha/iroha",
+  "license": "Apache-2.0",
+  "keywords": [
+    "iroha",
+    "torii",
+    "mcp",
+    "sora",
+    "taira",
+    "nexus",
+    "blockchain"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Iroha",
+    "shortDescription": "Use deployed Torii MCP endpoints for live Iroha app-development and network workflows",
+    "longDescription": "Use Iroha to work against deployed Torii MCP endpoints such as Taira, inspect accounts, assets, aliases, contracts, governance, and submit transaction-oriented workflows through the curated `iroha.*` tool surface exposed by native Torii MCP.",
+    "developerName": "Hyperledger Iroha",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://docs.iroha.tech",
+    "privacyPolicyURL": "https://www.linuxfoundation.org/privacy",
+    "termsOfServiceURL": "https://www.linuxfoundation.org/terms",
+    "defaultPrompt": [
+      "Inspect Taira accounts, aliases, and balances through Iroha MCP",
+      "Deploy or call a contract on a Torii MCP endpoint and wait for status",
+      "Query governance, subscriptions, or transaction status on a live Iroha network"
+    ],
+    "brandColor": "#0B6DFF",
+    "composerIcon": "./assets/iroha-small.svg",
+    "logo": "./assets/iroha-logo.svg",
+    "screenshots": []
+  }
+}

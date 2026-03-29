@@ -117,7 +117,7 @@ Numeric helpers (Norito)
 Domains / Peers
 - 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
 - 0x11 UNREGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_unreg_domain
-- 0x12 TRANSFER_DOMAIN — Args: `r10=&DomainId, r11=&ScopedAccountId` → 0 — Gas: G_xfer_domain
+- 0x12 TRANSFER_DOMAIN — Args: `r10=&DomainId, r11=&AccountId` → 0 — Gas: G_xfer_domain
 - 0x15 REGISTER_PEER — Args: `r10=&Json` (RegisterPeerWithPop) → 0 — Gas: G_reg_peer
   - JSON object: `{ "peer": "<public_key or public_key@addr>", "pop": [..], "activation_at": <u64?>, "expiry_at": <u64?>, "hsm": <HsmBinding?> }`
   - `peer` may be a string or an object with `public_key`/`publicKey`/`peer_id`/`peerId`/`key`; those keys are also accepted at top level.
@@ -125,29 +125,29 @@ Domains / Peers
 
 Accounts
 - 0x13 REGISTER_ACCOUNT — Args: `r10=&ScopedAccountId` → 0 — Gas: G_reg_acct
-- 0x14 UNREGISTER_ACCOUNT — Args: `r10=&ScopedAccountId` → 0 — Gas: G_unreg_acct
-- 0x17 ADD_SIGNATORY — Args: `r10=&ScopedAccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_add_sig
-- 0x18 REMOVE_SIGNATORY — Args: `r10=&ScopedAccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_rm_sig
-- 0x19 SET_ACCOUNT_QUORUM — Args: `r10=&ScopedAccountId, r11=quorum:u64` → 0 — Gas: G_set_quorum
-- 0x1A SET_ACCOUNT_DETAIL — Args: `r10=&ScopedAccountId, r11=&Name, r12=&Json` → 0 — Gas: G_set_detail + bytes(val)
+- 0x14 UNREGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_unreg_acct
+- 0x17 ADD_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_add_sig
+- 0x18 REMOVE_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_rm_sig
+- 0x19 SET_ACCOUNT_QUORUM — Args: `r10=&AccountId, r11=quorum:u64` → 0 — Gas: G_set_quorum
+- 0x1A SET_ACCOUNT_DETAIL — Args: `r10=&AccountId, r11=&Name, r12=&Json` → 0 — Gas: G_set_detail + bytes(val)
 
 Notes:
 - Signatory/quorum syscalls update the multisig spec stored in account metadata key `multisig/spec`.
-  The public key is mapped to a `ScopedAccountId` in the same domain with weight 1; the signatory
-  account must exist and the resulting spec must remain acyclic with quorum reachable.
+  The target account is selected by canonical `AccountId`; signatory accounts must exist and the
+  resulting spec must remain acyclic with quorum reachable.
 - These syscalls update multisig roles and metadata and rekey the account controller to the
   canonical multisig id derived from the spec (signatories must be single-key accounts).
 
 Assets (FT)
 - 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_reg_asset
 - 0x21 UNREGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_unreg_asset
-- 0x22 MINT_ASSET — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_mint
-- 0x23 BURN_ASSET — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_burn
-- 0x24 TRANSFER_ASSET — Args: `r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer
+- 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_mint
+- 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_burn
+- 0x24 TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer
 
 NFTs
-- 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&ScopedAccountId(owner)` → 0 — Gas: G_nft_mint_asset
-- 0x26 NFT_TRANSFER_ASSET — Args: `r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to)` → 0 — Gas: G_nft_transfer_asset
+- 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&AccountId(owner)` → 0 — Gas: G_nft_mint_asset
+- 0x26 NFT_TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)` → 0 — Gas: G_nft_transfer_asset
 - 0x27 NFT_SET_METADATA — Args: `r10=&NftId, r11=&Json` → 0 — Gas: G_nft_set_metadata
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
 
@@ -174,10 +174,10 @@ Roles / Permissions
 - 0x30 CREATE_ROLE — Args: `r10=&Name, r11=&Json` (perm set) → 0 — Gas: G_create_role
   - Permissions JSON: array of permission strings/objects or `{ "permissions": [...] }` / `{ "perms": [...] }`.
 - 0x31 DELETE_ROLE — Args: `r10=&Name` → 0 — Gas: G_delete_role
-- 0x32 GRANT_ROLE — Args: `r10=&ScopedAccountId, r11=&Name` → 0 — Gas: G_grant_role
-- 0x33 REVOKE_ROLE — Args: `r10=&ScopedAccountId, r11=&Name` → 0 — Gas: G_revoke_role
-- 0x34 GRANT_PERMISSION — Args: `r10=&ScopedAccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_grant_perm
-- 0x35 REVOKE_PERMISSION — Args: `r10=&ScopedAccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_revoke_perm
+- 0x32 GRANT_ROLE — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_grant_role
+- 0x33 REVOKE_ROLE — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_revoke_role
+- 0x34 GRANT_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_grant_perm
+- 0x35 REVOKE_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_revoke_perm
 
 Triggers
 - 0x40 CREATE_TRIGGER — Args: `r10=&Json` (trigger spec) → 0 — Gas: G_create_trig
@@ -232,8 +232,8 @@ JSON envelope support for EXECUTE_INSTRUCTION
 - 0xA1 EXECUTE_QUERY — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr` — Gas: G_scq
 - 0xA2 CREATE_NFTS_FOR_ALL_USERS — Args: none → `u64=count` — Gas: G_create_nfts_all
 - 0xA3 SET_SMARTCONTRACT_EXECUTION_DEPTH — Args: `r10=depth:u64` → `u64=prev` — Gas: G_sc_depth
-- 0xA4 GET_AUTHORITY — Args: none → `ptr` (ScopedAccountId in INPUT, `r10` points to it) — Gas: G_get_auth
-- 0xA7 RESOLVE_ACCOUNT_ALIAS — Args: `r10=&Name(label), r11=&DomainId(domain)` → `ptr` (ScopedAccountId in INPUT, `r10` points to it) — Gas: G_alias_resolve
+- 0xA4 GET_AUTHORITY — Args: none → `ptr` (AccountId in INPUT, `r10` points to it) — Gas: G_get_auth
+- 0xA7 RESOLVE_ACCOUNT_ALIAS — Args: `r10=&Blob(alias literal)` → `ptr` (AccountId in INPUT, `r10` points to it) — Gas: G_alias_resolve
 
 AXT host flow
 - 0xB0 AXT_BEGIN — Args: `r10=&AxtDescriptor`. Resets any in‑progress envelope and records the descriptor; hosts derive the canonical binding used by capability handles from this descriptor.
@@ -257,7 +257,7 @@ Soracloud runtime host surface
 - All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VMError::UnknownSyscall`.
 
 ZK Helpers
-- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
+- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
 - 0xFB USE_NULLIFIER — Args: `r10=nullifier:u64` → `u64=0` — Gas: G_use_null
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig
 
@@ -324,22 +324,22 @@ but they must not change the host ABI.
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
 | 0x10 | REGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_reg_domain@ivm.core/v2 |
 | 0x11 | UNREGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_unreg_domain@ivm.core/v2 |
-| 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&ScopedAccountId | u64=0 | asset:gas/G_xfer_domain@ivm.core/v2 |
+| 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&AccountId | u64=0 | asset:gas/G_xfer_domain@ivm.core/v2 |
 | 0x13 | REGISTER_ACCOUNT | r10=&ScopedAccountId | u64=0 | asset:gas/G_reg_acct@ivm.core/v2 |
-| 0x14 | UNREGISTER_ACCOUNT | r10=&ScopedAccountId | u64=0 | asset:gas/G_unreg_acct@ivm.core/v2 |
+| 0x14 | UNREGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_unreg_acct@ivm.core/v2 |
 | 0x15 | REGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_reg_peer@ivm.core/v2 |
 | 0x16 | UNREGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_unreg_peer@ivm.core/v2 |
-| 0x17 | ADD_SIGNATORY | r10=&ScopedAccountId, r11=&Json | u64=0 | asset:gas/G_add_sig@ivm.core/v2 |
-| 0x18 | REMOVE_SIGNATORY | r10=&ScopedAccountId, r11=&Json | u64=0 | asset:gas/G_rm_sig@ivm.core/v2 |
-| 0x19 | SET_ACCOUNT_QUORUM | r10=&ScopedAccountId, r11=quorum:u64 | u64=0 | asset:gas/G_set_quorum@ivm.core/v2 |
-| 0x1A | SET_ACCOUNT_DETAIL | r10=&ScopedAccountId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_set_detail@ivm.core/v2 + bytes(val) |
+| 0x17 | ADD_SIGNATORY | r10=&AccountId, r11=&Json | u64=0 | asset:gas/G_add_sig@ivm.core/v2 |
+| 0x18 | REMOVE_SIGNATORY | r10=&AccountId, r11=&Json | u64=0 | asset:gas/G_rm_sig@ivm.core/v2 |
+| 0x19 | SET_ACCOUNT_QUORUM | r10=&AccountId, r11=quorum:u64 | u64=0 | asset:gas/G_set_quorum@ivm.core/v2 |
+| 0x1A | SET_ACCOUNT_DETAIL | r10=&AccountId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_set_detail@ivm.core/v2 + bytes(val) |
 | 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_reg_asset@ivm.core/v2 |
 | 0x21 | UNREGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_unreg_asset@ivm.core/v2 |
-| 0x22 | MINT_ASSET | r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_mint@ivm.core/v2 |
-| 0x23 | BURN_ASSET | r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_burn@ivm.core/v2 |
-| 0x24 | TRANSFER_ASSET | r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
-| 0x25 | NFT_MINT_ASSET | r10=&NftId, r11=&ScopedAccountId(owner) | u64=0 | asset:gas/G_nft_mint_asset@ivm.core/v2 |
-| 0x26 | NFT_TRANSFER_ASSET | r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to) | u64=0 | asset:gas/G_nft_transfer_asset@ivm.core/v2 |
+| 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_mint@ivm.core/v2 |
+| 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_burn@ivm.core/v2 |
+| 0x24 | TRANSFER_ASSET | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x25 | NFT_MINT_ASSET | r10=&NftId, r11=&AccountId(owner) | u64=0 | asset:gas/G_nft_mint_asset@ivm.core/v2 |
+| 0x26 | NFT_TRANSFER_ASSET | r10=&AccountId(from), r11=&NftId, r12=&AccountId(to) | u64=0 | asset:gas/G_nft_transfer_asset@ivm.core/v2 |
 | 0x27 | NFT_SET_METADATA | r10=&NftId, r11=&Json | u64=0 | asset:gas/G_nft_set_metadata@ivm.core/v2 |
 | 0x28 | NFT_BURN_ASSET | r10=&NftId | u64=0 | asset:gas/G_nft_burn_asset@ivm.core/v2 |
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | - |
@@ -347,10 +347,10 @@ but they must not change the host ABI.
 | 0x2B | TRANSFER_V1_BATCH_APPLY | r10=&NoritoBytes(TransferAssetBatch) | u64=0 | asset:gas/G_transfer@ivm.core/v2 per entry |
 | 0x30 | CREATE_ROLE | r10=&Name, r11=&Json(perms) | u64=0 | asset:gas/G_create_role@ivm.core/v2 |
 | 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v2 |
-| 0x32 | GRANT_ROLE | r10=&ScopedAccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v2 |
-| 0x33 | REVOKE_ROLE | r10=&ScopedAccountId, r11=&Name | u64=0 | asset:gas/G_revoke_role@ivm.core/v2 |
-| 0x34 | GRANT_PERMISSION | r10=&ScopedAccountId, r11=&Name | u64=0 | asset:gas/G_grant_perm@ivm.core/v2 |
-| 0x35 | REVOKE_PERMISSION | r10=&ScopedAccountId, r11=&Name | u64=0 | asset:gas/G_revoke_perm@ivm.core/v2 |
+| 0x32 | GRANT_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v2 |
+| 0x33 | REVOKE_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_role@ivm.core/v2 |
+| 0x34 | GRANT_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_perm@ivm.core/v2 |
+| 0x35 | REVOKE_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_perm@ivm.core/v2 |
 | 0x40 | CREATE_TRIGGER | r10=&Json(spec) | u64=0 | asset:gas/G_create_trig@ivm.core/v2 |
 | 0x41 | REMOVE_TRIGGER | r10=&Name | u64=0 | asset:gas/G_remove_trig@ivm.core/v2 |
 | 0x42 | SET_TRIGGER_ENABLED | r10=&Name, r11=enabled:u64 | u64=0 | asset:gas/G_set_trig@ivm.core/v2 |
@@ -419,10 +419,10 @@ but they must not change the host ABI.
 | 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
 | 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | u64=count | asset:gas/G_create_nfts_all@ivm.core/v2 |
 | 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | r10=depth:u64 | u64=prev | asset:gas/G_sc_depth@ivm.core/v2 |
-| 0xA4 | GET_AUTHORITY | - | ptr (ScopedAccountId in INPUT) | asset:gas/G_get_auth@ivm.core/v2 |
+| 0xA4 | GET_AUTHORITY | - | ptr (AccountId in INPUT) | asset:gas/G_get_auth@ivm.core/v2 |
 | 0xA5 | SUBSCRIPTION_BILL | - | u64=0 | asset:gas/G_sub_bill@ivm.core/v2 |
 | 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
-| 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Name(label), r11=&DomainId(domain) | ptr (&ScopedAccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
+| 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | - |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | - |
 | 0xB2 | AXT_COMMIT | - | u64=0 | - |
@@ -445,7 +445,7 @@ but they must not change the host ABI.
 | 0xF5 | GROW_HEAP | r10=bytes:u64 | u64=new_limit | asset:gas/G_grow_heap@ivm.core/v2 per page |
 | 0xF6 | VERIFY_PROOF | - | r10=0/1 | asset:gas/G_verify@ivm.core/v2 |
 | 0xF7 | GET_MERKLE_PATH | r10=addr:u64, r11=out:u64, r12=root_out?:u64 | u64=len | asset:gas/G_mpath@ivm.core/v2 + len |
-| 0xF9 | GET_ACCOUNT_BALANCE | r10=&ScopedAccountId, r11=&AssetDefinitionId | ptr (&NoritoBytes(Numeric)) | asset:gas/G_get_bal@ivm.core/v2 |
+| 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&NoritoBytes(Numeric)) | asset:gas/G_get_bal@ivm.core/v2 |
 | 0xFA | GET_MERKLE_COMPACT | r10=addr, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0xFB | USE_NULLIFIER | r10=nullifier:u64 | u64=0 | asset:gas/G_use_null@ivm.core/v2 |
 | 0xFC | VERIFY_SIGNATURE | r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8 | r10=0/1 | asset:gas/G_verify_sig@ivm.core/v2 |

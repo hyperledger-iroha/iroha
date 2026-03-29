@@ -1512,7 +1512,7 @@ fn ensure_authority_registered(
                 .expect("register domain for test authority");
         }
 
-        let new_account = dm::Account::new(authority.account.clone().to_account_id(domain_id));
+        let new_account = dm::Account::new_in_domain(authority.account.clone(), domain_id);
         let register_account = dm::Register::account(new_account);
         register_account
             .execute(&authority.account, &mut tx)

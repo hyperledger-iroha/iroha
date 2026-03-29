@@ -35,7 +35,6 @@ pub mod isi {
         name::Name,
         offline::OFFLINE_ASSET_ENABLED_METADATA_KEY,
     };
-    use iroha_executor_data_model::permission::account::CanRegisterAccount;
     use iroha_logger::prelude::*;
 
     use super::*;
@@ -124,11 +123,43 @@ pub mod isi {
             Ok(())
         } else {
             Err(InstructionExecutionError::InvariantViolation(
-                "account label requires an active SNS lease"
+                "account alias requires an active SNS lease"
                     .to_owned()
                     .into(),
             ))
         }
+    }
+
+    fn refresh_account_alias_lease_if_requested(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        label: &AccountLabel,
+        lease_expiry_ms: Option<u64>,
+    ) -> Result<(), InstructionExecutionError> {
+        let Some(lease_expiry_ms) = lease_expiry_ms else {
+            return Ok(());
+        };
+        let literal = label
+            .to_literal(&state_transaction.nexus.dataspace_catalog)
+            .map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err.to_string().into(),
+                ))
+            })?;
+        crate::sns::set_name_lease_expiry(
+            state_transaction,
+            crate::sns::SnsNamespace::AccountAlias,
+            &literal,
+            lease_expiry_ms,
+        )
+        .map(|_| ())
+        .map_err(|err| match err {
+            crate::sns::SnsError::BadRequest(message) => {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    message.into(),
+                ))
+            }
+            other => InstructionExecutionError::InvariantViolation(other.to_string().into()),
+        })
     }
 
     fn contract_alias_matches_account_label(
@@ -349,7 +380,7 @@ pub mod isi {
         {
             state_transaction
                 .world
-                .link_account_subject_domain(&account_id.to_account_id(linked_domain.clone()));
+                .link_account_subject_domain(&account_id, &linked_domain);
             state_transaction
                 .world
                 .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
@@ -546,75 +577,6 @@ pub mod isi {
         }
     }
 
-    fn authority_has_permission(
-        world: &impl WorldReadOnly,
-        authority: &AccountId,
-        target: &Permission,
-    ) -> bool {
-        if world
-            .account_permissions_iter(authority)
-            .is_ok_and(|permissions| {
-                permissions
-                    .into_iter()
-                    .any(|permission| permission == target)
-            })
-        {
-            return true;
-        }
-
-        for role_id in world.account_roles_iter(authority) {
-            if world
-                .roles()
-                .get(role_id)
-                .is_some_and(|role| role.permissions.contains(target))
-            {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    fn permission_is_global_can_register_account(permission: &Permission) -> bool {
-        permission.name() == "CanRegisterAccount" && permission.payload().as_ref() == "null"
-    }
-
-    fn authority_can_register_account_in_domain(
-        world: &impl WorldReadOnly,
-        authority: &AccountId,
-        domain_id: &DomainId,
-    ) -> bool {
-        let required: Permission = CanRegisterAccount {
-            domain: domain_id.clone(),
-        }
-        .into();
-        if authority_has_permission(world, authority, &required) {
-            return true;
-        }
-
-        if world
-            .account_permissions_iter(authority)
-            .is_ok_and(|permissions| {
-                permissions
-                    .into_iter()
-                    .any(permission_is_global_can_register_account)
-            })
-        {
-            return true;
-        }
-
-        for role_id in world.account_roles_iter(authority) {
-            if world.roles().get(role_id).is_some_and(|role| {
-                role.permissions()
-                    .any(permission_is_global_can_register_account)
-            }) {
-                return true;
-            }
-        }
-
-        false
-    }
-
     fn is_permission_asset_definition_associated(
         permission: &Permission,
         asset_definition_id: &AssetDefinitionId,
@@ -802,7 +764,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let domain_id = self.object().domain().cloned();
+            let linked_domains = self.object().linked_domains().clone();
             let account: Account = self.object().clone().build(authority);
             ensure_controller_capabilities(
                 account.controller(),
@@ -811,7 +773,7 @@ pub mod isi {
             )?;
             let (account_id, account_value) = account.clone().into_key_value();
 
-            if let Some(domain_id) = domain_id.as_ref() {
+            for domain_id in &linked_domains {
                 if domain_id == &*iroha_genesis::GENESIS_DOMAIN_ID {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "Not allowed to register account in genesis domain"
@@ -823,7 +785,7 @@ pub mod isi {
                 let _domain = state_transaction.world.domain_mut(domain_id)?;
             }
             if state_transaction.world.account(&account_id).is_ok() {
-                let plain_domainless_self_registration = domain_id.is_none()
+                let plain_domainless_self_registration = linked_domains.is_empty()
                     && self.object().metadata().is_empty()
                     && self.object().label().is_none()
                     && self.object().uaid.is_none()
@@ -865,7 +827,10 @@ pub mod isi {
                     ));
                 }
                 if let Some(label_domain) = &label.domain
-                    && !account.linked_domains.contains(label_domain)
+                    && !account
+                        .linked_domains
+                        .iter()
+                        .any(|linked_domain| label_domain == linked_domain)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -990,15 +955,17 @@ pub mod isi {
                 ));
             }
 
-            if let Some(domain_id) = domain_id {
-                state_transaction
-                    .world
-                    .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                        AccountCreated::new(account, domain_id),
-                    ))));
-            } else {
+            if linked_domains.is_empty() {
                 // TODO: Emit a dedicated domainless account-created event once the event model
                 // stops requiring a concrete origin domain.
+            } else {
+                for domain_id in linked_domains {
+                    state_transaction
+                        .world
+                        .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+                            AccountCreated::new(account.clone(), domain_id),
+                        ))));
+                }
             }
 
             Ok(())
@@ -2627,82 +2594,58 @@ pub mod isi {
         }
     }
 
-    impl Execute for LinkAccountDomain {
-        #[metrics(+"link_account_domain")]
+    impl Execute for SetAccountAliasBinding {
+        #[metrics(+"set_account_alias_binding")]
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let LinkAccountDomain { account, domain } = self;
-            let domain_owner = state_transaction.world.domain(&domain)?.owned_by().clone();
-            let subject = account.subject_id();
-            let scoped = subject.to_account_id(domain.clone());
-
-            let authority_controls_subject = authority.subject_id() == subject;
-            let authority_controls_domain = authority == &domain_owner;
-            let authority_can_register_domain_accounts = authority_can_register_account_in_domain(
-                &state_transaction.world,
-                authority,
-                &domain,
-            );
-            if !authority_controls_subject
-                && !authority_controls_domain
-                && !authority_can_register_domain_accounts
-            {
+            let SetAccountAliasBinding {
+                account,
+                alias,
+                lease_expiry_ms,
+            } = self;
+            let existing_label = state_transaction.world.account(&account)?.label().cloned();
+            let Some(alias) = alias else {
+                if lease_expiry_ms.is_some() {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "lease_expiry_ms requires alias binding".into(),
+                        ),
+                    )
+                    .into());
+                }
+                let existing_aliases = state_transaction
+                    .world
+                    .account_aliases_by_account
+                    .get(&account)
+                    .cloned()
+                    .unwrap_or_default();
+                for existing_alias in existing_aliases {
+                    if existing_label.as_ref() == Some(&existing_alias) {
+                        continue;
+                    }
+                    state_transaction
+                        .world
+                        .remove_account_alias_binding(&existing_alias);
+                    state_transaction
+                        .world
+                        .account_rekey_records
+                        .remove(existing_alias.clone());
+                }
+                return Ok(());
+            };
+            if account_label_is_pii(&alias) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "authority is not permitted to link this account subject to the domain"
+                    "Account alias looks like raw PII; use UAID/opaque identifiers instead"
                         .to_owned()
                         .into(),
                 )
                 .into());
             }
 
-            let already_linked = state_transaction
-                .world
-                .account_subject_domains
-                .view()
-                .get(&subject)
-                .is_some_and(|domains| domains.contains(&domain));
-            if already_linked {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "account subject is already linked to the domain"
-                        .to_owned()
-                        .into(),
-                )
-                .into());
-            }
-
-            state_transaction.world.link_account_subject_domain(&scoped);
-            state_transaction
-                .world
-                .emit_events(Some(DomainEvent::AccountLinked(AccountDomainLinkChanged {
-                    domain,
-                    account,
-                })));
-            Ok(())
-        }
-    }
-
-    impl Execute for BindAccountAlias {
-        #[metrics(+"bind_account_alias")]
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let BindAccountAlias { account, label } = self;
-            if account_label_is_pii(&label) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Account label looks like raw PII; use UAID/opaque identifiers instead"
-                        .to_owned()
-                        .into(),
-                )
-                .into());
-            }
-
-            let subject = account.subject_id();
-            if !authority_can_manage_account_alias(&state_transaction.world, authority, &label) {
+            if !authority_can_manage_account_alias(&state_transaction.world, authority, &alias) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "authority is not permitted to bind this account alias"
                         .to_owned()
@@ -2710,30 +2653,13 @@ pub mod isi {
                 )
                 .into());
             }
-            ensure_active_account_alias_lease(state_transaction, &label)?;
-            ensure_contract_alias_namespace_available(state_transaction, &label)?;
+            refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
+            ensure_active_account_alias_lease(state_transaction, &alias)?;
+            ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
-            purge_stale_account_label_state(state_transaction, &label);
-            state_transaction.world.account(&account)?;
-            if let Some(domain) = &label.domain {
-                let already_linked = state_transaction
-                    .world
-                    .account_subject_domains
-                    .view()
-                    .get(&subject)
-                    .is_some_and(|domains| domains.contains(domain));
-                if !already_linked {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "Account alias domain {domain} must already be linked to the account subject"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-            }
+            purge_stale_account_label_state(state_transaction, &alias);
             let existing_alias_binding =
-                state_transaction.world.account_aliases.get(&label).cloned();
+                state_transaction.world.account_aliases.get(&alias).cloned();
             if let Some(existing_owner) = existing_alias_binding.as_ref() {
                 if existing_owner != &account {
                     let displaced_label = state_transaction
@@ -2741,86 +2667,97 @@ pub mod isi {
                         .account(existing_owner)?
                         .label()
                         .cloned();
-                    if displaced_label.as_ref() == Some(&label) {
+                    if displaced_label.as_ref() == Some(&alias) {
                         state_transaction
                             .world
                             .account_mut(existing_owner)?
                             .set_label(None);
                     }
-                    state_transaction.world.remove_account_alias_binding(&label);
+                    state_transaction.world.remove_account_alias_binding(&alias);
                 }
             }
             if existing_alias_binding.is_none()
                 && state_transaction
                     .world
                     .account_rekey_records
-                    .get(&label)
+                    .get(&alias)
                     .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "Account label already registered".to_owned().into(),
+                    "account alias already registered".to_owned().into(),
                 )
                 .into());
             }
 
             state_transaction
                 .world
-                .insert_account_alias_binding(label.clone(), account.clone());
-            upsert_account_rekey_record(state_transaction, &label, &account);
+                .insert_account_alias_binding(alias.clone(), account.clone());
+            upsert_account_rekey_record(state_transaction, &alias, &account);
 
             Ok(())
         }
     }
 
-    impl Execute for SetAccountLabel {
-        #[metrics(+"set_account_label")]
+    impl Execute for SetPrimaryAccountAlias {
+        #[metrics(+"set_primary_account_alias")]
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            let SetAccountLabel { account, label } = self;
-            if account_label_is_pii(&label) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "Account label looks like raw PII; use UAID/opaque identifiers instead"
-                        .to_owned()
-                        .into(),
-                )
-                .into());
-            }
-
-            let subject = account.subject_id();
-            if !authority_can_manage_account_alias(&state_transaction.world, authority, &label) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "authority is not permitted to set this account label"
-                        .to_owned()
-                        .into(),
-                )
-                .into());
-            }
-            ensure_active_account_alias_lease(state_transaction, &label)?;
-            ensure_contract_alias_namespace_available(state_transaction, &label)?;
-
-            purge_stale_account_label_state(state_transaction, &label);
-            if let Some(domain) = &label.domain {
-                let already_linked = state_transaction
-                    .world
-                    .account_subject_domains
-                    .view()
-                    .get(&subject)
-                    .is_some_and(|domains| domains.contains(domain));
-                if !already_linked {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "Account label domain {domain} must already be linked to the account subject"
-                        )
-                        .into(),
+            let SetPrimaryAccountAlias {
+                account,
+                alias,
+                lease_expiry_ms,
+            } = self;
+            let existing_label = state_transaction.world.account(&account)?.label().cloned();
+            let Some(alias) = alias else {
+                if lease_expiry_ms.is_some() {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "lease_expiry_ms requires alias binding".into(),
+                        ),
                     )
                     .into());
                 }
+                if let Some(previous_label) = existing_label.as_ref() {
+                    state_transaction
+                        .world
+                        .remove_account_alias_binding(previous_label);
+                    state_transaction
+                        .world
+                        .account_rekey_records
+                        .remove(previous_label.clone());
+                }
+                state_transaction
+                    .world
+                    .account_mut(&account)?
+                    .set_label(None);
+                return Ok(());
+            };
+            if account_label_is_pii(&alias) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "Account alias looks like raw PII; use UAID/opaque identifiers instead"
+                        .to_owned()
+                        .into(),
+                )
+                .into());
             }
-            let existing_label = state_transaction.world.account(&account)?.label().cloned();
-            let existing_alias_owner = state_transaction.world.account_aliases.get(&label).cloned();
+
+            if !authority_can_manage_account_alias(&state_transaction.world, authority, &alias) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "authority is not permitted to set this account alias"
+                        .to_owned()
+                        .into(),
+                )
+                .into());
+            }
+            refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
+            ensure_active_account_alias_lease(state_transaction, &alias)?;
+            ensure_contract_alias_namespace_available(state_transaction, &alias)?;
+
+            purge_stale_account_label_state(state_transaction, &alias);
+            let existing_alias_owner = state_transaction.world.account_aliases.get(&alias).cloned();
             if let Some(existing_owner) = existing_alias_owner.as_ref() {
                 if existing_owner != &account {
                     let displaced_label = state_transaction
@@ -2828,24 +2765,24 @@ pub mod isi {
                         .account(existing_owner)?
                         .label()
                         .cloned();
-                    if displaced_label.as_ref() == Some(&label) {
+                    if displaced_label.as_ref() == Some(&alias) {
                         state_transaction
                             .world
                             .account_mut(existing_owner)?
                             .set_label(None);
                     }
-                    state_transaction.world.remove_account_alias_binding(&label);
+                    state_transaction.world.remove_account_alias_binding(&alias);
                 }
             }
-            if existing_label.as_ref() != Some(&label)
+            if existing_label.as_ref() != Some(&alias)
                 && state_transaction
                     .world
                     .account_rekey_records
-                    .get(&label)
+                    .get(&alias)
                     .is_some()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "Account label already registered".to_owned().into(),
+                    "account alias already registered".to_owned().into(),
                 )
                 .into());
             }
@@ -2863,70 +2800,12 @@ pub mod isi {
             state_transaction
                 .world
                 .account_mut(&account)?
-                .set_label(Some(label.clone()));
+                .set_label(Some(alias.clone()));
             state_transaction
                 .world
-                .insert_account_alias_binding(label.clone(), account.clone());
-            upsert_account_rekey_record(state_transaction, &label, &account);
+                .insert_account_alias_binding(alias.clone(), account.clone());
+            upsert_account_rekey_record(state_transaction, &alias, &account);
 
-            Ok(())
-        }
-    }
-
-    impl Execute for UnlinkAccountDomain {
-        #[metrics(+"unlink_account_domain")]
-        fn execute(
-            self,
-            authority: &AccountId,
-            state_transaction: &mut StateTransaction<'_, '_>,
-        ) -> Result<(), Error> {
-            let UnlinkAccountDomain { account, domain } = self;
-            let domain_owner = state_transaction.world.domain(&domain)?.owned_by().clone();
-            let subject = account.subject_id();
-            let scoped = subject.to_account_id(domain.clone());
-
-            let authority_controls_subject = authority.subject_id() == subject;
-            let authority_controls_domain = authority == &domain_owner;
-            let authority_can_register_domain_accounts = authority_can_register_account_in_domain(
-                &state_transaction.world,
-                authority,
-                &domain,
-            );
-            if !authority_controls_subject
-                && !authority_controls_domain
-                && !authority_can_register_domain_accounts
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "authority is not permitted to unlink this account subject from the domain"
-                        .to_owned()
-                        .into(),
-                )
-                .into());
-            }
-
-            let linked = state_transaction
-                .world
-                .account_subject_domains
-                .view()
-                .get(&subject)
-                .is_some_and(|domains| domains.contains(&domain));
-            if !linked {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "account subject is not linked to the domain"
-                        .to_owned()
-                        .into(),
-                )
-                .into());
-            }
-
-            state_transaction
-                .world
-                .unlink_account_subject_domain(&scoped);
-            state_transaction
-                .world
-                .emit_events(Some(DomainEvent::AccountUnlinked(
-                    AccountDomainLinkChanged { domain, account },
-                )));
             Ok(())
         }
     }
@@ -3115,10 +2994,7 @@ pub mod query {
     };
 
     use super::*;
-    use crate::{
-        smartcontracts::{ValidQuery, ValidSingularQuery},
-        state::StateReadOnly,
-    };
+    use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
 
     impl ValidQuery for FindDomains {
         #[metrics(+"find_domains")]
@@ -3132,25 +3008,6 @@ pub mod query {
                 .domains_iter()
                 .filter(move |&v| filter.applies(v))
                 .cloned())
-        }
-    }
-
-    impl ValidSingularQuery for FindAccountIdsByDomainId {
-        #[metrics(+"find_account_ids_by_domain_id")]
-        fn execute(
-            &self,
-            state_ro: &impl StateReadOnly,
-        ) -> std::result::Result<Vec<AccountId>, QueryExecutionFail> {
-            let domain_id = self.domain_id().clone();
-            state_ro.world().domain(&domain_id)?;
-            let mut account_ids: Vec<AccountId> = state_ro
-                .world()
-                .account_subjects_in_domain(&domain_id)
-                .into_iter()
-                .collect();
-            account_ids.sort();
-            account_ids.dedup();
-            Ok(account_ids)
         }
     }
 }
@@ -3205,7 +3062,6 @@ mod tests {
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         prelude::World,
         query::store::LiveQueryStore,
-        smartcontracts::ValidSingularQuery,
         state::State,
     };
 
@@ -3265,9 +3121,9 @@ mod tests {
     fn seed_account_alias_lease(
         tx: &mut StateTransaction<'_, '_>,
         owner: &AccountId,
-        label: &AccountLabel,
+        alias: &AccountLabel,
     ) {
-        let selector = crate::sns::selector_for_account_alias(label, &tx.nexus.dataspace_catalog)
+        let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
             .expect("selector");
         let address = AccountAddress::from_account_id(owner).expect("account address");
         let record = NameRecordV1::new(
@@ -3295,7 +3151,7 @@ mod tests {
         tx.world.add_account_permission(
             authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(domain.clone()),
+                scope: AccountAliasPermissionScope::Domain(domain.clone().into()),
             }),
         );
         tx.world.add_account_permission(
@@ -3334,158 +3190,6 @@ mod tests {
     }
 
     #[test]
-    fn link_and_unlink_account_domain_updates_subject_query_indexes() {
-        let mut state = test_state();
-        let linked_domain: DomainId = "linked".parse().expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        seed_domain(&mut state, &linked_domain, &owner);
-
-        let probe_account = AccountId::new(KeyPair::random().public_key().clone());
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        LinkAccountDomain {
-            account: probe_account.clone(),
-            domain: linked_domain.clone(),
-        }
-        .execute(&owner, &mut tx)
-        .expect("domain owner should be able to link subject");
-        tx.apply();
-        block.commit().expect("block commit should succeed");
-
-        let view = state.view();
-        let linked_accounts =
-            iroha_data_model::query::domain::FindAccountIdsByDomainId::new(linked_domain.clone())
-                .execute(&view)
-                .expect("query should succeed");
-        assert_eq!(linked_accounts, vec![probe_account.clone()]);
-
-        let linked_domains =
-            iroha_data_model::query::account::FindDomainsByAccountId::new(probe_account.clone())
-                .execute(&view)
-                .expect("query should succeed");
-        assert_eq!(linked_domains, vec![linked_domain.clone()]);
-
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        UnlinkAccountDomain {
-            account: probe_account.clone(),
-            domain: linked_domain.clone(),
-        }
-        .execute(&owner, &mut tx)
-        .expect("domain owner should be able to unlink subject");
-        tx.apply();
-        block.commit().expect("block commit should succeed");
-
-        let view = state.view();
-        let linked_accounts =
-            iroha_data_model::query::domain::FindAccountIdsByDomainId::new(linked_domain.clone())
-                .execute(&view)
-                .expect("query should succeed");
-        assert!(linked_accounts.is_empty(), "domain links should be removed");
-        let linked_domains =
-            iroha_data_model::query::account::FindDomainsByAccountId::new(probe_account)
-                .execute(&view)
-                .expect("query should succeed");
-        assert!(linked_domains.is_empty(), "subject links should be removed");
-    }
-
-    #[test]
-    fn link_and_unlink_account_domain_allow_domain_registrar() {
-        let mut state = test_state();
-        let linked_domain: DomainId = "linked".parse().expect("domain id");
-        let owner = (*ALICE_ID).clone();
-        let registrar = (*BOB_ID).clone();
-        seed_domain(&mut state, &linked_domain, &owner);
-        seed_account(&mut state, &registrar, &linked_domain);
-
-        let probe_account = AccountId::new(KeyPair::random().public_key().clone());
-        let permission: Permission = CanRegisterAccount {
-            domain: linked_domain.clone(),
-        }
-        .into();
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Grant::account_permission(permission, registrar.clone())
-            .execute(&owner, &mut tx)
-            .expect("grant registrar permission");
-
-        LinkAccountDomain {
-            account: probe_account.clone(),
-            domain: linked_domain.clone(),
-        }
-        .execute(&registrar, &mut tx)
-        .expect("domain registrar should be able to link subject");
-        tx.apply();
-        block.commit().expect("block commit should succeed");
-
-        let view = state.view();
-        let linked_domains =
-            iroha_data_model::query::account::FindDomainsByAccountId::new(probe_account.clone())
-                .execute(&view)
-                .expect("query should succeed");
-        assert_eq!(linked_domains, vec![linked_domain.clone()]);
-
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        UnlinkAccountDomain {
-            account: probe_account.clone(),
-            domain: linked_domain.clone(),
-        }
-        .execute(&registrar, &mut tx)
-        .expect("domain registrar should be able to unlink subject");
-        tx.apply();
-        block.commit().expect("block commit should succeed");
-
-        let view = state.view();
-        let linked_domains =
-            iroha_data_model::query::account::FindDomainsByAccountId::new(probe_account)
-                .execute(&view)
-                .expect("query should succeed");
-        assert!(linked_domains.is_empty(), "subject links should be removed");
-    }
-
-    #[test]
-    fn unlink_account_domain_rejects_unauthorized_authority() {
-        let mut state = test_state();
-        let linked_domain: DomainId = "linked".parse().expect("domain id");
-        let owner = AccountId::new(KeyPair::random().public_key().clone());
-        seed_domain(&mut state, &linked_domain, &owner);
-
-        let probe_account = AccountId::new(KeyPair::random().public_key().clone());
-        let subject = probe_account.subject_id();
-        state.world.account_subject_domains.insert(
-            subject.clone(),
-            std::collections::BTreeSet::from([linked_domain.clone()]),
-        );
-        state.world.domain_account_subjects.insert(
-            linked_domain.clone(),
-            std::collections::BTreeSet::from([subject]),
-        );
-
-        let attacker = AccountId::new(KeyPair::random().public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let err = UnlinkAccountDomain {
-            account: probe_account.clone(),
-            domain: "linked".parse().unwrap(),
-        }
-        .execute(&attacker, &mut tx)
-        .expect_err("non-owner and non-subject authority must be rejected");
-        assert!(
-            err.to_string()
-                .contains("authority is not permitted to unlink this account subject"),
-            "unexpected unlink authorization error: {err}"
-        );
-    }
-
-    #[test]
     fn account_label_registration_and_cleanup() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
@@ -3496,7 +3200,7 @@ mod tests {
             AccountLabel::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = Account::new(account_id.clone().to_account_id(domain_id.clone()))
+        let new_account = Account::new_in_domain(account_id.clone(), domain_id.clone())
             .with_label(Some(account_label.clone()));
 
         // Execute register with label.
@@ -3520,7 +3224,7 @@ mod tests {
         // Duplicate label should be rejected.
         let second_keypair = KeyPair::random();
         let second_id = AccountId::new(second_keypair.public_key().clone());
-        let dup_account = Account::new(second_id.to_account_id(domain_id.clone()))
+        let dup_account = Account::new_in_domain(second_id.clone(), domain_id.clone())
             .with_label(Some(account_label.clone()));
         let err = Register::account(dup_account).execute(&authority, &mut tx);
         assert!(err.is_err(), "duplicate label must raise error");
@@ -3557,11 +3261,9 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_account_alias_lease(&mut tx, &authority, &account_label);
-        Register::account(
-            Account::new_domainless(account_id.clone()).with_label(Some(account_label.clone())),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register domainless account");
+        Register::account(Account::new(account_id.clone()).with_label(Some(account_label.clone())))
+            .execute(&authority, &mut tx)
+            .expect("register domainless account");
 
         let account = tx.world.account(&account_id).expect("account should exist");
         assert!(account.linked_domains.is_empty());
@@ -3597,7 +3299,7 @@ mod tests {
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         let err = Register::account(
-            Account::new(account_id.to_account_id(domain_id)).with_label(Some(label)),
+            Account::new_in_domain(account_id.clone(), domain_id).with_label(Some(label)),
         )
         .execute(&authority, &mut tx)
         .expect_err("alias lease should be required");
@@ -3605,6 +3307,35 @@ mod tests {
         assert!(
             err.to_string().contains("active SNS lease"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn register_account_with_multiple_linked_domains_materializes_all_links() {
+        let mut state = test_state();
+        let first_domain: DomainId = "first.world".parse().expect("domain id");
+        let second_domain: DomainId = "second.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &first_domain, &authority);
+        seed_domain(&mut state, &second_domain, &authority);
+
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let linked_domains = BTreeSet::from([first_domain.clone(), second_domain.clone()]);
+        let new_account =
+            NewAccount::new(account_id.clone()).with_linked_domains(linked_domains.clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(new_account)
+            .execute(&authority, &mut tx)
+            .expect("register account with multiple linked domains");
+
+        let account = tx.world.account(&account_id).expect("account should exist");
+        assert_eq!(&account.linked_domains, &linked_domains);
+        assert_eq!(
+            tx.world.account_subject_domains.view().get(&account_id),
+            Some(&account.linked_domains)
         );
     }
 
@@ -3619,7 +3350,7 @@ mod tests {
         let new_label = AccountLabel::new(domain_id.clone(), "treasury".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = Account::new(account_id.clone().to_account_id(domain_id.clone()))
+        let new_account = Account::new_in_domain(account_id.clone(), domain_id.clone())
             .with_label(Some(old_label.clone()));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -3631,9 +3362,10 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register account with initial label");
 
-        SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: account_id.clone(),
-            label: new_label.clone(),
+            alias: Some(new_label.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect("relabel existing account");
@@ -3666,7 +3398,7 @@ mod tests {
     }
 
     #[test]
-    fn set_account_label_rejects_domainful_alias_without_domain_link() {
+    fn set_primary_account_alias_allows_domainful_alias_without_domain_link() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -3678,20 +3410,25 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(Account::new_domainless(account_id.clone()))
+        Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register domainless account");
         seed_account_alias_lease(&mut tx, &authority, &label);
 
-        let err = SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: account_id.clone(),
-            label,
+            alias: Some(label.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
-        .expect_err("domainful alias without link must fail");
-        assert!(
-            err.to_string().contains("must already be linked"),
-            "unexpected error: {err}"
+        .expect("domainful alias should no longer require a domain link");
+        assert_eq!(tx.world.account_aliases.get(&label), Some(&account_id));
+        assert_eq!(
+            tx.world
+                .account(&account_id)
+                .expect("account should exist")
+                .label(),
+            Some(&label)
         );
     }
 
@@ -3717,16 +3454,18 @@ mod tests {
             label.clone(),
             AccountRekeyRecord::new(label.clone(), stale_owner),
         );
-        Register::account(Account::new(
-            account_id.clone().to_account_id(domain_id.clone()),
+        Register::account(Account::new_in_domain(
+            account_id.clone(),
+            domain_id.clone(),
         ))
         .execute(&authority, &mut tx)
         .expect("register account");
         seed_account_alias_lease(&mut tx, &authority, &label);
 
-        SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: account_id.clone(),
-            label: label.clone(),
+            alias: Some(label.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect("set label should reclaim stale binding");
@@ -3762,13 +3501,14 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
-        Register::account(Account::new(account_id.clone().to_account_id(domain_id)))
+        Register::account(Account::new_in_domain(account_id.clone(), domain_id))
             .execute(&authority, &mut tx)
             .expect("register account");
 
-        let err = BindAccountAlias {
+        let err = SetAccountAliasBinding {
             account: account_id,
-            label: alias,
+            alias: Some(alias),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect_err("alias lease should be required");
@@ -3797,16 +3537,18 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(Account::new(
-            account_id.clone().to_account_id(domain_id.clone()),
+        Register::account(Account::new_in_domain(
+            account_id.clone(),
+            domain_id.clone(),
         ))
         .execute(&authority, &mut tx)
         .expect("register unlabeled multisig account");
         seed_account_alias_lease(&mut tx, &authority, &account_label);
 
-        SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: account_id.clone(),
-            label: account_label.clone(),
+            alias: Some(account_label.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect("bind label to existing multisig account");
@@ -3864,28 +3606,26 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
-        Register::account(Account::new(
-            first_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register first account");
-        Register::account(Account::new(
-            second_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register second account");
+        Register::account(Account::new_in_domain(first_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register first account");
+        Register::account(Account::new_in_domain(second_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register second account");
         seed_account_alias_lease(&mut tx, &domain_owner, &alias);
 
-        SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: first_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
 
-        SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: second_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
         .expect("registrar should repoint alias");
@@ -3957,28 +3697,26 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
-        Register::account(Account::new(
-            first_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register first account");
-        Register::account(Account::new(
-            second_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register second account");
+        Register::account(Account::new_in_domain(first_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register first account");
+        Register::account(Account::new_in_domain(second_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register second account");
         seed_account_alias_lease(&mut tx, &domain_owner, &alias);
 
-        SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: first_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
 
-        SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: second_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
         .expect("global registrar should repoint alias");
@@ -4027,23 +3765,26 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(Account::new(
-            account_id.clone().to_account_id(domain_id.clone()),
+        Register::account(Account::new_in_domain(
+            account_id.clone(),
+            domain_id.clone(),
         ))
         .execute(&authority, &mut tx)
         .expect("register unlabeled multisig account");
         seed_account_alias_lease(&mut tx, &authority, &banking_label);
         seed_account_alias_lease(&mut tx, &authority, &issuance_label);
 
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: account_id.clone(),
-            label: banking_label.clone(),
+            alias: Some(banking_label.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect("bind banking alias");
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: account_id.clone(),
-            label: issuance_label.clone(),
+            alias: Some(issuance_label.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect("bind issuance alias");
@@ -4116,14 +3857,15 @@ mod tests {
         seed_account_alias_lease(&mut tx, &authority, &primary_label);
         seed_account_alias_lease(&mut tx, &authority, &bound_label);
         Register::account(
-            Account::new(account_id.clone().to_account_id(domain_id.clone()))
+            Account::new_in_domain(account_id.clone(), domain_id.clone())
                 .with_label(Some(primary_label.clone())),
         )
         .execute(&authority, &mut tx)
         .expect("register account with primary label");
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: account_id.clone(),
-            label: bound_label.clone(),
+            alias: Some(bound_label.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect("bind additional alias");
@@ -4143,6 +3885,87 @@ mod tests {
                 .is_none(),
             "reverse alias index must be cleared on unregister"
         );
+    }
+
+    #[test]
+    fn clear_account_alias_binding_removes_non_primary_aliases_only() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+
+        let primary_label =
+            AccountLabel::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
+        let root_alias =
+            AccountLabel::domainless("public".parse::<Name>().unwrap(), DataSpaceId::GLOBAL);
+        let domain_alias =
+            AccountLabel::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(keypair.public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        seed_account_alias_lease(&mut tx, &authority, &primary_label);
+        seed_account_alias_lease(&mut tx, &authority, &root_alias);
+        seed_account_alias_lease(&mut tx, &authority, &domain_alias);
+        Register::account(
+            Account::new_in_domain(account_id.clone(), domain_id.clone())
+                .with_label(Some(primary_label.clone())),
+        )
+        .execute(&authority, &mut tx)
+        .expect("register account with primary label");
+        SetAccountAliasBinding {
+            account: account_id.clone(),
+            alias: Some(root_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("bind root alias");
+        SetAccountAliasBinding {
+            account: account_id.clone(),
+            alias: Some(domain_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("bind domain alias");
+
+        SetAccountAliasBinding::clear(account_id.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear secondary aliases");
+
+        assert_eq!(
+            tx.world.account_aliases.get(&primary_label),
+            Some(&account_id),
+            "primary alias binding must remain"
+        );
+        assert!(tx.world.account_aliases.get(&root_alias).is_none());
+        assert!(tx.world.account_aliases.get(&domain_alias).is_none());
+        assert!(
+            tx.world.account_rekey_records.get(&root_alias).is_none(),
+            "cleared secondary alias must drop its rekey record"
+        );
+        assert!(
+            tx.world.account_rekey_records.get(&domain_alias).is_none(),
+            "cleared secondary alias must drop its rekey record"
+        );
+        assert_eq!(
+            tx.world
+                .account(&account_id)
+                .expect("account should exist")
+                .label(),
+            Some(&primary_label),
+            "clear must not remove the primary alias"
+        );
+        let remaining_aliases = tx
+            .world
+            .account_aliases_by_account
+            .get(&account_id)
+            .expect("reverse index should keep the primary alias");
+        assert_eq!(remaining_aliases.len(), 1);
+        assert!(remaining_aliases.contains(&primary_label));
     }
 
     #[test]
@@ -4167,16 +3990,18 @@ mod tests {
             alias.clone(),
             AccountRekeyRecord::new(alias.clone(), stale_owner),
         );
-        Register::account(Account::new(
-            account_id.clone().to_account_id(domain_id.clone()),
+        Register::account(Account::new_in_domain(
+            account_id.clone(),
+            domain_id.clone(),
         ))
         .execute(&authority, &mut tx)
         .expect("register account");
         seed_account_alias_lease(&mut tx, &authority, &alias);
 
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: account_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect("bind should reclaim stale alias");
@@ -4220,16 +4045,18 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
-        Register::account(Account::new(
-            account_id.clone().to_account_id(domain_id.clone()),
+        Register::account(Account::new_in_domain(
+            account_id.clone(),
+            domain_id.clone(),
         ))
         .execute(&domain_owner, &mut tx)
         .expect("register account");
         seed_account_alias_lease(&mut tx, &domain_owner, &alias);
 
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: account_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
         .expect("registrar should bind alias");
@@ -4264,16 +4091,18 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
-        Register::account(Account::new(
-            account_id.clone().to_account_id(domain_id.clone()),
+        Register::account(Account::new_in_domain(
+            account_id.clone(),
+            domain_id.clone(),
         ))
         .execute(&domain_owner, &mut tx)
         .expect("register account");
         seed_account_alias_lease(&mut tx, &domain_owner, &alias);
 
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: account_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
         .expect("global registrar should bind alias");
@@ -4303,28 +4132,26 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(Account::new(
-            first_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register first account");
-        Register::account(Account::new(
-            second_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register second account");
+        Register::account(Account::new_in_domain(first_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register first account");
+        Register::account(Account::new_in_domain(second_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register second account");
         seed_account_alias_lease(&mut tx, &domain_owner, &alias);
 
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: first_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&domain_owner, &mut tx)
         .expect("bind alias to first account");
 
-        let err = BindAccountAlias {
+        let err = SetAccountAliasBinding {
             account: second_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&unauthorized, &mut tx)
         .expect_err("alias collision should be rejected");
@@ -4365,28 +4192,26 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
-        Register::account(Account::new(
-            first_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register first account");
-        Register::account(Account::new(
-            second_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register second account");
+        Register::account(Account::new_in_domain(first_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register first account");
+        Register::account(Account::new_in_domain(second_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register second account");
         seed_account_alias_lease(&mut tx, &domain_owner, &alias);
 
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: first_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
 
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: second_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
         .expect("registrar should repoint alias");
@@ -4431,28 +4256,26 @@ mod tests {
         Grant::account_permission(permission, registrar.clone())
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
-        Register::account(Account::new(
-            first_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register first account");
-        Register::account(Account::new(
-            second_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&domain_owner, &mut tx)
-        .expect("register second account");
+        Register::account(Account::new_in_domain(first_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register first account");
+        Register::account(Account::new_in_domain(second_id.clone(), domain_id.clone()))
+            .execute(&domain_owner, &mut tx)
+            .expect("register second account");
         seed_account_alias_lease(&mut tx, &domain_owner, &alias);
 
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: first_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
 
-        BindAccountAlias {
+        SetAccountAliasBinding {
             account: second_id.clone(),
-            label: alias.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
         }
         .execute(&registrar, &mut tx)
         .expect("global registrar should repoint alias");
@@ -4483,7 +4306,7 @@ mod tests {
             AccountLabel::new(domain_id.clone(), "+819398553445".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
+        let new_account = Account::new_in_domain(account_id.clone(), domain_id.clone())
             .with_label(Some(account_label));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -4547,7 +4370,7 @@ mod tests {
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
         let new_account = NewAccount {
             id: account_id,
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: None,
@@ -4579,7 +4402,7 @@ mod tests {
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
         let new_account = NewAccount {
             id: account_id,
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(uaid),
@@ -4613,7 +4436,7 @@ mod tests {
 
         let first_account = NewAccount {
             id: first_id.clone(),
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(first_uaid),
@@ -4621,7 +4444,7 @@ mod tests {
         };
         let second_account = NewAccount {
             id: second_id.clone(),
-            domain: Some(domain_id.clone()),
+            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(second_uaid),
@@ -4672,7 +4495,7 @@ mod tests {
 
         let secp_pair = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
         let account_id = AccountId::new(secp_pair.public_key().clone());
-        let new_account = Account::new(account_id.to_account_id(domain_id.clone()));
+        let new_account = Account::new_in_domain(account_id.clone(), domain_id.clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4708,7 +4531,7 @@ mod tests {
 
         let bls_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let account_id = AccountId::new(bls_pair.public_key().clone());
-        let new_account = Account::new(account_id.to_account_id(domain_id.clone()));
+        let new_account = Account::new_in_domain(account_id.clone(), domain_id.clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4734,7 +4557,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = Account::new(account_id.to_account_id(domain_id.clone()));
+        let new_account = Account::new_in_domain(account_id.clone(), domain_id.clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -5286,12 +5109,8 @@ mod tests {
         ))
         .execute(&authority, &mut tx)
         .expect("register target account");
-        LinkAccountDomain {
-            account: target_id.clone(),
-            domain: retained_domain,
-        }
-        .execute(&authority, &mut tx)
-        .expect("link retained domain to account subject");
+        tx.world
+            .link_account_subject_domain(&target_id, &retained_domain);
         Register::account(NewAccount::new_in_domain(
             holder_id.clone(),
             holder_domain.clone(),
@@ -5549,12 +5368,8 @@ mod tests {
         ))
         .execute(&authority, &mut tx)
         .expect("register configured account");
-        LinkAccountDomain {
-            account: account_id.clone(),
-            domain: sink_domain,
-        }
-        .execute(&authority, &mut tx)
-        .expect("link configured subject into additional domain");
+        tx.world
+            .link_account_subject_domain(&account_id, &sink_domain);
         tx.nexus.fees.fee_sink_account_id = account_id.to_string();
         tx.nexus.staking.stake_escrow_account_id = account_id.to_string();
         tx.nexus.staking.slash_sink_account_id = account_id.to_string();
@@ -5629,12 +5444,8 @@ mod tests {
         ))
         .execute(&authority, &mut tx)
         .expect("register sink account");
-        LinkAccountDomain {
-            account: sink_account_id.clone(),
-            domain: remove_domain.clone(),
-        }
-        .execute(&authority, &mut tx)
-        .expect("link sink subject into cleanup domain");
+        tx.world
+            .link_account_subject_domain(&sink_account_id, &remove_domain);
         Register::account(NewAccount::new_in_domain(
             remove_account_id.clone(),
             remove_domain.clone(),
@@ -7282,7 +7093,7 @@ mod tests {
 
     #[test]
     fn set_contract_alias_updates_world_indexes() {
-        let mut state = test_state();
+        let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address =
             ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
@@ -7320,7 +7131,7 @@ mod tests {
 
     #[test]
     fn set_contract_alias_rejects_account_alias_collision() {
-        let mut state = test_state();
+        let state = test_state();
         let authority = (*ALICE_ID).clone();
         let contract_address =
             ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
@@ -7391,9 +7202,10 @@ mod tests {
             )
             .expect("seed contract alias");
 
-        let err = BindAccountAlias {
+        let err = SetAccountAliasBinding {
             account: authority.clone(),
-            label,
+            alias: Some(label),
+            lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
         .expect_err("contract alias collision must fail");

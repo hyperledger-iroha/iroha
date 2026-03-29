@@ -498,7 +498,7 @@ fn instruction_self_registers_authority(
         return false;
     };
 
-    if registration.domain().is_some() {
+    if !registration.linked_domains().is_empty() {
         return false;
     }
 
@@ -3770,7 +3770,7 @@ pub mod tests {
         account_id: &AccountId,
         domain_id: &DomainId,
     ) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone().to_account_id(domain_id.clone()))
+        Account::new_in_domain(account_id.clone(), domain_id.clone())
     }
 
     fn world_with_authority(domain: &str) -> (World, AccountId, KeyPair) {
@@ -4372,9 +4372,7 @@ pub mod tests {
 
         let tx = TransactionBuilder::new(chain.clone(), authority.clone())
             .with_instructions([
-                InstructionBox::from(Register::account(Account::new_domainless(
-                    authority.clone(),
-                ))),
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
                 InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
             ])
             .sign(keypair.private_key());
@@ -4400,7 +4398,7 @@ pub mod tests {
     fn existing_authority_self_register_is_idempotent() {
         let chain: ChainId = "existing-authority-self-register".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let existing = Account::new_domainless(authority.clone()).build(&authority);
+        let existing = Account::new(authority.clone()).build(&authority);
         let world = World::with([], [existing], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -4408,9 +4406,7 @@ pub mod tests {
 
         let tx = TransactionBuilder::new(chain.clone(), authority.clone())
             .with_instructions([
-                InstructionBox::from(Register::account(Account::new_domainless(
-                    authority.clone(),
-                ))),
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
                 InstructionBox::from(Log::new(Level::INFO, "self-register-again".into())),
             ])
             .sign(keypair.private_key());
@@ -7904,7 +7900,7 @@ pub mod tests {
                     .into_iter()
                     .chain([("genesis", GENESIS_ACCOUNT.clone())])
                     .map(|(_name, cred)| {
-                        Account::new(cred.id.clone().to_account_id(DOMAIN.clone()))
+                        Account::new_in_domain(cred.id.clone(), DOMAIN.clone())
                             .build(&GENESIS_ACCOUNT.id)
                     });
                 let assets = INIT_BALANCE

@@ -568,6 +568,7 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha app alias voprf-evaluate`↴](#iroha-app-alias-voprf-evaluate)
 * [`iroha app alias resolve`↴](#iroha-app-alias-resolve)
 * [`iroha app alias resolve-index`↴](#iroha-app-alias-resolve-index)
+* [`iroha app alias by-account`↴](#iroha-app-alias-by-account)
 * [`iroha app repo`↴](#iroha-app-repo)
 * [`iroha app repo initiate`↴](#iroha-app-repo-initiate)
 * [`iroha app repo unwind`↴](#iroha-app-repo-unwind)
@@ -1064,15 +1065,11 @@ Retrieve details of a specific account
 
 Register an account
 
-**Usage:** `iroha ledger account register [OPTIONS] --id <ID>`
+**Usage:** `iroha ledger account register --id <ID>`
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Canonical domainless account identifier for registration (canonical I105 literal)
-* `-d`, `--domain <DOMAIN>` — Domain in which to materialize the account link
-* `--domainless` — Register the canonical domainless account directly
-
-  Default value: `false`
+* `-i`, `--id <ID>` — Canonical global account identifier for registration (canonical I105 literal)
 
 
 
@@ -5048,7 +5045,7 @@ Contracts helpers (code storage)
 * `deploy-activate` — Deploy bytecode, register manifest, and activate a namespace binding in one transaction
 * `manifest` — Contract manifest helpers
 * `simulate` — Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
-* `instances` — List active contract instances in a namespace (supports filters and pagination)
+* `instances` — List active contract instances in a dataspace (supports filters and pagination)
 
 
 
@@ -5326,13 +5323,13 @@ Run an offline simulation of IVM bytecode to see the queued ISIs and header meta
 
 ## `iroha app contracts instances`
 
-List active contract instances in a namespace (supports filters and pagination)
+List active contract instances in a dataspace (supports filters and pagination)
 
-**Usage:** `iroha app contracts instances [OPTIONS] --namespace <NS>`
+**Usage:** `iroha app contracts instances [OPTIONS] --dataspace <DATASPACE>`
 
 ###### **Options:**
 
-* `--namespace <NS>` — Namespace to list (e.g., apps)
+* `--dataspace <DATASPACE>` — Dataspace to list (e.g., universal)
 * `--contains <CONTAINS>` — Filter: `contract_id` substring (case-sensitive)
 * `--hash-prefix <HASH_PREFIX>` — Filter: code hash hex prefix (lowercase)
 * `--offset <OFFSET>` — Pagination offset
@@ -10519,6 +10516,7 @@ Alias helpers (placeholder pipeline)
 * `voprf-evaluate` — Evaluate a blinded element using the alias VOPRF service (placeholder)
 * `resolve` — Resolve an alias by its canonical name (placeholder)
 * `resolve-index` — Resolve an alias by Merkle index (placeholder)
+* `by-account` — List aliases bound to a canonical account id
 
 
 
@@ -10558,6 +10556,20 @@ Resolve an alias by Merkle index (placeholder)
 ###### **Options:**
 
 * `--index <INDEX>` — Alias Merkle index to resolve
+
+
+
+## `iroha app alias by-account`
+
+List aliases bound to a canonical account id
+
+**Usage:** `iroha app alias by-account [OPTIONS] --account-id <ACCOUNT_ID>`
+
+###### **Options:**
+
+* `--account-id <ACCOUNT_ID>` — Canonical I105 account id
+* `--dataspace <DATASPACE>` — Optional dataspace alias filter such as `sbp`
+* `--domain <DOMAIN>` — Optional exact domain filter such as `hbl`
 
 
 

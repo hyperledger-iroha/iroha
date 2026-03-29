@@ -94,8 +94,10 @@ fn transactions_should_be_applied() -> Result<()> {
         target_height += 1;
         wait_for_height(target_height, "after create_asset")?;
 
-        let create_account =
-            Register::account(Account::new(account_id.to_account_id(domain_id.clone())));
+        let create_account = Register::account(Account::new_in_domain(
+            account_id.clone(),
+            domain_id.clone(),
+        ));
         iroha.submit(create_account).wrap_err_with(|| {
             format!(
                 "submit create_account; torii={torii}, env_dir={}",

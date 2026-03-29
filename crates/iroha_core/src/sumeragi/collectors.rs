@@ -28,6 +28,16 @@ impl CollectorPlan {
         }
     }
 
+    /// Recreate a plan with a known number of already-consumed targets.
+    pub fn with_sent(targets: Vec<PeerId>, sent: usize) -> Self {
+        let capped_sent = sent.min(targets.len());
+        Self {
+            targets,
+            sent: capped_sent,
+            gossip_triggered: false,
+        }
+    }
+
     /// Return a view of the underlying targets in their planned order.
     pub fn targets(&self) -> &[PeerId] {
         &self.targets
@@ -157,6 +167,18 @@ mod tests {
         assert!(plan.trigger_gossip());
         assert!(!plan.trigger_gossip());
         assert!(plan.gossip_triggered());
+    }
+
+    #[test]
+    fn plan_with_sent_preserves_remaining_targets() {
+        let peers: Vec<PeerId> = (0..4)
+            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .collect();
+        let mut plan = CollectorPlan::with_sent(peers.clone(), 1);
+
+        assert_eq!(plan.sent_count(), 1);
+        assert_eq!(plan.peek(), Some(&peers[1]));
+        assert_eq!(plan.next(), Some(peers[1].clone()));
     }
 
     #[test]

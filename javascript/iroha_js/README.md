@@ -64,6 +64,7 @@ surface, use the dedicated browser subpath:
 import {
   createConnectSessionPreview,
   registerConnectSession,
+  resolveConnectLaunchUri,
   openConnectWebSocket,
 } from "@iroha/iroha-js/connect-browser";
 
@@ -76,13 +77,27 @@ const session = await registerConnectSession("https://taira.sora.org", preview.s
   node: "https://taira.sora.org",
 });
 
+const walletUri = resolveConnectLaunchUri("wallet", preview, session);
+// Launch IrohaConnect with the canonical one-time wallet URI from Torii.
+window.location.href = walletUri;
+
 const socket = openConnectWebSocket(
   "https://taira.sora.org",
   preview.sidBase64Url,
   session.token_app,
   "app",
+  { protocols: ["iroha-connect"] },
 );
 ```
+
+Use the Torii session response (`wallet_uri` / `app_uri`) for launch once the
+session is registered. The preview URIs are tokenless bootstrap hints and now
+mirror Torii's role-based `iroha://connect?...&role=...` shape so wallet and
+app launchers stay consistent.
+
+If Torii sits behind nginx or another reverse proxy, `/v1/connect/ws` must
+forward websocket upgrade headers (`Connection: Upgrade`, `Upgrade: websocket`)
+to the upstream node or browser Connect joins will fail with `400 Bad Request`.
 
 You can also use namespaced exports when you prefer grouped imports:
 

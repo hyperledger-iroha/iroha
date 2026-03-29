@@ -28,7 +28,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   - `AccountId` is the canonical account identity and is always domainless.
   - `ScopedAccountId { account, domain }` is only explicit domain context for operations or views that require a linked domain; it is not the canonical identity.
   - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` bind to the same canonical `AccountId`.
-  - In tests and fixtures, seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately. Use `Account::new_domainless(...)` for dataspace-root aliases and `Account::new(scoped_id)` only when the behavior under test truly requires a domain-linked registration/materialization.
+  - In tests and fixtures, seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately. Use `Account::new(...)` for dataspace-root aliases and `Account::from_scoped_id(...)` only when the behavior under test truly requires a domain-linked registration/materialization.
 
 ## Repository structure
 - `Cargo.toml` at the repository root defines the workspace and lists all member crates.
@@ -141,6 +141,12 @@ Note: First release policy
 - Do not attempt to disable DA/RBC in tests (e.g., via `DevBypassDaAndRbcForZeroChain`); DA is enforced and that bypass path currently deadlocks in `sumeragi` during consensus startup.
 - QC quorum must be satisfied by voting validators (`min_votes_for_commit`); observer padding does not count toward availability/prevote/precommit quorum checks, so aggregate QCs only after enough validator votes arrive.
 - DA-enabled consensus now waits longer before view changes (commit quorum timeout = `block_time + 3 * commit_time`) to let RBC/availability QC finish on slower hosts.
+- When the user asks about the live SORA Taira testnet or deployed Torii MCP
+  workflows, consult `skills/sora-taira-testnet/SKILL.md` in this repo and
+  prefer the curated `iroha.*` tool surface on `https://taira.sora.org/v1/mcp`.
+- Treat any Taira/runtime signing inputs such as `authority`,
+  `private_key`, bearer tokens, or forwarded auth headers as runtime-only
+  secrets and never persist them in repo files or committed docs.
 
 ## Navigation tips
 - Search code: `rg '<term>'` and list files: `fd <name>`.

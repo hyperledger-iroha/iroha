@@ -639,16 +639,19 @@ mod tests {
 
     #[test]
     fn validator_summary_formats_activation_and_status() {
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        let validator = iroha::data_model::account::AccountId::new(
+            KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .canonical_i105()
+        .expect("canonical I105");
         let record = Map::from_iter([
             ("lane_id".into(), Value::from(0u64)),
-            (
-                "validator".into(),
-                Value::from("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
-            ),
-            (
-                "stake_account".into(),
-                Value::from("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
-            ),
+            ("validator".into(), Value::from(validator.clone())),
+            ("stake_account".into(), Value::from(validator.clone())),
             ("total_stake".into(), Value::from("1000")),
             ("self_stake".into(), Value::from("800")),
             (
@@ -669,7 +672,7 @@ mod tests {
         ]));
 
         let summary = format_validator_summary(&payload).expect("format summary");
-        assert!(summary.contains("6cmzPVPX944pj7vV"));
+        assert!(summary.contains(&truncate_field(&validator, 36)));
         assert!(summary.contains("Pending(epoch 2)"));
         assert!(summary.contains("epoch 1 @ 3601"));
         assert!(summary.contains("1000 (self 800)"));
@@ -677,6 +680,22 @@ mod tests {
 
     #[test]
     fn stake_summary_marks_pending_unbonds() {
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        let validator = iroha::data_model::account::AccountId::new(
+            KeyPair::from_seed(vec![0x12; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .canonical_i105()
+        .expect("canonical I105");
+        let staker = iroha::data_model::account::AccountId::new(
+            KeyPair::from_seed(vec![0x13; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .canonical_i105()
+        .expect("canonical I105");
         let pending = Map::from_iter([
             ("request_id".into(), Value::from("deadbeef")),
             ("amount".into(), Value::from("250")),
@@ -684,14 +703,8 @@ mod tests {
         ]);
         let record = Map::from_iter([
             ("lane_id".into(), Value::from(0u64)),
-            (
-                "validator".into(),
-                Value::from("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
-            ),
-            (
-                "staker".into(),
-                Value::from("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
-            ),
+            ("validator".into(), Value::from(validator.clone())),
+            ("staker".into(), Value::from(staker.clone())),
             ("bonded".into(), Value::from("750")),
             (
                 "pending_unbonds".into(),
@@ -705,8 +718,8 @@ mod tests {
         ]));
 
         let summary = format_stake_summary(&payload).expect("format summary");
-        assert!(summary.contains("6cmzPVPX944pj7vV"));
-        assert!(summary.contains("6cmzPVPX7WxKCts6"));
+        assert!(summary.contains(&truncate_field(&validator, 32)));
+        assert!(summary.contains(&truncate_field(&staker, 32)));
         assert!(summary.contains("750"));
         assert!(summary.contains("pending (next @ 10)"));
     }

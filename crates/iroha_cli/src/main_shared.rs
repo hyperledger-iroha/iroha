@@ -44,7 +44,7 @@ use futures::{TryStreamExt, stream::TryStream};
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
-    data_model::{account::ScopedAccountId, prelude::*, transaction::IvmBytecode},
+    data_model::{prelude::*, transaction::IvmBytecode},
 };
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, KeyPair};
@@ -1694,20 +1694,11 @@ mod account {
                     context.print_data(&entry)
                 }
                 Register(args) => {
-                    let instruction = if args.domainless {
-                        let account_id = parse_domainless_account_id(&args.id)?;
-                        iroha::data_model::isi::Register::account(Account::new_domainless(
+                    let account_id = parse_register_account_id(&args.id)?;
+                    let instruction =
+                        iroha::data_model::isi::Register::account(Account::new(
                             account_id,
-                        ))
-                    } else {
-                        let domain = args.domain.as_ref().ok_or_else(|| {
-                            eyre!(
-                                "`ledger account register` requires either `--domain <domain>` or `--domainless`"
-                            )
-                        })?;
-                        let account_id = parse_register_account_id(&args.id, domain)?;
-                        iroha::data_model::isi::Register::account(Account::new(account_id))
-                    };
+                        ));
                     context
                         .finish([instruction])
                         .wrap_err("Failed to register account")
@@ -1846,15 +1837,9 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct RegisterId {
-        /// Canonical domainless account identifier for registration (canonical I105 literal)
+        /// Canonical global account identifier for registration (canonical I105 literal)
         #[arg(short, long)]
         id: String,
-        /// Domain in which to materialize the account link
-        #[arg(short = 'd', long, conflicts_with = "domainless")]
-        domain: Option<DomainId>,
-        /// Register the canonical domainless account directly
-        #[arg(long, default_value_t = false, conflicts_with = "domain")]
-        domainless: bool,
     }
 
     #[derive(clap::Args, Debug)]
@@ -4150,7 +4135,7 @@ mod multisig {
             let domain: DomainId = "wonderland".parse().unwrap();
             let account_id = account_from_seed(9, &domain);
             let account =
-                Account::new(account_id.clone().to_account_id(domain.clone())).build(&account_id);
+                Account::new_in_domain(account_id.clone(), domain.clone()).build(&account_id);
 
             let mut accounts = BTreeMap::new();
             accounts.insert(account_id.clone(), account);
@@ -7273,21 +7258,14 @@ fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
         .map_err(|err| eyre!("asset definition literal: {err}"))
 }
 
-fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedAccountId> {
-    Ok(ScopedAccountId::from_account_id(
-        parse_domainless_account_id(literal)?,
-        domain.clone(),
-    ))
-}
-
-fn parse_domainless_account_id(literal: &str) -> Result<AccountId> {
+fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
         eyre::bail!("`ledger account register --id` must be a canonical I105 account id");
     }
     if trimmed.contains('@') {
         eyre::bail!(
-            "`ledger account register --id` must not include '@domain'; pass the scope via `--domain`"
+            "`ledger account register --id` must not include '@domain'; accounts are global and aliases carry domains"
         );
     }
     if trimmed
@@ -7415,6 +7393,7 @@ mod tests {
     use futures::stream;
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
+        account::ScopedAccountId,
         ChainId, Level,
         events::{
             EventFilterBox, data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter,
@@ -7432,19 +7411,21 @@ mod tests {
     use tokio::runtime::Runtime;
     use url::Url;
 
-    #[test]
-    fn parse_domainless_account_id_accepts_canonical_i105_literal() {
-        let literal = "44ZQsD4b6qLunCkTq4zwtixNaRBPXshxMZa23TA2JNde33UWs67E7WCpjemcwS2YdKa78EhgEgfvR";
-        let parsed = parse_domainless_account_id(literal).expect("domainless account id");
-        assert_eq!(parsed.to_string(), literal);
+    fn sample_canonical_i105_literal(seed: u8) -> String {
+        AccountId::new(KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).public_key().clone())
+            .canonical_i105()
+            .expect("canonical I105")
+    }
+
+    fn sample_noncanonical_i105_literal(seed: u8) -> String {
+        sample_canonical_i105_literal(seed).replacen("sora", "ｓｏｒａ", 1)
     }
 
     #[test]
-    fn parse_register_account_id_materializes_requested_domain() {
-        let literal = "44ZQsD4b6qLunCkTq4zwtixNaRBPXshxMZa23TA2JNde33UWs67E7WCpjemcwS2YdKa78EhgEgfvR";
-        let domain: DomainId = "universal".parse().expect("domain");
-        let scoped = parse_register_account_id(literal, &domain).expect("scoped account");
-        assert_eq!(scoped.to_string(), format!("{literal}@{domain}"));
+    fn parse_register_account_id_accepts_canonical_i105_literal() {
+        let literal = sample_canonical_i105_literal(23);
+        let parsed = parse_register_account_id(&literal).expect("register account id");
+        assert_eq!(parsed.to_string(), literal);
     }
 
     #[derive(Clone, Copy, JsonSerialize)]
@@ -7596,10 +7577,10 @@ mod tests {
 
     #[test]
     fn resolve_account_id_with_rejects_non_canonical_i105_literal() {
-        let literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+        let literal = sample_noncanonical_i105_literal(25);
 
-        let err =
-            resolve_account_id_with(&literal).expect_err("non-canonical I105 literal should fail");
+        let err = resolve_account_id_with(&literal)
+            .expect_err("non-canonical I105 literal should fail");
 
         assert!(
             err.to_string().contains("must be canonical I105"),
@@ -7608,37 +7589,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_register_account_id_uses_explicit_domain() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let key_pair = KeyPair::from_seed(vec![11_u8; 32], Algorithm::Ed25519);
-        let literal = AccountId::new(key_pair.public_key().clone())
-            .canonical_i105()
-            .expect("canonical I105");
-        let resolved = parse_register_account_id(&literal, &domain).expect("register account id");
-        assert_eq!(
-            resolved,
-            ScopedAccountId::new(domain, key_pair.public_key().clone())
-        );
-    }
-
-    #[test]
     fn parse_register_account_id_rejects_alias_like_literal() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let err = parse_register_account_id("inori@invalid-domain", &domain)
+        let err = parse_register_account_id("inori@invalid-domain")
             .expect_err("alias should fail");
         assert!(
             err.to_string()
-                .contains("must not include '@domain'; pass the scope via `--domain`"),
+                .contains("accounts are global and aliases carry domains"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
     fn parse_register_account_id_rejects_non_canonical_i105_literal() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
-        let err = parse_register_account_id(&literal, &domain)
-            .expect_err("non-canonical I105 literal should fail");
+        let literal = sample_noncanonical_i105_literal(26);
+        let err =
+            parse_register_account_id(&literal).expect_err("non-canonical I105 literal should fail");
         assert!(
             err.to_string()
                 .contains("must be a canonical I105 account id"),
@@ -7648,13 +7613,11 @@ mod tests {
 
     #[test]
     fn parse_register_account_id_rejects_canonical_hex() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![14_u8; 32], Algorithm::Ed25519);
         let literal = AccountId::new(key_pair.public_key().clone())
             .to_canonical_hex()
             .expect("canonical hex");
-        let err =
-            parse_register_account_id(&literal, &domain).expect_err("canonical hex should fail");
+        let err = parse_register_account_id(&literal).expect_err("canonical hex should fail");
         assert!(
             err.to_string().contains("canonical hex is not accepted"),
             "unexpected error: {err}"
@@ -8785,9 +8748,9 @@ mod tests {
             let id3 = ScopedAccountId::new(domain.clone(), kp3.public_key().clone());
 
             // Build accounts; builder API needs an authority, use id1 for simplicity
-            let mut a1 = Account::new(id1.clone()).build(&id1);
-            let mut a2 = Account::new(id2.clone()).build(&id1);
-            let mut a3 = Account::new(id3.clone()).build(&id1);
+            let mut a1 = Account::from_scoped_id(id1.clone()).build(id1.account());
+            let mut a2 = Account::from_scoped_id(id2.clone()).build(id1.account());
+            let mut a3 = Account::from_scoped_id(id3.clone()).build(id1.account());
 
             // Insert ranks: a2=1, a1=2, a3=None
             a1.metadata
@@ -9533,10 +9496,7 @@ mod tests {
                     let kp = KeyPair::random();
                     let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
                     // owner for builder is arbitrary for this harness
-                    Account::new(id).build(&ScopedAccountId::new(
-                        domain.clone(),
-                        KeyPair::random().public_key().clone(),
-                    ))
+                    Account::from_scoped_id(id.clone()).build(id.account())
                 })
                 .collect();
             let key: Name = "rank".parse().unwrap();
@@ -9661,10 +9621,7 @@ mod tests {
                 .map(|_| {
                     let kp = KeyPair::random();
                     let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
-                    Account::new(id).build(&ScopedAccountId::new(
-                        domain.clone(),
-                        KeyPair::random().public_key().clone(),
-                    ))
+                    Account::from_scoped_id(id.clone()).build(id.account())
                 })
                 .collect();
             let key: Name = "rank".parse().unwrap();
@@ -10702,10 +10659,8 @@ mod tests {
             for i in 0..5 {
                 let kp = KeyPair::random();
                 let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
-                let mut a = Account::new(id).build(
-                    // owner is arbitrary in builder path
-                    &ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone()),
-                );
+                // owner is arbitrary in builder path
+                let mut a = Account::from_scoped_id(id.clone()).build(id.account());
                 a.metadata
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
                 accounts.push(a);
@@ -11582,8 +11537,8 @@ mod cli_integration_harness {
         let bob = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
         server.accounts = vec![
-            Account::new(alice.clone()).build(&alice),
-            Account::new(bob.clone()).build(&bob),
+            Account::from_scoped_id(alice.clone()).build(alice.account()),
+            Account::from_scoped_id(bob.clone()).build(bob.account()),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -11736,9 +11691,9 @@ mod cli_integration_harness {
         let carol = sample_account_id("w", 5);
         let mut server = MockQueryServer::default();
         server.accounts = vec![
-            Account::new(alice.clone()).build(&alice),
-            Account::new(bob.clone()).build(&bob),
-            Account::new(carol.clone()).build(&carol),
+            Account::from_scoped_id(alice.clone()).build(alice.account()),
+            Account::from_scoped_id(bob.clone()).build(bob.account()),
+            Account::from_scoped_id(carol.clone()).build(carol.account()),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(

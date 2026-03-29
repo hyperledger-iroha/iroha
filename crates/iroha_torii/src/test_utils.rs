@@ -246,7 +246,7 @@ pub fn random_authority() -> AuthorityCreds {
 pub fn world_with_authority(authority: &AccountId) -> iroha_core::state::World {
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(authority);
-    let account = Account::new(authority.to_account_id(domain_id)).build(authority);
+    let account = Account::new_in_domain(authority.clone(), domain_id).build(authority);
     iroha_core::state::World::with([domain], [account], [])
 }
 

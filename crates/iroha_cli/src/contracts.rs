@@ -37,6 +37,8 @@ pub enum Command {
     Alias(AliasCommand),
     /// Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
     Deploy(DeployArgs),
+    /// Derive a canonical contract address locally from authority, deploy nonce, and dataspace
+    DeriveAddress(DeriveAddressArgs),
     /// Submit a contract call through Torii (POST /v1/contracts/call)
     Call(CallArgs),
     /// Execute a read-only contract view through Torii (POST /v1/contracts/view)
@@ -52,7 +54,7 @@ pub enum Command {
     Manifest(ManifestCommand),
     /// Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
     Simulate(SimulateArgs),
-    /// List active contract instances in a namespace (supports filters and pagination)
+    /// List active contract instances in a dataspace (supports filters and pagination)
     Instances(InstancesArgs),
 }
 
@@ -62,6 +64,7 @@ impl Run for Command {
             Command::Code(cmd) => cmd.run(context),
             Command::Alias(cmd) => cmd.run(context),
             Command::Deploy(args) => args.run(context),
+            Command::DeriveAddress(args) => args.run(context),
             Command::Call(args) => args.run(context),
             Command::View(args) => args.run(context),
             Command::DebugView(args) => args.run(context),
@@ -280,6 +283,51 @@ impl Run for DeployArgs {
             self.dataspace.as_deref(),
         )?;
         context.print_data(&v)?;
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DeriveAddressArgs {
+    /// Authority account identifier (canonical I105 account literal)
+    #[arg(long)]
+    pub authority: String,
+    /// Target dataspace alias or numeric dataspace id (defaults to `universal`)
+    #[arg(long, default_value = "universal")]
+    pub dataspace: String,
+    /// Successful deploy nonce consumed for address derivation
+    #[arg(long)]
+    pub deploy_nonce: u64,
+    /// Explicit chain discriminant used for Bech32m contract-address derivation
+    #[arg(long)]
+    pub chain_discriminant: u16,
+    /// Optional numeric dataspace id override for non-default dataspaces
+    #[arg(long)]
+    pub dataspace_id: Option<u64>,
+}
+
+impl Run for DeriveAddressArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let authority = crate::resolve_account_id(context, &self.authority)
+            .wrap_err("failed to resolve --authority")?;
+        let dataspace_id = resolve_contract_dataspace_id_hint(&self.dataspace, self.dataspace_id)?;
+        let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
+            self.chain_discriminant,
+            &authority,
+            self.deploy_nonce,
+            dataspace_id,
+        )
+        .map_err(|err| eyre!(err.to_string()))
+        .wrap_err("failed to derive contract address")?;
+
+        context.print_data(&norito::json!({
+            "authority": (authority),
+            "dataspace": (self.dataspace),
+            "dataspace_id": (dataspace_id.as_u64()),
+            "deploy_nonce": (self.deploy_nonce),
+            "chain_discriminant": (self.chain_discriminant),
+            "contract_address": (contract_address),
+        }))?;
         Ok(())
     }
 }
@@ -668,6 +716,36 @@ fn load_code_bytes(code_file: Option<PathBuf>, code_b64: Option<String>) -> Resu
     }
 }
 
+fn resolve_contract_dataspace_id_hint(
+    dataspace: &str,
+    dataspace_id: Option<u64>,
+) -> Result<iroha::data_model::nexus::DataSpaceId> {
+    if let Some(dataspace_id) = dataspace_id {
+        return Ok(iroha::data_model::nexus::DataSpaceId::new(dataspace_id));
+    }
+
+    let trimmed = dataspace.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("--dataspace must not be empty"));
+    }
+
+    if let Ok(raw) = trimmed.parse::<u64>() {
+        return Ok(iroha::data_model::nexus::DataSpaceId::new(raw));
+    }
+
+    let raw = match trimmed {
+        "universal" => 0,
+        "governance" => 1,
+        "zk" => 2,
+        _ => {
+            return Err(eyre!(
+                "unknown dataspace alias `{trimmed}`; pass --dataspace-id for non-default dataspaces"
+            ))
+        }
+    };
+    Ok(iroha::data_model::nexus::DataSpaceId::new(raw))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedContractTarget {
     contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
@@ -812,7 +890,7 @@ fn resolve_contract_call_private_key<C: RunContext>(
 }
 
 fn self_register_authority_instruction(authority: &AccountId) -> InstructionBox {
-    Register::account(Account::new_domainless(authority.clone())).into()
+    Register::account(Account::new(authority.clone())).into()
 }
 
 fn deploy_activate_instructions(
@@ -2512,6 +2590,36 @@ mod tests {
     }
 
     #[test]
+    fn resolve_contract_dataspace_id_hint_accepts_default_aliases() {
+        assert_eq!(
+            resolve_contract_dataspace_id_hint("universal", None)
+                .expect("universal")
+                .as_u64(),
+            0
+        );
+        assert_eq!(
+            resolve_contract_dataspace_id_hint("governance", None)
+                .expect("governance")
+                .as_u64(),
+            1
+        );
+        assert_eq!(
+            resolve_contract_dataspace_id_hint("zk", None)
+                .expect("zk")
+                .as_u64(),
+            2
+        );
+    }
+
+    #[test]
+    fn resolve_contract_dataspace_id_hint_requires_override_for_unknown_alias() {
+        let err = resolve_contract_dataspace_id_hint("private-ds", None).expect_err("must fail");
+        assert!(err
+            .to_string()
+            .contains("pass --dataspace-id for non-default dataspaces"));
+    }
+
+    #[test]
     fn resolve_contract_call_private_key_uses_context_key_for_default_authority() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let ctx = TestContext::new(authority.clone());
@@ -2754,9 +2862,9 @@ impl Run for ManifestArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct InstancesArgs {
-    /// Namespace to list (e.g., apps)
-    #[arg(long, value_name = "NS")]
-    pub namespace: String,
+    /// Dataspace to list (e.g., universal)
+    #[arg(long, value_name = "DATASPACE")]
+    pub dataspace: String,
     /// Filter: `contract_id` substring (case-sensitive)
     #[arg(long)]
     pub contains: Option<String>,
@@ -2784,7 +2892,7 @@ impl Run for InstancesArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         let value = client.get_contracts_instances_by_ns_filtered_json(
-            &self.namespace,
+            &self.dataspace,
             self.contains.as_deref(),
             self.hash_prefix.as_deref(),
             self.offset,
@@ -2794,7 +2902,11 @@ impl Run for InstancesArgs {
         if self.table {
             // Pretty table renderer
             use norito::json::Value;
-            let ns = value.get("namespace").and_then(Value::as_str).unwrap_or("");
+            let dataspace = value
+                .get("dataspace")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("namespace").and_then(Value::as_str))
+                .unwrap_or("");
             let total = value.get("total").and_then(Value::as_u64).unwrap_or(0);
             let offset = value.get("offset").and_then(Value::as_u64).unwrap_or(0);
             let limit = value.get("limit").and_then(Value::as_u64).unwrap_or(0);
@@ -2804,10 +2916,10 @@ impl Run for InstancesArgs {
                 .cloned()
                 .unwrap_or_default();
             // Compute widths
-            let mut w_ns = "Namespace".len();
+            let mut w_dataspace = "Dataspace".len();
             let mut w_id = "Contract ID".len();
             let mut w_hash = "Code Hash".len();
-            w_ns = w_ns.max(ns.len());
+            w_dataspace = w_dataspace.max(dataspace.len());
             let mut items: Vec<(String, String)> = Vec::new();
             for row in rows {
                 if let Value::Object(m) = row {
@@ -2836,32 +2948,33 @@ impl Run for InstancesArgs {
                 "",
                 "",
                 "",
-                ns = w_ns,
+                ns = w_dataspace,
                 id = w_id,
                 hash = w_hash
             );
             // Header
             context.println(format!(
-                "Namespace: {ns}  (total={total}, offset={offset}, limit={limit})"
+                "Dataspace: {dataspace}  (total={total}, offset={offset}, limit={limit})"
             ))?;
             context.println(&sep)?;
             context.println(format!(
-                "| {namespace:<ns_width$} | {contract:<id_width$} | {hash_label:<hash_width$} |",
-                namespace = "Namespace",
+                "| {dataspace:<ns_width$} | {contract:<id_width$} | {hash_label:<hash_width$} |",
+                dataspace = "Dataspace",
                 contract = "Contract ID",
                 hash_label = "Code Hash",
-                ns_width = w_ns,
+                ns_width = w_dataspace,
                 id_width = w_id,
                 hash_width = w_hash
             ))?;
             context.println(&sep)?;
             // Rows
-            let ns_width = w_ns;
+            let ns_width = w_dataspace;
             let id_width = w_id;
             let hash_width = w_hash;
             for (cid, hash) in items {
                 context.println(format!(
-                    "| {ns:<ns_width$} | {cid:<id_width$} | {hash:<hash_width$} |"
+                    "| {dataspace:<ns_width$} | {cid:<id_width$} | {hash:<hash_width$} |",
+                    dataspace = dataspace
                 ))?;
             }
             context.println(&sep)?;

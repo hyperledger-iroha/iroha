@@ -56,6 +56,22 @@ Notes:
   registered; requests to `/v1/connect/ws` and `/v1/connect/status` return 404.
 - The server requires a client‑provided `sid` for `/v1/connect/session` (base64url or hex, 32 bytes).
   It no longer generates a fallback `sid`.
+- If Torii is served behind nginx or another reverse proxy, `/v1/connect/ws`
+  must preserve the websocket upgrade hop. For nginx, use
+  `proxy_http_version 1.1`, `proxy_set_header Upgrade $http_upgrade`, and
+  `proxy_set_header Connection "upgrade"` on the proxied websocket route.
+- Keep `/v1/connect/ws` in its own exact-match location and do not rely on a
+  generic `location /` or `location ^~ /v1/` proxy stanza to handle websocket
+  upgrades for Connect.
+- A practical smoke test for a reverse-proxied Connect deploy is:
+  1. `POST /v1/connect/session` with `accept: application/json` and a
+     client-generated 32-byte base64url `sid`.
+  2. Reuse the returned `sid` plus `token_app` or `token_wallet` in a websocket
+     upgrade request to `/v1/connect/ws?sid=<sid>&role=<role>`.
+  3. Treat a Torii-generated application response (`400/401/...`) as proof that
+     the proxy upgrade hop is working; proxy-layer `404` / missing-upgrade
+     failures mean the reverse proxy still is not preserving websocket
+     semantics.
 
 See also: `crates/iroha_config/src/parameters/{user,actual}.rs` and defaults in
 `crates/iroha_config/src/parameters/defaults.rs` (module `connect`).

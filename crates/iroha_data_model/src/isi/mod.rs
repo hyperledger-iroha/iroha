@@ -686,18 +686,13 @@ impl From<crate::isi::space_directory::ExpireSpaceDirectoryManifest> for Instruc
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::domain_link::LinkAccountDomain> for InstructionBox {
-    fn from(i: crate::isi::domain_link::LinkAccountDomain) -> Self {
+impl From<crate::isi::domain_link::SetAccountAliasBinding> for InstructionBox {
+    fn from(i: crate::isi::domain_link::SetAccountAliasBinding) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::domain_link::BindAccountAlias> for InstructionBox {
-    fn from(i: crate::isi::domain_link::BindAccountAlias) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-impl From<crate::isi::domain_link::SetAccountLabel> for InstructionBox {
-    fn from(i: crate::isi::domain_link::SetAccountLabel) -> Self {
+impl From<crate::isi::domain_link::SetPrimaryAccountAlias> for InstructionBox {
+    fn from(i: crate::isi::domain_link::SetPrimaryAccountAlias) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -706,12 +701,6 @@ impl From<crate::isi::contract_alias::SetContractAlias> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
-    fn from(i: crate::isi::domain_link::UnlinkAccountDomain) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
 // Allow direct boxing of offline allowance instructions.
 impl From<crate::isi::offline::RegisterOfflineLineage> for InstructionBox {
     fn from(i: crate::isi::offline::RegisterOfflineLineage) -> Self {
@@ -2700,7 +2689,7 @@ pub mod prelude {
         consensus_keys::{DisableConsensusKey, RegisterConsensusKey, RotateConsensusKey},
         content::{PublishContentBundle, RetireContentBundle},
         contract_alias::SetContractAlias,
-        domain_link::{BindAccountAlias, LinkAccountDomain, SetAccountLabel, UnlinkAccountDomain},
+        domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
         },

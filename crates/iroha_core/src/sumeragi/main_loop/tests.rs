@@ -1293,7 +1293,7 @@ fn test_sumeragi_config() -> SumeragiConfig {
             enabled: iroha_config::parameters::defaults::sumeragi::MODE_FLIP_ENABLED,
         },
         collectors: SumeragiCollectors {
-            k: 1,
+            k: iroha_config::parameters::defaults::sumeragi::COLLECTORS_K,
             redundant_send_r:
                 iroha_config::parameters::defaults::sumeragi::COLLECTORS_REDUNDANT_SEND_R,
             parallel_topology_fanout:
@@ -2242,10 +2242,9 @@ async fn test_actor_harness_with_config_and_height_and_kura(
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new(
-        genesis_id
-            .clone()
-            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
+        genesis_id.clone(),
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
     )
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
@@ -3364,10 +3363,9 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new(
-        genesis_id
-            .clone()
-            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
+        genesis_id.clone(),
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
     )
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
@@ -15440,6 +15438,7 @@ async fn commit_vote_targets_collectors_or_topology() {
     insert_validated_pending(actor, block.clone());
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
+    actor.reset_collector_state();
 
     let _ = harness.background_rx.try_iter().count();
 
@@ -15457,20 +15456,16 @@ async fn commit_vote_targets_collectors_or_topology() {
 
     let signature_topology =
         super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
-    let (collectors_k, redundant_r) = on_chain_permissioned_collector_params(actor);
-    let collectors = super::collectors::deterministic_collectors(
-        &signature_topology,
-        ConsensusMode::Permissioned,
-        collectors_k,
-        None,
-        1,
-        0,
-    );
-    let limit = usize::from(redundant_r.max(1));
-    let mut expected_targets: Vec<_> = if collectors.is_empty() {
+    let mut expected_targets: Vec<_> = if actor.subsystems.propose.collectors_contacted.is_empty() {
         signature_topology.as_ref().to_vec()
     } else {
-        collectors.into_iter().take(limit).collect()
+        actor
+            .subsystems
+            .propose
+            .collectors_contacted
+            .iter()
+            .cloned()
+            .collect()
     };
     let local_peer_id = actor.common_config.peer.id().clone();
     expected_targets.retain(|peer| peer != &local_peer_id);
@@ -15493,19 +15488,6 @@ async fn commit_vote_targets_collectors_or_topology() {
                 }
             }
         }
-        let remote_floor = usize::from(actor.subsystems.propose.collector_redundant_limit.max(1))
-            .min(signature_topology.as_ref().len().saturating_sub(1));
-        if expected_targets.len() < remote_floor {
-            for peer in signature_topology.as_ref() {
-                if peer == &local_peer_id || expected_targets.contains(peer) {
-                    continue;
-                }
-                expected_targets.push(peer.clone());
-                if expected_targets.len() >= remote_floor {
-                    break;
-                }
-            }
-        }
     }
     let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
 
@@ -15524,7 +15506,7 @@ async fn commit_vote_targets_collectors_or_topology() {
 
     assert_eq!(
         actual_targets, expected_set,
-        "commit votes should target deterministic collectors or topology fallback"
+        "initial commit votes should target only the seeded collector set plus parallel fanout or topology fallback"
     );
 
     harness.shutdown.send();
@@ -18138,6 +18120,7 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
     insert_validated_pending(actor, block.clone());
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let epoch = actor.epoch_for_height(height);
+    actor.reset_collector_state();
 
     let _ = harness.background_rx.try_iter().count();
 
@@ -18155,20 +18138,16 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
 
     let signature_topology =
         super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
-    let (collectors_k, redundant_r) = on_chain_permissioned_collector_params(actor);
-    let collectors = super::collectors::deterministic_collectors(
-        &signature_topology,
-        ConsensusMode::Permissioned,
-        collectors_k,
-        None,
-        1,
-        0,
-    );
-    let limit = usize::from(redundant_r.max(1));
-    let mut expected_targets: Vec<_> = if collectors.is_empty() {
+    let mut expected_targets: Vec<_> = if actor.subsystems.propose.collectors_contacted.is_empty() {
         signature_topology.as_ref().to_vec()
     } else {
-        collectors.into_iter().take(limit).collect()
+        actor
+            .subsystems
+            .propose
+            .collectors_contacted
+            .iter()
+            .cloned()
+            .collect()
     };
     let local_peer_id = actor.common_config.peer.id().clone();
     expected_targets.retain(|peer| peer != &local_peer_id);
@@ -18194,124 +18173,13 @@ async fn precommit_vote_targets_collectors_without_broadcast() {
     }
     let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
 
-    let mut actual_targets: Vec<_> = actor
+    let actual_contacted: BTreeSet<_> = actor
         .subsystems
         .propose
         .collectors_contacted
         .iter()
         .cloned()
         .collect();
-    actual_targets.retain(|peer| peer != &local_peer_id);
-    let fallback_to_topology = actual_targets.is_empty();
-    if fallback_to_topology {
-        actual_targets = signature_topology.as_ref().to_vec();
-        actual_targets.retain(|peer| peer != &local_peer_id);
-    } else {
-        let parallel = actor.config.collectors.parallel_topology_fanout;
-        if parallel > 0 {
-            let mut parallel_targets: Vec<_> = signature_topology
-                .topology_fanout_from_tail(parallel)
-                .into_iter()
-                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
-                .collect();
-            parallel_targets.retain(|peer| peer != &local_peer_id);
-            for peer in parallel_targets {
-                if !actual_targets.contains(&peer) {
-                    actual_targets.push(peer);
-                }
-            }
-        }
-    }
-    let actual_targets: BTreeSet<_> = actual_targets.into_iter().collect();
-
-    assert_eq!(
-        actual_targets, expected_set,
-        "precommit votes should target deterministic collectors or topology fallback"
-    );
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn rebroadcast_precommit_votes_keep_collectors_when_below_quorum() {
-    let _history_guard = crate::sumeragi::status::commit_history_test_guard();
-    crate::sumeragi::status::reset_precommit_signer_history_for_tests();
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.relay_backpressure.disable_for_tests();
-    let height = 1;
-    // Keep the block hash unique per harness to avoid pulling roster artifacts from
-    // concurrent tests that use deterministic sample hashes.
-    let block = sample_block(
-        height,
-        0,
-        Some(HashOf::from_untyped_unchecked(Hash::new(
-            actor.common_config.peer.id().to_string().as_bytes(),
-        ))),
-    );
-    let block_hash = block.hash();
-    insert_validated_pending(actor, block.clone());
-    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let epoch = actor.epoch_for_height(height);
-
-    assert!(actor.emit_precommit_vote(
-        block_hash,
-        1,
-        0,
-        epoch,
-        ValidationStatus::Valid,
-        &topology,
-        block.header().prev_block_hash(),
-        Some((Hash::new([]), Hash::new([]))),
-    ));
-    let _ = harness.background_rx.try_iter().count();
-
-    let signature_topology =
-        super::topology_for_view(&topology, 1, 0, actor.mode_tag(), actor.npos_prf_seed());
-    let local_peer_id = actor.common_config.peer.id().clone();
-    let planned_collectors: Vec<_> = signature_topology
-        .as_ref()
-        .iter()
-        .filter(|peer| *peer != &local_peer_id)
-        .take(2)
-        .cloned()
-        .collect();
-    assert_eq!(
-        planned_collectors.len(),
-        2,
-        "expected enough remote peers for below-quorum collectors"
-    );
-    actor.subsystems.propose.collector_plan = Some(super::collectors::CollectorPlan::new(
-        planned_collectors.clone(),
-    ));
-    actor.subsystems.propose.collector_plan_subject = Some((1, 0));
-    actor.subsystems.propose.collector_plan_targets = planned_collectors.clone();
-    actor.subsystems.propose.collectors_contacted.clear();
-    actor
-        .subsystems
-        .propose
-        .collectors_contacted
-        .extend(planned_collectors.iter().cloned());
-
-    let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, 1, 0, false);
-
-    let mut expected_targets = planned_collectors;
-    let parallel = actor.config.collectors.parallel_topology_fanout;
-    if parallel > 0 {
-        let mut parallel_targets: Vec<_> = signature_topology
-            .topology_fanout_from_tail(parallel)
-            .into_iter()
-            .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
-            .collect();
-        parallel_targets.retain(|peer| peer != &local_peer_id);
-        for peer in parallel_targets {
-            if !expected_targets.contains(&peer) {
-                expected_targets.push(peer);
-            }
-        }
-    }
-    let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
-
     let actual_targets: BTreeSet<_> = harness
         .background_rx
         .try_iter()
@@ -18326,8 +18194,170 @@ async fn rebroadcast_precommit_votes_keep_collectors_when_below_quorum() {
         .collect();
 
     assert_eq!(
+        actual_contacted.len(),
+        1,
+        "initial precommit emit should keep exactly one seeded collector before any retransmit widening"
+    );
+
+    assert_eq!(
         actual_targets, expected_set,
-        "precommit vote rebroadcasts should retain collector targets even when below quorum"
+        "precommit votes should target the seeded collector set plus parallel fanout or topology fallback"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn initial_precommit_emit_does_not_consume_redundant_collectors_immediately() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.collectors.parallel_topology_fanout = 0;
+    let height = 1;
+    let block = sample_block(height, 0, None);
+    let block_hash = block.hash();
+    insert_validated_pending(actor, block.clone());
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let epoch = actor.epoch_for_height(height);
+    actor.reset_collector_state();
+
+    assert!(actor.emit_precommit_vote(
+        block_hash,
+        height,
+        0,
+        epoch,
+        ValidationStatus::Valid,
+        &topology,
+        block.header().prev_block_hash(),
+        Some((Hash::new([]), Hash::new([]))),
+    ));
+
+    let plan = actor
+        .subsystems
+        .propose
+        .collector_plan
+        .as_ref()
+        .expect("collector plan should remain active after initial emit");
+    assert_eq!(
+        plan.sent_count(),
+        1,
+        "initial precommit emit should keep redundant collectors for later retries"
+    );
+    assert_eq!(
+        actor.subsystems.propose.collectors_contacted.len(),
+        1,
+        "initial precommit emit should only contact the seeded collector"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rebroadcast_precommit_votes_widen_collectors_when_below_quorum() {
+    let _history_guard = crate::sumeragi::status::commit_history_test_guard();
+    crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.relay_backpressure.disable_for_tests();
+    actor.config.collectors.parallel_topology_fanout = 0;
+    let height = 1;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_peer_id = actor.common_config.peer.id().clone();
+    let view = (0..256_u64)
+        .find(|candidate_view| {
+            actor.reset_collector_state();
+            let signature_topology = super::topology_for_view(
+                &topology,
+                height,
+                *candidate_view,
+                actor.mode_tag(),
+                actor.npos_prf_seed(),
+            );
+            actor.init_collector_plan(&signature_topology, height, *candidate_view);
+            actor
+                .subsystems
+                .propose
+                .collectors_contacted
+                .iter()
+                .any(|peer| peer != &local_peer_id)
+        })
+        .expect("expected a view with a remote seeded collector");
+    actor.reset_collector_state();
+    let _ = harness.background_rx.try_iter().count();
+
+    // Keep the block hash unique per harness to avoid pulling roster artifacts from
+    // concurrent tests that use deterministic sample hashes.
+    let block = sample_block(
+        height,
+        view,
+        Some(HashOf::from_untyped_unchecked(Hash::new(
+            actor.common_config.peer.id().to_string().as_bytes(),
+        ))),
+    );
+    let block_hash = block.hash();
+    insert_validated_pending(actor, block.clone());
+    let epoch = actor.epoch_for_height(height);
+
+    assert!(actor.emit_precommit_vote(
+        block_hash,
+        1,
+        view,
+        epoch,
+        ValidationStatus::Valid,
+        &topology,
+        block.header().prev_block_hash(),
+        Some((Hash::new([]), Hash::new([]))),
+    ));
+
+    let signature_topology = super::topology_for_view(
+        &topology,
+        height,
+        view,
+        actor.mode_tag(),
+        actor.npos_prf_seed(),
+    );
+    let expected_initial_contacts: BTreeSet<_> = actor
+        .subsystems
+        .propose
+        .collectors_contacted
+        .iter()
+        .cloned()
+        .filter(|peer| peer != &local_peer_id)
+        .collect();
+    assert_eq!(
+        expected_initial_contacts.len(),
+        1,
+        "initial precommit emit should leave exactly one seeded remote collector before retransmit widening"
+    );
+    let _ = harness.background_rx.try_iter().count();
+
+    let _ = actor.rebroadcast_block_votes(Phase::Commit, block_hash, height, view, false);
+
+    let expected_set: BTreeSet<_> = signature_topology
+        .as_ref()
+        .iter()
+        .filter(|peer| *peer != &local_peer_id)
+        .cloned()
+        .collect();
+
+    let actual_targets: BTreeSet<_> = harness
+        .background_rx
+        .try_iter()
+        .filter_map(|post| match post {
+            BackgroundPost::Post { peer, msg, .. }
+                if matches!(
+                    msg.as_ref(),
+                    BlockMessage::QcVote(vote) if vote.block_hash == block_hash
+                ) =>
+            {
+                Some(peer)
+            }
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        actual_targets, expected_set,
+        "precommit vote rebroadcasts should widen to the remaining collectors when quorum is still missing"
     );
 
     harness.shutdown.send();
@@ -18537,19 +18567,6 @@ async fn rebroadcast_block_votes_targets_snapshot_roster() {
             for peer in parallel_targets {
                 if expected_targets.iter().all(|existing| existing != &peer) {
                     expected_targets.push(peer);
-                }
-            }
-        }
-        let remote_floor = usize::from(actor.subsystems.propose.collector_redundant_limit.max(1))
-            .min(signature_topology.as_ref().len().saturating_sub(1));
-        if expected_targets.len() < remote_floor {
-            for peer in signature_topology.as_ref() {
-                if peer == &local_peer || expected_targets.contains(peer) {
-                    continue;
-                }
-                expected_targets.push(peer.clone());
-                if expected_targets.len() >= remote_floor {
-                    break;
                 }
             }
         }
@@ -34315,10 +34332,9 @@ async fn stale_pending_block_requeues_transactions() {
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new(
-        genesis_id
-            .clone()
-            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
+        genesis_id.clone(),
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
     )
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
@@ -76670,11 +76686,9 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
-        .expect("register account");
+        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
+            .expect("register account");
         let trigger = Trigger::new(
             "precommit_probe".parse().expect("trigger name"),
             Action::new(
@@ -90983,10 +90997,9 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new(
-        genesis_id
-            .clone()
-            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
+        genesis_id.clone(),
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
     )
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
@@ -91613,7 +91626,7 @@ fn commit_quorum_timeout_tracks_block_time() {
             da_enabled,
             quorum_multiplier
         ),
-        Duration::from_millis(3_000)
+        Duration::from_millis(2_000)
     );
     quorum_multiplier = 1;
     assert_eq!(
@@ -91635,7 +91648,7 @@ fn commit_quorum_timeout_tracks_block_time() {
             da_enabled,
             quorum_multiplier
         ),
-        Duration::from_millis(15_000)
+        Duration::from_millis(10_000)
     );
 
     commit_time = Duration::ZERO;
@@ -91820,7 +91833,7 @@ fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     };
     assert_eq!(
         commit_quorum_timeout_for_params(&params),
-        Duration::from_millis(6_000)
+        Duration::from_millis(4_000)
     );
 
     let params = SumeragiParameters {
@@ -91831,7 +91844,7 @@ fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     };
     assert_eq!(
         commit_quorum_timeout_for_params(&params),
-        Duration::from_millis(15_000)
+        Duration::from_millis(10_000)
     );
 
     let params = SumeragiParameters {
@@ -91842,7 +91855,7 @@ fn commit_quorum_timeout_tracks_sumeragi_parameters() {
     };
     assert_eq!(
         commit_quorum_timeout_for_params(&params),
-        Duration::from_millis(6_000),
+        Duration::from_millis(4_000),
         "zero commit timeout should clamp to block_time for liveness"
     );
 
@@ -91895,11 +91908,11 @@ fn availability_timeout_from_quorum_scales_for_da() {
     );
     assert_eq!(
         super::availability_timeout_from_quorum(quorum_timeout, true, multiplier, floor),
-        Duration::from_secs(4)
+        quorum_timeout
     );
     assert_eq!(
         super::availability_timeout_from_quorum(Duration::from_secs(3), true, multiplier, floor),
-        Duration::from_secs(6)
+        Duration::from_secs(3)
     );
 }
 
@@ -99657,12 +99670,9 @@ async fn state_commit_failure_after_kura_store_keeps_partial_head_hidden() {
     let genesis_key = KeyPair::random();
     let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
     let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-    let genesis_account = Account::new(
-        genesis_account_id
-            .clone()
-            .to_account_id(GENESIS_DOMAIN_ID.clone()),
-    )
-    .build(&genesis_account_id);
+    let genesis_account =
+        Account::new_in_domain(genesis_account_id.clone(), GENESIS_DOMAIN_ID.clone())
+            .build(&genesis_account_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     let isolated_kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();

@@ -11928,25 +11928,25 @@ npm run dev
 ```bash
 npm run build
 iroha app sorafs toolkit pack ./dist \
-  --manifest-out ../sorafs/site_manifest.to \
   --car-out ../sorafs/site_payload.car \
+  --manifest-out ../sorafs/site_manifest.to \
   --json-out ../sorafs/site_pack_report.json
 ```
 
 ## Register and bind on SoraDNS
 
-`pin register` needs `chunk_digest_sha3_256` and governance alias proof material.
+Use the pack report to recover the chunk digest and then register the pin
+alongside the public alias binding.
 
 ```bash
-export CHUNK_DIGEST_HEX=<chunk_digest_sha3_256_hex>
-export CURRENT_EPOCH=<network_epoch>
+export CHUNK_DIGEST=$(jq -r '.chunk_digest_sha3_256' ../sorafs/site_pack_report.json)
 iroha app sorafs pin register \
   --manifest ../sorafs/site_manifest.to \
-  --chunk-digest "$CHUNK_DIGEST_HEX" \
-  --submitted-epoch "$CURRENT_EPOCH" \
+  --chunk-digest "$CHUNK_DIGEST" \
+  --submitted-epoch 123 \
   --alias-namespace soradns \
   --alias-name {dns_host} \
-  --alias-proof ../sorafs/alias_proof.bin
+  --alias-proof ../sorafs/{service_name}_alias_proof.bin
 ```
 "#
     )
@@ -12958,8 +12958,8 @@ mod tests {
             request.payload.capability.heartbeat_expires_at_ms
                 > request.payload.capability.advertised_at_ms
         );
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]

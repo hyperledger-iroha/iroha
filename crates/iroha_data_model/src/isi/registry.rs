@@ -170,11 +170,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<endorsement::RegisterDomainCommittee>,
     InstructionRegistry::register::<endorsement::SetDomainEndorsementPolicy>,
     InstructionRegistry::register::<endorsement::SubmitDomainEndorsement>,
-    InstructionRegistry::register::<domain_link::LinkAccountDomain>,
-    InstructionRegistry::register::<domain_link::BindAccountAlias>,
-    InstructionRegistry::register::<domain_link::SetAccountLabel>,
+    InstructionRegistry::register::<domain_link::SetAccountAliasBinding>,
+    InstructionRegistry::register::<domain_link::SetPrimaryAccountAlias>,
     InstructionRegistry::register::<contract_alias::SetContractAlias>,
-    InstructionRegistry::register::<domain_link::UnlinkAccountDomain>,
     InstructionRegistry::register::<ram_lfe::RegisterRamLfeProgramPolicy>,
     InstructionRegistry::register::<ram_lfe::ActivateRamLfeProgramPolicy>,
     InstructionRegistry::register::<ram_lfe::DeactivateRamLfeProgramPolicy>,
@@ -457,14 +455,12 @@ fn with_consensus_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     );
     registry = registry
         .register_with_id::<endorsement::SubmitDomainEndorsement>("nexus::SubmitDomainEndorsement");
-    registry =
-        registry.register_with_id::<domain_link::LinkAccountDomain>("identity::LinkAccountDomain");
-    registry =
-        registry.register_with_id::<domain_link::BindAccountAlias>("identity::BindAccountAlias");
-    registry =
-        registry.register_with_id::<domain_link::SetAccountLabel>("identity::SetAccountLabel");
-    registry = registry
-        .register_with_id::<domain_link::UnlinkAccountDomain>("identity::UnlinkAccountDomain");
+    registry = registry.register_with_id::<domain_link::SetAccountAliasBinding>(
+        "identity::SetAccountAliasBinding",
+    );
+    registry = registry.register_with_id::<domain_link::SetPrimaryAccountAlias>(
+        "identity::SetPrimaryAccountAlias",
+    );
     registry
 }
 

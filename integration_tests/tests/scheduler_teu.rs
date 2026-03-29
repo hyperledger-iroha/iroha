@@ -43,7 +43,7 @@ const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 
 fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
     let domain = Domain::new(domain_id.clone()).build(authority);
-    let account = Account::new(authority.to_account_id(domain_id.clone())).build(authority);
+    let account = Account::new_in_domain(authority.clone(), domain_id.clone()).build(authority);
     let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), "xor".parse().unwrap());
     let asset_definition = {
         let __asset_definition_id = asset_definition_id;
@@ -207,10 +207,10 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     // Assemble world with both authorities registered.
     let domain0: Domain = Domain::new(lane0_domain_id.clone()).build(&lane0_account);
     let domain1: Domain = Domain::new(lane1_domain_id.clone()).build(&lane1_account);
-    let account0 =
-        Account::new(lane0_account.to_account_id(lane0_domain_id.clone())).build(&lane0_account);
-    let account1 =
-        Account::new(lane1_account.to_account_id(lane1_domain_id.clone())).build(&lane1_account);
+    let account0 = Account::new_in_domain(lane0_account.clone(), lane0_domain_id.clone())
+        .build(&lane0_account);
+    let account1 = Account::new_in_domain(lane1_account.clone(), lane1_domain_id.clone())
+        .build(&lane1_account);
     let world = World::with(
         [domain0, domain1],
         [account0, account1],
@@ -445,10 +445,11 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
 
     let domain_fallback: Domain = Domain::new(fallback_domain_id.clone()).build(&fallback_account);
     let domain_routed: Domain = Domain::new(routed_domain_id.clone()).build(&routed_account);
-    let account_fallback = Account::new(fallback_account.to_account_id(fallback_domain_id.clone()))
-        .build(&fallback_account);
-    let account_routed =
-        Account::new(routed_account.to_account_id(routed_domain_id.clone())).build(&routed_account);
+    let account_fallback =
+        Account::new_in_domain(fallback_account.clone(), fallback_domain_id.clone())
+            .build(&fallback_account);
+    let account_routed = Account::new_in_domain(routed_account.clone(), routed_domain_id.clone())
+        .build(&routed_account);
     let world = World::with(
         [domain_fallback, domain_routed],
         [account_fallback, account_routed],

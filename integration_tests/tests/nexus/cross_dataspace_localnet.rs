@@ -75,6 +75,7 @@ const DS2_LANE_INDEX: u32 = 2;
 const TOTAL_PEERS: usize = 12;
 const VALIDATORS_PER_LANE: usize = 4;
 const VALIDATOR_STAKE: u64 = 2_000;
+const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
@@ -108,6 +109,12 @@ fn stake_asset_definition_id() -> AssetDefinitionId {
 
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
+}
+
+fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
+    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse()
+        .expect("default nexus fee asset id")
 }
 
 fn parse_positive_usize_override(raw: Option<&str>, default: usize) -> usize {
@@ -238,6 +245,7 @@ fn localnet_builder() -> NetworkBuilder {
             layer
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
+                .write(["norito", "allow_gpu_compression"], false)
                 .write(
                     ["nexus", "lane_catalog"],
                     TomlValue::Array(vec![
@@ -336,9 +344,11 @@ fn npos_multilane_genesis_post_topology_transactions(
         topology.len()
     );
     let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+    let universal_domain: DomainId = "universal".parse().expect("universal domain");
     let ds1_domain: DomainId = "ds1".parse().expect("ds1 domain");
     let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
+    let fee_asset_id = nexus_fee_asset_definition_id();
     let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
         "nexus".parse().expect("asset definition domain"),
         "ds1coin".parse().expect("asset definition name"),
@@ -349,10 +359,17 @@ fn npos_multilane_genesis_post_topology_transactions(
     );
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
+        Register::domain(Domain::new(universal_domain)).into(),
         Register::domain(Domain::new(ds1_domain)).into(),
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
             let __asset_definition_id = stake_asset_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
+        Register::asset_definition({
+            let __asset_definition_id = fee_asset_id.clone();
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         })
@@ -374,6 +391,16 @@ fn npos_multilane_genesis_post_topology_transactions(
             AssetId::new(ds1_asset_def.clone(), ALICE_ID.clone()),
         )
         .into(),
+        Mint::asset_numeric(
+            NEXUS_FEE_SEED_AMOUNT,
+            AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
+        )
+        .into(),
+        Mint::asset_numeric(
+            NEXUS_FEE_SEED_AMOUNT,
+            AssetId::new(fee_asset_id.clone(), BOB_ID.clone()),
+        )
+        .into(),
         Mint::asset_numeric(200_u32, AssetId::new(ds2_asset_def, BOB_ID.clone())).into(),
     ];
 
@@ -388,8 +415,9 @@ fn npos_multilane_genesis_post_topology_transactions(
         let lane_id = LaneId::new(lane_index);
         let validator_id = AccountId::new(peer.public_key().clone());
         bootstrap_tx.push(
-            Register::account(Account::new(
-                validator_id.to_account_id(nexus_domain.clone()),
+            Register::account(Account::new_in_domain(
+                validator_id.clone(),
+                nexus_domain.clone(),
             ))
             .into(),
         );
@@ -397,6 +425,13 @@ fn npos_multilane_genesis_post_topology_transactions(
             Mint::asset_numeric(
                 VALIDATOR_STAKE,
                 AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+            )
+            .into(),
+        );
+        bootstrap_tx.push(
+            Mint::asset_numeric(
+                NEXUS_FEE_SEED_AMOUNT,
+                AssetId::new(fee_asset_id.clone(), validator_id.clone()),
             )
             .into(),
         );
@@ -504,6 +539,68 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
         ))) => Ok(Numeric::zero()),
         Err(err) => Err(eyre!(err)),
     }
+}
+
+#[derive(Debug)]
+struct RoutedJsonGetResponse {
+    body: JsonValue,
+    routed_by: Option<String>,
+    route_lane_id: Option<String>,
+    route_dataspace_id: Option<String>,
+}
+
+fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned)
+}
+
+async fn torii_json_get(
+    client: &Client,
+    path_segments: &[String],
+    query_pairs: &[(String, String)],
+) -> Result<RoutedJsonGetResponse> {
+    let mut url = client.torii_url.clone();
+    let torii_url_literal = url.to_string();
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
+        segments.pop_if_empty();
+        for segment in path_segments {
+            segments.push(segment);
+        }
+    }
+    if !query_pairs.is_empty() {
+        let mut query = url.query_pairs_mut();
+        for (key, value) in query_pairs {
+            query.append_pair(key, value);
+        }
+    }
+
+    let response = reqwest::Client::new()
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.bytes().await?;
+    if status != reqwest::StatusCode::OK {
+        return Err(eyre!(
+            "Torii GET failed with status {}: {}",
+            status,
+            String::from_utf8_lossy(&body)
+        ));
+    }
+
+    Ok(RoutedJsonGetResponse {
+        body: norito::json::from_slice(&body)?,
+        routed_by: routed_header_string(&headers, "x-iroha-routed-by"),
+        route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
+        route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -771,7 +868,7 @@ fn wait_for_account_permissions(
         {
             Ok(permissions) => permissions,
             Err(err) => {
-                last_error = Some(err.to_string());
+                last_error = Some(format!("{err} ({err:?})"));
                 polls = polls.saturating_add(1);
                 if polls % PERMISSION_WAIT_TICK_EVERY_POLLS == 0 {
                     let _ = tick_submitter.submit(Log::new(
@@ -1430,6 +1527,133 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "Bob ds2 balance query through Nexus ingress did not route to ds2"
         );
     }
+    {
+        let _phase = phase_timings.phase("route probes: wrong-dataspace app-api query/assert");
+        let ds1_asset_literal = ds1_asset_def.to_string();
+        let alice_account_literal = ALICE_ID.to_string();
+        let expected_ds1_lane_literal = DS1_LANE_INDEX.to_string();
+        let expected_ds1_dataspace_literal = DS1_ID_U64.to_string();
+        let validators_path = vec![
+            "v1".to_owned(),
+            "nexus".to_owned(),
+            "public_lanes".to_owned(),
+            DS1_LANE_INDEX.to_string(),
+            "validators".to_owned(),
+        ];
+        let account_assets_path = vec![
+            "v1".to_owned(),
+            "accounts".to_owned(),
+            alice_account_literal.clone(),
+            "assets".to_owned(),
+        ];
+        let asset_definition_path = vec![
+            "v1".to_owned(),
+            "assets".to_owned(),
+            "definitions".to_owned(),
+            ds1_asset_literal.clone(),
+        ];
+        let account_summary_path = vec![
+            "v1".to_owned(),
+            "nexus".to_owned(),
+            "dataspaces".to_owned(),
+            "accounts".to_owned(),
+            alice_account_literal.clone(),
+            "summary".to_owned(),
+        ];
+        rt.block_on(async {
+            let validators = torii_json_get(&nexus_alice_submitter, &validators_path, &[]).await?;
+            ensure!(
+                validators.routed_by.as_deref() == Some("proxy"),
+                "DS1 validator query through Nexus ingress should be proxied, observed {:?}",
+                validators.routed_by
+            );
+            ensure!(
+                validators.route_lane_id.as_deref() == Some(expected_ds1_lane_literal.as_str()),
+                "DS1 validator query should advertise lane {DS1_LANE_INDEX}, observed {:?}",
+                validators.route_lane_id
+            );
+            ensure!(
+                validators.route_dataspace_id.as_deref()
+                    == Some(expected_ds1_dataspace_literal.as_str()),
+                "DS1 validator query should advertise dataspace {DS1_ID_U64}, observed {:?}",
+                validators.route_dataspace_id
+            );
+            let (total, active) =
+                lane_validator_snapshot(&validators.body, "nexus-routed ds1 validator query")?;
+            ensure!(
+                total == expected_ds1_validators.len() && active == expected_ds1_validators,
+                "DS1 validator query through Nexus ingress returned total {total} active {:?}, expected total {} active {:?}",
+                active,
+                expected_ds1_validators.len(),
+                expected_ds1_validators
+            );
+
+            let account_assets =
+                torii_json_get(&nexus_alice_submitter, &account_assets_path, &[]).await?;
+            ensure!(
+                account_assets.routed_by.as_deref() == Some("proxy"),
+                "account assets query through Nexus ingress should be proxied, observed {:?}",
+                account_assets.routed_by
+            );
+            let account_asset_items = account_assets
+                .body
+                .get("items")
+                .and_then(JsonValue::as_array)
+                .ok_or_else(|| eyre!("account assets response missing items array"))?;
+            ensure!(
+                account_asset_items.iter().any(|item| {
+                    item.get("asset").and_then(JsonValue::as_str) == Some(ds1_asset_literal.as_str())
+                }),
+                "account assets query through Nexus ingress did not include routed asset definition {} in {:?}",
+                ds1_asset_literal,
+                account_asset_items
+            );
+
+            let asset_definition =
+                torii_json_get(&nexus_alice_submitter, &asset_definition_path, &[]).await?;
+            ensure!(
+                asset_definition.routed_by.as_deref() == Some("proxy"),
+                "asset definition query through Nexus ingress should be proxied, observed {:?}",
+                asset_definition.routed_by
+            );
+            ensure!(
+                asset_definition.body["id"].as_str() == Some(ds1_asset_literal.as_str()),
+                "asset definition query through Nexus ingress returned unexpected id {:?}",
+                asset_definition.body["id"].as_str()
+            );
+
+            let account_summary =
+                torii_json_get(&nexus_alice_submitter, &account_summary_path, &[]).await?;
+            ensure!(
+                account_summary.routed_by.as_deref() == Some("proxy"),
+                "dataspace summary query through Nexus ingress should be proxied, observed {:?}",
+                account_summary.routed_by
+            );
+            ensure!(
+                account_summary.body["account_id"].as_str() == Some(alice_account_literal.as_str()),
+                "dataspace summary query through Nexus ingress returned unexpected account_id {:?}",
+                account_summary.body["account_id"].as_str()
+            );
+            let summary_rows = account_summary
+                .body
+                .get("dataspaces")
+                .and_then(JsonValue::as_array)
+                .ok_or_else(|| eyre!("dataspace summary response missing dataspaces array"))?;
+            let summary_totals = account_summary
+                .body
+                .get("totals")
+                .and_then(JsonValue::as_object)
+                .ok_or_else(|| eyre!("dataspace summary response missing totals object"))?;
+            ensure!(
+                summary_totals.get("dataspaces").and_then(JsonValue::as_u64)
+                    == Some(summary_rows.len() as u64),
+                "dataspace summary query through Nexus ingress returned inconsistent totals {:?} vs rows {:?}",
+                summary_totals,
+                summary_rows
+            );
+            Ok::<(), eyre::Report>(())
+        })?;
+    }
 
     let setup_grants_barrier_target = {
         let submitter = nexus_alice_submitter.clone();
@@ -1448,7 +1672,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             ))],
             Metadata::default(),
         );
-        submitter.submit_transaction(&setup_grants_tx)?;
+        submitter.submit_transaction_blocking(&setup_grants_tx)?;
         pre_barrier_height.saturating_add(1)
     };
     {

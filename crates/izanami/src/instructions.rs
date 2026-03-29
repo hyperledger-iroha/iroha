@@ -111,6 +111,7 @@ pub struct TransactionPlan {
 
 #[derive(Clone, Debug)]
 pub(crate) enum PlanUpdate {
+    TrackAccount(AccountRecord),
     RegisterTrigger(TriggerId),
     RegisterCallTrigger(TriggerId),
     TrackRepeatableTrigger(TriggerId),
@@ -125,6 +126,9 @@ pub(crate) enum PlanUpdate {
 impl PlanUpdate {
     fn apply(&self, state: &mut ChaosState, succeeded: bool) {
         match self {
+            PlanUpdate::TrackAccount(record) if succeeded => {
+                state.track_account(record.clone());
+            }
             PlanUpdate::RegisterTrigger(trigger_id) if succeeded => {
                 if !state.registered_triggers.contains(trigger_id) {
                     state.registered_triggers.push(trigger_id.clone());
@@ -213,8 +217,12 @@ fn now_ms() -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
+fn nexus_fee_seed_amount() -> Numeric {
+    1_000_000_u64.into()
+}
+
 fn account_from_record(record: &AccountRecord, domain: &DomainId) -> NewAccount {
-    let builder = Account::new(record.id.clone().to_account_id(domain.clone()));
+    let builder = Account::new_in_domain(record.id.clone(), domain.clone());
     if let Some(uaid) = record.uaid {
         builder.with_uaid(Some(uaid))
     } else {
@@ -385,7 +393,7 @@ pub fn prepare_state(
         let gas_label: Name = "gas"
             .parse()
             .map_err(|_| eyre!("failed to parse gas account label"))?;
-        let gas_account = Account::new(gas_account_id.clone().to_account_id(ivm_domain.clone()))
+        let gas_account = Account::new_in_domain(gas_account_id.clone(), ivm_domain.clone())
             .with_label(Some(AccountLabel::new(ivm_domain.clone(), gas_label)));
 
         let stake_asset: AssetDefinitionId = config_defaults::nexus::staking::stake_asset_id()
@@ -428,9 +436,9 @@ pub fn prepare_state(
                 key_pair,
                 uaid: None,
             });
-            nexus_genesis.push(InstructionBox::from(Register::account(Account::new(
-                account_id.to_account_id(nexus_domain.clone()),
-            ))));
+            nexus_genesis.push(InstructionBox::from(Register::account(
+                Account::new_in_domain(account_id.clone(), nexus_domain.clone()),
+            )));
         }
 
         for validator in &validator_accounts {
@@ -487,6 +495,25 @@ pub fn prepare_state(
         )));
     }
     genesis_tx.extend(nexus_genesis);
+    if let Some(setup) = nexus_staking.as_ref() {
+        let fee_float = nexus_fee_seed_amount();
+        genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+            fee_float.clone(),
+            AssetId::new(setup.fee_asset.clone(), treasury.id.clone()),
+        )));
+        for account in &users {
+            genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+                fee_float.clone(),
+                AssetId::new(setup.fee_asset.clone(), account.id.clone()),
+            )));
+        }
+        for validator in &setup.validator_accounts {
+            genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+                fee_float.clone(),
+                AssetId::new(setup.fee_asset.clone(), validator.id.clone()),
+            )));
+        }
+    }
     genesis_tx.push(InstructionBox::from(Grant::account_permission(
         CanRegisterDomain,
         treasury.id.clone(),
@@ -983,10 +1010,24 @@ impl ChaosState {
     }
 
     fn track_account(&mut self, record: AccountRecord) {
+        if !self.users.iter().any(|existing| existing.id == record.id) {
+            self.users.push(record.clone());
+        }
         if let Some(uaid) = record.uaid {
             self.uaid_accounts.insert(uaid, record.clone());
         }
-        self.users.push(record);
+    }
+
+    fn maybe_prefund_nexus_fee_asset(&self, account_id: &AccountId) -> Vec<InstructionBox> {
+        self.nexus_staking
+            .as_ref()
+            .map(|setup| {
+                vec![InstructionBox::from(Mint::asset_numeric(
+                    nexus_fee_seed_amount(),
+                    AssetId::new(setup.fee_asset.clone(), account_id.clone()),
+                ))]
+            })
+            .unwrap_or_default()
     }
 
     fn nexus_staking_expect_success(&self) -> bool {
@@ -1166,13 +1207,14 @@ impl ChaosState {
             key_pair: key,
             uaid: None,
         };
-        self.track_account(record.clone());
+        let mut instructions = vec![InstructionBox::from(Register::account(
+            Account::new_in_domain(account_id.clone(), self.base_domain.clone()),
+        ))];
+        instructions.extend(self.maybe_prefund_nexus_fee_asset(&record.id));
         TransactionPlan {
-            state_updates: Vec::new(),
+            state_updates: vec![PlanUpdate::TrackAccount(record)],
             label: "register_account",
-            instructions: vec![InstructionBox::from(Register::account(Account::new(
-                account_id.to_account_id(self.base_domain.clone()),
-            )))],
+            instructions,
             signer: self.treasury.clone(),
             expect_success: true,
         }
@@ -1183,9 +1225,9 @@ impl ChaosState {
         Ok(TransactionPlan {
             state_updates: Vec::new(),
             label: "duplicate_account",
-            instructions: vec![InstructionBox::from(Register::account(Account::new(
-                candidate.id.clone().to_account_id(self.base_domain.clone()),
-            )))],
+            instructions: vec![InstructionBox::from(Register::account(
+                Account::new_in_domain(candidate.id.clone(), self.base_domain.clone()),
+            ))],
             signer: self.treasury.clone(),
             expect_success: false,
         })
@@ -1194,11 +1236,12 @@ impl ChaosState {
     fn plan_register_uaid_account(&mut self) -> TransactionPlan {
         let record = self.allocate_uaid_record();
         let account = account_from_record(&record, &self.base_domain);
-        self.track_account(record.clone());
+        let mut instructions = vec![InstructionBox::from(Register::account(account))];
+        instructions.extend(self.maybe_prefund_nexus_fee_asset(&record.id));
         TransactionPlan {
-            state_updates: Vec::new(),
+            state_updates: vec![PlanUpdate::TrackAccount(record)],
             label: "register_uaid_account",
-            instructions: vec![InstructionBox::from(Register::account(account))],
+            instructions,
             signer: self.treasury.clone(),
             expect_success: true,
         }
@@ -2064,6 +2107,7 @@ impl ChaosState {
     fn plan_publish_space_manifest(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let dataspace = self.random_dataspace(rng);
         let mut instructions = Vec::new();
+        let mut state_updates = Vec::new();
         let uaid = if let Some(uaid) = self.pick_uaid_without_manifest(dataspace, rng) {
             self.uaid_accounts
                 .get(&uaid)
@@ -2073,10 +2117,11 @@ impl ChaosState {
             let record = self.allocate_uaid_record();
             let account = account_from_record(&record, &self.base_domain);
             instructions.push(InstructionBox::from(Register::account(account)));
+            instructions.extend(self.maybe_prefund_nexus_fee_asset(&record.id));
+            state_updates.push(PlanUpdate::TrackAccount(record.clone()));
             let uaid = record
                 .uaid
                 .expect("allocated UAID record should carry uaid");
-            self.track_account(record);
             uaid
         };
 
@@ -2111,7 +2156,7 @@ impl ChaosState {
             .insert(dataspace);
 
         Ok(TransactionPlan {
-            state_updates: Vec::new(),
+            state_updates,
             label: "publish_space_directory_manifest",
             instructions,
             signer: self.treasury.clone(),
@@ -2954,6 +2999,20 @@ mod tests {
                     })
             })
             .expect("plan should include an asset mint destination")
+    }
+
+    fn minted_asset_destinations(plan: &[InstructionBox]) -> Vec<AssetId> {
+        plan.iter()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<MintBox>()
+                    .and_then(|mint| match mint {
+                        MintBox::Asset(asset) => Some(asset.destination.clone()),
+                        _ => None,
+                    })
+            })
+            .collect()
     }
 
     #[test]
@@ -4370,14 +4429,148 @@ mod tests {
     fn register_uaid_account_tracks_mapping() {
         let PreparedChaos { mut state, .. } =
             prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let before = state.uaid_accounts.len();
         let plan = state.plan_register_uaid_account();
         assert_eq!(plan.label, "register_uaid_account");
+        assert_eq!(
+            state.uaid_accounts.len(),
+            before,
+            "planning alone must not publish the new UAID account"
+        );
+        plan.apply_updates(&mut state, false);
+        assert_eq!(
+            state.uaid_accounts.len(),
+            before,
+            "failed account registration must not mutate the UAID registry"
+        );
+        plan.apply_updates(&mut state, true);
         assert!(
             state
                 .uaid_accounts
                 .values()
                 .any(|record| record.uaid.is_some()),
             "UAID registry should record the new account"
+        );
+    }
+
+    #[test]
+    fn register_account_tracks_only_on_success() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let before = state.users.len();
+        let plan = state.plan_register_account();
+        assert_eq!(plan.label, "register_account");
+        assert_eq!(
+            state.users.len(),
+            before,
+            "planning alone must not publish the new account"
+        );
+        plan.apply_updates(&mut state, false);
+        assert_eq!(
+            state.users.len(),
+            before,
+            "failed account registration must not mutate tracked users"
+        );
+        plan.apply_updates(&mut state, true);
+        assert_eq!(
+            state.users.len(),
+            before + 1,
+            "successful account registration should publish the signer account"
+        );
+    }
+
+    #[test]
+    fn nexus_genesis_prefunds_fee_asset_for_signers() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let PreparedChaos { state, genesis, .. } =
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let setup = state
+            .nexus_staking
+            .as_ref()
+            .expect("nexus staking setup should be present");
+        let fee_asset = setup.fee_asset.clone();
+        let minted_fee_accounts: HashSet<AccountId> = genesis
+            .iter()
+            .flatten()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<MintBox>()
+                    .and_then(|mint| match mint {
+                        MintBox::Asset(asset) if asset.destination.definition() == &fee_asset => {
+                            Some(asset.destination.account().clone())
+                        }
+                        _ => None,
+                    })
+            })
+            .collect();
+
+        assert!(
+            minted_fee_accounts.contains(&state.treasury.id),
+            "treasury should start with fee asset balance under nexus"
+        );
+        for user in &state.users {
+            assert!(
+                minted_fee_accounts.contains(&user.id),
+                "every seeded workload user should start with fee asset balance"
+            );
+        }
+        for validator in &setup.validator_accounts {
+            assert!(
+                minted_fee_accounts.contains(&validator.id),
+                "every validator signer should start with fee asset balance"
+            );
+        }
+    }
+
+    #[test]
+    fn nexus_account_registration_prefunds_fee_asset_and_tracks_on_success() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let before = state.users.len();
+        let plan = state.plan_register_account();
+        let registered_account = plan
+            .instructions
+            .iter()
+            .find_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .and_then(|register| match register {
+                        RegisterBox::Account(account) => Some(account.object.id().clone()),
+                        _ => None,
+                    })
+            })
+            .expect("plan should register an account");
+        let fee_asset = state
+            .nexus_staking
+            .as_ref()
+            .expect("nexus staking setup should exist")
+            .fee_asset
+            .clone();
+        assert!(
+            minted_asset_destinations(&plan.instructions)
+                .iter()
+                .any(|asset| {
+                    asset.definition() == &fee_asset && asset.account() == &registered_account
+                }),
+            "nexus account registration should prefund the new signer with fee asset"
+        );
+        assert_eq!(
+            state.users.len(),
+            before,
+            "planning alone must not publish the new account"
+        );
+        plan.apply_updates(&mut state, true);
+        assert!(
+            state
+                .users
+                .iter()
+                .any(|record| record.id == registered_account),
+            "successful account registration should publish the new signer"
         );
     }
 

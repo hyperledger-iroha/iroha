@@ -10675,12 +10675,20 @@ pub mod isi {
                     .cloned()
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|label| label.domain.as_ref() == Some(&domain_id))
+                    .filter(|label| {
+                        label
+                            .domain
+                            .as_ref()
+                            .is_some_and(|label_domain| label_domain == &domain_id)
+                    })
                     .collect();
                 if let Some(account) = state_transaction.world.accounts.get_mut(&account_id)
-                    && account
-                        .label()
-                        .is_some_and(|label| label.domain.as_ref() == Some(&domain_id))
+                    && account.label().is_some_and(|label| {
+                        label
+                            .domain
+                            .as_ref()
+                            .is_some_and(|label_domain| label_domain == &domain_id)
+                    })
                 {
                     account.set_label(None);
                 }
@@ -10695,7 +10703,7 @@ pub mod isi {
             for subject in unlink_subjects {
                 state_transaction
                     .world
-                    .unlink_account_subject_domain(&subject.to_account_id(domain_id.clone()));
+                    .unlink_account_subject_domain(&subject, &domain_id);
             }
 
             let selector = iroha_data_model::account::AccountDomainSelector::from_domain(
@@ -12042,7 +12050,7 @@ pub mod isi {
             let policy = MultisigPolicy::new(threshold, members).expect("multisig policy");
             let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
             let multisig_id = AccountId::new_multisig(policy);
-            Register::account(Account::new(multisig_id.to_account_id(domain_id)))
+            Register::account(Account::new_in_domain(multisig_id.clone(), domain_id))
                 .execute(&ALICE_ID, stx)
                 .expect("register multisig authority");
             multisig_id
@@ -12379,12 +12387,8 @@ pub mod isi {
             Register::account(new_account_in_domain(&account_id, &remove_domain))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup-domain account");
-            LinkAccountDomain {
-                account: account_id.clone(),
-                domain: retained_domain.clone(),
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .expect("link account into retained domain");
+            stx.world
+                .link_account_subject_domain(&account_id, &retained_domain);
 
             let (holder_id, _) = gen_account_in(&holder_domain);
             Register::account(new_account_in_domain(&holder_id, &holder_domain))
@@ -13662,12 +13666,8 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
-            LinkAccountDomain {
-                account: target_id.clone(),
-                domain: retained_domain_id.clone(),
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .expect("link retained domain to target subject");
+            stx.world
+                .link_account_subject_domain(&target_id, &retained_domain_id);
 
             let (holder_id, _) = gen_account_in(&holder_domain_id);
             Register::account(new_account_in_domain(&holder_id, &holder_domain_id))
@@ -16944,7 +16944,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            Register::account(Account::new_domainless(ALICE_ID.clone()))
+            Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed authority");
 
@@ -16988,7 +16988,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            Register::account(Account::new_domainless(ALICE_ID.clone()))
+            Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("seed authority");
 

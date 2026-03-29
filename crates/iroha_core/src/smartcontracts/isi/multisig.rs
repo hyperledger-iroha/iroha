@@ -434,7 +434,7 @@ fn rekey_account_id(
     for domain in linked_domains {
         state_transaction
             .world
-            .link_account_subject_domain(&new_account.to_account_id(domain));
+            .link_account_subject_domain(&new_account, &domain);
     }
 
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
@@ -1294,7 +1294,7 @@ fn execute_register(
             home_domain,
         )
     } else {
-        iroha_data_model::account::NewAccount::new_domainless(multisig_account_id.clone())
+        iroha_data_model::account::NewAccount::new(multisig_account_id.clone())
     };
     Register::account(register_account)
         .execute(authority, state_transaction)
@@ -1829,7 +1829,7 @@ fn ensure_signatory_account_exists(
             let register_account = if let Some(home_domain) = home_domain.cloned() {
                 iroha_data_model::account::NewAccount::new_in_domain(signatory.clone(), home_domain)
             } else {
-                iroha_data_model::account::NewAccount::new_domainless(signatory.clone())
+                iroha_data_model::account::NewAccount::new(signatory.clone())
             };
             Register::account(register_account.with_metadata(metadata))
                 .execute(authority, state_transaction)
@@ -2527,7 +2527,7 @@ mod tests {
         ChainId, IntoKeyValue,
         account::{AccountId, rekey::AccountLabel},
         block::BlockHeader,
-        isi::{AddSignatory, RemoveSignatory, SetAccountLabel, SetAccountQuorum},
+        isi::{AddSignatory, RemoveSignatory, SetAccountQuorum, SetPrimaryAccountAlias},
         prelude::{Domain, InstructionBox, Register},
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -2625,9 +2625,10 @@ mod tests {
             domain_id.clone(),
             label.parse().expect("account label name"),
         );
-        SetAccountLabel {
+        SetPrimaryAccountAlias {
             account: account_id.clone(),
-            label: label.clone(),
+            alias: Some(label.clone()),
+            lease_expiry_ms: None,
         }
         .execute(authority, state_transaction)
         .expect("bind account label");
@@ -4066,11 +4067,9 @@ mod tests {
         let mut state_transaction = block.transaction();
 
         let owner_id = new_account_id(&KeyPair::random());
-        Register::account(iroha_data_model::account::NewAccount::new_domainless(
-            owner_id.clone(),
-        ))
-        .execute(&owner_id, &mut state_transaction)
-        .expect("register domainless owner");
+        Register::account(iroha_data_model::account::NewAccount::new(owner_id.clone()))
+            .execute(&owner_id, &mut state_transaction)
+            .expect("register domainless owner");
 
         let signer = new_account_id(&KeyPair::random());
         let spec = MultisigSpec {
@@ -4943,7 +4942,7 @@ mod tests {
         }
         state_transaction
             .world
-            .link_account_subject_domain(&shared_account.to_account_id(alt_domain.clone()));
+            .link_account_subject_domain(&shared_account, &alt_domain);
         assert_eq!(
             domain_owner(&state_transaction, &home_domain).expect("domain owner lookup"),
             owner_id,

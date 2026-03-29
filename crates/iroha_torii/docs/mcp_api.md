@@ -26,6 +26,28 @@ MCP is disabled by default. Enable it under `torii.mcp`.
 }
 ```
 
+### Public Deployed-Network Profile
+
+For public SORA/Torii deployments intended to be used from Codex, the
+recommended policy is a curated writer profile that exposes only the stable
+`iroha.*` aliases:
+
+```json
+{
+  "torii": {
+    "mcp": {
+      "enabled": true,
+      "profile": "writer",
+      "expose_operator_routes": false,
+      "allow_tool_prefixes": ["iroha."]
+    }
+  }
+}
+```
+
+This keeps the public tool catalog small and task-oriented while hiding the
+full raw `torii.*` OpenAPI-derived namespace and all operator routes.
+
 ### Configuration Fields
 - `enabled`: master switch for `/v1/mcp`.
 - `max_request_bytes`: POST body limit for MCP JSON-RPC.
@@ -41,6 +63,12 @@ Profile behavior:
 - `read_only`: GET/HEAD/OPTIONS and read-style aliases only.
 - `writer`: includes mutating non-operator tools.
 - `operator`: includes operator tools as well.
+
+When `allow_tool_prefixes` is set, the profile still applies first and the
+prefix allow-list is applied second. Public networks can therefore use
+`profile = "writer"` together with `allow_tool_prefixes = ["iroha."]` to keep
+mutating app-development helpers available without publishing the broader raw
+surface.
 
 ## Endpoints
 - `GET /v1/mcp`: capabilities payload (not JSON-RPC wrapped).
@@ -64,6 +92,11 @@ For route dispatch, MCP forwards inbound auth headers automatically:
 
 Per-call additional headers can also be passed via `arguments.headers`.
 `content-length`, `host`, and `connection` from `arguments.headers` are ignored.
+
+For public writer-profile deployments, treat user-supplied `authority` /
+`private_key` fields and forwarded auth headers as runtime-only inputs. Do not
+store deployment credentials in repo config, plugin manifests, or
+documentation examples tied to real secrets.
 
 ## Protocol Behavior
 - `jsonrpc` is recommended as `"2.0"`.
@@ -175,6 +208,11 @@ Tool names are stable and generated from HTTP method + path for OpenAPI-derived 
 
 Additional curated aliases are provided under `connect.*` and `iroha.*`.
 
+For public Codex-facing deployments, prefer publishing only `iroha.*` aliases.
+Those names are curated for live account, asset, contract, governance, and
+transaction workflows and are substantially easier for an agent to use than the
+full raw `torii.*` catalog.
+
 Streaming/internal paths are intentionally excluded from MCP tool generation (for example SSE/WS stream routes and `/v1/mcp` itself).
 
 Do not hardcode the full tool catalog in clients.
@@ -199,6 +237,12 @@ Body/headers behavior:
 
 Many `iroha.*` alias tools also accept flat shortcut keys (for example `account_id`, `hash`, `definition_id`, `limit`, `offset`).
 Rely on each tool’s `inputSchema` for authoritative accepted fields.
+
+The live-network write-oriented aliases intentionally support the existing
+Torii JSON request bodies used by deployed app endpoints, so Codex can work
+with runtime-supplied `authority` / `private_key` JSON fields on supported
+routes such as contract, governance, onboarding, faucet, subscription, and
+submit-and-wait flows.
 
 ## Tool Result Contract
 `tools/call` returns a JSON-RPC `result` object with MCP tool semantics:
@@ -257,6 +301,23 @@ Notes:
 3. Call tools with `tools/call`.
 4. For long-running work, use `tools/call_async` + `tools/jobs/get` polling.
 5. Re-run `tools/list` when `listChanged` becomes `true`.
+
+## Codex Plugin Workflow
+
+This repo ships a Codex plugin bundle under `plugins/iroha/` that assumes the
+target Torii host already exposes native MCP at `/v1/mcp`.
+
+- Built-in preset: `https://taira.sora.org/v1/mcp`
+- Custom deployments: add a user-local MCP server, for example
+  `codex mcp add iroha-custom --url https://<torii>/v1/mcp`
+- Standalone skill: this repo also ships `skills/sora-taira-testnet/` for the
+  Codex Skills surface. Install it from a GitHub checkout of this repo with
+  your local skill installer and restart Codex so it appears in the Skills tab.
+
+The plugin does not parameterize `.mcp.json` and does not persist secrets. For
+custom networks, keep endpoint-specific auth and any signing material in the
+user's local Codex MCP configuration or pass them as explicit runtime inputs to
+supported `iroha.*` tools.
 
 ## Examples
 

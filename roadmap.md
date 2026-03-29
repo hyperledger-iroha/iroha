@@ -2,6 +2,506 @@
 
 Last updated: 2026-03-28
 
+Latest sync (2026-03-28 Taira Sorafs upload proxy fix):
+the public edge on this machine no longer rejects larger Sorafs uploads with
+`413 Request Entity Too Large`.
+
+- both the checked-in Taira nginx template and the active Homebrew vhost now
+  set `client_max_body_size 64m;` on the `taira.sora.org` and
+  `taira-explorer.sora.org` TLS server blocks;
+- after `nginx -t && nginx -s reload`, 2 MiB `POST /v1/sorafs/storage/pin`
+  requests now reach Torii and fail at application content-type validation
+  (`415`) instead of dying at nginx; and
+- direct Torii status serving remained healthy after the reload.
+
+Open work for this slice now remains:
+- rerun `yarn taira:publish` from a shell that has valid
+  `SORAFS_AUTHORITY` / `SORAFS_PRIVATE_KEY`;
+- if the serving nodes are not reading directly from this checkout, sync
+  `configs/soranexus/taira/sorafs_sites.json` to those deployed nodes and
+  restart/redeploy them so root serving picks up the new binding; and
+- re-verify `https://taira.sora.org/.well-known/sorafs/manifest`,
+  `https://taira.sora.org/`, and `https://taira.sora.org/status` after the
+  publish completes.
+
+Latest sync (2026-03-28 Taira MCP restored on the served localnet):
+the local/public `404` on `/v1/mcp` is closed on this machine.
+
+- the served `dist/taira-localnet/peer{0,1,2,3}.toml` files now carry the
+  shipped `[torii.mcp]` writer profile and the restarted `taira-localnet`
+  screen session exposes MCP again on both `http://127.0.0.1:29080/v1/mcp` and
+  `https://taira.sora.org/v1/mcp`; and
+- `iroha_kagami` now generates the same `[torii.mcp]` block automatically for
+  Sora-profile localnets, with focused regression coverage.
+
+Open work for this slice now remains:
+- keep the Taira reset path one-command reproducible by folding the remaining
+  live-only overlays into generation, not just MCP:
+  the loopback peer mesh/telemetry host adjustments and the extra faucet-funding
+  genesis mint still require manual post-generation edits in `dist/`.
+
+Latest sync (2026-03-28 Taira faucet funding overlay restored after reset):
+the live Taira faucet is healthy again, and the post-reset 400s have been
+traced to a missing genesis funding overlay rather than a PoW or account-format
+regression.
+
+- the served `dist/taira-localnet` bundle now includes the missing faucet
+  authority mint again, has been re-signed with the deterministic
+  `taira-localgenesis` key material, and has been restarted from clean storage;
+- a real solved-PoW claim now returns `202` and commits in block 2; and
+- a second claim for the same account now fails for the intended reason:
+  `account already has a positive faucet asset balance`.
+
+Open work for this slice now remains:
+- fold the full Taira live overlay into a reproducible reset path so future
+  `kagami localnet` redeploys on this machine do not require manual post-gen
+  edits for either the loopback peer mesh or the extra faucet-funding genesis
+  mint; and
+- if the checked-in Taira bundle is supposed to mirror the served localnet more
+  closely, capture this faucet-funding overlay in a repo-owned config/script
+  rather than only in the untracked `dist/` deployment directory.
+
+Latest sync (2026-03-28 Taira local reset after iroha/explorer update):
+the local Taira validator set and explorer are back on the latest checkouts,
+and the fresh-genesis redeploy is healthy again on this machine.
+
+- `iroha_kagami` now compiles against the updated account/domain API after the
+  `Account::new_in_domain(...)` and `register.object.domain()` fixes; and
+- the reset flow again regenerates `dist/taira-localnet`, restarts the detached
+  `taira-localnet` screen session, serves a live faucet puzzle, returns valid
+  Connect sessions, and points the rebuilt explorer bundle at
+  `https://taira.sora.org`.
+
+Open work for this slice now remains:
+- teach `kagami localnet` to separate the internal peer-mesh/telemetry host
+  from the external `--public-host`, so Taira resets on this machine no longer
+  require manual post-generation edits to `trusted_peers`,
+  `network.public_address`, and `torii.peer_telemetry_urls`; and
+- if this local Taira reset is meant to stay fully one-command reproducible,
+  move the live-only faucet authority plus faucet-funding overlay out of manual
+  `dist/` edits into a documented generation/signing path.
+
+Latest sync (2026-03-28 Taira deploy docs now capture the nginx websocket fix):
+the future deploy path for Taira Connect is now written down in-tree instead of
+living only in terminal history.
+
+- `configs/soranexus/taira/README.md` now documents the generic edge-host
+  install flow, the shared macOS/Homebrew nginx path, the exact websocket
+  location requirement, and the Connect session plus websocket smoke checks;
+- `defaults/kagami/iroha3-taira/README.md` now warns future bundle consumers to
+  keep `/v1/connect/ws` ahead of generic `/` and `/v1/` proxy stanzas; and
+- `docs/connect_config.md` now describes how to distinguish a broken proxy hop
+  from an application-level Connect error during rollout verification.
+
+Open work for this slice now remains:
+- if the public internet-facing Taira edge is not this machine, deploy the same
+  nginx websocket location blocks there and rerun the documented Connect smoke
+  against the public hostnames.
+
+Latest sync (2026-03-28 Taira deploy bundle aligned to MCP rollout):
+the Taira deployment artifacts now explicitly enforce the MCP-enabled validator
+config and shared edge path, rather than assuming operators will wire the live
+hostnames correctly by hand.
+
+- `configs/soranexus/taira/dns_records.json` now aligns `taira.sora.org` with
+  the shared edge host expected by `taira-explorer.nginx.conf`;
+- `configs/soranexus/taira/taira-explorer.nginx.conf` now carries explicit
+  `/v1/mcp` proxy locations for both public virtual hosts;
+- `configs/soranexus/taira/taira-irohad.service` now provides a sample systemd
+  unit that starts the validator from the shipped Taira config/genesis under
+  `--sora`; and
+- `configs/soranexus/taira/check_mcp_rollout.sh` now gives operators a hard
+  rollout gate for local and public MCP availability plus curated `iroha.*`
+  exposure.
+
+Open work for this follow-up now remains:
+- apply the updated Taira deploy bundle on the live hosts
+  (`taira-irohad.service`, `taira-explorer.nginx.conf`, DNS, and
+  `check_mcp_rollout.sh`);
+- rerun the new local-first smoke gate on the validator host so
+  `http://127.0.0.1:18080/v1/mcp` passes before the next public reload;
+- rerun the public smoke once the edge is reloaded so
+  `https://taira.sora.org/v1/mcp` stops returning `HTTP/2 404`; and
+- after public MCP is live, complete the end-to-end Taira Codex smoke
+  (`GET /v1/mcp`, `tools/list`, hidden `torii.*`, one public read, one
+  explicit-key write flow).
+
+Latest sync (2026-03-28 Torii peer-monitor `/configuration` auth fix):
+the live Taira config-monitor warning loop is closed.
+
+- `iroha_torii` now signs peer-monitor `GET /configuration` requests with the
+  node's operator signer instead of polling an operator-only endpoint
+  anonymously;
+- the peer monitor now classifies operator-auth `401/403` payloads as an
+  expected "config unavailable" case and broadens the legacy config decode
+  fallback for mixed-version peers; and
+- the restarted `taira-localnet` deployment is now clean after `2026-03-28T12:03`:
+  `rg` finds no fresh `peer_monitor` configuration warnings in
+  `dist/taira-localnet/peer{0,1,2,3}.log`, and direct Torii status remains
+  healthy.
+
+Open work for this slice now remains:
+- rerun a longer post-fix soak on a future redeploy if you want more than the
+  immediate post-restart proof that the warning loop is gone; and
+- if any older peers still expose only legacy `/configuration` payloads, keep
+  the broadened decode fallback covered when the config DTO evolves again.
+
+Latest sync (2026-03-28 Taira skill/docs gap closure with live endpoint recheck):
+the repo-side gaps from the standalone Taira skill rollout are now closed, and
+the remaining blocker has narrowed back down to the public deployment.
+
+- `README.md` now advertises the Codex-facing Taira plugin and standalone skill
+  from the repository landing page;
+- `plugins/iroha/README.md` now uses the portable
+  `${CODEX_HOME:-$HOME/.codex}` installer path for the standalone skill;
+- `scripts/check_codex_plugin_manifests.py` now validates the repo-shared
+  `skills/sora-taira-testnet/` skill and its `agents/openai.yaml` metadata, and
+  the accompanying test harness covers that new validation path; and
+- the focused `iroha_torii` MCP tests for the writer-prefix policy now pass
+  cleanly again.
+
+Open work for this follow-up now remains:
+- fix the public Taira deployment or ingress so `https://taira.sora.org/v1/mcp`
+  stops returning `HTTP/2 404` for both `GET /v1/mcp` and JSON-RPC
+  `tools/list`;
+- once the public MCP path is live, run the full public smoke again against
+  Taira (`GET /v1/mcp`, `tools/list`, hidden raw `torii.*`, one public read,
+  one explicit-key write flow);
+- publish the repo-shared skill from a GitHub remote that teammates can install
+  from directly if this repository path is not already their source of truth;
+- complete the human-run OpenAI support and Developer Forum submission if the
+  goal is eventual inclusion in the `openai/skills` catalog.
+
+Latest sync (2026-03-28 initial PRECOMMIT sparse-send root-cause fix):
+the next DA/precommit slice is now aimed at the implementation bug in vote
+dissemination rather than at timeout/FSM tuning.
+
+- restored the ineffective Cut 2 collector constant changes back to the clean
+  Cut 1 baseline
+  (`IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS: 2 -> 3`,
+  `COLLECTORS_K: 2 -> 1`) while keeping the Cut 0 / Cut 1 backlog, pipeline,
+  DA multiplier, timeout-floor, `redundant_send_r = 3`, and
+  `parallel_topology_fanout = 1` settings intact;
+- recorded why the Cut 2 `k` tuning could never help the preserved-peer 4-peer
+  soaks: `collector_fanout_floor()` collapses `k = 1/2/3` to the same
+  quorum-sized fanout (`3` remotes), so those `k` deltas are observationally
+  equivalent in that envelope; and
+- fixed the real root cause in
+  `crates/iroha_core/src/sumeragi/main_loop/commit.rs` by changing only the
+  initial `PRECOMMIT` dissemination semantics:
+  `init_collector_plan()` still seeds the primary collector deterministically,
+  but the first `emit_precommit_vote()` no longer drains redundant collectors
+  or performs remote-floor top-up. The initial send now targets only the
+  seeded collector set plus any configured parallel-topology additions, with
+  fallback to full topology only when the collector plan is empty or local-only.
+  Timeout/rebroadcast logic still owns later widening, and NEW_VIEW,
+  rebroadcast semantics, frontier-slot ownership, deep catch-up, quorum-timeout
+  FSM routing, and recovery paths are intentionally unchanged in this slice.
+
+Focused validation for this slice is now green in an isolated target
+directory:
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib commit_vote_targets_collectors_or_topology -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib precommit_vote_targets_collectors_without_broadcast -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib initial_precommit_emit_does_not_consume_redundant_collectors_immediately -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib rebroadcast_precommit_votes_widen_collectors_when_below_quorum -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib plan_with_sent_preserves_remaining_targets -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo test -p iroha_core --lib --features iroha-core-tests collector_fanout_floor_respects_quorum_and_bounds -- --nocapture`
+
+Fresh rerun evidence on built binaries is now in hand:
+- `CARGO_TARGET_DIR=/tmp/iroha_target_precommitfix cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  now succeeds on the current worktree;
+- preserved-peer stable permissioned still fails the acceptance gate at
+  height `186` with
+  `no strict block height progress for 600s`, while the old repair-path
+  markers remain zero
+  (`requested block-sync range pull from committed anchor=0`,
+  `sharing from fallback anchor=0`,
+  `requested missing BlockCreated while awaiting RBC INIT=0`);
+  its dominant symptoms are instead
+  `plan submission failed=49`,
+  `transaction queued for too long=80`,
+  and
+  `haven't got tx confirmation within 20s=29`;
+- preserved-peer stable NPoS also fails the acceptance gate, but only after
+  progressing much farther to height `878`; it keeps the old repair markers
+  and `Failed to find asset` at zero, but it accumulates persistent Nexus
+  ingress failures:
+  `route_unavailable=1480`,
+  `plan submission failed=151`;
+- derived from the logged progress samples, both reruns also miss the latency
+  gate:
+  permissioned `interval_p95_ms ~= 1251`,
+  NPoS `interval_p95_ms ~= 2001`; and
+- the sparse initial-`PRECOMMIT` fix therefore improved dissemination
+  semantics and likely helped NPoS height reach, but it did not close the
+  preserved-peer soak gate by itself.
+
+Open work from this slice:
+- debug the permissioned stall around height `186` as an ingress/backpressure
+  problem rather than reopening collector-`k` or timeout-floor tuning; the
+  evidence points at queueing and confirmation starvation, not at the old
+  fallback-anchor / missing-`BlockCreated` repair path;
+- debug the NPoS-specific `route_unavailable: no reachable authoritative peers
+  are available for lane 1 dataspace 1` regression in Nexus routing or
+  authoritative-peer tracking, because that now appears to be the dominant
+  blocker once the consensus tail is partially relieved;
+- keep the recovery invariants hard in future reruns:
+  `requested block-sync range pull from committed anchor=0`,
+  `sharing from fallback anchor=0`,
+  `requested missing BlockCreated while awaiting RBC INIT=0`,
+  and
+  `Failed to find asset=0`; and
+- stop and reassess before widening the consensus-side change surface again.
+  The next slice should be chosen only after deciding whether the primary
+  blocker is permissioned ingress queueing, Nexus authoritative-route
+  availability, or a remaining consensus liveness issue.
+
+Latest sync (2026-03-28 repeatable-trigger ingress repin on `route_unavailable`):
+the first targeted Nexus/NPoS ingress fix is now in `izanami`, not in
+consensus.
+
+- repeatable-trigger plans in `crates/izanami/src/chaos.rs` still pin to one
+  ingress endpoint on the happy path, but query/submit/reconcile now repin to
+  an alternate endpoint when the pinned peer returns `route_unavailable`;
+- the alternate-endpoint helper explicitly excludes the endpoint that just
+  failed the authoritative-route check, so the workload driver no longer
+  retries the same stale pin immediately; and
+- focused tests were added for happy-path pin reuse, alternate failover that
+  skips the pinned endpoint, and `route_unavailable` error detection.
+
+Open work from this slice:
+- rerun the preserved-peer stable NPoS soak after the `izanami` validation is
+  green to see whether `route_unavailable` and `plan submission failed`
+  materially drop from the last baseline (`1480` and `151`, respectively);
+- if NPoS still reports `route_unavailable` after the client-side repin fix,
+  move the next slice into Torii-side authoritative-route visibility or proxy
+  behavior rather than touching nomination/election logic; and
+- keep the permissioned ingress/backpressure stall as separate work. This
+  `izanami` repin fix is aimed at the NPoS/Nexus routing failure and is not
+  expected to resolve the permissioned `transaction queued for too long` /
+  confirmation-starvation path by itself.
+
+Latest sync (2026-03-28 repo-shared SORA Taira standalone Codex skill):
+this repo now carries a shareable standalone Codex skill for the Taira testnet
+in addition to the installable `plugins/iroha/` bundle.
+
+- `skills/sora-taira-testnet/` now contains the standalone skill definition and
+  UI metadata for the Codex Skills surface;
+- `plugins/iroha/README.md` now documents how teammates can install that skill
+  from a GitHub checkout of this repo with the built-in skill installer;
+- `crates/iroha_torii/docs/mcp_api.md` now points readers to both the plugin
+  and standalone-skill surfaces; and
+- `AGENTS.md` now tells future agents to consult
+  `skills/sora-taira-testnet/SKILL.md` for live Taira/Torii MCP workflows.
+
+Open work for this shareability slice now remains:
+- publish the repo-shared skill from a GitHub remote that teammates can install
+  from directly if this repository path is not already their source of truth;
+- complete the human-run OpenAI support and Developer Forum submission if the
+  goal is eventual inclusion in the `openai/skills` catalog;
+- install `PyYAML` locally if the stock `quick_validate.py` workflow should be
+  part of routine validation for the repo-shared skill; and
+- once public Taira MCP is redeployed and stable, consider tightening the skill
+  text from today's provisional `404` handling to the final operator-facing
+  rollout guidance.
+
+Latest sync (2026-03-28 account alias cleanup / account-domain query removal):
+the universal-account cleanup now pushes one step further into the public query
+surface and alias instructions.
+
+- `SetAccountLabel` / `BindAccountAlias` have been renamed in the active
+  data-model/core path to `SetPrimaryAccountAlias` /
+  `SetAccountAliasBinding`;
+- `FindAliasesByAccountId` now returns lease-aware alias binding records backed
+  by SNS state; and
+- the stale singular query surfaces `FindDomainsByAccountId` and
+  `FindAccountIdsByDomainId` have been removed from the public
+  data-model/runtime path so account-domain membership stays an internal
+  index/detail instead of a first-class account identity API.
+
+Open work from this slice:
+- finish the broader `ScopedAccountId` / domain-linked account registration
+  cleanup across CLI, Torii tests, bridge helpers, IVM, and docs so account
+  creation and account-targeting ABIs stop depending on scoped account IDs;
+- remove the remaining `ScopedAccountId` compatibility builders/views from the
+  data model (`from_scoped_id`, `new_in_domain`, `domain()`, `scoped_id()`)
+  once downstream consumers stop depending on them;
+- decide whether `linked_domains` remains a transient internal projection only
+  or is removed entirely from stored account records once the remaining
+  link-index consumers are migrated; and
+- update the translated/public account-structure docs once the broader
+  `ScopedAccountId` removal lands, so the multilingual docs do not need a
+  second churn pass.
+
+Latest sync (2026-03-28 Codex plugin rollout for deployed Torii MCP networks):
+the repo now ships the first deployed-network Codex integration slice for
+native Torii MCP.
+
+- `plugins/iroha/` now contains the installable Codex plugin manifest, fixed
+  Taira MCP preset, plugin README, live-network skill, and assets; and
+- `.agents/plugins/marketplace.json` now registers that plugin for repo-local
+  installation.
+- Taira deployment defaults now ship the intended public writer profile in
+  `configs/soranexus/taira/config.toml` and
+  `defaults/kagami/iroha3-taira/config.toml`:
+  `enabled = true`, `profile = "writer"`,
+  `expose_operator_routes = false`,
+  `allow_tool_prefixes = ["iroha."]`; and
+- Torii MCP docs and Taira/Kagami READMEs now document the built-in Taira
+  preset, custom `codex mcp add ... --url https://<torii>/v1/mcp` workflow,
+  curated `iroha.*` public tool exposure, and runtime-only key-material
+  expectations.
+
+Open work for this rollout now remains:
+- redeploy Taira and the matching Nexus overlays with the shipped
+  `[torii.mcp]` block so public `/v1/mcp` stops returning `404` and exposes the
+  curated `iroha.*` writer-profile surface;
+- run the post-redeploy public smoke against Taira:
+  `GET /v1/mcp`, JSON-RPC `tools/list`, confirm raw `torii.*` tools stay
+  hidden, verify one anonymous/public read succeeds, and verify one write flow
+  succeeds only when explicit runtime key material is supplied;
+- rerun the focused
+  `CARGO_INCREMENTAL=0 cargo test -p iroha_torii --test mcp_endpoints mcp_writer_prefix_policy_ -- --nocapture`
+  validation now that the earlier `crates/iroha_data_model/src/query/mod.rs`
+  `NameStatus` derive blocker has been cleared;
+- install `pytest` locally if the plugin-manifest validator test should run via
+  `python3 -m pytest scripts/tests/check_codex_plugin_manifests_test.py`
+  instead of the temporary manual harness; and
+- when a stable public Nexus Torii URL exists, document it as a user-local
+  custom MCP server rather than hardcoding another repo preset.
+
+Latest sync (2026-03-28 DA/precommit tuning stop point after Cut 2 regression):
+the requested deterministic tuning slices have now hit the user-defined stop
+condition:
+
+- Cut 0 cleared the `irohad` release-build blocker in
+  `crates/irohad/src/main.rs`, and the permissioned ingress follow-up in
+  `crates/iroha_torii/src/lib.rs` removed the clean-soak
+  `route_unavailable` failure by falling back to the committed permissioned
+  topology when no public lane validators exist;
+- clean Cut 1 permissioned on
+  `/tmp/izanami_permissioned_full_cut1_20260328T061158Z.log`
+  reached target with `interval_p95_ms=1667` and
+  `phase_collect_precommit_ms=877 >= phase_collect_da_ms=177`, while all
+  liveness/workload guardrails stayed at zero;
+- clean Cut 1 NPoS on
+  `/tmp/izanami_npos_full_cut1_20260328T064716Z.log`
+  reached target with `interval_p95_ms=2001` and
+  `phase_collect_precommit_ms=785 >= phase_collect_da_ms=271`, and its
+  workload guardrails also stayed clean with
+  `plan submission failed=0` / `Failed to find asset=0`;
+- Cut 2 was therefore applied (`IZANAMI_SHARED_HOST_SOAK_COLLECTORS_K_4_PEERS:
+  3 -> 2`, `COLLECTORS_K: 1 -> 2`) and passed focused tests plus a release
+  build; but
+- the clean permissioned Cut 2 rerun on
+  `/tmp/izanami_permissioned_full_cut2_20260328T074345Z.log`
+  regressed into ingress backpressure and strict-progress stall before target:
+  it froze at `strict_min_height=1306` while the reference advanced to `1312`,
+  with sampled intervals already at
+  `p50=1667`, `p95=3335`, `p99=5001`, `max=10003`,
+  `plan submission failed=25`,
+  `transaction queued for too long=39`,
+  `haven't got tx confirmation within 20s=5`, and
+  `strict block height is stalled with no lagging peers=21`.
+
+Open work from this stop point:
+- do not touch frontier-slot ownership, deep-catchup entry, quorum-timeout FSM
+  routing, exact-body repair, or any other recovery/FSM semantics next; the
+  user explicitly asked to stop before that once Cut 2 still failed;
+- investigate why the Cut 2 collector shift creates permissioned ingress
+  backpressure and strict-height stall in the preserved-peer shared-host
+  envelope, using the preserved-peer logs and queue/backpressure signals from
+  `/tmp/izanami_permissioned_full_cut2_20260328T074345Z.log`;
+- decide whether the next tuning attempt should revert the Cut 2 collector
+  change and keep only the clean Cut 1 timeout/backlog reductions, or whether
+  collector fanout needs a more targeted adjustment that does not saturate
+  submission/confirmation paths;
+- if tuning resumes, rerun the clean full permissioned envelope first on the
+  next candidate, and only rerun NPoS after permissioned stays workload-clean
+  and does not reintroduce strict-stall or queue-backpressure warnings; and
+- keep the acceptance bar unchanged for any follow-up candidate:
+  both full preserved-peer stable modes must reach target height with
+  `interval_p95_ms <= 1000`, and NPoS must still keep
+  `plan submission failed=0` and `Failed to find asset=0`.
+
+Latest sync (2026-03-28 Nexus localnet fee bootstrap + Norito GPU-startup hardening):
+`integration_tests/tests/nexus/{cross_dataspace_localnet.rs,cross_dataspace_zk_stark_localnet.rs}`
+now explicitly seed the Nexus fee asset in their custom multilane genesis and
+disable Norito GPU compression for those localnets.
+
+- both tests opt out of the default NPoS bootstrap, so they now register the
+  configured fee asset definition themselves, include the `universal` domain,
+  and mint fee balances for Alice, Bob, and validator accounts;
+- this closes the earlier setup-grant rejection path where the first routed tx
+  failed with `Failed to find asset definition: 5PeSrQmLNwwKtruJvDZrbrm9RuMw`;
+- both localnet builders now set `norito.allow_gpu_compression = false`, which
+  avoids the observed macOS startup hang where one peer blocked in
+  `libgpuzstd_metal` before binding P2P/Torii; and
+- the cheap genesis smoke passes again with the fixed custom bootstrap.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test mod cross_dataspace_localnet_genesis_preexecution_smoke -- --nocapture`
+- `cargo test -p integration_tests --test mod cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture --test-threads=1`
+  (pass on a fresh post-patch run; total `41.929s`)
+
+Open work for this localnet stabilization slice now remains:
+- keep the wrong-dataspace routed-read assertions in place as the stable
+  regression for this ingress-routing work; and
+- if similar macOS startup hangs appear in other large localnets, decide
+  whether `iroha_test_network` should default `norito.allow_gpu_compression`
+  off for multi-peer test networks instead of patching individual suites.
+
+Latest sync (2026-03-28 Nexus routed-read localnet coverage):
+`integration_tests/tests/nexus/cross_dataspace_localnet.rs`
+now checks routed read responses through wrong-dataspace Nexus ingress instead
+of limiting integration coverage to tx submission plus low-level balance
+queries.
+
+- the localnet regression now performs raw app-API GETs through Nexus-lane
+  submitters for public-lane validators, account assets, asset-definition
+  lookup, and dataspace account summary;
+- the new helper preserves `x-iroha-routed-by` and route headers so the test
+  can assert the ingress behavior that the Rust client helpers currently drop;
+- the full 12-peer atomic-swap regression is green again on this host after
+  the localnet fee bootstrap and CPU-only Norito startup hardening.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests --test mod cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture --test-threads=1`
+  (pass; total `41.929s`)
+
+Open work for this routed-read integration slice now remains:
+- add similar header-aware wrong-dataspace coverage for any remaining routed
+  endpoints that still only have unit coverage; and
+- keep pushing toward proof-backed routed reads once the underlying committed
+  state inclusion-proof plumbing exists.
+
+Latest sync (2026-03-28 `irohad` relay / Torii proxy exhaustiveness):
+`crates/irohad/src/main.rs`
+now keeps the generic relay aligned with Torii’s dedicated control-plane
+subscriber for proxy request/response traffic.
+
+- `NetworkMessage::ToriiProxyRequest` and `ToriiProxyResponse` are now
+  explicitly classified as relay-ignored dedicated-subscriber messages
+  alongside the existing Soracloud proxy / genesis / health / connect frames;
+- a focused relay regression now covers both Torii proxy variants so future
+  control-plane enum additions fail in tests before they break `irohad`
+  compilation again; and
+- targeted `irohad` formatting, check, and unit-test validation now pass for
+  this slice.
+
+Validation:
+- `cargo fmt --all`
+- `cargo check -p irohad --message-format short`
+- `cargo test -p irohad dedicated_subscriber_message_set_includes_torii_proxy_frames -- --nocapture`
+
+Open work for this relay-control-plane slice now remains:
+- keep `irohad`’s dedicated-subscriber ignore set synchronized with the actual
+  Torii control-plane subscriber whenever new `NetworkMessage` control variants
+  are added, so enum evolution does not regress back into relay exhaustiveness
+  failures.
+
 Latest sync (2026-03-28 managed C# transaction build/sign/submit slice):
 `csharp/` now contains the first managed `.NET 8` preview of
 `Hyperledger.Iroha.Sdk` plus a dedicated C# CI lane.

@@ -4,55 +4,232 @@ direction: ltr
 source: docs/source/universal_accounts_guide.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5d525863066feb78b2668d766816ed9404cef6e8159dea85db0fc8c1bcec9d01
-source_last_modified: "2026-01-30T18:06:03.658066+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: f972f8f82b7f4e89c1d48b0dbbc6eb5b73303e2fab0f580ab21e63990ba03af8
+source_last_modified: "2026-03-27T19:05:17.617064+00:00"
+translation_last_reviewed: 2026-03-28
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Universal Account Guide
+# Бүх нийтийн дансны гарын авлага
 
-This guide distils the UAID (Universal Account ID) rollout requirements from
-the Nexus roadmap and packages them into an operator + SDK focused walkthrough.
-It covers UAID derivation, portfolio/manifest inspection, regulator templates,
-and the evidence that must accompany every `iroha app space-directory manifest
+Энэхүү гарын авлага нь UAID (Universal Account ID)-ийн танилцуулгад тавигдах шаардлагыг
+Nexus замын зураглалыг гаргаж, тэдгээрийг оператор + SDK-д чиглэсэн заавар болгон багцлана.
+Энэ нь UAID гаралт, багц/манифест шалгалт, зохицуулагчийн загварууд,
+мөн `iroha програмын сансрын лавлах манифест бүрийг дагалдах ёстой нотлох баримтууд
 publish` run (roadmap reference: `roadmap.md:2209`).
 
-## 1. UAID quick reference
-
-- UAIDs are `uaid:<hex>` literals where `<hex>` is a Blake2b-256 digest whose
-  LSB is set to `1`. The canonical type lives in
+## 1. UAID хурдан лавлагаа- UAID нь `uaid:<hex>` литерал бөгөөд `<hex>` нь Blake2b-256 дижест бөгөөд
+  LSB-г `1` гэж тохируулсан. Каноник төрөл нь амьдардаг
   `crates/iroha_data_model/src/nexus/manifest.rs::UniversalAccountId`.
-- Account records (`Account` and `AccountDetails`) now carry an optional `uaid`
-  field so applications can learn the identifier without bespoke hashing.
-- Space Directory maintains a `World::uaid_dataspaces` map that ties each UAID
-  to the dataspace accounts referenced by active manifests. Torii reuses that
-  map for the `/portfolio` and `/uaids/*` APIs.
-- `POST /v1/accounts/onboard` publishes a default Space Directory manifest for
-  the global dataspace when none exists, so the UAID is immediately bound.
-  Onboarding authorities must hold `CanPublishSpaceDirectoryManifest{dataspace=0}`.
-- All SDKs expose helpers for canonicalising UAID literals (e.g.,
-  `UaidLiteral` in the Android SDK). The helpers accept raw 64-hex digests
-  (LSB=1) or `uaid:<hex>` literals and re-use the same Norito codecs so the
-  digest cannot drift across languages.
+- Дансны бүртгэлд (`Account` ба `AccountDetails`) одоо нэмэлт `uaid` бичигдсэн байна.
+  талбарт оруулснаар программууд тусгай хэшгүйгээр танигчийг сурах боломжтой.
+- Далд функц тодорхойлогч бодлого нь дурын хэвийн оролтыг холбож болно
+  (утасны дугаар, имэйл, дансны дугаар, түншийн тэмдэгт) `opaque:` ID-ууд
+  UAID нэрийн орон зайн дор. Гинжний хэсгүүд нь `IdentifierPolicy`,
+  `IdentifierClaimRecord`, `opaque_id -> uaid` индекс.
+- Сансрын лавлах нь UAID бүрийг холбосон `World::uaid_dataspaces` газрын зургийг хадгалдаг.
+  идэвхтэй манифестуудаар иш татсан өгөгдлийн орон зайн данс руу. Torii үүнийг дахин ашигладаг
+  `/portfolio` болон `/uaids/*` API-д зориулсан газрын зураг.
+- `POST /v1/accounts/onboard` нь өгөгдмөл сансрын лавлах манифестийг нийтэлдэг.
+  дэлхийн өгөгдлийн орон зай байхгүй үед UAID шууд холбогддог.
+  Онгоцны эрх баригчид `CanPublishSpaceDirectoryManifest{dataspace=0}` байх ёстой.
+- Бүх SDK-ууд UAID литералуудыг каноник болгоход туслах хэрэгслүүдийг гаргадаг (жишээ нь,
+  Android SDK дээрх `UaidLiteral`). Туслах ажилтнууд 64-гекс түүхий эдийг хүлээн авдаг
+  (LSB=1) эсвэл `uaid:<hex>` литерал ба ижил Norito кодлогчийг дахин ашигла.
+  digest нь хэлээр дамжиж чадахгүй.
 
-## 2. Deriving and verifying UAIDs
+## 1.1 Нуугдсан танигч бодлого
 
-There are three supported ways to obtain a UAID:
+UAID нь одоо хоёр дахь таних давхаргын зангуу болж байна:
 
-1. **Read it from world state or SDK models.** Any `Account`/`AccountDetails`
-   payload queried via Torii now has the `uaid` field populated when the
-   participant opted into universal accounts.
-2. **Query the UAID registries.** Torii exposes
-   `GET /v1/space-directory/uaids/{uaid}` which returns the dataspace bindings
-   and manifest metadata the Space Directory host persists (see
-   `docs/space-directory.md` §3 for payload samples).
-3. **Derive it deterministically.** When bootstrapping new UAIDs offline, hash
-   the canonical participant seed with Blake2b-256 and prefix the result with
-   `uaid:`. The snippet below mirrors the helper documented in
+- Глобал `IdentifierPolicyId` (`<kind>#<business_rule>`) нь дараахь зүйлийг тодорхойлдог.
+  нэрийн орон зай, нийтийн амлалтын мета өгөгдөл, шийдвэрлэгчийн баталгаажуулах түлхүүр болон
+  каноник оролтыг хэвийн болгох горим (`Exact`, `LowercaseTrimmed`,
+  `PhoneE164`, `EmailAddress`, эсвэл `AccountNumber`).
+- Нэхэмжлэл нь нэг үүсмэл `opaque:` танигчийг яг нэг UAID болон нэгтэй холбодог.
+  Энэ бодлогын дагуу `AccountId` каноник боловч гинж нь зөвхөн
+  гарын үсэг зурсан `IdentifierResolutionReceipt` бичгийг хавсаргасан тохиолдолд нэхэмжлэх.
+- Нарийвчлал нь `resolve -> transfer` урсгалтай хэвээр байна. Torii тунгалаг бус байдлыг шийддэг
+  каноник `AccountId`-ийг зохицуулж, буцаана; шилжүүлэг зорилтот хэвээр байна
+  `uaid:` эсвэл `opaque:` шууд утгаар биш, каноник данс.
+- Бодлого нь одоо BFV оролт-шифрлэлтийн параметрүүдийг дамжуулан нийтлэх боломжтой
+  `PolicyCommitment.public_parameters`. Байгаа үед Torii тэднийг сурталчилдаг
+  `GET /v1/identifier-policies` ба үйлчлүүлэгчид BFV ороосон оролтыг оруулж болно
+  энгийн текстийн оронд. Програмчлагдсан бодлого нь BFV параметрүүдийг a
+  каноник `BfvProgrammedPublicParameters` багц нь мөн хэвлэгддэг
+  нийтийн `ram_fhe_profile`; Хуучин түүхий BFV ачааллыг үүн дээр шинэчилсэн
+  амлалт дахин бий болсон үед каноник багц.
+- Тодорхойлогч маршрутууд нь ижил Torii хандалтын токен болон хурдны хязгаараар дамждаг.
+  бусад апп-д тулгарч буй төгсгөлийн цэгүүд шиг шалгадаг. Тэд ердийнхөөс тойрч гарах зам биш юм
+  API бодлого.
+
+## 1.2 Нэр томьёо
+
+Нэрний хуваагдал нь зориудаар:
+
+- `ram_lfe` нь далд функцийн гаднах хийсвэрлэл юм. Энэ нь бодлогыг хамардаг
+  бүртгэл, амлалт, нийтийн мета өгөгдөл, гүйцэтгэлийн баримт, болон
+  баталгаажуулах горим.
+- `BFV` нь Brakerski/Fan-Vercauteren гомоморф шифрлэлтийн схем юм.
+  шифрлэгдсэн оролтыг үнэлэх зарим `ram_lfe` backends.
+- `ram_fhe_profile` нь BFV-д хамаарах мета өгөгдөл бөгөөд бүхэлд нь хоёр дахь нэр биш
+  онцлог. Энэ нь түрийвч болон программчлагдсан BFV гүйцэтгэх машин тайлбарлах
+  Бодлого нь програмчлагдсан арын хэсгийг ашиглах үед баталгаажуулагч зорилтот байх ёстой.
+
+Тодорхой хэллэгээр:
+
+- `RamLfeProgramPolicy` ба `RamLfeExecutionReceipt` нь LFE давхаргын төрөл юм.
+- `BfvParameters`, `BfvCiphertext`, `BfvProgrammedPublicParameters`, болон
+  `BfvRamProgramProfile` нь FHE давхаргын төрлүүд юм.
+- `HiddenRamFheProgram` ба `HiddenRamFheInstruction` нь дотоод нэр юм.
+  програмчлагдсан backend-ээр гүйцэтгэгдсэн далд BFV программ. Тэд дээр үлддэг
+  FHE тал, учир нь тэд илүү шифрлэгдсэн гүйцэтгэх механизмыг тайлбарлах
+  гадаад бодлого эсвэл баримтын хийсвэрлэл.
+
+## 1.3 Бүртгэлийн таниулбар болон бусад нэр
+
+Бүх нийтийн дансны танилцуулга нь каноник дансны таних загварыг өөрчлөхгүй:
+
+- `AccountId` нь каноник, домэйнгүй дансны сэдэв хэвээр байна.
+- `ScopedAccountId { account, domain }` нь үзэл бодолд зориулсан тодорхой домайн контекст юм
+  домэйн холбоосыг бүрдүүлдэг бүртгэлүүд. Энэ нь хоёр дахь каноник биш юм
+  таних тэмдэг.
+- SNS/акаунтын бусад нэр нь тухайн сэдвийн дээд талд тусдаа холбоосууд юм. А
+  `merchant@hbl.sbp` болон өгөгдлийн орон зайн эх нэр гэх мэт домэйны шаардлага хангасан нэр
+  `merchant@sbp` зэрэг нь хоёулаа ижил каноник `AccountId`-г шийдэж чадна.
+- Хадгалсан дансны бүртгэл дээрх `linked_domains` төлөв нь -аас гаралтай
+  дансны домэйн индексүүд. Энэ нь одоогоор хэрэгжиж буй холбоосуудыг тайлбарладаг
+  сэдэв; энэ нь каноник танигчийн нэг хэсэг биш юм.
+
+Оператор, SDK болон тестийг хэрэгжүүлэх дүрэм: каноникаас эхэлнэ
+`AccountId`, дараа нь нэрийн түрээс, өгөгдлийн орон зай/домэйны зөвшөөрөл болон тодорхой мэдээллийг нэмнэ үү.
+домэйн холбоосыг тусад нь. Хуурамч домэйны хамрах хүрээтэй каноникийг нэгтгэж болохгүй
+Албан нэр эсвэл чиглүүлэлт нь домэйн сегментийг дагуулдаг учраас л данс.
+
+Одоогийн Torii маршрутууд:
+
+| Маршрут | Зорилго |
+|-------|---------|
+| `GET /v1/ram-lfe/program-policies` | Идэвхтэй болон идэвхгүй RAM-LFE програмын бодлогууд болон тэдгээрийн нийтийн гүйцэтгэлийн мета өгөгдлүүд, үүнд нэмэлт BFV `input_encryption` параметрүүд болон программчлагдсан `ram_fhe_profile` багтана. |
+| `POST /v1/ram-lfe/programs/{program_id}/execute` | `{ input_hex }` эсвэл `{ encrypted_input }`-ийн яг аль нэгийг нь хүлээн авч, сонгогдсон програмын хувьд харьяалалгүй `RamLfeExecutionReceipt` дээр нэмэх нь `{ output_hex, output_hash, receipt_hash }`-г буцаана. Одоогийн Torii ажиллах хугацаа нь программчлагдсан BFV backend-ийн төлбөрийн баримтыг гаргадаг. |
+| `POST /v1/ram-lfe/receipts/verify` | Иргэншилгүй `RamLfeExecutionReceipt`-г нийтэлсэн гинжин хэлхээний хөтөлбөрийн бодлоготой нийцүүлэн баталгаажуулж, дуудлага хийгчийн нийлүүлсэн `output_hex` нь `output_hash` баримттай таарч байгаа эсэхийг шалгана. |
+| `GET /v1/identifier-policies` | Идэвхтэй болон идэвхгүй далд функцийн бодлогын нэрсийн орон зай, тэдгээрийн нийтийн мета өгөгдлийн жагсаалт, үүнд нэмэлт BFV `input_encryption` параметрүүд, шифрлэгдсэн клиент талын оролтод шаардлагатай `normalization` горим, програмчлагдсан BFV бодлогод зориулсан `ram_fhe_profile` орно. |
+| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | `{ input }` эсвэл `{ encrypted_input }`-ийн яг аль нэгийг нь хүлээн авна. Энгийн текст `input` сервер талдаа хэвийн; BFV `encrypted_input` нь хэвлэгдсэн бодлогын горимын дагуу аль хэдийн хэвийн болсон байх ёстой. Төгсгөлийн цэг нь дараа нь `opaque:` бариулыг гаргаж, `ClaimIdentifier` нь түүхий `signature_payload_hex` болон задлан шинжлэгдсэн `signature_payload` зэрэг гинжин хэлхээнд илгээх боломжтой гарын үсэгтэй баримтыг буцаана. || `POST /v1/identifiers/resolve` | `{ input }` эсвэл `{ encrypted_input }`-ийн яг аль нэгийг нь хүлээн авна. Энгийн текст `input` сервер талын хэвийн; BFV `encrypted_input` нь хэвлэгдсэн бодлогын горимын дагуу аль хэдийн хэвийн болсон байх ёстой. Төгсгөлийн цэг нь идэвхтэй нэхэмжлэл байгаа үед танигчийг `{ opaque_id, receipt_hash, uaid, account_id, signature }` болгон шийдэж, мөн `{ signature_payload_hex, signature_payload }` гэж каноник гарын үсэгтэй ачааллыг буцаана. |
+| `GET /v1/identifiers/receipts/{receipt_hash}` | Тодорхойлолттой төлбөрийн хэштэй холбогдсон `IdentifierClaimRecord`-г хайж олох бөгөөд ингэснээр операторууд болон SDK-ууд нь бүрэн танигчийн индексийг скан хийлгүйгээр эзэмшигчийн эрхийг шалгах эсвэл дахин тоглуулах / таарахгүй алдааг оношлох боломжтой. |
+
+Torii-ийн процессын гүйцэтгэлийн ажиллах хугацааг доор тохируулсан.
+`torii.ram_lfe.programs[*]`, `program_id` түлхүүртэй. Тодорхойлогч одоо чиглүүлж байна
+Тусдаа `identifier_resolver`-ийн оронд ижил RAM-LFE ажиллах цагийг дахин ашиглах
+тохиргооны гадаргуу.
+
+Одоогийн SDK дэмжлэг:
+
+- `normalizeIdentifierInput(value, normalization)` Rust-тэй таарч байна
+  `exact`, `lowercase_trimmed`, `phone_e164`,
+  `email_address`, `account_number`.
+- `ToriiClient.listIdentifierPolicies()` бодлогын мета өгөгдлийг, түүний дотор BFV-г жагсаасан
+  Бодлого нийтлэх үед оролтын шифрлэлтийн мета өгөгдөл, дээр нь тайлагдсан
+  `input_encryption_public_parameters_decoded`-ээр дамжуулан BFV параметрийн объект.
+  Програмчлагдсан бодлого нь `ram_fhe_profile` кодыг тайлсан кодыг мөн харуулж байна. Тэр талбар
+  зориудаар BFV-ийн хамрах хүрээг хамарсан: энэ нь хэтэвчүүдэд хүлээгдэж буй бүртгэлийг шалгах боломжийг олгодог
+  тоо, эгнээний тоо, канончлолын горим, шифр текстийн хамгийн бага модуль
+  клиент талын оролтыг шифрлэхээс өмнө програмчлагдсан FHE backend.
+- `getIdentifierBfvPublicParameters(policy)` ба
+  `buildIdentifierRequestForPolicy(policy, { input | encryptedInput })` тусламж
+  JS дуудагсад нийтлэгдсэн BFV мета өгөгдлийг ашиглаж, бодлоготой холбоотой хүсэлтийг бий болгодог
+  бодлого-id болон хэвийн болгох дүрмийг дахин хэрэгжүүлэхгүйгээр байгууллагууд.
+- `encryptIdentifierInputForPolicy(policy, input, { seedHex? })` ба
+  `buildIdentifierRequestForPolicy(policy, { input, encrypt: true })` одоо зөвшөөрнө үү
+  JS түрийвч нь бүрэн BFV Norito шифр текстийн дугтуйг дараахаас бүтээдэг.
+  урьдчилан бүтээгдсэн шифр текстийн hex илгээхийн оронд бодлогын параметрүүдийг нийтэлсэн.
+- `ToriiClient.resolveIdentifier({ policyId, input | encryptedInput })`
+  далд танигчийг шийдэж, гарын үсэг зурсан баримтын ачааллыг буцаана,
+  үүнд `receipt_hash`, `signature_payload_hex`, болон
+  `signature_payload`.
+- `ToriiClient.issueIdentifierClaimReceipt(accountId, { policyId, оролт |
+  encryptedInput })` issues the signed receipt needed by `ClaimIdentifier`.
+- `verifyIdentifierResolutionReceipt(receipt, policy)` буцаасаныг баталгаажуулна
+  Үйлчлүүлэгч тал дахь бодлого шийдвэрлэгч түлхүүрийн эсрэг баримт, болон`ToriiClient.getIdentifierClaimByReceiptHash(receiptHash)` нь татаж авдаг
+  хожим аудит/дибаг хийх урсгалд зориулсан байнгын нэхэмжлэлийн бүртгэл.
+- `IrohaSwift.ToriiClient` одоо `listIdentifierPolicies()`,
+  `resolveIdentifier(policyId:input:encryptedInputHex:)`,
+  `issueIdentifierClaimReceipt(accountId:policyId:input:encryptedInputHex:)`,
+  болон `getIdentifierClaimByReceiptHash(_)`, нэмэх
+  `ToriiIdentifierNormalization` ижил утас/и-мэйл/дансны дугаар
+  канончлолын горимууд.
+- `ToriiIdentifierLookupRequest` болон
+  `ToriiIdentifierPolicySummary.plaintextRequest(...)` /
+  `.encryptedRequest(...)` туслахууд нь бичсэн Swift хүсэлтийн гадаргууг өгдөг
+  дуудлагыг шийдвэрлэх, нэхэмжлэх-хүлээн авах, мөн Swift бодлого нь одоо BFV-г гаргаж авах боломжтой
+  `encryptInput(...)` / `encryptedRequest(input:...)`-ээр дамжуулан локал шифр текст.
+- `ToriiIdentifierResolutionReceipt.verifySignature(using:)` үүнийг баталж байна
+  дээд түвшний төлбөрийн талбарууд нь гарын үсэг зурсан ачаатай таарч, баталгаажуулдаг
+  илгээхээс өмнө шийдвэрлэх гарын үсэг үйлчлүүлэгч тал.
+- Android SDK дахь `HttpClientTransport` одоо гарч байна
+  `listIdentifierPolicies()`, `resolveIdentifier(бодлогын ID, оролт,
+  encryptedInputHex)`, `issueIdentifierClaimReceipt(дансны дугаар, бодлогын дугаар,
+  оролт, шифрлэгдсэнInputHex)`, and `getIdentifierClaimByReceiptHash(...)`,
+  дээр нь ижил канончлолын дүрмийн хувьд `IdentifierNormalization`.
+- `IdentifierResolveRequest` болон
+  `IdentifierPolicySummary.plaintextRequest(...)` /
+  `.encryptedRequest(...)` туслахууд нь бичсэн Android хүсэлтийн гадаргууг хангаж,
+  байхад `IdentifierPolicySummary.encryptInput(...)` /
+  `.encryptedRequestFromInput(...)` нь BFV шифр текстийн дугтуйг гаргаж авдаг
+  нийтлэгдсэн бодлогын параметрүүдээс орон нутагт .
+  `IdentifierResolutionReceipt.verifySignature(policy)` буцаасаныг баталгаажуулна
+  шийдвэрлэх гарын үсэг үйлчлүүлэгч тал.
+
+Одоогийн зааврын багц:
+
+- `RegisterIdentifierPolicy`
+- `ActivateIdentifierPolicy`
+- `ClaimIdentifier` (баримт бичигдсэн; түүхий `opaque_id` нэхэмжлэлийг татгалзсан)
+- `RevokeIdentifier`
+
+Одоо `iroha_crypto::ram_lfe` дээр гурван арын хэсэг байна:
+
+- түүхэн үүрэг хүлээсэн `HKDF-SHA3-512` PRF, мөн
+- BFV-ээр шифрлэгдсэн танигчийг ашигладаг BFV-д суурилсан нууц аффин үнэлгээч
+  шууд оролт. `iroha_crypto` анхдагчаар бүтээгдсэн үед
+  `bfv-accel` онцлогтой, BFV цагираг үржүүлэх нь тодорхой тодорхойлогчийг ашигладаг.
+  Дотооддоо CRT-NTT backend; Энэ функцийг идэвхгүй болгох нь буцаж ирдэг
+  ижил үр дүн бүхий скаляр сургуулийн номын зам, ба
+- Зааварт тулгуурласан BFV-д суурилсан нууц программчлагдсан үнэлгээч
+  Шифрлэгдсэн регистрүүд болон шифрлэгдсэн текстийн санах ой дээр RAM хэлбэрийн гүйцэтгэлийн ул мөр
+  тунгалаг бус танигч болон хүлээн авсан хэшийг гаргахын өмнөх эгнээ. Програмчлагдсан
+  backend нь одоо аффин замаас илүү хүчтэй BFV модулийн шалыг шаарддаг ба
+  түүний нийтийн параметрүүдийг багтаасан каноник багцад нийтлэв
+  Түрийвч болон баталгаажуулагчийн хэрэглэдэг RAM-FHE гүйцэтгэлийн профайл.
+
+Энд BFV нь хэрэгжсэн Brakerski/Fan-Vercauteren FHE схемийг хэлнэ
+`crates/iroha_crypto/src/fhe_bfv.rs`. Энэ нь шифрлэгдсэн гүйцэтгэх механизм юм
+affine болон программчлагдсан backends ашигладаг, гадна далд нэр биш
+функцийн хийсвэрлэл.Torii нь бодлогын амлалтаар нийтлэгдсэн арын хэсгийг ашигладаг. BFV backend үед
+идэвхтэй байгаа тул энгийн текстийн хүсэлтийг хэвийн болгож, өмнө нь сервер талдаа шифрлэнэ
+үнэлгээ. Affin backend-д зориулсан BFV `encrypted_input` хүсэлтийг үнэлдэг
+шууд бөгөөд аль хэдийн үйлчлүүлэгчийн талаас хэвийн байх ёстой; програмчлагдсан арын хэсэг
+Шифрлэгдсэн оролтыг шийдвэрлэгчийн детерминист BFV руу буцааж каноникчилна
+нууц RAM програмыг ажиллуулахын өмнө дугтуйг хийснээр хүлээн авсан хэшүүд хэвээр үлдэнэ
+семантикийн хувьд ижил төстэй шифр текстүүдэд тогтвортой.
+
+## 2. UAID-г гаргаж авах, баталгаажуулах
+
+UAID авах гурван дэмжигдсэн арга байдаг:
+
+1. **Үүнийг дэлхийн төлөв эсвэл SDK загвараас уншина уу.** Дурын `Account`/`AccountDetails`
+   Torii-ээр асуусан ачааллыг одоо `uaid` талбарт бөглөсөн байна.
+   Оролцогч бүх нийтийн дансыг сонгосон.
+2. **UAID бүртгэлээс лавлана уу.** Torii илрүүлнэ
+   `GET /v1/space-directory/uaids/{uaid}` нь өгөгдлийн орон зайн холболтыг буцаадаг
+   болон Сансрын лавлах хостын манифест метадата (харна уу
+   Ачааллын дээжийн хувьд `docs/space-directory.md` §3).
+3. **Үүнийг тодорхой гаргаарай.** Шинэ UAID-г офлайнаар ачаалах үед хэш
+   каноник оролцогчийн үрийг Blake2b-256-тай холбож, үр дүнгийн угтварыг бичнэ
+   `uaid:`. Доорх хэсэг нь баримтжуулсан туслагчийг толилуулж байна
    `docs/space-directory.md` §3.3:
 
    ```python
@@ -60,28 +237,26 @@ There are three supported ways to obtain a UAID:
    seed = b"participant@example"  # canonical address/domain seed
    digest = hashlib.blake2b(seed, digest_size=32).hexdigest()
    print(f"uaid:{digest}")
-   ```
+   ```Хэшгэхийн өмнө үсгийг жижиг үсгээр бичиж, хоосон зайг хэвийн болго.
+`iroha app space-directory manifest scaffold` болон Android зэрэг CLI туслахууд
+`UaidLiteral` задлагч ижил шүргэх дүрмийг ашигладаг тул засаглалын тойм
+тусгай скриптгүйгээр утгуудыг шалгах.
 
-Always store the literal in lower case and normalise whitespace before hashing.
-CLI helpers such as `iroha app space-directory manifest scaffold` and the Android
-`UaidLiteral` parser apply the same trimming rules so governance reviews can
-cross-check values without ad hoc scripts.
+## 3. UAID-ийн эзэмшил болон манифестуудыг шалгах
 
-## 3. Inspecting UAID holdings and manifests
+`iroha_core::nexus::portfolio` дахь детерминист багцын агрегатор
+UAID-д хамаарах хөрөнгө/өгөгдлийн орон зай бүрийг харуулдаг. Операторууд ба SDK
+дараах гадаргуугаар дамжуулан өгөгдлийг ашиглаж болно:
 
-The deterministic portfolio aggregator in `iroha_core::nexus::portfolio`
-surfaces every asset/dataspace pair that references the UAID. Operators and SDKs
-can consume the data through the following surfaces:
-
-| Surface | Usage |
+| Гадаргуу | Хэрэглээ |
 |---------|-------|
-| `GET /v1/accounts/{uaid}/portfolio` | Returns dataspace → asset → balance summaries; described in `docs/source/torii/portfolio_api.md`. |
-| `GET /v1/space-directory/uaids/{uaid}` | Lists dataspace IDs + account literals tied to the UAID. |
-| `GET /v1/space-directory/uaids/{uaid}/manifests` | Provides the full `AssetPermissionManifest` history for audits. |
-| `iroha app space-directory bindings fetch --uaid <literal>` | CLI shortcut that wraps the bindings endpoint and optionally writes the JSON to disk (`--json-out`). |
-| `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` | Fetches the manifest JSON bundle for evidence packs. |
+| `GET /v1/accounts/{uaid}/portfolio` | Өгөгдлийн орон зай → хөрөнгө → үлдэгдлийн хураангуйг буцаана; `docs/source/torii/portfolio_api.md`-д тодорхойлсон. |
+| `GET /v1/space-directory/uaids/{uaid}` | UAID-тэй холбогдсон өгөгдлийн орон зайн ID + бүртгэлийн литералуудыг жагсаана. |
+| `GET /v1/space-directory/uaids/{uaid}/manifests` | Аудитын `AssetPermissionManifest` түүхийг бүрэн хэмжээгээр өгдөг. |
+| `iroha app space-directory bindings fetch --uaid <literal>` | Холболтын төгсгөлийн цэгийг ороож, JSON-г диск рүү (`--json-out`) бичдэг CLI товчлол. |
+| `iroha app space-directory manifest fetch --uaid <literal> --json-out <path>` | Нотлох баримтын багцад зориулсан манифест JSON багцыг татаж авдаг. |
 
-Example CLI session (Torii URL configured via `torii_api_url` in `iroha.json`):
+Жишээ CLI сесс (`iroha.json` дээрх `torii_api_url`-ээр тохируулсан Torii URL):
 
 ```bash
 iroha app space-directory bindings fetch \
@@ -93,18 +268,18 @@ iroha app space-directory manifest fetch \
   --json-out artifacts/uaid86/manifests.json
 ```
 
-Store the JSON snapshots alongside the manifest hash used during reviews; the
-Space Directory watcher rebuilds the `uaid_dataspaces` map whenever manifests
-activate, expire, or revoke, so these snapshots are the fastest way to prove
-what bindings were active at a given epoch.
+JSON агшин агшингуудыг шалгах явцад ашигласан манифест хэшийн хажууд хадгалах; нь
+Сансрын лавлах ажиглагч нь илрэх бүрт `uaid_dataspaces` газрын зургийг дахин бүтээдэг.
+идэвхжүүлэх, хүчингүй болгох, хүчингүй болгох, тиймээс эдгээр хормын хувилбарууд нь нотлох хамгийн хурдан арга юм.
+Тухайн эрин үед ямар холболтууд идэвхтэй байсан.
 
-## 4. Publishing capability manifests with evidence
+## 4. Нийтлэх чадвар нь нотлох баримтаар илэрдэг
 
-Use the CLI flow below whenever a new allowance is rolled out. Each step must
-land in the evidence bundle recorded for governance sign-off.
+Шинэ тэтгэмж гарах бүрт доорх CLI урсгалыг ашиглаарай. Алхам бүр заавал байх ёстой
+засаглалын гарын үсэг зурахаар бүртгэгдсэн нотлох баримтын багцад газар.
 
-1. **Encode the manifest JSON** so reviewers see the deterministic hash before
-   submission:
+1. **Манифест JSON-г кодчилно уу**, ингэснээр хянагчид өмнө нь тодорхойлогч хэшийг харна
+   илгээх:
 
    ```bash
    iroha app space-directory manifest encode \
@@ -113,9 +288,9 @@ land in the evidence bundle recorded for governance sign-off.
      --hash-out artifacts/eu_regulator_audit.manifest.hash
    ```
 
-2. **Publish the allowance** using either the Norito payload (`--manifest`) or
-   the JSON description (`--manifest-json`). Record the Torii/CLI receipt plus
-   the `PublishSpaceDirectoryManifest` instruction hash:
+2. **Тэтгэмжийг нийтлэх** эсвэл Norito (`--manifest`) эсвэл
+   JSON тайлбар (`--manifest-json`). Torii/CLI баримтыг нэмж бичнэ үү
+   `PublishSpaceDirectoryManifest` зааврын хэш:
 
    ```bash
    iroha app space-directory manifest publish \
@@ -123,12 +298,12 @@ land in the evidence bundle recorded for governance sign-off.
      --reason "ESMA wave 2 onboarding"
    ```
 
-3. **Capture SpaceDirectoryEvent evidence.** Subscribe to
-   `SpaceDirectoryEvent::ManifestActivated` and include the event payload in
-   the bundle so auditors can confirm when the change landed.
+3. **SpaceDirectoryEvent-ийн нотлох баримтыг аваарай.** Бүртгүүлэх
+   `SpaceDirectoryEvent::ManifestActivated` ба үйл явдлын ачааллыг оруулах
+   аудиторууд өөрчлөлт хэзээ орж ирснийг батлах боломжтой багц.
 
-4. **Generate an audit bundle** tying the manifest to its dataspace profile and
-   telemetry hooks:
+4. **Аудитын багц үүсгэх** манифестыг өгөгдлийн орон зайн профайл болон
+   телеметрийн дэгээ:
 
    ```bash
    iroha app space-directory manifest audit-bundle \
@@ -137,70 +312,64 @@ land in the evidence bundle recorded for governance sign-off.
      --out-dir artifacts/eu_regulator_audit_bundle
    ```
 
-5. **Verify bindings via Torii** (`bindings fetch` and `manifests fetch`) and
-   archive those JSON files with the hash + bundle above.
+5. **Torii** (`bindings fetch` болон `manifests fetch`)-р холболтыг баталгаажуулах ба
+   эдгээр JSON файлуудыг дээрх хэш + багцаар архивлана.
 
-Evidence checklist:
+Нотлох баримт шалгах хуудас:
 
-- [ ] Manifest hash (`*.manifest.hash`) signed by the change approver.
-- [ ] CLI/Torii receipt for the publish call (stdout or `--json-out` artefact).
-- [ ] `SpaceDirectoryEvent` payload proving activation.
-- [ ] Audit bundle directory with dataspace profile, hooks, and manifest copy.
-- [ ] Bindings + manifest snapshots fetched from Torii post-activation.
+- [ ] Өөрчлөлтийг баталгаажуулагч гарын үсэг зурсан манифест хэш (`*.manifest.hash`).
+- [ ] Нийтлэх дуудлагын CLI/Torii баримт (stdout эсвэл `--json-out` олдвор).
+- [ ] `SpaceDirectoryEvent` даацыг нотлох идэвхжүүлэлт.
+- [ ] Өгөгдлийн орон зайн профайл, дэгээ, манифест хуулбар бүхий багцын лавлахад аудит хийх.
+- [ ] Идэвхжүүлсний дараах Torii-аас авчирсан холболтууд + манифест агшин зуурын зургууд.Энэ нь SDK өгөх үед `docs/space-directory.md` §3.2-д заасан шаардлагыг тусгадаг.
+Эзэмшигчид нь хувилбарын үнэлгээний үеэр зааж өгөх нэг хуудас.
 
-This mirrors the requirements in `docs/space-directory.md` §3.2 while giving SDK
-owners a single page to point to during release reviews.
+## 5. Зохицуулагч/бүс нутгийн манифест загварууд
 
-## 5. Regulator/regional manifest templates
+Урлах чадвар илрэх үед репо дахь бэхэлгээг эхлэх цэг болгон ашиглаарай
+зохицуулагчид эсвэл бүс нутгийн хянагчдад зориулсан. Тэд зөвшөөрөх/татгалзах хамрах хүрээг хэрхэн харуулахыг харуулдаг
+журмууд болон тоймчдын хүлээж буй бодлогын тэмдэглэлүүдийг тайлбарла.
 
-Use the in-repo fixtures as starting points when crafting capability manifests
-for regulators or regional supervisors. They demonstrate how to scope allow/deny
-rules and explain the policy notes reviewers expect.
-
-| Fixture | Purpose | Highlights |
+| Бэхэлгээ | Зорилго | Онцлох үйл явдал |
 |---------|---------|------------|
-| `fixtures/space_directory/capability/eu_regulator_audit.manifest.json` | ESMA/ESRB audit feed. | Read-only allowances for `compliance.audit::{stream_reports, request_snapshot}` with deny-wins on retail transfers to keep regulator UAIDs passive. |
-| `fixtures/space_directory/capability/jp_regulator_supervision.manifest.json` | JFSA supervision lane. | Adds a capped `cbdc.supervision.issue_stop_order` allowance (PerDay window + `max_amount`) and an explicit deny on `force_liquidation` to enforce dual controls. |
+| `fixtures/space_directory/capability/eu_regulator_audit.manifest.json` | ESMA/ESRB аудитын хангамж. | `compliance.audit::{stream_reports, request_snapshot}`-д зориулсан зөвхөн унших боломжтой, зохицуулагчийн UAID-г идэвхгүй байлгахын тулд жижиглэнгийн шилжүүлгийг үгүйсгэх боломжтой. |
+| `fixtures/space_directory/capability/jp_regulator_supervision.manifest.json` | JFSA хяналтын эгнээ. | Давхар хяналтыг хэрэгжүүлэхийн тулд `cbdc.supervision.issue_stop_order` хязгаарлагдмал тэтгэмж (Өдөр тутмын цонх + `max_amount`) болон `force_liquidation` дээр тодорхой үгүйсгэлийг нэмдэг. |
 
-When cloning these fixtures, update:
+Эдгээр бэхэлгээг клон хийхдээ дараахыг шинэчилнэ үү:
 
-1. `uaid` and `dataspace` ids to match the participant and lane you’re enabling.
-2. `activation_epoch`/`expiry_epoch` windows based on the governance schedule.
-3. `notes` fields with the regulator’s policy references (MiCA article, JFSA
-   circular, etc.).
-4. Allowance windows (`PerSlot`, `PerMinute`, `PerDay`) and optional
-   `max_amount` caps so SDKs enforce the same limits as the host.
+1. `uaid` болон `dataspace` id-ууд нь таны идэвхжүүлж буй оролцогч болон эгнээнд таарна.
+2. Засаглалын хуваарь дээр үндэслэн `activation_epoch`/`expiry_epoch` цонх.
+3. Зохицуулагчийн бодлогын лавлагаа бүхий `notes` талбарууд (MiCA нийтлэл, JFSA
+   дугуй гэх мэт).
+4. Тэтгэмжийн цонх (`PerSlot`, `PerMinute`, `PerDay`) болон нэмэлт
+   `max_amount` хязгаартай тул SDK нь хосттой ижил хязгаарлалтыг мөрддөг.
 
-## 6. Migration notes for SDK consumers
+## 6. SDK хэрэглэгчдэд зориулсан шилжүүлгийн тэмдэглэлДомэйн дансны ID-д хандсан одоо байгаа SDK интеграцууд руу шилжих ёстой
+дээр дурдсан UAID төвтэй гадаргуу. Шинэчлэлтийн үед энэ хяналтын хуудсыг ашиглана уу:
 
-Existing SDK integrations that referenced per-domain account IDs must migrate to
-the UAID-centric surfaces described above. Use this checklist during upgrades:
+  дансны дугаар. Rust/JS/Swift/Android-ын хувьд энэ нь хамгийн сүүлийн үеийн хувилбар руу шинэчлэх гэсэн үг юм
+  ажлын талбайн хайрцаг эсвэл Norito холболтыг сэргээж байна.
+- **API дуудлагууд:** Домэйн хамрах хүрээний багцын асуулгыг дараахаар солино
+  `GET /v1/accounts/{uaid}/portfolio` ба манифест/холбох төгсгөлийн цэгүүд.
+  `GET /v1/accounts/{uaid}/portfolio` нь нэмэлт `asset_id` хүсэлтийг хүлээн авдаг.
+  түрийвчэнд зөвхөн нэг хөрөнгийн жишээ хэрэгтэй үед параметр. Үйлчлүүлэгчийн туслахууд ийм
+  `ToriiClient.getUaidPortfolio` (JS) болон Android
+  `SpaceDirectoryClient` аль хэдийн эдгээр маршрутуудыг боож; захиалгаар хийхээс илүүд үздэг
+  HTTP код.
+- **Кэш ба телеметр:** Түүхий биш харин UAID + өгөгдлийн орон зайгаар кэш оруулах
+  дансны ids, мөн UAID утгыг харуулсан телеметрийг ялгаруулж, үйлдлүүдийг хийх боломжтой
+  Сансрын лавлах нотлох баримт бүхий бүртгэлүүдийг жагсаах.
+- **Алдаа боловсруулах:** Шинэ төгсгөлийн цэгүүд нь хатуу UAID задлан шинжлэх алдааг буцаана
+  `docs/source/torii/portfolio_api.md`-д баримтжуулсан; эдгээр кодуудыг гарга
+  Тиймээс тусламжийн багууд дахин давтах алхамгүйгээр асуудлыг шийдвэрлэх боломжтой.
+- **Туршилт:** Дээр дурдсан хэрэгслүүдийг холбоно уу (өөрийн UAID манифест)
+  Norito хоёр талын аялал болон манифест үнэлгээг батлахын тулд SDK тестийн багц руу оруулна
+  хостын хэрэгжилттэй таарч байна.
 
-  account ids. For Rust/JS/Swift/Android this means upgrading to the latest
-  workspace crates or regenerating Norito bindings.
-- **API calls:** Replace domain-scoped portfolio queries with
-  `GET /v1/accounts/{uaid}/portfolio` and the manifest/bindings endpoints.
-  `GET /v1/accounts/{uaid}/portfolio` accepts an optional `asset_id` query
-  parameter when wallets only need a single asset instance. Client helpers such
-  as `ToriiClient.getUaidPortfolio` (JS) and the Android
-  `SpaceDirectoryClient` already wrap these routes; prefer them over bespoke
-  HTTP code.
-- **Caching & telemetry:** Cache entries by UAID + dataspace instead of raw
-  account ids, and emit telemetry showing the UAID literal so operations can
-  line up logs with Space Directory evidence.
-- **Error handling:** New endpoints return the strict UAID parsing errors
-  documented in `docs/source/torii/portfolio_api.md`; surface those codes
-  verbatim so support teams can triage issues without repro steps.
-- **Testing:** Wire the fixtures mentioned above (plus your own UAID manifests)
-  into SDK test suites to prove Norito round-trips and manifest evaluations
-  match the host implementation.
-
-## 7. References
-
-- `docs/space-directory.md` — operator playbook with deeper lifecycle detail.
-- `docs/source/torii/portfolio_api.md` — REST schema for UAID portfolio and
-  manifest endpoints.
-- `crates/iroha_cli/src/space_directory.rs` — CLI implementation referenced in
-  this guide.
-- `fixtures/space_directory/capability/*.manifest.json` — regulator, retail, and
-  CBDC manifest templates ready for cloning.
+## 7. Ашигласан материал- `docs/space-directory.md` — амьдралын мөчлөгийн дэлгэрэнгүй мэдээлэл бүхий операторын тоглоомын ном.
+- `docs/source/torii/portfolio_api.md` — UAID багцын REST схем болон
+  илэрхий төгсгөлийн цэгүүд.
+- `crates/iroha_cli/src/space_directory.rs` — CLI хэрэгжилтийг иш татсан
+  энэ гарын авлага.
+- `fixtures/space_directory/capability/*.manifest.json` — зохицуулагч, жижиглэн худалдаа, болон
+  CBDC манифест загварууд клончлоход бэлэн байна.

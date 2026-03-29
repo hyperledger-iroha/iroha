@@ -36,10 +36,9 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 fn build_test_transaction(chain_id: ChainId) -> TransactionBuilder {
     let domain_id: DomainId = "domain".parse().unwrap();
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
-    let create_account = Register::account(Account::new(
-        gen_account_in(&domain_id)
-            .0
-            .to_account_id(domain_id.clone()),
+    let create_account = Register::account(Account::new_in_domain(
+        gen_account_in(&domain_id).0.clone(),
+        domain_id.clone(),
     ));
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
         "domain".parse().unwrap(),
@@ -64,8 +63,8 @@ fn build_test_and_transient_state() -> State {
     let state = State::new(
         {
             let domain = Domain::new(STARTER_DOMAIN.clone()).build(&account_id);
-            let account =
-                Account::new(account_id.to_account_id(STARTER_DOMAIN.clone())).build(&account_id);
+            let account = Account::new_in_domain(account_id.clone(), STARTER_DOMAIN.clone())
+                .build(&account_id);
             World::with([domain], [account], [])
         },
         Arc::clone(&kura),

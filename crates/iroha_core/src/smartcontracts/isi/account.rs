@@ -399,7 +399,7 @@ pub mod isi {
             Register::domain(Domain::new(wonderland.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.to_account_id(wonderland.clone())))
+            Register::account(Account::new_in_domain(ALICE_ID.clone(), wonderland.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -442,7 +442,7 @@ pub mod isi {
             Register::domain(Domain::new(wonderland.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(ALICE_ID.to_account_id(wonderland.clone())))
+            Register::account(Account::new_in_domain(ALICE_ID.clone(), wonderland.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -558,7 +558,7 @@ pub mod query {
                 iroha_executor_data_model::permission::account::CanManageAccountAlias {
                     scope:
                         iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            domain.clone(),
+                            domain.clone().into(),
                         ),
                 },
             ),
@@ -1071,21 +1071,16 @@ pub mod query {
         }
     }
 
-    impl ValidSingularQuery for FindDomainsByAccountId {
-        #[metrics(+"find_domains_by_account_id")]
-        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Vec<DomainId>, Error> {
-            Ok(state_ro
-                .world()
-                .domains_for_subject(&self.account_id().subject_id()))
-        }
-    }
-
     impl ValidSingularQuery for FindAliasesByAccountId {
         #[metrics(+"find_aliases_by_account_id")]
         fn execute(
             &self,
             state_ro: &impl StateReadOnly,
         ) -> Result<Vec<AccountAliasBindingRecord>, Error> {
+            let now_ms = state_ro
+                .latest_block()
+                .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(0))
+                .unwrap_or(0);
             let dataspace_filter = self
                 .dataspace()
                 .map(str::trim)
@@ -1107,8 +1102,10 @@ pub mod query {
                 .filter(|value| !value.is_empty())
                 .map(|domain| {
                     domain
-                        .parse::<DomainId>()
-                        .map_err(|err| Error::Conversion(format!("invalid domain: {err}")))
+                        .parse::<iroha_data_model::account::rekey::AccountAliasDomain>()
+                        .map_err(|err| {
+                            Error::Conversion(format!("invalid alias domain segment: {err}"))
+                        })
                 })
                 .transpose()?;
 
@@ -1148,11 +1145,26 @@ pub mod query {
                         })?
                         .alias
                         .clone();
+                    let record = crate::sns::get_name_record(
+                        state_ro.world(),
+                        &state_ro.nexus().dataspace_catalog,
+                        crate::sns::SnsNamespace::AccountAlias,
+                        &alias,
+                        now_ms,
+                    )
+                    .map_err(|err| {
+                        Error::Conversion(format!("invalid account alias lease record: {err}"))
+                    })?;
                     Ok(AccountAliasBindingRecord {
+                        account_id: account_id.clone(),
                         alias,
                         dataspace,
                         domain: label.domain.as_ref().map(ToString::to_string),
                         is_primary: account.as_ref().label() == Some(&label),
+                        status: record.status,
+                        lease_expiry_ms: Some(record.expires_at_ms),
+                        grace_until_ms: Some(record.grace_expires_at_ms),
+                        bound_at_ms: record.registered_at_ms,
                     })
                 })
                 .collect()
@@ -1205,10 +1217,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1264,10 +1276,10 @@ pub mod query {
 
             let (acc1, _) = gen_account_in("wonderland");
             let (acc2, _) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id)))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1304,10 +1316,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1353,14 +1365,11 @@ pub mod query {
                 .unwrap();
 
             let (account, _kp) = gen_account_in("wonderland");
-            Register::account(Account::new(
-                account.clone().to_account_id(wonderland.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+            Register::account(Account::new_in_domain(account.clone(), wonderland.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
 
-            let scoped = account.subject_id().to_account_id(sbp.clone());
-            stx.world.link_account_subject_domain(&scoped);
+            stx.world.link_account_subject_domain(&account, &sbp);
             stx.world
                 .account_mut(&account)
                 .expect("account must exist")
@@ -1401,10 +1410,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1440,13 +1449,13 @@ pub mod query {
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
             let (acc3, _kp3) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc3.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc3.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1485,10 +1494,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1533,10 +1542,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1597,10 +1606,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1654,13 +1663,13 @@ pub mod query {
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
             let (acc3, _kp3) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc3.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc3.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1714,10 +1723,10 @@ pub mod query {
 
             let (acc1, _kp1) = gen_account_in("wonderland");
             let (acc2, _kp2) = gen_account_in("wonderland");
-            Register::account(Account::new(acc1.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc1.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(acc2.clone().to_account_id(domain_id.clone())))
+            Register::account(Account::new_in_domain(acc2.clone(), domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 
@@ -1764,49 +1773,6 @@ pub mod query {
         }
 
         #[test]
-        fn find_domains_by_account_id_returns_linked_domains_for_subject() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let wonderland: DomainId = "wonderland".parse().unwrap();
-            let acme: DomainId = "acme".parse().unwrap();
-            Register::domain(Domain::new(wonderland.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-            Register::domain(Domain::new(acme.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-
-            let (account_id, _) = gen_account_in("wonderland");
-            Register::account(Account::new(
-                account_id.clone().to_account_id(wonderland.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-
-            iroha_data_model::isi::domain_link::LinkAccountDomain {
-                account: account_id.clone(),
-                domain: acme.clone(),
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-
-            stx.apply();
-            state_block.commit().unwrap();
-
-            let view = state.view();
-            let domains = FindDomainsByAccountId::new(account_id)
-                .execute(&view)
-                .unwrap();
-            assert_eq!(domains, vec![acme, wonderland]);
-        }
-
-        #[test]
         fn find_aliases_by_account_id_returns_primary_alias_bindings() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -1844,12 +1810,12 @@ pub mod query {
             let (account_id, _) = gen_account_in("hbl");
             let primary_label = AccountLabel::new_in_dataspace(
                 "merchant".parse().expect("label"),
-                Some(linked_domain.clone()),
+                Some(linked_domain.clone().into()),
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
             Register::account(
-                Account::new(account_id.clone().to_account_id(linked_domain.clone()))
+                Account::new_in_domain(account_id.clone(), linked_domain.clone())
                     .with_label(Some(primary_label)),
             )
             .execute(&ALICE_ID, &mut stx)
@@ -1911,12 +1877,12 @@ pub mod query {
             let (account_id, _) = gen_account_in("hbl");
             let primary_label = AccountLabel::new_in_dataspace(
                 "merchant".parse().expect("label"),
-                Some(linked_domain.clone()),
+                Some(linked_domain.clone().into()),
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
             Register::account(
-                Account::new(account_id.clone().to_account_id(linked_domain))
+                Account::new_in_domain(account_id.clone(), linked_domain)
                     .with_label(Some(primary_label)),
             )
             .execute(&ALICE_ID, &mut stx)
@@ -1972,11 +1938,9 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &root_label);
-            Register::account(
-                Account::new_domainless(account_id.clone()).with_label(Some(root_label)),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+            Register::account(Account::new(account_id.clone()).with_label(Some(root_label)))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
 
             stx.apply();
             state_block.commit().unwrap();
@@ -2010,21 +1974,18 @@ pub mod query {
             let (source, _) = gen_account_in("wonderland");
             let (destination, _) = gen_account_in("wonderland");
             let (intruder, _) = gen_account_in("wonderland");
-            Register::account(Account::new(
-                source.clone().to_account_id(domain_id.clone()),
+            Register::account(Account::new_in_domain(source.clone(), domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new_in_domain(
+                destination.clone(),
+                domain_id.clone(),
             ))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-            Register::account(Account::new(
-                destination.clone().to_account_id(domain_id.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-            Register::account(Account::new(
-                intruder.clone().to_account_id(domain_id.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+            Register::account(Account::new_in_domain(intruder.clone(), domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
 
             let asset_definition: AssetDefinitionId =
                 iroha_data_model::asset::AssetDefinitionId::new(
@@ -2078,21 +2039,18 @@ pub mod query {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new(
-                ALICE_ID.clone().to_account_id(domain_id.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+            Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
 
             let (source, _) = gen_account_in("wonderland");
             let (destination, _) = gen_account_in("wonderland");
-            Register::account(Account::new(
-                source.clone().to_account_id(domain_id.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
-            Register::account(Account::new(
-                destination.clone().to_account_id(domain_id.clone()),
+            Register::account(Account::new_in_domain(source.clone(), domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new_in_domain(
+                destination.clone(),
+                domain_id.clone(),
             ))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();

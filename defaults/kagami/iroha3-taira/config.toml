@@ -29,6 +29,12 @@ public_address = "127.0.0.1:1337"
 [torii]
 address = "0.0.0.0:8080"
 
+[torii.mcp]
+enabled = true
+profile = "writer"
+expose_operator_routes = false
+allow_tool_prefixes = ["iroha."]
+
 [torii.onboarding]
 authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
@@ -56,6 +62,16 @@ identity_private_key = "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E319
 [nexus]
 enabled = true
 lane_count = 3
+
+[nexus.fees]
+fee_asset_id = "xor#universal"
+fee_sink_account_id = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+base_fee = "0"
+per_byte_fee = "0"
+per_instruction_fee = "0.001"
+per_gas_unit_fee = "0.00005"
+sponsorship_enabled = false
+sponsor_max_fee = "0"
 
 [genesis]
 public_key = "ed0120CFBB23652880ABCAEEE2FA6F512A1657E5D7EDBC7B45589721FD86C2FEC9F559"

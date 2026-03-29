@@ -5628,7 +5628,7 @@ pub mod tests {
         let domain_id: DomainId = "wonderland".parse().expect("Valid");
         let (account_id, _account_keypair) = gen_account_in("wonderland");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
-        let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
+        let account = Account::new_in_domain(account_id.clone(), domain_id).build(&account_id);
         World::with([domain], [account], [])
     }
 
@@ -5900,7 +5900,7 @@ pub mod tests {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("Valid");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
-        let account = Account::new(account_id.clone().to_account_id(domain_id))
+        let account = Account::new_in_domain(account_id.clone(), domain_id)
             .with_uaid(Some(uaid))
             .build(&account_id);
 
@@ -7629,8 +7629,8 @@ pub mod tests {
             let domain_id: DomainId = "wonderland".parse().expect("Valid");
             let domain = Domain::new(domain_id.clone()).build(&alice_id);
             let alice_account =
-                Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-            let bob_account = Account::new(bob_id.clone().to_account_id(domain_id)).build(&bob_id);
+                Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
+            let bob_account = Account::new_in_domain(bob_id.clone(), domain_id).build(&bob_id);
             World::with([domain], [alice_account, bob_account], [])
         };
         let query_handle = LiveQueryStore::start_test();

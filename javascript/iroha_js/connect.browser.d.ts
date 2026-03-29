@@ -59,6 +59,7 @@ export interface BrowserConnectRegisterOptions extends BrowserConnectFetchOption
 
 export interface BrowserConnectSocketOptions {
   webSocketImpl?: typeof WebSocket;
+  protocols?: string | ReadonlyArray<string>;
 }
 
 export function toHex(bytes: Uint8Array): string;
@@ -82,6 +83,11 @@ export function deleteConnectSession(
   options?: BrowserConnectFetchOptions,
 ): Promise<void>;
 export function buildConnectTokenProtocol(token: string): string;
+export function resolveConnectLaunchUri(
+  role: "app" | "wallet",
+  preview?: Pick<BrowserConnectSessionPreview, "walletUri" | "appUri"> | null,
+  session?: Pick<BrowserConnectSessionResponse, "wallet_uri" | "app_uri"> | null,
+): string;
 export function openConnectWebSocket(
   baseUrl: string,
   sid: string,

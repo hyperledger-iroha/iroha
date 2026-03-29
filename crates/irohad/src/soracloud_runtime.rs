@@ -53,22 +53,21 @@ use iroha_data_model::{
         SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1, SORACLOUD_HOST_RESPONSE_VERSION_V1,
         SoraAgentApartmentRecordV1, SoraAgentRuntimeStatusV1, SoraArtifactKindV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1,
-        SoraDeploymentBundleV1,
-        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
-        SoraHfPlacementRecordV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1,
-        SoraHfSourceStatusV1, SoraModelHostViolationKindV1, SoraModelPrivacyModeV1,
-        SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
-        SoraPrivateInferenceSessionV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
-        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
-        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
-        SoraStateMutationOperationV1, SoraUploadedModelBindingStatusV1, SoraUploadedModelBundleV1,
-        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
-        SoracloudAppendJournalResponseV1, SoracloudEgressFetchRequestV1,
-        SoracloudEgressFetchResponseV1, SoracloudEmitMailboxMessageRequestV1,
-        SoracloudEmitMailboxMessageResponseV1, SoracloudEmitStateMutationRequestV1,
-        SoracloudEmitStateMutationResponseV1, SoracloudHostOperationV1,
-        SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
+        SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
+        SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfSharedLeaseMemberStatusV1,
+        SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1, SoraModelHostViolationKindV1,
+        SoraModelPrivacyModeV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
+        SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRouteVisibilityV1,
+        SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
+        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1,
+        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
+        SoraStateBindingV1, SoraStateMutationOperationV1, SoraUploadedModelBindingStatusV1,
+        SoraUploadedModelBundleV1, SoraUploadedModelKeyEncapsulationV1,
+        SoraUploadedModelKeyWrapAeadV1, SoracloudAppendJournalResponseV1,
+        SoracloudEgressFetchRequestV1, SoracloudEgressFetchResponseV1,
+        SoracloudEmitMailboxMessageRequestV1, SoracloudEmitMailboxMessageResponseV1,
+        SoracloudEmitStateMutationRequestV1, SoracloudEmitStateMutationResponseV1,
+        SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
         SoracloudHostResponseEnvelopeV1, SoracloudHostResponsePayloadV1,
         SoracloudPublishCheckpointResponseV1, SoracloudReadCommittedStateResponseV1,
         SoracloudReadConfigResponseV1, SoracloudReadCredentialResponseV1,
@@ -1846,7 +1845,11 @@ impl IVMHost for SoracloudIvmHost {
             }
             SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
                 let SoracloudHostRequestPayloadV1::ReadSecretEnvelope(request) = self
-                    .read_request_payload(vm, SoracloudHostOperationV1::ReadSecretEnvelope, number)?
+                    .read_request_payload(
+                        vm,
+                        SoracloudHostOperationV1::ReadSecretEnvelope,
+                        number,
+                    )?
                 else {
                     return Err(VMError::NoritoInvalid);
                 };

@@ -3131,6 +3131,169 @@ pub struct QueryOptions {
     pub gas_units: Option<u64>,
 }
 
+/// Verify a signed query and return the authenticated request payload.
+pub(crate) fn verify_signed_query_request(
+    query: &SignedQuery,
+) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
+    let iroha_data_model::query::QuerySignature(sig) = &query.signature;
+    sig.verify(query.payload.authority.signatory(), &query.payload)
+        .map_err(|_| {
+            Error::from(ValidationFail::NotPermitted(
+                "query signature failed verification".to_string(),
+            ))
+        })?;
+    let bytes = norito::to_bytes(&query.payload).map_err(|error| {
+        Error::from(ValidationFail::InternalError(format!(
+            "failed to encode verified query request payload: {error}"
+        )))
+    })?;
+    norito::decode_from_bytes(&bytes).map_err(|error| {
+        Error::from(ValidationFail::InternalError(format!(
+            "failed to decode verified query request payload: {error}"
+        )))
+    })
+}
+
+/// Execute a previously verified query request with the provided options.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub(crate) async fn execute_verified_query_with_opts(
+    live_query_store: LiveQueryStoreHandle,
+    state: Arc<CoreState>,
+    query: iroha_data_model::query::QueryRequestWithAuthority,
+    tel: MaybeTelemetry,
+    opts: QueryOptions,
+) -> Result<iroha_data_model::query::QueryResponse> {
+    use iroha_core::{
+        query::snapshot::{
+            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode,
+        },
+        smartcontracts::isi::query::QueryLimits,
+    };
+    #[cfg(feature = "telemetry")]
+    let start = std::time::Instant::now();
+
+    let authority = query.authority.clone();
+    let request = query.request;
+    let pipeline = state.pipeline_snapshot();
+
+    // Map config cursor mode to lane cursor mode (with query override)
+    let mode = {
+        match opts.cursor_mode.as_deref() {
+            Some("ephemeral") => LaneCursorMode::Ephemeral,
+            Some("stored") => LaneCursorMode::Stored,
+            Some(other) => {
+                iroha_logger::warn!(
+                    other,
+                    "unknown cursor_mode override; falling back to config"
+                );
+                match pipeline.query_default_cursor_mode {
+                    iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
+                        LaneCursorMode::Ephemeral
+                    }
+                    iroha_config::parameters::actual::QueryCursorMode::Stored => {
+                        LaneCursorMode::Stored
+                    }
+                }
+            }
+            None => match pipeline.query_default_cursor_mode {
+                iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
+                    LaneCursorMode::Ephemeral
+                }
+                iroha_config::parameters::actual::QueryCursorMode::Stored => LaneCursorMode::Stored,
+            },
+        }
+    };
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    let mode_label = match mode {
+        LaneCursorMode::Ephemeral => "ephemeral",
+        LaneCursorMode::Stored => "stored",
+    };
+
+    // Optional gas gating for stored cursor mode (resource bound).
+    // If configured (> 0) and the effective mode is Stored, enforce a minimum
+    // client-provided budget. For continuations, honor the cursor's gas budget.
+    // This does not actually charge gas; it simply guards resource usage for server-side cursors.
+    {
+        let min_gas = pipeline.query_stored_min_gas_units;
+        if min_gas > 0 && matches!(mode, LaneCursorMode::Stored) {
+            let provided = match &request {
+                iroha_data_model::query::QueryRequest::Continue(cursor) => {
+                    cursor.gas_budget.unwrap_or(0)
+                }
+                _ => opts.gas_units.unwrap_or(0),
+            };
+            if provided < min_gas {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "stored cursor requires at least {min_gas} gas units"
+                ))
+                .into());
+            }
+        }
+    }
+
+    // Execute on a captured snapshot using the selected mode, offloaded to
+    // a blocking worker pool to avoid tying up the server thread.
+    let state_cloned = Arc::clone(&state);
+    let store_cloned = live_query_store.clone();
+    let authority_cloned = authority.clone();
+    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+    let continue_budget = match &request {
+        iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
+        _ => None,
+    };
+    let limits = QueryLimits::new(app_query_limits().max_fetch_size);
+    let resp = tokio::task::spawn_blocking(move || {
+        run_on_snapshot_with_mode(
+            &state_cloned,
+            &store_cloned,
+            &authority_cloned,
+            request,
+            mode,
+            limits,
+        )
+    })
+    .await
+    .map_err(|e| ValidationFail::InternalError(format!("query worker join error: {e}")))
+    .and_then(|r| {
+        r.map_err(|e| match e {
+            SnapshotQueryError::Validation(v) => v,
+            SnapshotQueryError::Execution(exec) => ValidationFail::QueryFailed(exec),
+        })
+    })?;
+
+    #[cfg(feature = "telemetry")]
+    if tel.is_enabled() {
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        let metrics = tel.metrics().await;
+        metrics
+            .torii_query_snapshot_requests
+            .with_label_values(&[mode_label])
+            .inc();
+        if matches!(resp, QueryResponse::Iterable(_)) {
+            metrics
+                .torii_query_snapshot_first_batch_ms
+                .with_label_values(&[mode_label])
+                .observe(ms);
+        }
+        if matches!(mode, LaneCursorMode::Stored) {
+            if let Some(units) = opts.gas_units {
+                metrics
+                    .torii_query_snapshot_gas_consumed_units_total
+                    .with_label_values(&[mode_label])
+                    .inc_by(units);
+            }
+            if let Some(units) = continue_budget {
+                metrics
+                    .torii_query_snapshot_gas_consumed_units_total
+                    .with_label_values(&[mode_label])
+                    .inc_by(units);
+            }
+        }
+    }
+
+    Ok(resp)
+}
+
 // ---------------------- Iroha Connect (feature-gated) ----------------------
 
 #[cfg(feature = "connect")]
@@ -4665,7 +4828,7 @@ mod zk_roots_selector_tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
             iroha_core::state::World::with([domain], [account], [definition]),
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -6059,142 +6222,8 @@ pub async fn handle_queries_with_opts(
     crate::NoritoQuery(opts): crate::NoritoQuery<QueryOptions>,
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
-    use iroha_core::{
-        query::snapshot::{
-            CursorMode as LaneCursorMode, SnapshotQueryError, run_on_snapshot_with_mode,
-        },
-        smartcontracts::isi::query::QueryLimits,
-    };
-    #[cfg(feature = "telemetry")]
-    let start = std::time::Instant::now();
-
-    let iroha_data_model::query::SignedQuery {
-        payload: query,
-        signature,
-    } = query;
-    let authority = query.authority.clone();
-    let iroha_data_model::query::QuerySignature(sig) = &signature;
-    sig.verify(authority.signatory(), &query).map_err(|_| {
-        ValidationFail::NotPermitted("query signature failed verification".to_string())
-    })?;
-    let pipeline = state.pipeline_snapshot();
-
-    // Map config cursor mode to lane cursor mode (with query override)
-    let mode = {
-        match opts.cursor_mode.as_deref() {
-            Some("ephemeral") => LaneCursorMode::Ephemeral,
-            Some("stored") => LaneCursorMode::Stored,
-            Some(other) => {
-                iroha_logger::warn!(
-                    other,
-                    "unknown cursor_mode override; falling back to config"
-                );
-                match pipeline.query_default_cursor_mode {
-                    iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
-                        LaneCursorMode::Ephemeral
-                    }
-                    iroha_config::parameters::actual::QueryCursorMode::Stored => {
-                        LaneCursorMode::Stored
-                    }
-                }
-            }
-            None => match pipeline.query_default_cursor_mode {
-                iroha_config::parameters::actual::QueryCursorMode::Ephemeral => {
-                    LaneCursorMode::Ephemeral
-                }
-                iroha_config::parameters::actual::QueryCursorMode::Stored => LaneCursorMode::Stored,
-            },
-        }
-    };
-    #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
-    let mode_label = match mode {
-        LaneCursorMode::Ephemeral => "ephemeral",
-        LaneCursorMode::Stored => "stored",
-    };
-
-    let request = query.request;
-
-    // Optional gas gating for stored cursor mode (resource bound).
-    // If configured (> 0) and the effective mode is Stored, enforce a minimum
-    // client-provided budget. For continuations, honor the cursor's gas budget.
-    // This does not actually charge gas; it simply guards resource usage for server-side cursors.
-    {
-        let min_gas = pipeline.query_stored_min_gas_units;
-        if min_gas > 0 && matches!(mode, LaneCursorMode::Stored) {
-            let provided = match &request {
-                iroha_data_model::query::QueryRequest::Continue(cursor) => {
-                    cursor.gas_budget.unwrap_or(0)
-                }
-                _ => opts.gas_units.unwrap_or(0),
-            };
-            if provided < min_gas {
-                return Err(iroha_data_model::ValidationFail::NotPermitted(format!(
-                    "stored cursor requires at least {min_gas} gas units"
-                ))
-                .into());
-            }
-        }
-    }
-
-    // Execute on a captured snapshot using the selected mode, offloaded to
-    // a blocking worker pool to avoid tying up the server thread.
-    let state_cloned = Arc::clone(&state);
-    let store_cloned = live_query_store.clone();
-    let authority_cloned = authority.clone();
-    let continue_budget = match &request {
-        iroha_data_model::query::QueryRequest::Continue(cursor) => cursor.gas_budget,
-        _ => None,
-    };
-    let limits = QueryLimits::new(app_query_limits().max_fetch_size);
-    let resp = tokio::task::spawn_blocking(move || {
-        run_on_snapshot_with_mode(
-            &state_cloned,
-            &store_cloned,
-            &authority_cloned,
-            request,
-            mode,
-            limits,
-        )
-    })
-    .await
-    .map_err(|e| ValidationFail::InternalError(format!("query worker join error: {e}")))
-    .and_then(|r| {
-        r.map_err(|e| match e {
-            SnapshotQueryError::Validation(v) => v,
-            SnapshotQueryError::Execution(exec) => ValidationFail::QueryFailed(exec),
-        })
-    })?;
-
-    #[cfg(feature = "telemetry")]
-    if tel.is_enabled() {
-        let ms = start.elapsed().as_secs_f64() * 1000.0;
-        let metrics = tel.metrics().await;
-        metrics
-            .torii_query_snapshot_requests
-            .with_label_values(&[mode_label])
-            .inc();
-        if matches!(resp, QueryResponse::Iterable(_)) {
-            metrics
-                .torii_query_snapshot_first_batch_ms
-                .with_label_values(&[mode_label])
-                .observe(ms);
-        }
-        if matches!(mode, LaneCursorMode::Stored) {
-            if let Some(units) = opts.gas_units {
-                metrics
-                    .torii_query_snapshot_gas_consumed_units_total
-                    .with_label_values(&[mode_label])
-                    .inc_by(units);
-            }
-            if let Some(units) = continue_budget {
-                metrics
-                    .torii_query_snapshot_gas_consumed_units_total
-                    .with_label_values(&[mode_label])
-                    .inc_by(units);
-            }
-        }
-    }
-
+    let query = verify_signed_query_request(&query)?;
+    let resp = execute_verified_query_with_opts(live_query_store, state, query, tel, opts).await?;
     Ok(crate::utils::respond_with_format(resp, format))
 }
 
@@ -7436,7 +7465,7 @@ pub async fn handle_post_contract_instance_activate(
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(
             [
-                dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
+                dm::InstructionBox::from(dm::Register::account(dm::Account::new(
                     authority.clone(),
                 ))),
                 Box::new(isi).into_instruction_box(),
@@ -7491,9 +7520,7 @@ pub async fn handle_post_contract_instance(
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
 
     let instructions = [
-        dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
-            authority.clone(),
-        ))),
+        dm::InstructionBox::from(dm::Register::account(dm::Account::new(authority.clone()))),
         dm::InstructionBox::from(smart_contract_code::RegisterSmartContractCode {
             manifest: prepared.manifest.clone(),
         }),
@@ -7577,7 +7604,9 @@ pub async fn handle_post_contract_call(
                 "exactly one of contract_address or contract_alias must be provided".to_owned(),
             ));
         }
-        (Some(contract_address), None) => prepare_contract_call_by_address(&state, contract_address)?,
+        (Some(contract_address), None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
         (None, Some(contract_alias)) => {
             prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
         }
@@ -7640,7 +7669,7 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex,
@@ -7709,7 +7738,7 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex,
@@ -7734,7 +7763,7 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: false,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex,
@@ -7783,7 +7812,9 @@ pub async fn handle_post_contract_view(
                 "exactly one of contract_address or contract_alias must be provided".to_owned(),
             ));
         }
-        (Some(contract_address), None) => prepare_contract_call_by_address(&state, contract_address)?,
+        (Some(contract_address), None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
         (None, Some(contract_alias)) => {
             prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
         }
@@ -7819,7 +7850,7 @@ pub async fn handle_post_contract_view(
         Err(err) => {
             let body = norito::json::to_json_pretty(&ContractViewErrorResponseDto {
                 ok: false,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex: hex::encode(code_hash.as_ref()),
@@ -7841,7 +7872,7 @@ pub async fn handle_post_contract_view(
 
     let body = norito::json::to_json_pretty(&ContractViewResponseDto {
         ok: true,
-        namespace,
+        dataspace: namespace,
         contract_id,
         contract_address,
         code_hash_hex: hex::encode(code_hash.as_ref()),
@@ -14214,8 +14245,8 @@ pub struct ContractCallResponseDto {
     pub ok: bool,
     /// Whether Torii submitted the transaction to the pipeline.
     pub submitted: bool,
-    /// Namespace targeted by the call.
-    pub namespace: String,
+    /// Dataspace targeted by the call.
+    pub dataspace: String,
     /// Contract id targeted by the call.
     pub contract_id: String,
     /// Canonical contract address targeted by the call, when available.
@@ -14278,8 +14309,8 @@ pub struct ContractViewDto {
 pub struct ContractViewResponseDto {
     /// Whether execution succeeded.
     pub ok: bool,
-    /// Namespace targeted by the query.
-    pub namespace: String,
+    /// Dataspace targeted by the query.
+    pub dataspace: String,
     /// Contract id targeted by the query.
     pub contract_id: String,
     /// Canonical contract address targeted by the query, when available.
@@ -14333,7 +14364,7 @@ pub struct ContractViewVmDiagnosticDto {
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 pub struct ContractViewErrorResponseDto {
     pub ok: bool,
-    pub namespace: String,
+    pub dataspace: String,
     pub contract_id: String,
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
@@ -15988,7 +16019,7 @@ pub async fn handle_post_contract_deploy(
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(
             [
-                dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
+                dm::InstructionBox::from(dm::Register::account(dm::Account::new(
                     authority.clone(),
                 ))),
                 dm::InstructionBox::from(isi_code),
@@ -27219,7 +27250,7 @@ mod app_api_integration_tests {
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let accounts: Vec<Account> = accounts
             .into_iter()
-            .map(|id| Account::new(id.to_account_id(domain_id.clone())).build(&authority))
+            .map(|id| Account::new_in_domain(id.clone(), domain_id.clone()).build(&authority))
             .collect();
         let asset_definitions: Vec<AssetDefinition> = asset_definitions
             .into_iter()
@@ -27884,7 +27915,7 @@ mod app_api_integration_tests {
         let domain_alpha = Domain::new(alpha.clone()).build(&alice_id);
         let domain_omega = Domain::new(omega).build(&alice_id);
         let domain_gamma = Domain::new(gamma).build(&alice_id);
-        let account = Account::new(alice_id.to_account_id(alpha)).build(&alice_id);
+        let account = Account::new_in_domain(alice_id.clone(), alpha).build(&alice_id);
         let world = World::with(
             [domain_alpha, domain_omega, domain_gamma],
             [account],
@@ -28575,7 +28606,7 @@ mod app_api_integration_tests {
         };
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
+        let account = Account::new_in_domain(alice_id.clone(), domain_id).build(&alice_id);
         let asset_def = AssetDefinition::numeric(AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -28861,8 +28892,8 @@ mod app_api_integration_tests {
         ];
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let alice_account =
-            Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-        let bob_account = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
+            Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
+        let bob_account = Account::new_in_domain(bob_id.clone(), domain_id).build(&alice_id);
         let world = World::with_assets(
             [domain],
             [alice_account, bob_account],
@@ -28923,7 +28954,7 @@ mod query_endpoint_tests {
 
         // Build a small world with a single asset for Alice.
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
+        let account = Account::new_in_domain(alice_id.clone(), domain_id).build(&alice_id);
         let asset_def_id: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
@@ -38093,13 +38124,15 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     Register::domain(Domain::new("wonderland".parse().unwrap()))
         .execute(&authority_id, &mut stx)
         .unwrap();
-    Register::account(Account::new(
-        initiator_id.to_account_id("wonderland".parse().unwrap()),
+    Register::account(Account::new_in_domain(
+        initiator_id.clone(),
+        "wonderland".parse().unwrap(),
     ))
     .execute(&authority_id, &mut stx)
     .unwrap();
-    Register::account(Account::new(
-        counterparty_id.to_account_id("wonderland".parse().unwrap()),
+    Register::account(Account::new_in_domain(
+        counterparty_id.clone(),
+        "wonderland".parse().unwrap(),
     ))
     .execute(&authority_id, &mut stx)
     .unwrap();
@@ -39761,6 +39794,13 @@ fn ensure_onboarding_signer_can_manage_alias(
     ))
 }
 
+#[cfg(feature = "app_api")]
+fn alias_domain_to_domain_id(
+    domain: account::rekey::AccountAliasDomain,
+) -> iroha_data_model::domain::DomainId {
+    iroha_data_model::domain::DomainId::new(Name::from(domain))
+}
+
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard(
@@ -39850,8 +39890,10 @@ pub async fn handle_v1_accounts_onboard(
     }
 
     let register_builder = match alias_label.domain.clone() {
-        Some(domain) => dm::Account::new(account_id.to_account_id(domain)),
-        None => dm::Account::new_domainless(account_id.clone()),
+        Some(domain) => {
+            dm::Account::new_in_domain(account_id.clone(), alias_domain_to_domain_id(domain))
+        }
+        None => dm::Account::new(account_id.clone()),
     };
     let register = Register::account(
         register_builder
@@ -40226,11 +40268,15 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
         .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
-    let register =
-        MultisigRegister::with_account(multisig_account.clone(), alias_label.domain.clone(), spec);
-    let bind_alias = SetAccountLabel {
+    let register = MultisigRegister::with_account(
+        multisig_account.clone(),
+        alias_label.domain.clone().map(alias_domain_to_domain_id),
+        spec,
+    );
+    let bind_alias = SetPrimaryAccountAlias {
         account: multisig_account.clone(),
-        label: alias_label,
+        alias: Some(alias_label),
+        lease_expiry_ms: None,
     };
 
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
@@ -41890,8 +41936,7 @@ mod asset_definitions_query_tests {
         let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: dm::DomainId = "wonderland".parse().expect("valid domain");
         let domain = dm::Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            dm::Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = dm::Account::new_in_domain(authority.clone(), domain_id).build(&authority);
 
         let mut pkr_metadata = dm::Metadata::default();
         pkr_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
@@ -48287,7 +48332,7 @@ mod nexus_dataspaces_summary_tests {
         let authority = ALICE_ID.clone();
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
         let state = Arc::new(CoreState::new_for_testing(
             World::with([domain], [account], []),
             Kura::blank_kura_for_testing(),

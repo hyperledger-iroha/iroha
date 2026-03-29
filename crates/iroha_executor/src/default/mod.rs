@@ -475,26 +475,21 @@ pub mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
+        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
 
-    /// Register a `SoraFS` pin manifest when permitted (or during genesis).
+    /// Register a `SoraFS` pin manifest.
+    ///
+    /// Public submissions rely on the universal-lane Nexus fee schedule instead
+    /// of an additional executor permission gate.
     pub fn visit_register_pin_manifest<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RegisterPinManifest,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanRegisterSorafsPin.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't register SoraFS pin manifest");
+        execute!(executor, isi);
     }
 
     /// Approve a pending `SoraFS` pin manifest when permitted.
@@ -943,42 +938,43 @@ pub mod account {
     use super::*;
     use crate::permission::{account::is_account_owner, revoke_permissions};
 
-    /// Registers an account when the caller owns the domain or holds the registration permission.
+    /// Registers an account when the caller governs every linked domain or holds the
+    /// corresponding registration permissions.
     pub fn visit_register_account<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<Account>,
     ) {
-        let domain_id = if let Some(domain_id) = isi.object().domain() {
-            domain_id
-        } else {
+        if isi.object().linked_domains().is_empty() {
             // TODO: Replace this temporary self/unrestricted bridge with explicit domainless
             // account registration permissions once dataspace-aware alias permissions land.
             execute!(executor, isi);
-        };
-
-        match crate::permission::domain::is_domain_owner(
-            domain_id,
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
         }
 
-        let can_register_account_in_domain = CanRegisterAccount {
-            domain: domain_id.clone(),
-        };
-        if can_register_account_in_domain
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
+        for domain_id in isi.object().linked_domains() {
+            match crate::permission::domain::is_domain_owner(
+                domain_id,
+                &executor.context().authority,
+                executor.host(),
+            ) {
+                Err(err) => deny!(executor, err),
+                Ok(true) => continue,
+                Ok(false) => {}
+            }
+
+            let can_register_account_in_domain = CanRegisterAccount {
+                domain: domain_id.clone(),
+            };
+            if !can_register_account_in_domain
+                .is_owned_by(&executor.context().authority, executor.host())
+            {
+                deny!(
+                    executor,
+                    "Can't register account in a domain owned by another account"
+                );
+            }
         }
 
-        deny!(
-            executor,
-            "Can't register account in a domain owned by another account"
-        );
+        execute!(executor, isi);
     }
 
     /// Unregisters an account when the caller owns it or has the unregister permission.
@@ -2746,9 +2742,8 @@ mod sorafs_permission_tests {
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
+        CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -2837,6 +2832,18 @@ mod sorafs_permission_tests {
         assert!(
             executor.verdict().is_err(),
             "expected denial without permission"
+        );
+    }
+
+    fn assert_allowed_without_permission<T: Clone>(
+        instruction: T,
+        visit: impl Fn(&mut MockExecutor, &T),
+    ) {
+        let mut executor = MockExecutor::new(false);
+        visit(&mut executor, &instruction);
+        assert!(
+            executor.verdict().is_ok(),
+            "expected instruction to be permitted without permission"
         );
     }
 
@@ -3027,12 +3034,13 @@ mod sorafs_permission_tests {
         };
     }
 
-    sorafs_permission_case!(
-        register_pin_manifest_requires_permission,
-        register_pin_manifest(),
-        CanRegisterSorafsPin,
-        sorafs::visit_register_pin_manifest
-    );
+    #[test]
+    fn register_pin_manifest_is_public() {
+        assert_allowed_without_permission(
+            register_pin_manifest(),
+            sorafs::visit_register_pin_manifest,
+        );
+    }
 
     sorafs_permission_case!(
         approve_pin_manifest_requires_permission,
