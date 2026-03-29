@@ -28,7 +28,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   - `AccountId` is the canonical account identity and is always domainless.
   - `ScopedAccountId { account, domain }` is only explicit domain context for operations or views that require a linked domain; it is not the canonical identity.
   - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` bind to the same canonical `AccountId`.
-  - In tests and fixtures, seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately. Use `Account::new_domainless(...)` for dataspace-root aliases and `Account::new(scoped_id)` only when the behavior under test truly requires a domain-linked registration/materialization.
+  - In tests and fixtures, seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately. Use `Account::new(...)` for dataspace-root aliases and `Account::from_scoped_id(...)` only when the behavior under test truly requires a domain-linked registration/materialization.
 
 ## Repository structure
 - `Cargo.toml` at the repository root defines the workspace and lists all member crates.

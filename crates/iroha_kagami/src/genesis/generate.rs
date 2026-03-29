@@ -1369,8 +1369,9 @@ fn generate_synthetic(
 
         for _ in 0..accounts_per_domain {
             let (account_id, _account_keypair) = gen_account_in(&domain_id);
-            builder = builder.append_instruction(Register::account(Account::new(
-                account_id.to_account_id(domain_id.clone()),
+            builder = builder.append_instruction(Register::account(Account::new_in_domain(
+                account_id.clone(),
+                domain_id.clone(),
             )));
 
             for asset_definition_id in &synthetic_asset_definitions {

@@ -16,7 +16,7 @@ use mv::storage::StorageReadOnly;
 fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     let domain_id: DomainId = "wonderland".parse().expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account = Account::new_in_domain(ALICE_ID.clone(), domain_id).build(&ALICE_ID);
     let asset_definition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),

@@ -4828,7 +4828,7 @@ mod zk_roots_selector_tests {
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
-            Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
         let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
             iroha_core::state::World::with([domain], [account], [definition]),
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -5906,7 +5906,8 @@ mod multisig_guard_tests {
         let multisig_id = ScopedAccountId::new_multisig(domain_id.clone(), policy);
 
         let domain = Domain::new(domain_id.clone()).build(multisig_id.account());
-        let multisig_account = Account::new(multisig_id.clone()).build(multisig_id.account());
+        let multisig_account =
+            Account::from_scoped_id(multisig_id.clone()).build(multisig_id.account());
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -5937,7 +5938,7 @@ mod multisig_guard_tests {
             Role::new(role_id.clone(), signatory_id.clone().into()).build(signatory_id.account());
 
         let domain = Domain::new(domain_id.clone()).build(signatory_id.account());
-        let account = Account::new(signatory_id.clone()).build(signatory_id.account());
+        let account = Account::from_scoped_id(signatory_id.clone()).build(signatory_id.account());
         let mut world = World::with_assets_and_roles([domain], [account], [], [], [], [role]);
         world.grant_role_for_tests(signatory_id.clone().into(), role_id);
 
@@ -5969,7 +5970,8 @@ mod multisig_guard_tests {
         let multisig_id = ScopedAccountId::new_multisig(domain_id.clone(), policy);
 
         let domain = Domain::new(domain_id.clone()).build(multisig_id.account());
-        let multisig_account = Account::new(multisig_id.clone()).build(multisig_id.account());
+        let multisig_account =
+            Account::from_scoped_id(multisig_id.clone()).build(multisig_id.account());
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -5995,6 +5997,9 @@ pub(crate) fn accept_transaction_for_ingress(
     tx: SignedTransaction,
     telemetry: &MaybeTelemetry,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
+    #[cfg(not(feature = "telemetry"))]
+    let _ = telemetry;
+
     let (max_clock_drift, tx_limits, state_view) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -7465,7 +7470,7 @@ pub async fn handle_post_contract_instance_activate(
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(
             [
-                dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
+                dm::InstructionBox::from(dm::Register::account(dm::Account::new(
                     authority.clone(),
                 ))),
                 Box::new(isi).into_instruction_box(),
@@ -7520,9 +7525,7 @@ pub async fn handle_post_contract_instance(
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
 
     let instructions = [
-        dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
-            authority.clone(),
-        ))),
+        dm::InstructionBox::from(dm::Register::account(dm::Account::new(authority.clone()))),
         dm::InstructionBox::from(smart_contract_code::RegisterSmartContractCode {
             manifest: prepared.manifest.clone(),
         }),
@@ -7671,7 +7674,7 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex,
@@ -7740,7 +7743,7 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex,
@@ -7765,7 +7768,7 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: false,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex,
@@ -7852,7 +7855,7 @@ pub async fn handle_post_contract_view(
         Err(err) => {
             let body = norito::json::to_json_pretty(&ContractViewErrorResponseDto {
                 ok: false,
-                namespace,
+                dataspace: namespace,
                 contract_id,
                 contract_address,
                 code_hash_hex: hex::encode(code_hash.as_ref()),
@@ -7874,7 +7877,7 @@ pub async fn handle_post_contract_view(
 
     let body = norito::json::to_json_pretty(&ContractViewResponseDto {
         ok: true,
-        namespace,
+        dataspace: namespace,
         contract_id,
         contract_address,
         code_hash_hex: hex::encode(code_hash.as_ref()),
@@ -10153,12 +10156,12 @@ mod multisig_selector_tests {
         let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name);
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let multisig_account = Account::new(multisig_id)
+        let multisig_account = Account::from_scoped_id(multisig_id)
             .with_label(Some(label))
             .with_metadata(multisig_metadata)
             .build(&authority);
-        let signer_one_account = Account::new(signer_one_id.clone()).build(&authority);
-        let signer_two_account = Account::new(signer_two_id.clone()).build(&authority);
+        let signer_one_account = Account::from_scoped_id(signer_one_id.clone()).build(&authority);
+        let signer_two_account = Account::from_scoped_id(signer_two_id.clone()).build(&authority);
 
         let mut world = World::with(
             [domain],
@@ -10311,12 +10314,12 @@ mod multisig_selector_tests {
         let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name);
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id).build(&authority);
-        let multisig_account = Account::new(multisig_id)
+        let multisig_account = Account::from_scoped_id(multisig_id)
             .with_label(Some(label))
             .with_metadata(multisig_metadata)
             .build(&authority);
-        let signer_one_account = Account::new(signer_one_id.clone()).build(&authority);
-        let signer_two_account = Account::new(signer_two_id.clone()).build(&authority);
+        let signer_one_account = Account::from_scoped_id(signer_one_id.clone()).build(&authority);
+        let signer_two_account = Account::from_scoped_id(signer_two_id.clone()).build(&authority);
         let state = build_state(World::with(
             [domain],
             [multisig_account, signer_one_account, signer_two_account],
@@ -10455,7 +10458,7 @@ mod multisig_selector_tests {
         let scoped = dm::ScopedAccountId::new(domain_id.clone(), keypair.public_key().clone());
         let authority = scoped.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(scoped)
+        let account = Account::from_scoped_id(scoped)
             .with_label(Some(account::rekey::AccountLabel::new(
                 domain_id,
                 "cbdc".parse().expect("label"),
@@ -10509,11 +10512,11 @@ mod multisig_selector_tests {
         let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name.clone());
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let multisig_account = Account::new(multisig_id)
+        let multisig_account = Account::from_scoped_id(multisig_id)
             .with_label(Some(label))
             .build(&authority);
-        let signer_one_account = Account::new(signer_one_id.clone()).build(&authority);
-        let signer_two_account = Account::new(signer_two_id.clone()).build(&authority);
+        let signer_one_account = Account::from_scoped_id(signer_one_id.clone()).build(&authority);
+        let signer_two_account = Account::from_scoped_id(signer_two_id.clone()).build(&authority);
 
         let mut world = World::with(
             [domain],
@@ -11557,7 +11560,7 @@ mod multisig_selector_tests {
                 controls: vec![record],
             }),
         );
-        let account = Account::new(scoped_account_id)
+        let account = Account::from_scoped_id(scoped_account_id)
             .with_metadata(metadata)
             .build(&authority);
         let state = build_state(World::with([domain], [account], [definition]));
@@ -14247,8 +14250,8 @@ pub struct ContractCallResponseDto {
     pub ok: bool,
     /// Whether Torii submitted the transaction to the pipeline.
     pub submitted: bool,
-    /// Namespace targeted by the call.
-    pub namespace: String,
+    /// Dataspace targeted by the call.
+    pub dataspace: String,
     /// Contract id targeted by the call.
     pub contract_id: String,
     /// Canonical contract address targeted by the call, when available.
@@ -14311,8 +14314,8 @@ pub struct ContractViewDto {
 pub struct ContractViewResponseDto {
     /// Whether execution succeeded.
     pub ok: bool,
-    /// Namespace targeted by the query.
-    pub namespace: String,
+    /// Dataspace targeted by the query.
+    pub dataspace: String,
     /// Contract id targeted by the query.
     pub contract_id: String,
     /// Canonical contract address targeted by the query, when available.
@@ -14366,7 +14369,7 @@ pub struct ContractViewVmDiagnosticDto {
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 pub struct ContractViewErrorResponseDto {
     pub ok: bool,
-    pub namespace: String,
+    pub dataspace: String,
     pub contract_id: String,
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
@@ -16021,7 +16024,7 @@ pub async fn handle_post_contract_deploy(
     let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(
             [
-                dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
+                dm::InstructionBox::from(dm::Register::account(dm::Account::new(
                     authority.clone(),
                 ))),
                 dm::InstructionBox::from(isi_code),
@@ -22424,7 +22427,7 @@ mod stateful_account_path_parser_tests {
         );
         let world = World::with(
             [Domain::new(domain_id).build(&authority)],
-            [Account::new(scoped_account_id)
+            [Account::from_scoped_id(scoped_account_id)
                 .with_label(Some(alias))
                 .build(&authority)],
             [],
@@ -25040,7 +25043,7 @@ mod tx_query_integration_smoke {
             .ok();
         let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let actor_id = dm::ScopedAccountId::new(domain_id.clone(), kp_actor.public_key().clone());
-        dm::Register::account(dm::Account::new(actor_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(actor_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
         stx0.apply();
@@ -25151,13 +25154,13 @@ mod tx_query_integration_smoke {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(exec_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(alice_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(alice_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(bob_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(bob_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::asset_definition({
@@ -25298,7 +25301,7 @@ mod tx_query_integration_smoke {
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::ScopedAccountId::new(domain_id.clone(), kp_a.public_key().clone());
         let account_literal = acc_a.account().to_string();
-        dm::Register::account(dm::Account::new(acc_a.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(acc_a.clone()))
             .execute(exec_id.account(), &mut stx)
             .ok();
         stx.apply();
@@ -25481,12 +25484,12 @@ mod tx_query_integration_smoke {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
-        dm::Register::account(dm::Account::new(exec_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
         let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let actor_id = dm::ScopedAccountId::new(domain_id.clone(), kp_actor.public_key().clone());
-        dm::Register::account(dm::Account::new(actor_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(actor_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
         stx0.apply();
@@ -25588,13 +25591,13 @@ mod tx_query_integration_smoke {
         dm::Register::domain(dm::Domain::new(dom_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
-        dm::Register::account(dm::Account::new(exec_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
-        dm::Register::account(dm::Account::new(acc_a.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(acc_a.clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
-        dm::Register::account(dm::Account::new(acc_b.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(acc_b.clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
         stx0.apply();
@@ -26866,7 +26869,7 @@ mod tx_query_integration_smoke {
             dm::Register::domain(dm::Domain::new(dom.clone()))
                 .execute(exec_id.account(), &mut stx0)
                 .ok();
-            dm::Register::account(dm::Account::new(acc_b.clone()))
+            dm::Register::account(dm::Account::from_scoped_id(acc_b.clone()))
                 .execute(exec_id.account(), &mut stx0)
                 .ok();
             stx0.apply();
@@ -27044,7 +27047,7 @@ mod tx_query_integration_smoke {
             dm::Register::domain(dm::Domain::new(dom.clone()))
                 .execute(exec_id.account(), &mut stx0)
                 .ok();
-            dm::Register::account(dm::Account::new(acc_a.clone()))
+            dm::Register::account(dm::Account::from_scoped_id(acc_a.clone()))
                 .execute(exec_id.account(), &mut stx0)
                 .ok();
             stx0.apply();
@@ -27252,7 +27255,7 @@ mod app_api_integration_tests {
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let accounts: Vec<Account> = accounts
             .into_iter()
-            .map(|id| Account::new(id.to_account_id(domain_id.clone())).build(&authority))
+            .map(|id| Account::new_in_domain(id.clone(), domain_id.clone()).build(&authority))
             .collect();
         let asset_definitions: Vec<AssetDefinition> = asset_definitions
             .into_iter()
@@ -27917,7 +27920,7 @@ mod app_api_integration_tests {
         let domain_alpha = Domain::new(alpha.clone()).build(&alice_id);
         let domain_omega = Domain::new(omega).build(&alice_id);
         let domain_gamma = Domain::new(gamma).build(&alice_id);
-        let account = Account::new(alice_id.to_account_id(alpha)).build(&alice_id);
+        let account = Account::new_in_domain(alice_id.clone(), alpha).build(&alice_id);
         let world = World::with(
             [domain_alpha, domain_omega, domain_gamma],
             [account],
@@ -28608,7 +28611,7 @@ mod app_api_integration_tests {
         };
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
+        let account = Account::new_in_domain(alice_id.clone(), domain_id).build(&alice_id);
         let asset_def = AssetDefinition::numeric(AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -28894,8 +28897,8 @@ mod app_api_integration_tests {
         ];
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let alice_account =
-            Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-        let bob_account = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
+            Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
+        let bob_account = Account::new_in_domain(bob_id.clone(), domain_id).build(&alice_id);
         let world = World::with_assets(
             [domain],
             [alice_account, bob_account],
@@ -28956,7 +28959,7 @@ mod query_endpoint_tests {
 
         // Build a small world with a single asset for Alice.
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
+        let account = Account::new_in_domain(alice_id.clone(), domain_id).build(&alice_id);
         let asset_def_id: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
@@ -38126,13 +38129,15 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     Register::domain(Domain::new("wonderland".parse().unwrap()))
         .execute(&authority_id, &mut stx)
         .unwrap();
-    Register::account(Account::new(
-        initiator_id.to_account_id("wonderland".parse().unwrap()),
+    Register::account(Account::new_in_domain(
+        initiator_id.clone(),
+        "wonderland".parse().unwrap(),
     ))
     .execute(&authority_id, &mut stx)
     .unwrap();
-    Register::account(Account::new(
-        counterparty_id.to_account_id("wonderland".parse().unwrap()),
+    Register::account(Account::new_in_domain(
+        counterparty_id.clone(),
+        "wonderland".parse().unwrap(),
     ))
     .execute(&authority_id, &mut stx)
     .unwrap();
@@ -39794,6 +39799,13 @@ fn ensure_onboarding_signer_can_manage_alias(
     ))
 }
 
+#[cfg(feature = "app_api")]
+fn alias_domain_to_domain_id(
+    domain: account::rekey::AccountAliasDomain,
+) -> iroha_data_model::domain::DomainId {
+    iroha_data_model::domain::DomainId::new(Name::from(domain))
+}
+
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard(
@@ -39884,9 +39896,9 @@ pub async fn handle_v1_accounts_onboard(
 
     let register_builder = match alias_label.domain.clone() {
         Some(domain) => {
-            dm::Account::new(account_id.to_account_id(dm::DomainId::new(domain.into())))
+            dm::Account::new_in_domain(account_id.clone(), alias_domain_to_domain_id(domain))
         }
-        None => dm::Account::new_domainless(account_id.clone()),
+        None => dm::Account::new(account_id.clone()),
     };
     let register = Register::account(
         register_builder
@@ -40263,10 +40275,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
     let register = MultisigRegister::with_account(
         multisig_account.clone(),
-        alias_label
-            .domain
-            .clone()
-            .map(|domain| dm::DomainId::new(domain.into())),
+        alias_label.domain.clone().map(alias_domain_to_domain_id),
         spec,
     );
     let bind_alias = SetPrimaryAccountAlias {
@@ -41589,7 +41598,8 @@ mod accounts_query_tests {
         );
         let exec_id = exec_authority.clone().to_account_id(domain_id.clone());
         let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
-        let mut accounts = vec![dm::Account::new(exec_id.clone()).build(&exec_authority)];
+        let mut accounts =
+            vec![dm::Account::from_scoped_id(exec_id.clone()).build(&exec_authority)];
         for _ in 0..5 {
             let authority = dm::AccountId::new(
                 KeyPair::random_with_algorithm(Algorithm::Ed25519)
@@ -41597,7 +41607,7 @@ mod accounts_query_tests {
                     .clone(),
             );
             let account_id = authority.clone().to_account_id(domain_id.clone());
-            accounts.push(dm::Account::new(account_id).build(&authority));
+            accounts.push(dm::Account::from_scoped_id(account_id).build(&authority));
         }
         let state = Arc::new(State::new_for_testing(
             World::with([domain], accounts, []),
@@ -41660,8 +41670,8 @@ mod accounts_query_tests {
             World::with(
                 [domain],
                 [
-                    dm::Account::new(exec_id).build(&exec_authority),
-                    dm::Account::new(account_id.clone())
+                    dm::Account::from_scoped_id(exec_id).build(&exec_authority),
+                    dm::Account::from_scoped_id(account_id.clone())
                         .with_label(Some(label.clone()))
                         .build(&labelled_authority),
                 ],
@@ -41840,8 +41850,8 @@ mod accounts_query_tests {
             World::with(
                 [domain],
                 [
-                    dm::Account::new(exec_id).build(&exec_authority),
-                    dm::Account::new(account_id.clone())
+                    dm::Account::from_scoped_id(exec_id).build(&exec_authority),
+                    dm::Account::from_scoped_id(account_id.clone())
                         .with_label(Some(label.clone()))
                         .build(&labelled_authority),
                 ],
@@ -41932,8 +41942,7 @@ mod asset_definitions_query_tests {
         let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: dm::DomainId = "wonderland".parse().expect("valid domain");
         let domain = dm::Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            dm::Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = dm::Account::new_in_domain(authority.clone(), domain_id).build(&authority);
 
         let mut pkr_metadata = dm::Metadata::default();
         pkr_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
@@ -44251,16 +44260,16 @@ mod explorer_asset_definition_econometrics_tests {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(exec_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(alice_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(alice_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(bob_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(bob_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(carol_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(carol_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::asset_definition({
@@ -44558,13 +44567,13 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(exec_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(alice_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(alice_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(bob_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(bob_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::asset_definition({
@@ -44728,13 +44737,13 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(exec_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(alice_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(alice_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::new(bob_id.clone()))
+        dm::Register::account(dm::Account::from_scoped_id(bob_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
         dm::Register::asset_definition({
@@ -48329,7 +48338,7 @@ mod nexus_dataspaces_summary_tests {
         let authority = ALICE_ID.clone();
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
         let state = Arc::new(CoreState::new_for_testing(
             World::with([domain], [account], []),
             Kura::blank_kura_for_testing(),
@@ -53726,8 +53735,8 @@ mod subscription_api_tests {
         let provider_account = provider.to_account_id(domain_id.clone());
         let subscriber_account = subscriber.to_account_id(domain_id.clone());
         let accounts = vec![
-            Account::new(provider_account).build(&provider),
-            Account::new(subscriber_account).build(&subscriber),
+            Account::from_scoped_id(provider_account).build(&provider),
+            Account::from_scoped_id(subscriber_account).build(&subscriber),
         ];
         let asset_definitions: Vec<AssetDefinition> = plans
             .into_iter()

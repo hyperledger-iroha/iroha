@@ -20,10 +20,9 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
     let (bob_id, _) = gen_account_in("wonderland");
     let (carol_id, _) = gen_account_in("wonderland");
     let alice_account =
-        Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
-    let bob_account =
-        Account::new(bob_id.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
-    let carol_account = Account::new(carol_id.clone().to_account_id(domain_id)).build(&ALICE_ID);
+        Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+    let bob_account = Account::new_in_domain(bob_id.clone(), domain_id.clone()).build(&ALICE_ID);
+    let carol_account = Account::new_in_domain(carol_id.clone(), domain_id).build(&ALICE_ID);
 
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),

@@ -811,7 +811,7 @@ mod tests {
                 .entry(domain_id.clone())
                 .or_insert_with(|| account_id.clone());
             account_models.push(
-                Account::new(account_id.clone().to_account_id(domain_id.clone())).build(account_id),
+                Account::new_in_domain(account_id.clone(), domain_id.clone()).build(account_id),
             );
         }
         let domain_models = domain_owners

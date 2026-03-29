@@ -3833,7 +3833,10 @@ mod tests {
                 panic!("expected RegisterRwa instruction");
             };
 
-            assert_eq!(register.rwa.domain, "commodities".parse().expect("domain"));
+            assert_eq!(
+                register.rwa.domain,
+                "commodities".parse::<DomainId>().expect("domain")
+            );
             assert_eq!(
                 register.rwa.quantity,
                 Numeric::from_str("10.5").expect("quantity")
@@ -3849,6 +3852,41 @@ mod tests {
                 Some("AE")
             );
             assert!(register.rwa.controls.freeze_enabled);
+        });
+    }
+
+    #[test]
+    fn register_account_instruction_classmethod_uses_default_linked_domain() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let account_id = canonical_i105_from_seed(0x33);
+            let instruction =
+                Instruction::register_account(&instruction_type, py, &account_id, None)
+                    .expect("register account builds");
+            let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let Some(register_box) = instruction_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+            else {
+                panic!("expected Register instruction");
+            };
+            let iroha_data_model::isi::RegisterBox::Account(register) = register_box else {
+                panic!("expected Register<Account> instruction");
+            };
+            let default_domain: DomainId =
+                iroha_data_model::account::address::default_domain_name()
+                    .as_ref()
+                    .parse()
+                    .expect("default domain parses");
+
+            assert_eq!(
+                register.object.id,
+                parse_account_id(&account_id).expect("account parses")
+            );
+            assert_eq!(register.object.domain(), Some(&default_domain));
         });
     }
 
@@ -5961,7 +5999,7 @@ impl Instruction {
                 PyValueError::new_err(format!("invalid default account domain label: {err}"))
             })?;
         let metadata = py_to_metadata(py, metadata)?;
-        let mut new_account = Account::new(account_id.to_account_id(home_domain));
+        let mut new_account = Account::new_in_domain(account_id, home_domain);
         new_account.metadata = metadata;
         let instruction = Register::<Account>::account(new_account);
         Ok(Instruction::new(instruction.into()))

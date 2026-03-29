@@ -343,7 +343,7 @@ pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
 pub const SYSCALL_SUBSCRIPTION_BILL: u32 = 0xA5;
 /// Record subscription usage from trigger args payload.
 pub const SYSCALL_SUBSCRIPTION_RECORD_USAGE: u32 = 0xA6;
-/// Resolve a stable account alias `(label, domain)` to the current AccountId.
+/// Resolve a canonical alias literal (for example `merchant@sbp`) to the current AccountId.
 pub const SYSCALL_RESOLVE_ACCOUNT_ALIAS: u32 = 0xA7;
 /// Begin an atomic cross-transaction (AXT) envelope.
 pub const SYSCALL_AXT_BEGIN: u32 = 0xB0;

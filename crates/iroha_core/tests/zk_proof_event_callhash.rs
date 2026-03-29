@@ -19,7 +19,7 @@ fn proof_event_includes_call_hash() {
     let (authority_id, kp) = iroha_test_samples::gen_account_in("zkd");
     let domain_id: DomainId = "zkd".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let acc = Account::new(authority_id.clone().to_account_id(domain_id)).build(&authority_id);
+    let acc = Account::new_in_domain(authority_id.clone(), domain_id).build(&authority_id);
     let world = iroha_core::state::World::with([domain], [acc], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();

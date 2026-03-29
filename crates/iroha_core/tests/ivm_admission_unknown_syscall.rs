@@ -39,7 +39,7 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
+    let account = Account::new_in_domain(account_id.clone(), domain_id).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 

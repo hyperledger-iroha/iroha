@@ -4170,15 +4170,8 @@ impl Iroha {
                             config.sumeragi.consensus_mode,
                             iroha_config::parameters::actual::ConsensusMode::Npos
                         ) {
-                            let (active_bls, active_total, pending, total) = {
-                                let world = state.world_view();
-                                npos_validator_status_counts(
-                                    world
-                                        .public_lane_validators()
-                                        .iter()
-                                        .map(|(_, record)| record),
-                                )
-                            };
+                            let (active_bls, active_total, pending, total) =
+                                effective_npos_validator_status_counts(&state);
                             if active_bls == 0 {
                                 let stake_asset_id = config.nexus.staking.stake_asset_id.as_str();
                                 iroha_logger::error!(
@@ -4190,7 +4183,7 @@ impl Iroha {
                                     "NPoS genesis did not activate any BLS validators"
                                 );
                                 let err_msg = format!(
-                                    "NPoS genesis did not activate any BLS validators (active_total={active_total}, pending={pending}, total={total}). Ensure genesis registers validators with PoPs and stakes {stake_asset_id} for each topology peer (for example via `kagami localnet` or `kagami genesis sign --topology ... --peer-pop ...`)."
+                                    "NPoS genesis did not activate any BLS validators (active_total={active_total}, pending={pending}, total={total}). Ensure genesis either registers stake-elected validators with PoPs and stakes {stake_asset_id} for each topology peer (for example via `kagami localnet` or `kagami genesis sign --topology ... --peer-pop ...`) or provides live BLS peer consensus keys for admin-managed lanes."
                                 );
                                 return Err(Report::new(StartError::InitKura).attach(err_msg));
                             }
@@ -5369,7 +5362,7 @@ fn genesis_public_key_from_genesis_block(
 
 fn genesis_account(public_key: PublicKey) -> Account {
     let genesis_account_id = AccountId::new(public_key);
-    Account::new(genesis_account_id.to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()))
+    Account::new_in_domain(genesis_account_id.clone(), iroha_genesis::GENESIS_DOMAIN_ID.clone())
         .build(&genesis_account_id)
 }
 
@@ -7431,6 +7424,29 @@ fn npos_validator_status_counts<'a>(
     (active_bls, active_total, pending, total)
 }
 
+fn effective_npos_validator_status_counts(state: &State) -> (usize, usize, usize, usize) {
+    let raw_counts = {
+        let world = state.world_view();
+        npos_validator_status_counts(
+            world
+                .public_lane_validators()
+                .iter()
+                .map(|(_, record)| record),
+        )
+    };
+    let Some(roster) = state.epoch_validator_peer_ids_fast(0) else {
+        return raw_counts;
+    };
+    let active_total = roster.len();
+    let active_bls = roster
+        .iter()
+        .filter(|peer| peer.public_key().algorithm() == Algorithm::BlsNormal)
+        .count();
+    let pending = raw_counts.2;
+    let total = raw_counts.3.max(active_total.saturating_add(pending));
+    (active_bls, active_total, pending, total)
+}
+
 #[allow(clippy::too_many_lines)]
 fn verify_genesis_metadata(
     genesis: &GenesisBlock,
@@ -8469,9 +8485,8 @@ mod tests {
             let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
                 .with_instructions([
                     InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
-                    InstructionBox::from(Register::account(Account::new(
-                        bls_account_id.to_account_id(domain_id),
-                    ))),
+                    InstructionBox::from(Register::account(Account::new_in_domain(
+                        bls_account_id.clone(), domain_id))),
                 ])
                 .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
             let block = SignedBlock::genesis(

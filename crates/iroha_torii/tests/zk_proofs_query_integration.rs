@@ -32,7 +32,7 @@ async fn proofs_query_find_by_id_returns_norito() {
     let domain_id: iroha_data_model::domain::DomainId = domain_name.parse().unwrap();
     let authority = iroha_data_model::account::AccountId::new(key_pair.public_key().clone());
     let domain = iroha_data_model::domain::Domain::new(domain_id.clone()).build(&authority);
-    let account = iroha_data_model::account::Account::new(authority.to_account_id(domain_id))
+    let account = iroha_data_model::account::Account::new_in_domain(authority.clone(), domain_id)
         .build(&authority);
     let world = World::with(
         [domain],

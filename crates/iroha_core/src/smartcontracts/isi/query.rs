@@ -4091,12 +4091,8 @@ mod tests {
     fn world_with_test_domains() -> World {
         let domain_id = "wonderland".parse().expect("Valid");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
-        let account = Account::new(
-            ALICE_ID
-                .clone()
-                .to_account_id("wonderland".parse().unwrap()),
-        )
-        .build(&ALICE_ID);
+        let account = Account::new_in_domain(ALICE_ID.clone(), "wonderland".parse().unwrap())
+            .build(&ALICE_ID);
         let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -4224,7 +4220,7 @@ mod tests {
         d2.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
 
-        let account = Account::new(ALICE_ID.clone().to_account_id(d1_id.clone())).build(&ALICE_ID);
+        let account = Account::new_in_domain(ALICE_ID.clone(), d1_id.clone()).build(&ALICE_ID);
         let world = World::with([d1.clone(), d2.clone(), d3.clone()], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -4314,8 +4310,7 @@ mod tests {
             d2.metadata_mut()
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
 
-            let account =
-                Account::new(ALICE_ID.clone().to_account_id(d1.id.clone())).build(&ALICE_ID);
+            let account = Account::new_in_domain(ALICE_ID.clone(), d1.id.clone()).build(&ALICE_ID);
             World::with([d1, d2, d3], [account], [])
         }
 
@@ -4416,8 +4411,9 @@ mod tests {
         fn make_world() -> (World, AssetDefinitionId, AssetId) {
             let domain =
                 iroha_data_model::domain::Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-            let account = iroha_data_model::account::Account::new(
-                ALICE_ID.clone().to_account_id("w".parse().unwrap()),
+            let account = iroha_data_model::account::Account::new_in_domain(
+                ALICE_ID.clone(),
+                "w".parse().unwrap(),
             )
             .build(&ALICE_ID);
             let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
@@ -4534,7 +4530,7 @@ mod tests {
         fn make_world() -> World {
             let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
             let account =
-                Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+                Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
             let n1 = Nft::new("n1$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
             let n2 = Nft::new("n2$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
             World::with_assets([domain], [account], [], [], [n1, n2])
@@ -4639,9 +4635,8 @@ mod tests {
         fn make_world() -> World {
             let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
             let alice =
-                Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
-            let bob =
-                Account::new(BOB_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+                Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
+            let bob = Account::new_in_domain(BOB_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
             World::with([domain], [alice, bob], [])
         }
 
@@ -4842,7 +4837,7 @@ mod tests {
         d2.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
 
-        let account = Account::new(ALICE_ID.clone().to_account_id(d1_id.clone())).build(&ALICE_ID);
+        let account = Account::new_in_domain(ALICE_ID.clone(), d1_id.clone()).build(&ALICE_ID);
         let world = World::with([d1.clone(), d2.clone(), d3.clone()], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -4920,7 +4915,7 @@ mod tests {
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let n1 = Nft::new("n1$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let n2 = Nft::new("n2$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let world = World::with_assets([domain], [account], [], [], [n1.clone(), n2.clone()]);
@@ -4987,7 +4982,7 @@ mod tests {
         // Minimal world with ALICE
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -5073,7 +5068,7 @@ mod tests {
         let a: Domain = Domain::new("a".parse().unwrap()).build(&ALICE_ID);
         let b: Domain = Domain::new("b".parse().unwrap()).build(&ALICE_ID);
         let c: Domain = Domain::new("c".parse().unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone().to_account_id(a.id.clone())).build(&ALICE_ID);
+        let account = Account::new_in_domain(ALICE_ID.clone(), a.id.clone()).build(&ALICE_ID);
         let world = World::with([a.clone(), b.clone(), c.clone()], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -5141,7 +5136,7 @@ mod tests {
         let b: Domain = Domain::new("b".parse().unwrap()).build(&ALICE_ID);
         let c: Domain = Domain::new("c".parse().unwrap()).build(&ALICE_ID);
         let d: Domain = Domain::new("d".parse().unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone().to_account_id(a.id.clone())).build(&ALICE_ID);
+        let account = Account::new_in_domain(ALICE_ID.clone(), a.id.clone()).build(&ALICE_ID);
         let world = World::with([a.clone(), b.clone(), c.clone(), d.clone()], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -5223,10 +5218,8 @@ mod tests {
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let (acc1_id, _) = iroha_test_samples::gen_account_in("w");
         let (acc2_id, _) = iroha_test_samples::gen_account_in("w");
-        let acc1 =
-            Account::new(acc1_id.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
-        let acc2 =
-            Account::new(acc2_id.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+        let acc1 = Account::new_in_domain(acc1_id.clone(), "w".parse().unwrap()).build(&ALICE_ID);
+        let acc2 = Account::new_in_domain(acc2_id.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let ad1 = AssetDefinition::new(
             iroha_data_model::asset::AssetDefinitionId::new(
                 "w".parse().unwrap(),
@@ -5343,21 +5336,21 @@ mod tests {
         let (b_id, _) = iroha_test_samples::gen_account_in("w");
         let (c_id, _) = iroha_test_samples::gen_account_in("w");
 
-        let a = Account::new(a_id.clone().to_account_id("w".parse().unwrap()))
+        let a = Account::new_in_domain(a_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
                 m
             })
             .build(&a_id);
-        let b = Account::new(b_id.clone().to_account_id("w".parse().unwrap()))
+        let b = Account::new_in_domain(b_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
                 m
             })
             .build(&b_id);
-        let c = Account::new(c_id.clone().to_account_id("w".parse().unwrap())).build(&c_id);
+        let c = Account::new_in_domain(c_id.clone(), "w".parse().unwrap()).build(&c_id);
 
         let world = World::with([w], [a.clone(), b.clone(), c.clone()], []);
         let kura = Kura::blank_kura_for_testing();
@@ -5427,7 +5420,7 @@ mod tests {
         let (c_id, _) = iroha_test_samples::gen_account_in("w");
 
         let make = |id: &AccountId| {
-            Account::new(id.clone().to_account_id("w".parse().unwrap()))
+            Account::new_in_domain(id.clone(), "w".parse().unwrap())
                 .with_metadata({
                     let mut m = Metadata::default();
                     m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
@@ -5536,7 +5529,7 @@ mod tests {
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -5625,7 +5618,7 @@ mod tests {
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -5919,11 +5912,9 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account");
+        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
         Register::asset_definition(
             AssetDefinition::numeric(ad_id.clone()).with_name(ad_id.name().to_string()),
         )
@@ -6017,16 +6008,12 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(
-            acc1_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account1");
-        Register::account(Account::new(
-            acc2_id.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account2");
+        Register::account(Account::new_in_domain(acc1_id.clone(), domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account1");
+        Register::account(Account::new_in_domain(acc2_id.clone(), domain_id.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account2");
         Register::asset_definition(
             AssetDefinition::numeric(ad_id.clone()).with_name(ad_id.name().to_string()),
         )
@@ -6123,16 +6110,12 @@ mod tests {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register domain");
-            Register::account(Account::new(
-                ALICE_ID.clone().to_account_id(domain_id.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register ALICE");
-            Register::account(Account::new(
-                BOB_ID.clone().to_account_id(domain_id.clone()),
-            ))
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register BOB");
+            Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register ALICE");
+            Register::account(Account::new_in_domain(BOB_ID.clone(), domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register BOB");
             Register::asset_definition(
                 AssetDefinition::numeric(ad_id.clone()).with_name(ad_id.name().to_string()),
             )
@@ -6279,7 +6262,7 @@ mod tests {
         // Build world with two domains and ALICE account
         let d1: Domain = Domain::new("w1".parse().unwrap()).build(&ALICE_ID);
         let d2: Domain = Domain::new("w2".parse().unwrap()).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone().to_account_id(d1.id.clone())).build(&ALICE_ID);
+        let account = Account::new_in_domain(ALICE_ID.clone(), d1.id.clone()).build(&ALICE_ID);
         let world = World::with([d1.clone(), d2.clone()], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -6328,8 +6311,8 @@ mod tests {
         let w: Domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let (a_id, _) = iroha_test_samples::gen_account_in("w");
         let (b_id, _) = iroha_test_samples::gen_account_in("w");
-        let a = Account::new(a_id.clone().to_account_id("w".parse().unwrap())).build(&a_id);
-        let b = Account::new(b_id.clone().to_account_id("w".parse().unwrap())).build(&b_id);
+        let a = Account::new_in_domain(a_id.clone(), "w".parse().unwrap()).build(&a_id);
+        let b = Account::new_in_domain(b_id.clone(), "w".parse().unwrap()).build(&b_id);
         let world = World::with([w], [a.clone(), b.clone()], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -6376,7 +6359,7 @@ mod tests {
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -6437,7 +6420,7 @@ mod tests {
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let nft1 = Nft::new("n1$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let nft2 = Nft::new("n2$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let world = World::with_assets([domain], [account], [], [], [nft1.clone(), nft2.clone()]);
@@ -6500,10 +6483,7 @@ mod tests {
         let world = {
             let mut w = World::with(
                 [domain],
-                [
-                    Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap()))
-                        .build(&ALICE_ID),
-                ],
+                [Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID)],
                 [],
             );
             let mut block = w.block();
@@ -6570,7 +6550,7 @@ mod tests {
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let mut world = World::with([domain], [account], []);
         // Add 2 time triggers
         {
@@ -6647,7 +6627,7 @@ mod tests {
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -6737,21 +6717,21 @@ mod tests {
         let (b_id, _) = iroha_test_samples::gen_account_in("w");
         let (c_id, _) = iroha_test_samples::gen_account_in("w");
 
-        let a = Account::new(a_id.clone().to_account_id("w".parse().unwrap()))
+        let a = Account::new_in_domain(a_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
                 m
             })
             .build(&a_id);
-        let b = Account::new(b_id.clone().to_account_id("w".parse().unwrap()))
+        let b = Account::new_in_domain(b_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
                 m
             })
             .build(&b_id);
-        let c = Account::new(c_id.clone().to_account_id("w".parse().unwrap())).build(&c_id);
+        let c = Account::new_in_domain(c_id.clone(), "w".parse().unwrap()).build(&c_id);
 
         let world = World::with([w], [a.clone(), b.clone(), c.clone()], []);
         let kura = Kura::blank_kura_for_testing();
@@ -6821,21 +6801,21 @@ mod tests {
         let (b_id, _) = iroha_test_samples::gen_account_in("w");
         let (c_id, _) = iroha_test_samples::gen_account_in("w");
 
-        let a = Account::new(a_id.clone().to_account_id("w".parse().unwrap()))
+        let a = Account::new_in_domain(a_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
                 m
             })
             .build(&a_id);
-        let b = Account::new(b_id.clone().to_account_id("w".parse().unwrap()))
+        let b = Account::new_in_domain(b_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
                 m
             })
             .build(&b_id);
-        let c = Account::new(c_id.clone().to_account_id("w".parse().unwrap())).build(&c_id);
+        let c = Account::new_in_domain(c_id.clone(), "w".parse().unwrap()).build(&c_id);
 
         let world = World::with([w], [a.clone(), b.clone(), c.clone()], []);
         let kura = Kura::blank_kura_for_testing();
@@ -6913,7 +6893,7 @@ mod tests {
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -7014,7 +6994,7 @@ mod tests {
         // Build three asset definitions with rank metadata: 0,1,2
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let mut ad0 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "a0".parse().unwrap(),
@@ -7117,7 +7097,7 @@ mod tests {
         // Build three asset definitions with rank metadata: 0,1,2
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
         let account =
-            Account::new(ALICE_ID.clone().to_account_id("w".parse().unwrap())).build(&ALICE_ID);
+            Account::new_in_domain(ALICE_ID.clone(), "w".parse().unwrap()).build(&ALICE_ID);
         let mut ad0 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "a0".parse().unwrap(),
@@ -7223,21 +7203,21 @@ mod tests {
         let (b_id, _) = iroha_test_samples::gen_account_in("w");
         let (c_id, _) = iroha_test_samples::gen_account_in("w");
 
-        let a = Account::new(a_id.clone().to_account_id("w".parse().unwrap()))
+        let a = Account::new_in_domain(a_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
                 m
             })
             .build(&a_id);
-        let b = Account::new(b_id.clone().to_account_id("w".parse().unwrap()))
+        let b = Account::new_in_domain(b_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
                 m
             })
             .build(&b_id);
-        let c = Account::new(c_id.clone().to_account_id("w".parse().unwrap()))
+        let c = Account::new_in_domain(c_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
@@ -7328,21 +7308,21 @@ mod tests {
         let (a1_id, _) = iroha_test_samples::gen_account_in("w");
         let (a2_id, _) = iroha_test_samples::gen_account_in("w");
 
-        let a0 = Account::new(a0_id.clone().to_account_id("w".parse().unwrap()))
+        let a0 = Account::new_in_domain(a0_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(0)));
                 m
             })
             .build(&a0_id);
-        let a1 = Account::new(a1_id.clone().to_account_id("w".parse().unwrap()))
+        let a1 = Account::new_in_domain(a1_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
                 m
             })
             .build(&a1_id);
-        let a2 = Account::new(a2_id.clone().to_account_id("w".parse().unwrap()))
+        let a2 = Account::new_in_domain(a2_id.clone(), "w".parse().unwrap())
             .with_metadata({
                 let mut m = Metadata::default();
                 m.insert("rank".parse().unwrap(), Json::from(norito::json!(2)));

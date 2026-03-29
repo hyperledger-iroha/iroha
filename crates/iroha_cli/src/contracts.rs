@@ -37,6 +37,8 @@ pub enum Command {
     Alias(AliasCommand),
     /// Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
     Deploy(DeployArgs),
+    /// Derive a canonical contract address locally from authority, deploy nonce, and dataspace
+    DeriveAddress(DeriveAddressArgs),
     /// Submit a contract call through Torii (POST /v1/contracts/call)
     Call(CallArgs),
     /// Execute a read-only contract view through Torii (POST /v1/contracts/view)
@@ -62,6 +64,7 @@ impl Run for Command {
             Command::Code(cmd) => cmd.run(context),
             Command::Alias(cmd) => cmd.run(context),
             Command::Deploy(args) => args.run(context),
+            Command::DeriveAddress(args) => args.run(context),
             Command::Call(args) => args.run(context),
             Command::View(args) => args.run(context),
             Command::DebugView(args) => args.run(context),
@@ -280,6 +283,51 @@ impl Run for DeployArgs {
             self.dataspace.as_deref(),
         )?;
         context.print_data(&v)?;
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct DeriveAddressArgs {
+    /// Authority account identifier (canonical I105 account literal)
+    #[arg(long)]
+    pub authority: String,
+    /// Target dataspace alias or numeric dataspace id (defaults to `universal`)
+    #[arg(long, default_value = "universal")]
+    pub dataspace: String,
+    /// Successful deploy nonce consumed for address derivation
+    #[arg(long)]
+    pub deploy_nonce: u64,
+    /// Explicit chain discriminant used for Bech32m contract-address derivation
+    #[arg(long)]
+    pub chain_discriminant: u16,
+    /// Optional numeric dataspace id override for non-default dataspaces
+    #[arg(long)]
+    pub dataspace_id: Option<u64>,
+}
+
+impl Run for DeriveAddressArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let authority = crate::resolve_account_id(context, &self.authority)
+            .wrap_err("failed to resolve --authority")?;
+        let dataspace_id = resolve_contract_dataspace_id_hint(&self.dataspace, self.dataspace_id)?;
+        let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
+            self.chain_discriminant,
+            &authority,
+            self.deploy_nonce,
+            dataspace_id,
+        )
+        .map_err(|err| eyre!(err.to_string()))
+        .wrap_err("failed to derive contract address")?;
+
+        context.print_data(&norito::json!({
+            "authority": (authority),
+            "dataspace": (self.dataspace),
+            "dataspace_id": (dataspace_id.as_u64()),
+            "deploy_nonce": (self.deploy_nonce),
+            "chain_discriminant": (self.chain_discriminant),
+            "contract_address": (contract_address),
+        }))?;
         Ok(())
     }
 }
@@ -668,6 +716,36 @@ fn load_code_bytes(code_file: Option<PathBuf>, code_b64: Option<String>) -> Resu
     }
 }
 
+fn resolve_contract_dataspace_id_hint(
+    dataspace: &str,
+    dataspace_id: Option<u64>,
+) -> Result<iroha::data_model::nexus::DataSpaceId> {
+    if let Some(dataspace_id) = dataspace_id {
+        return Ok(iroha::data_model::nexus::DataSpaceId::new(dataspace_id));
+    }
+
+    let trimmed = dataspace.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("--dataspace must not be empty"));
+    }
+
+    if let Ok(raw) = trimmed.parse::<u64>() {
+        return Ok(iroha::data_model::nexus::DataSpaceId::new(raw));
+    }
+
+    let raw = match trimmed {
+        "universal" => 0,
+        "governance" => 1,
+        "zk" => 2,
+        _ => {
+            return Err(eyre!(
+                "unknown dataspace alias `{trimmed}`; pass --dataspace-id for non-default dataspaces"
+            ))
+        }
+    };
+    Ok(iroha::data_model::nexus::DataSpaceId::new(raw))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResolvedContractTarget {
     contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
@@ -812,7 +890,7 @@ fn resolve_contract_call_private_key<C: RunContext>(
 }
 
 fn self_register_authority_instruction(authority: &AccountId) -> InstructionBox {
-    Register::account(Account::new_domainless(authority.clone())).into()
+    Register::account(Account::new(authority.clone())).into()
 }
 
 fn deploy_activate_instructions(
@@ -2509,6 +2587,36 @@ mod tests {
         );
         assert!(resolved.contract_address.is_none());
         assert_eq!(entrypoint.as_deref(), Some("swap"));
+    }
+
+    #[test]
+    fn resolve_contract_dataspace_id_hint_accepts_default_aliases() {
+        assert_eq!(
+            resolve_contract_dataspace_id_hint("universal", None)
+                .expect("universal")
+                .as_u64(),
+            0
+        );
+        assert_eq!(
+            resolve_contract_dataspace_id_hint("governance", None)
+                .expect("governance")
+                .as_u64(),
+            1
+        );
+        assert_eq!(
+            resolve_contract_dataspace_id_hint("zk", None)
+                .expect("zk")
+                .as_u64(),
+            2
+        );
+    }
+
+    #[test]
+    fn resolve_contract_dataspace_id_hint_requires_override_for_unknown_alias() {
+        let err = resolve_contract_dataspace_id_hint("private-ds", None).expect_err("must fail");
+        assert!(err
+            .to_string()
+            .contains("pass --dataspace-id for non-default dataspaces"));
     }
 
     #[test]

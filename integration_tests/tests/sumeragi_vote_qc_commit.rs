@@ -38,7 +38,8 @@ fn commits_via_vote_qc_pipeline() -> Result<()> {
         let (new_account_id, _) = gen_account_in("wonderland");
         let wonderland: DomainId = "wonderland".parse()?;
         let new_scoped_account_id = new_account_id.to_account_id(wonderland);
-        let register_new_account = Register::account(Account::new(new_scoped_account_id.clone()));
+        let register_new_account =
+            Register::account(Account::from_scoped_id(new_scoped_account_id.clone()));
         client.submit_blocking(register_new_account)?;
 
         let target_non_empty = baseline_non_empty + 1;

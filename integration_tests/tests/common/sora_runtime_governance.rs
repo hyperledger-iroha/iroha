@@ -949,8 +949,9 @@ pub async fn setup_runtime_governance_fixture(
 
     alice
         .submit_all(citizens.iter().map(|(account_id, _)| {
-            Register::account(Account::new(
-                account_id.to_account_id(wonderland_domain.clone()),
+            Register::account(Account::new_in_domain(
+                account_id.clone(),
+                wonderland_domain.clone(),
             ))
         }))
         .wrap_err("register runtime-governance citizen accounts")?;

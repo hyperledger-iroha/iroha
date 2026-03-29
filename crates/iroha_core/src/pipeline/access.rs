@@ -1490,7 +1490,7 @@ mod tests {
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone().to_account_id(wonderland_domain_id()))
+        Account::new_in_domain(account_id.clone(), wonderland_domain_id())
     }
 
     fn build_wonderland_account(account_id: &AccountId) -> Account {

@@ -378,6 +378,7 @@ mod tests {
             retention_epoch: 0,
             retention_source: None,
             last_access: 0,
+            files: Vec::new(),
             chunk_files: Vec::new(),
             por_tree: StoredPorTree::from(&PorMerkleTree::empty()),
             manifest_path: PathBuf::from("/tmp/manifest"),

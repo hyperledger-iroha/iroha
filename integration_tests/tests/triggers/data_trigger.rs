@@ -97,10 +97,9 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
             let client = test_client.clone();
             let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
             move || {
-                client.submit_blocking(Register::account(Account::new(
-                    gen_account_in("wonderland")
-                        .0
-                        .to_account_id(wonderland_domain.clone()),
+                client.submit_blocking(Register::account(Account::new_in_domain(
+                    gen_account_in("wonderland").0.clone(),
+                    wonderland_domain.clone(),
                 )))
             }
         })

@@ -1314,6 +1314,30 @@ impl MockWorldStateView {
         self.unlink_subject_from_domain(&subject, id.domain())
     }
 
+    /// Attempt to unregister an account subject across all linked domains.
+    ///
+    /// This models the canonical `Unregister::account(AccountId)` surface while
+    /// keeping the mock's simplified subject/domain index intact.
+    pub fn unregister_account_subject(&mut self, subject: &AccountId) -> bool {
+        if !self.subject_has_any_domain(subject) {
+            return false;
+        }
+        let has_bal = self
+            .balances
+            .iter()
+            .any(|((acc, _), amount)| acc == subject && !amount.is_zero());
+        let has_nfts = self.nfts.values().any(|rec| rec.owner == *subject);
+        if has_bal || has_nfts {
+            return false;
+        }
+        for subjects in self.domain_accounts.values_mut() {
+            subjects.remove(subject);
+        }
+        self.domain_accounts
+            .retain(|_, subjects| !subjects.is_empty());
+        true
+    }
+
     /// Register a new asset definition with given mintability.
     /// Returns `true` if the definition was added.
     pub fn register_asset_definition(
@@ -2302,6 +2326,10 @@ impl WsvHost {
         self.account_map.get(&idx).cloned()
     }
 
+    fn indexed_account_subject(&self, idx: u64) -> Option<AccountId> {
+        self.account(idx).map(|id| id.subject_id())
+    }
+
     fn asset(&self, idx: u64) -> Option<AssetDefinitionId> {
         self.asset_map.get(&idx).cloned()
     }
@@ -2314,6 +2342,10 @@ impl WsvHost {
         self.wsv
             .canonical_account_id_for_subject(&subject)
             .ok_or(VMError::DecodeError)
+    }
+
+    fn decode_account_subject_payload(&self, payload: &[u8]) -> Result<AccountId, VMError> {
+        decode_from_bytes::<AccountId>(payload).map_err(|_| VMError::DecodeError)
     }
 
     fn decode_asset_payload(&self, payload: &[u8]) -> Result<AssetDefinitionId, VMError> {
@@ -2363,6 +2395,45 @@ impl WsvHost {
             return Err(VMError::NoritoInvalid);
         }
         self.decode_account_payload(tlv.payload)
+    }
+
+    /// Decode a canonical AccountId from a register which may contain either an
+    /// index into `account_map` (older tests) or a pointer to a TLV in INPUT.
+    ///
+    /// Unlike `decode_account_reg`, this rejects ScopedAccountId payloads in
+    /// the TLV body so the mock matches the current core host ABI surface for
+    /// account-targeting syscalls.
+    fn decode_account_subject_reg(&self, vm: &IVM, reg: usize) -> Result<AccountId, VMError> {
+        let v = vm.register(reg);
+        if crate::dev_env::debug_wsv_enabled() {
+            eprintln!("[wsv.decode_account_subject_reg] reg=r{reg} ptr=0x{v:08x}");
+        }
+        if let Some(subject) = self.indexed_account_subject(v) {
+            return Ok(subject);
+        }
+        let tlv = vm.memory.validate_tlv(v)?;
+        if crate::dev_env::debug_wsv_enabled() {
+            eprintln!(
+                "[wsv.decode_account_subject_reg] tlv type={:?} len={}",
+                tlv.type_id,
+                tlv.payload.len()
+            );
+        }
+        if tlv.type_id != PointerType::AccountId {
+            return Err(VMError::NoritoInvalid);
+        }
+        self.decode_account_subject_payload(tlv.payload)
+    }
+
+    fn decode_canonical_account_reg(
+        &self,
+        vm: &IVM,
+        reg: usize,
+    ) -> Result<ScopedAccountId, VMError> {
+        let subject = self.decode_account_subject_reg(vm, reg)?;
+        self.wsv
+            .canonical_account_id_for_subject(&subject)
+            .ok_or(VMError::DecodeError)
     }
 
     /// Decode an AssetDefinitionId from a register which may contain either an
@@ -5333,8 +5404,8 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_ADD_SIGNATORY => {
-                // r10 = &ScopedAccountId; r11 = &Json PublicKey
-                let account = self.decode_account_reg(vm, 10)?;
+                // r10 = &AccountId; r11 = &Json PublicKey
+                let account = self.decode_canonical_account_reg(vm, 10)?;
                 let tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
@@ -5353,8 +5424,8 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REMOVE_SIGNATORY => {
-                // r10 = &ScopedAccountId; r11 = &Json PublicKey
-                let account = self.decode_account_reg(vm, 10)?;
+                // r10 = &AccountId; r11 = &Json PublicKey
+                let account = self.decode_canonical_account_reg(vm, 10)?;
                 let tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
@@ -5371,8 +5442,8 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
-                // r10 = &ScopedAccountId; r11 = quorum
-                let account = self.decode_account_reg(vm, 10)?;
+                // r10 = &AccountId; r11 = quorum
+                let account = self.decode_canonical_account_reg(vm, 10)?;
                 let quorum_raw = vm.register(11);
                 let quorum_u16 = u16::try_from(quorum_raw).map_err(|_| VMError::DecodeError)?;
                 let quorum = NonZeroU16::new(quorum_u16).ok_or(VMError::DecodeError)?;
@@ -5386,7 +5457,7 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
-                let account = self.decode_account_reg(vm, 10)?;
+                let account = self.decode_canonical_account_reg(vm, 10)?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if key_tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);
@@ -5477,8 +5548,8 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             syscalls::SYSCALL_GRANT_PERMISSION => {
-                // r10=&ScopedAccountId (subject), r11=permission as Name or Json
-                let subject = self.decode_account_reg(vm, 10)?;
+                // r10=&AccountId (subject), r11=permission as Name or Json
+                let subject = self.decode_canonical_account_reg(vm, 10)?;
                 // Decode permission token from TLV in r11
                 let token = {
                     let v = vm.register(11);
@@ -5503,7 +5574,7 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             syscalls::SYSCALL_REVOKE_PERMISSION => {
-                let subject = self.decode_account_reg(vm, 10)?;
+                let subject = self.decode_canonical_account_reg(vm, 10)?;
                 let token = {
                     let v = vm.register(11);
                     let tlv = vm.memory.validate_tlv(v)?;
@@ -5550,8 +5621,8 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_GRANT_ROLE => {
-                // r10 = &ScopedAccountId, r11=&Name
-                let subj = self.decode_account_reg(vm, 10)?;
+                // r10 = &AccountId, r11=&Name
+                let subj = self.decode_canonical_account_reg(vm, 10)?;
                 let rname = self.decode_name_reg(vm, 11)?.to_string();
                 if self.wsv.grant_role(&subj, &rname) {
                     Ok(0)
@@ -5560,7 +5631,7 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REVOKE_ROLE => {
-                let subj = self.decode_account_reg(vm, 10)?;
+                let subj = self.decode_canonical_account_reg(vm, 10)?;
                 let rname = self.decode_name_reg(vm, 11)?.to_string();
                 if self.wsv.revoke_role(&subj, &rname) {
                     Ok(0)
@@ -5572,8 +5643,8 @@ impl IVMHost for WsvHost {
                 if self.fastpq_batch_entries.is_some() {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    let from_id = self.decode_account_reg(vm, 10)?;
-                    let to_id = self.decode_account_reg(vm, 11)?;
+                    let from_id = self.decode_canonical_account_reg(vm, 10)?;
+                    let to_id = self.decode_canonical_account_reg(vm, 11)?;
                     let asset_id = self.decode_asset_reg(vm, 12)?;
                     let amount = self.decode_numeric_reg(vm, 13)?;
                     if MockWorldStateView::account_subject(&from_id)
@@ -5603,7 +5674,7 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
             syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => self.apply_fastpq_batch_tlv(vm),
             syscalls::SYSCALL_MINT_ASSET => {
-                let account_id = self.decode_account_reg(vm, 10)?;
+                let account_id = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_id = self.decode_asset_reg(vm, 11)?;
                 let amount = self.decode_numeric_reg(vm, 12)?;
                 let token = PermissionToken::MintAsset(asset_id.clone());
@@ -5617,7 +5688,7 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_BURN_ASSET => {
-                let account_id = self.decode_account_reg(vm, 10)?;
+                let account_id = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_id = self.decode_asset_reg(vm, 11)?;
                 let amount = self.decode_numeric_reg(vm, 12)?;
                 if MockWorldStateView::account_subject(&account_id)
@@ -5642,8 +5713,8 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             syscalls::SYSCALL_UNREGISTER_ACCOUNT => {
-                let account_id = self.decode_account_reg(vm, 10)?;
-                if !self.wsv.unregister_account(&account_id) {
+                let subject = self.decode_account_subject_reg(vm, 10)?;
+                if !self.wsv.unregister_account_subject(&subject) {
                     return Err(VMError::PermissionDenied);
                 }
                 Ok(0)
@@ -5656,14 +5727,14 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             syscalls::SYSCALL_TRANSFER_DOMAIN => {
-                // r10=&DomainId, r11=&ScopedAccountId(to). This mock host validates TLVs
+                // r10=&DomainId, r11=&AccountId(to). This mock host validates TLVs
                 // and returns success; ownership is not tracked in MockWorldStateView.
                 let _dom = self.decode_domain_reg(vm, 10)?;
-                let _to = self.decode_account_reg(vm, 11)?;
+                let _to = self.decode_account_subject_reg(vm, 11)?;
                 Ok(0)
             }
             syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
-                let account_id = self.decode_account_reg(vm, 10)?;
+                let account_id = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_id = self.decode_asset_reg(vm, 11)?;
                 if MockWorldStateView::account_subject(&account_id)
                     != MockWorldStateView::account_subject(&self.caller)
@@ -5689,7 +5760,7 @@ impl IVMHost for WsvHost {
             }
             syscalls::SYSCALL_NFT_MINT_ASSET => {
                 let nft = self.decode_nft_reg(vm, 10)?;
-                let owner = self.decode_account_reg(vm, 11)?;
+                let owner = self.decode_canonical_account_reg(vm, 11)?;
                 if self.wsv.create_nft(owner, self.caller.clone(), nft) {
                     Ok(0)
                 } else {
@@ -5697,9 +5768,9 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
-                let from = self.decode_account_reg(vm, 10)?;
+                let from = self.decode_canonical_account_reg(vm, 10)?;
                 let nft = self.decode_nft_reg(vm, 11)?;
-                let to = self.decode_account_reg(vm, 12)?;
+                let to = self.decode_canonical_account_reg(vm, 12)?;
                 if self.wsv.transfer_nft(&self.caller, from, to, &nft) {
                     Ok(0)
                 } else {
@@ -6685,6 +6756,75 @@ mod tests_null_decode {
 
         call_syscall(&mut vm, syscalls::SYSCALL_CURRENT_TIME_MS).expect("syscall ok");
         assert_eq!(vm.register(10), 1_717_171_717_000);
+    }
+
+    #[test]
+    fn add_signatory_syscall_rejects_scoped_account_payloads() {
+        let caller: ScopedAccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let scoped_payload = norito::to_bytes(&caller).expect("encode scoped account");
+        let account_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &scoped_payload))
+            .expect("alloc account tlv");
+        let signatory = Json::from_str_norito(
+            "\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"",
+        )
+        .expect("json signatory");
+        let signatory_bytes = norito::to_bytes(&signatory).expect("encode signatory json");
+        let signatory_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &signatory_bytes))
+            .expect("alloc signatory tlv");
+
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, signatory_ptr);
+        let err = call_syscall(&mut vm, syscalls::SYSCALL_ADD_SIGNATORY)
+            .expect_err("scoped account payload should be rejected");
+        assert!(matches!(err, VMError::DecodeError));
+    }
+
+    #[test]
+    fn get_account_balance_syscall_accepts_account_id_payloads() {
+        let caller: ScopedAccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let asset: AssetDefinitionId = "rose#wonderland".parse().expect("asset definition id");
+        let wsv = MockWorldStateView::with_balances(&[(
+            (caller.clone(), asset.clone()),
+            Numeric::from(41_u64),
+        )]);
+        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let account_bytes =
+            norito::to_bytes(&AccountId::from(&caller)).expect("encode account subject");
+        let account_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &account_bytes))
+            .expect("alloc account tlv");
+        let asset_bytes = norito::to_bytes(&asset).expect("encode asset definition id");
+        let asset_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AssetDefinitionId, &asset_bytes))
+            .expect("alloc asset tlv");
+
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, asset_ptr);
+        call_syscall(&mut vm, syscalls::SYSCALL_GET_ACCOUNT_BALANCE).expect("balance syscall");
+        let out = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("balance tlv");
+        assert_eq!(out.type_id, PointerType::NoritoBytes);
+        let decoded: Numeric = norito::decode_from_bytes(out.payload).expect("decode numeric");
+        assert_eq!(decoded, Numeric::from(41_u64));
     }
 
     #[test]

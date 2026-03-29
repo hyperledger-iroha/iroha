@@ -2242,10 +2242,9 @@ async fn test_actor_harness_with_config_and_height_and_kura(
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new(
-        genesis_id
-            .clone()
-            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
+        genesis_id.clone(),
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
     )
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
@@ -3364,10 +3363,9 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new(
-        genesis_id
-            .clone()
-            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
+        genesis_id.clone(),
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
     )
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
@@ -34334,10 +34332,9 @@ async fn stale_pending_block_requeues_transactions() {
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new(
-        genesis_id
-            .clone()
-            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
+        genesis_id.clone(),
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
     )
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
@@ -76689,11 +76686,9 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
-        .expect("register account");
+        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
+            .expect("register account");
         let trigger = Trigger::new(
             "precommit_probe".parse().expect("trigger name"),
             Action::new(
@@ -91002,10 +90997,9 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new(
-        genesis_id
-            .clone()
-            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
+        genesis_id.clone(),
+        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
     )
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
@@ -99676,12 +99670,9 @@ async fn state_commit_failure_after_kura_store_keeps_partial_head_hidden() {
     let genesis_key = KeyPair::random();
     let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
     let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-    let genesis_account = Account::new(
-        genesis_account_id
-            .clone()
-            .to_account_id(GENESIS_DOMAIN_ID.clone()),
-    )
-    .build(&genesis_account_id);
+    let genesis_account =
+        Account::new_in_domain(genesis_account_id.clone(), GENESIS_DOMAIN_ID.clone())
+            .build(&genesis_account_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     let isolated_kura = Arc::new(Kura::blank_kura_for_testing());
     let query_handle = LiveQueryStore::start_test();

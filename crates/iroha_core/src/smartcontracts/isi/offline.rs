@@ -1901,10 +1901,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
@@ -1984,10 +1982,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
@@ -2068,10 +2064,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                     .build(&controller);
@@ -2133,7 +2127,7 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+                Account::new_in_domain(controller.clone(), domain_id).build(&controller);
             let asset_definition =
                 AssetDefinition::new(definition_id, NumericSpec::integer()).build(&controller);
             let world = World::with([domain], [controller_account], [asset_definition]);
@@ -2187,7 +2181,7 @@ pub mod isi {
                 let domain_id = offline_domain_id();
                 let domain = Domain::new(domain_id.clone()).build(&controller);
                 let controller_account =
-                    Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+                    Account::new_in_domain(controller.clone(), domain_id).build(&controller);
                 let mut asset_definition =
                     AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
                         .build(&controller);
@@ -2256,7 +2250,7 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+                Account::new_in_domain(controller.clone(), domain_id).build(&controller);
 
             let mut asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer())
@@ -2329,9 +2323,9 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&deposit);
             let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id.clone())).build(&escrow);
+                Account::new_in_domain(escrow.clone(), domain_id.clone()).build(&escrow);
             let deposit_account =
-                Account::new(deposit.clone().to_account_id(domain_id)).build(&deposit);
+                Account::new_in_domain(deposit.clone(), domain_id).build(&deposit);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer()).build(&deposit);
             let world = World::with(
@@ -2391,7 +2385,7 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&deposit);
             let deposit_account =
-                Account::new(deposit.clone().to_account_id(domain_id)).build(&deposit);
+                Account::new_in_domain(deposit.clone(), domain_id).build(&deposit);
             let mut asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer()).build(&deposit);
             asset_definition.metadata_mut().insert(
@@ -2434,9 +2428,9 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&deposit);
             let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id.clone())).build(&escrow);
+                Account::new_in_domain(escrow.clone(), domain_id.clone()).build(&escrow);
             let deposit_account =
-                Account::new(deposit.clone().to_account_id(domain_id)).build(&deposit);
+                Account::new_in_domain(deposit.clone(), domain_id).build(&deposit);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer()).build(&deposit);
             let world = World::with(
@@ -2493,8 +2487,7 @@ pub mod isi {
                 AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&escrow);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition =
                 AssetDefinition::new(definition_id.clone(), NumericSpec::integer()).build(&escrow);
             let world = World::with([domain], [escrow_account], [asset_definition]);
@@ -3127,10 +3120,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
@@ -3203,10 +3194,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
@@ -3421,8 +3410,7 @@ pub mod isi {
             let controller = record.certificate.controller.clone();
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
-            let account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+            let account = Account::new_in_domain(controller.clone(), domain_id).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
             let asset_definition = {
                 let __asset_definition_id = definition_id;
@@ -3488,8 +3476,7 @@ pub mod isi {
             let controller = record.certificate.controller.clone();
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
-            let account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+            let account = Account::new_in_domain(controller.clone(), domain_id).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
             let asset_definition = {
                 let __asset_definition_id = definition_id;
@@ -3542,8 +3529,7 @@ pub mod isi {
             let controller = record.certificate.controller.clone();
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
-            let account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+            let account = Account::new_in_domain(controller.clone(), domain_id).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
             let asset_definition = {
                 let __asset_definition_id = definition_id;
@@ -3622,8 +3608,7 @@ pub mod isi {
             let controller = record.certificate.controller.clone();
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
-            let account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+            let account = Account::new_in_domain(controller.clone(), domain_id).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
@@ -3691,8 +3676,7 @@ pub mod isi {
             let controller = record.certificate.controller.clone();
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
-            let account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+            let account = Account::new_in_domain(controller.clone(), domain_id).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
             let asset_definition = {
                 let __asset_definition_id = definition_id;
@@ -3763,8 +3747,7 @@ pub mod isi {
             let controller = record.certificate.controller.clone();
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
-            let account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+            let account = Account::new_in_domain(controller.clone(), domain_id).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
             let asset_definition = {
                 let __asset_definition_id = definition_id;
@@ -3923,14 +3906,13 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
             let receiver_account =
-                Account::new(receiver.to_account_id(domain_id.clone())).build(&controller);
-            let deposit = Account::new(deposit_account.clone().to_account_id(domain_id.clone()))
+                Account::new_in_domain(receiver.clone(), domain_id.clone()).build(&controller);
+            let deposit = Account::new_in_domain(deposit_account.clone(), domain_id.clone())
                 .build(&controller);
             let escrow =
-                Account::new(escrow_account.clone().to_account_id(domain_id)).build(&controller);
+                Account::new_in_domain(escrow_account.clone(), domain_id).build(&controller);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
@@ -4018,8 +4000,7 @@ pub mod isi {
             let controller = record.certificate.controller.clone();
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
-            let account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+            let account = Account::new_in_domain(controller.clone(), domain_id).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
             let asset_definition = {
                 let __asset_definition_id = definition_id;
@@ -4091,8 +4072,7 @@ pub mod isi {
             let controller = record.certificate.controller.clone();
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
-            let account =
-                Account::new(controller.clone().to_account_id(domain_id)).build(&controller);
+            let account = Account::new_in_domain(controller.clone(), domain_id).build(&controller);
             let definition_id = record.certificate.allowance.asset.definition().clone();
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
@@ -4197,10 +4177,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
@@ -4327,10 +4305,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
@@ -4418,13 +4394,11 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
             let unauthorized_account =
-                Account::new(unauthorized.clone().to_account_id(domain_id.clone()))
+                Account::new_in_domain(unauthorized.clone(), domain_id.clone())
                     .build(&unauthorized);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
@@ -4533,10 +4507,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
@@ -4678,10 +4650,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
@@ -4849,10 +4819,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())
@@ -5001,10 +4969,8 @@ pub mod isi {
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&controller);
             let controller_account =
-                Account::new(controller.clone().to_account_id(domain_id.clone()))
-                    .build(&controller);
-            let escrow_account =
-                Account::new(escrow.clone().to_account_id(domain_id)).build(&escrow);
+                Account::new_in_domain(controller.clone(), domain_id.clone()).build(&controller);
+            let escrow_account = Account::new_in_domain(escrow.clone(), domain_id).build(&escrow);
             let asset_definition = {
                 let __asset_definition_id = definition_id.clone();
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::integer())

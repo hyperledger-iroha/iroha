@@ -1108,4 +1108,41 @@ mod tests {
         let result = resolve_trusted_peers_pop(&args, &answers, &keypair);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn public_taira_bundle_uses_expected_network_identity() {
+        const EXPECTED_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+        const EXPECTED_TAIRA_CHAIN_DISCRIMINANT: i64 = 369;
+
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+
+        let config_path = repo_root.join("configs/soranexus/taira/config.toml");
+        let config_text = fs::read_to_string(&config_path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", config_path.display()));
+        let config: TomlValue = toml::from_str(&config_text)
+            .unwrap_or_else(|err| panic!("parse {}: {err}", config_path.display()));
+        assert_eq!(
+            config.get("chain").and_then(TomlValue::as_str),
+            Some(EXPECTED_TAIRA_CHAIN_ID),
+            "public Taira config.toml must keep the shipped live chain id"
+        );
+        assert_eq!(
+            config
+                .get("chain_discriminant")
+                .and_then(TomlValue::as_integer),
+            Some(EXPECTED_TAIRA_CHAIN_DISCRIMINANT),
+            "public Taira config.toml must keep the shipped address discriminant"
+        );
+
+        let genesis_path = repo_root.join("configs/soranexus/taira/genesis.json");
+        let genesis_text = fs::read_to_string(&genesis_path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", genesis_path.display()));
+        let genesis: JsonValue = json::from_str(&genesis_text)
+            .unwrap_or_else(|err| panic!("parse {}: {err}", genesis_path.display()));
+        assert_eq!(
+            genesis.get("chain").and_then(JsonValue::as_str),
+            Some(EXPECTED_TAIRA_CHAIN_ID),
+            "public Taira genesis.json must match the shipped live chain id"
+        );
+    }
 }

@@ -3,9 +3,12 @@ services:
   iroha-iroha3-taira:
     image: hyperledger/iroha:latest
     command: ["irohad", "--sora", "--config", "/config/config.toml", "--genesis", "/config/genesis.json"]
+    environment:
+      IROHA_SORAFS_SITE_BINDINGS_FILE: /config/sorafs_sites.json
     volumes:
       - ./config.toml:/config/config.toml:ro
       - ./genesis.json:/config/genesis.json:ro
+      - ./sorafs_sites.json:/config/sorafs_sites.json:ro
     ports:
       - "8080:8080"
       - "1337:1337"
