@@ -80,11 +80,7 @@ impl Execute for CreateKaigi {
                     proof: proof.as_deref(),
                 };
                 let expected_root = kaigi_zk::empty_roster_root_hash();
-                privacy::verify_host_create(
-                    state_transaction,
-                    &host_artifacts,
-                    &expected_root,
-                )?;
+                privacy::verify_host_create(state_transaction, &host_artifacts, &expected_root)?;
             }
         }
 
@@ -252,9 +248,10 @@ impl Execute for EndKaigi {
                         }
                     }
                     KaigiPrivacyMode::ZkRosterV1 => {
-                        let stored_commitment = record.host_commitment.as_ref().ok_or_else(|| {
-                            privacy_error("privacy mode requires a stored host commitment")
-                        })?;
+                        let stored_commitment =
+                            record.host_commitment.as_ref().ok_or_else(|| {
+                                privacy_error("privacy mode requires a stored host commitment")
+                            })?;
                         let provided_nullifier = nullifier
                             .as_ref()
                             .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
@@ -1291,11 +1288,8 @@ mod tests {
         }
     }
 
-    fn with_seeded_kaigi_state_transaction<F>(
-        domain: &DomainId,
-        accounts: &[AccountId],
-        mut f: F,
-    ) where
+    fn with_seeded_kaigi_state_transaction<F>(domain: &DomainId, accounts: &[AccountId], mut f: F)
+    where
         F: FnMut(&mut StateTransaction<'_, '_>),
     {
         let kura = Kura::blank_kura_for_testing();
@@ -1515,8 +1509,8 @@ mod tests {
                 roster_root: None,
                 proof: None,
             }
-                .execute(&host, stx)
-                .expect("create kaigi");
+            .execute(&host, stx)
+            .expect("create kaigi");
 
             let events = stx.world.take_external_events();
             let summary = extract_roster_summary(&events).expect("roster summary event");
@@ -1924,8 +1918,8 @@ mod tests {
                 roster_root: None,
                 proof: None,
             }
-                .execute(&host, stx)
-                .expect("create kaigi");
+            .execute(&host, stx)
+            .expect("create kaigi");
             stx.world.take_external_events();
 
             SetKaigiRelayManifest {

@@ -459,8 +459,8 @@ fn kaigi_privacy_join_and_leave_flow_updates_record() {
         roster_root: None,
         proof: None,
     }
-        .execute(&host, &mut tx1)
-        .expect("create kaigi");
+    .execute(&host, &mut tx1)
+    .expect("create kaigi");
 
     JoinKaigi {
         call_id: call_id.clone(),
@@ -618,8 +618,8 @@ fn usage_summary_emitted_on_record_usage() {
         roster_root: None,
         proof: None,
     }
-        .execute(&host, &mut tx)
-        .expect("create kaigi");
+    .execute(&host, &mut tx)
+    .expect("create kaigi");
 
     tx.world.take_external_events();
 

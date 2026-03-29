@@ -11355,10 +11355,10 @@ where
     let mut object = norito::json::Map::new();
     if let Some(query_string) = query_string {
         for (key, value) in url::form_urlencoded::parse(query_string.as_bytes()) {
-            let value = value.into_owned();
-            let parsed =
-                norito::json::from_str::<Value>(&value).unwrap_or_else(|_| Value::from(value));
-            object.insert(key.into_owned(), parsed);
+            object.insert(
+                key.into_owned(),
+                torii_proxy_query_scalar_value(value.as_ref()),
+            );
         }
     }
     norito::json::from_value(Value::Object(object)).map_err(|error| {
@@ -11368,6 +11368,28 @@ where
             format!("failed to decode proxied query params: {error}"),
         )
     })
+}
+
+#[cfg(feature = "app_api")]
+fn torii_proxy_query_scalar_value(raw: &str) -> Value {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("null") {
+        Value::Null
+    } else if trimmed.eq_ignore_ascii_case("true") {
+        Value::Bool(true)
+    } else if trimmed.eq_ignore_ascii_case("false") {
+        Value::Bool(false)
+    } else if let Ok(u) = trimmed.parse::<u64>() {
+        Value::Number(norito::json::Number::from(u))
+    } else if let Ok(i) = trimmed.parse::<i64>() {
+        Value::Number(norito::json::Number::from(i))
+    } else if let Ok(f) = trimmed.parse::<f64>() {
+        norito::json::Number::from_f64(f)
+            .map(Value::Number)
+            .unwrap_or_else(|| Value::String(trimmed.to_owned()))
+    } else {
+        Value::String(trimmed.to_owned())
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -11846,6 +11868,27 @@ mod torii_routed_read_tests {
         assert_eq!(decoded.offset, params.offset);
         assert_eq!(decoded.asset, params.asset);
         assert_eq!(decoded.scope, params.scope);
+    }
+
+    #[test]
+    fn torii_proxy_query_roundtrip_preserves_json_filter_literals_as_strings() {
+        let params = routing::ListFilterParams {
+            filter: Some(r#"{"op":"eq","args":["id","alice.i105.invalid"]}"#.to_owned()),
+            limit: Some(8),
+            offset: 0,
+            sort: Some("id:asc".to_owned()),
+        };
+
+        let encoded = encode_torii_proxy_query(&params)
+            .expect("query encoding should succeed")
+            .expect("non-empty params should produce a query string");
+        let decoded = decode_torii_proxy_query::<routing::ListFilterParams>(Some(&encoded))
+            .expect("query decoding should succeed");
+
+        assert_eq!(decoded.filter, params.filter);
+        assert_eq!(decoded.limit, params.limit);
+        assert_eq!(decoded.offset, params.offset);
+        assert_eq!(decoded.sort, params.sort);
     }
 
     #[test]

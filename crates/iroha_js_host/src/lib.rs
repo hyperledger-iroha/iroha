@@ -18,8 +18,7 @@ macro_rules! norito_json {
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
-    fmt, fs,
-    mem,
+    fmt, fs, mem,
     num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
@@ -127,9 +126,9 @@ use iroha_primitives::{
     soradns::{GatewayHostBindings, derive_gateway_hosts},
 };
 use kaigi_zk::{
-    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit,
-    compute_commitment, compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes,
-    empty_roster_root_hash, roster_root_limbs,
+    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit, compute_commitment,
+    compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, empty_roster_root_hash,
+    roster_root_limbs,
 };
 use napi::{
     ValueType,
@@ -633,8 +632,12 @@ fn build_kaigi_roster_join_proof_bytes(
         )
     })?;
 
-    let circuit =
-        KaigiRosterJoinCircuit::new(account_scalar, domain_scalar, nullifier_scalar, root_scalars);
+    let circuit = KaigiRosterJoinCircuit::new(
+        account_scalar,
+        domain_scalar,
+        nullifier_scalar,
+        root_scalars,
+    );
     let proving_key = keygen_pk(&params, verifying_key.clone(), &circuit).map_err(|err| {
         napi::Error::new(
             napi::Status::GenericFailure,
@@ -646,12 +649,10 @@ fn build_kaigi_roster_join_proof_bytes(
     let nullifier_scalar_public = compute_nullifier(account_scalar, nullifier_scalar);
     let mut instance_columns = vec![vec![commitment_scalar], vec![nullifier_scalar_public]];
     instance_columns.extend(root_scalars.iter().map(|scalar| vec![*scalar]));
-    let instance_refs: Vec<&[Halo2Scalar]> =
-        instance_columns.iter().map(Vec::as_slice).collect();
+    let instance_refs: Vec<&[Halo2Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
     let proof_instances = vec![instance_refs.as_slice()];
 
-    let mut transcript =
-        Blake2bWrite::<_, Halo2Curve, Challenge255<Halo2Curve>>::init(Vec::new());
+    let mut transcript = Blake2bWrite::<_, Halo2Curve, Challenge255<Halo2Curve>>::init(Vec::new());
     create_proof::<
         IPACommitmentScheme<Halo2Curve>,
         ProverIPA<'_, Halo2Curve>,
@@ -5894,8 +5895,10 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             format!("CreateKaigi.call parse error: {err}"),
                         )
                     })?;
-                    let commitment =
-                        parse_optional_commitment(create_fields.remove("commitment"), "CreateKaigi")?;
+                    let commitment = parse_optional_commitment(
+                        create_fields.remove("commitment"),
+                        "CreateKaigi",
+                    )?;
                     let nullifier =
                         parse_optional_nullifier(create_fields.remove("nullifier"), "CreateKaigi")?;
                     let roster_root = parse_optional_hash(
@@ -8110,11 +8113,8 @@ mod tests {
 
     #[test]
     fn build_kaigi_roster_join_proof_emits_envelope() {
-        let proof = build_kaigi_roster_join_proof_bytes(
-            &[0x42; 32],
-            &empty_roster_root_hash(),
-        )
-        .expect("build proof");
+        let proof = build_kaigi_roster_join_proof_bytes(&[0x42; 32], &empty_roster_root_hash())
+            .expect("build proof");
 
         assert_eq!(proof.commitment.len(), Hash::LENGTH);
         assert_eq!(proof.nullifier.len(), Hash::LENGTH);

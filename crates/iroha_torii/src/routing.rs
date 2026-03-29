@@ -1769,13 +1769,14 @@ fn kaigi_call_view_from_record(record: &iroha_data_model::kaigi::KaigiRecord) ->
         call_name: record.id.call_name.to_string(),
         host_account_id: reveal_authorities
             .then(|| crate::account_literal::display_literal(&record.host)),
-        billing_account_id: reveal_authorities.then(|| {
-            record
-                .billing_account
-                .as_ref()
-                .map(crate::account_literal::display_literal)
-        })
-        .flatten(),
+        billing_account_id: reveal_authorities
+            .then(|| {
+                record
+                    .billing_account
+                    .as_ref()
+                    .map(crate::account_literal::display_literal)
+            })
+            .flatten(),
         title: record.title.clone(),
         description: record.description.clone(),
         max_participants: record.max_participants,
@@ -1853,17 +1854,17 @@ fn kaigi_signal_from_transaction(
         timestamp_ms,
         call_id,
         signal_kind,
-        host_account_id: reveal_authorities.then(|| {
-            kaigi_metadata_string(&signal_json, &["hostAccountId", "host_account_id"])
-        })
-        .flatten(),
-        participant_account_id: reveal_authorities.then(|| {
-            kaigi_metadata_string(
-                &signal_json,
-                &["participantAccountId", "participant_account_id"],
-            )
-        })
-        .flatten(),
+        host_account_id: reveal_authorities
+            .then(|| kaigi_metadata_string(&signal_json, &["hostAccountId", "host_account_id"]))
+            .flatten(),
+        participant_account_id: reveal_authorities
+            .then(|| {
+                kaigi_metadata_string(
+                    &signal_json,
+                    &["participantAccountId", "participant_account_id"],
+                )
+            })
+            .flatten(),
         created_at_ms,
         metadata: IrohaJson::from(signal_json),
     })
@@ -24672,7 +24673,10 @@ mod tx_query_filter_tests {
         assert_eq!(signal.signal_kind, "answer");
         assert_eq!(signal.created_at_ms, 1_700_000_000_000);
         assert_eq!(signal.timestamp_ms, Some(1_700_000_000_100));
-        assert_eq!(signal.authority.as_deref(), Some(authority_literal.as_str()));
+        assert_eq!(
+            signal.authority.as_deref(),
+            Some(authority_literal.as_str())
+        );
         assert_eq!(
             signal.participant_account_id.as_deref(),
             Some(authority_literal.as_str())
