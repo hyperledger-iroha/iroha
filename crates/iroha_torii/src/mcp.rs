@@ -163,6 +163,11 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_connect_session_create_and_ticket_tool());
     tools.push(iroha_connect_session_delete_tool());
     tools.push(iroha_connect_status_tool());
+    tools.push(iroha_vpn_profile_tool());
+    tools.push(iroha_vpn_sessions_create_tool());
+    tools.push(iroha_vpn_sessions_get_tool());
+    tools.push(iroha_vpn_sessions_delete_tool());
+    tools.push(iroha_vpn_receipts_list_tool());
     tools.push(iroha_health_tool());
     tools.push(iroha_status_tool());
     tools.push(iroha_parameters_get_tool());
@@ -624,6 +629,36 @@ async fn handle_tools_call(
         }
         "connect.status" | "iroha.connect.status" => {
             match dispatch_connect_status(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.vpn.profile" => {
+            match dispatch_iroha_vpn_profile(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.vpn.sessions.create" => {
+            match dispatch_iroha_vpn_sessions_create(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.vpn.sessions.get" => {
+            match dispatch_iroha_vpn_sessions_get(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.vpn.sessions.delete" => {
+            match dispatch_iroha_vpn_sessions_delete(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.vpn.receipts.list" => {
+            match dispatch_iroha_vpn_receipts_list(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -2413,6 +2448,123 @@ async fn dispatch_connect_status(
         inbound_headers,
         Method::GET,
         "/v1/connect/status",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_vpn_profile(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/vpn/profile",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_vpn_sessions_create(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_object_body_or_flat_shortcuts(arguments, &["body", "headers", "accept"])?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/vpn/sessions",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_vpn_sessions_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let session_id = extract_vpn_session_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("session_id".into(), Value::String(session_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/vpn/sessions/{session_id}", Some(&path_value))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_vpn_sessions_delete(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let session_id = extract_vpn_session_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("session_id".into(), Value::String(session_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/vpn/sessions/{session_id}", Some(&path_value))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::DELETE,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_vpn_receipts_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/vpn/receipts",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -6413,6 +6565,35 @@ fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
         })
 }
 
+fn extract_vpn_session_id_argument(arguments: &Map) -> Result<String, String> {
+    if let Some(path) = arguments.get("path") {
+        let path = path
+            .as_object()
+            .ok_or_else(|| "`path` must be an object".to_owned())?;
+        if let Some(session_id) = path.get("session_id").and_then(Value::as_str)
+            && !session_id.is_empty()
+        {
+            return Ok(session_id.to_owned());
+        }
+        if let Some(session_id) = path.get("id").and_then(Value::as_str)
+            && !session_id.is_empty()
+        {
+            return Ok(session_id.to_owned());
+        }
+    }
+
+    arguments
+        .get("session_id")
+        .or_else(|| arguments.get("id"))
+        .and_then(Value::as_str)
+        .filter(|session_id| !session_id.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            "`session_id` is required (provide `session_id`, `id`, `path.session_id`, or `path.id`)"
+                .to_owned()
+        })
+}
+
 fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<String, String> {
     let status = submit_result
         .get("status")
@@ -7744,6 +7925,167 @@ fn iroha_connect_status_tool() -> ToolSpec {
     tool.name = "iroha.connect.status".to_owned();
     tool.description = "Alias for connect.status.".to_owned();
     tool
+}
+
+fn iroha_vpn_profile_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.vpn.profile".to_owned(),
+        description: "Fetch the public Sora VPN profile advertised by Torii.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/vpn/profile".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_vpn_sessions_create_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.vpn.sessions.create".to_owned(),
+        description: "Create a signed Sora VPN session for the active wallet account.".to_owned(),
+        method: Method::POST,
+        path_template: "/v1/vpn/sessions".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "exit_class": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.exit_class`."
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw VPN session create request body. If provided, its own fields take precedence over flat shortcuts."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Optional request headers. Signed VPN session routes normally use canonical `X-Iroha-*` headers."
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_vpn_sessions_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.vpn.sessions.get".to_owned(),
+        description: "Fetch the current status of a signed Sora VPN session.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/vpn/sessions/{session_id}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "anyOf": [
+                { "required": ["session_id"] },
+                { "required": ["id"] },
+                { "required": ["path"] }
+            ],
+            "properties": {
+                "session_id": { "type": "string" },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for `session_id`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "anyOf": [
+                        { "required": ["session_id"] },
+                        { "required": ["id"] }
+                    ],
+                    "properties": {
+                        "session_id": { "type": "string" },
+                        "id": {
+                            "type": "string",
+                            "description": "Alias for `path.session_id`."
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.vpn.sessions.delete".to_owned(),
+        description: "Delete a signed Sora VPN session and return its canonical receipt."
+            .to_owned(),
+        method: Method::DELETE,
+        path_template: "/v1/vpn/sessions/{session_id}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "anyOf": [
+                { "required": ["session_id"] },
+                { "required": ["id"] },
+                { "required": ["path"] }
+            ],
+            "properties": {
+                "session_id": { "type": "string" },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for `session_id`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "anyOf": [
+                        { "required": ["session_id"] },
+                        { "required": ["id"] }
+                    ],
+                    "properties": {
+                        "session_id": { "type": "string" },
+                        "id": {
+                            "type": "string",
+                            "description": "Alias for `path.session_id`."
+                        }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_vpn_receipts_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.vpn.receipts.list".to_owned(),
+        description: "List canonical Sora VPN receipts for the active wallet account.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/vpn/receipts".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
 }
 
 fn iroha_health_tool() -> ToolSpec {
@@ -13481,6 +13823,51 @@ mod tests {
         let sid =
             extract_connect_sid_argument(args.as_object().expect("object")).expect("sid alias");
         assert_eq!(sid, "nested-sid");
+    }
+
+    #[test]
+    fn vpn_tool_factories_expose_expected_names_and_routes() {
+        let profile = iroha_vpn_profile_tool();
+        assert_eq!(profile.name, "iroha.vpn.profile");
+        assert_eq!(profile.path_template, "/v1/vpn/profile");
+
+        let create = iroha_vpn_sessions_create_tool();
+        assert_eq!(create.name, "iroha.vpn.sessions.create");
+        assert_eq!(create.path_template, "/v1/vpn/sessions");
+
+        let get = iroha_vpn_sessions_get_tool();
+        assert_eq!(get.name, "iroha.vpn.sessions.get");
+        assert_eq!(get.path_template, "/v1/vpn/sessions/{session_id}");
+
+        let delete = iroha_vpn_sessions_delete_tool();
+        assert_eq!(delete.name, "iroha.vpn.sessions.delete");
+        assert_eq!(delete.path_template, "/v1/vpn/sessions/{session_id}");
+
+        let receipts = iroha_vpn_receipts_list_tool();
+        assert_eq!(receipts.name, "iroha.vpn.receipts.list");
+        assert_eq!(receipts.path_template, "/v1/vpn/receipts");
+    }
+
+    #[test]
+    fn extract_vpn_session_id_argument_accepts_path_id_alias() {
+        let args = norito::json!({
+            "path": {
+                "id": "nested-vpn-session"
+            }
+        });
+        let session_id = extract_vpn_session_id_argument(args.as_object().expect("object"))
+            .expect("vpn session id");
+        assert_eq!(session_id, "nested-vpn-session");
+    }
+
+    #[test]
+    fn extract_vpn_session_id_argument_accepts_top_level_id_alias() {
+        let args = norito::json!({
+            "id": "top-level-vpn-session"
+        });
+        let session_id = extract_vpn_session_id_argument(args.as_object().expect("object"))
+            .expect("vpn session id");
+        assert_eq!(session_id, "top-level-vpn-session");
     }
 
     #[test]

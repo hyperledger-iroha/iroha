@@ -115,6 +115,12 @@ fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
+fn parse_u16_arg(flag: &str, raw: &str, context: &str) -> Result<u16, String> {
+    raw.trim()
+        .parse::<u16>()
+        .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
+}
+
 fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
     raw.trim()
         .parse::<Decimal>()
@@ -125,6 +131,24 @@ fn parse_account_id_arg(flag: &str, raw: &str, context: &str) -> Result<AccountI
     AccountId::parse_encoded(raw.trim())
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
+}
+
+fn parse_account_id_arg_with_prefix(
+    flag: &str,
+    raw: &str,
+    context: &str,
+    expected_prefix: Option<u16>,
+) -> Result<AccountId, String> {
+    if let Some(prefix) = expected_prefix {
+        let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(prefix);
+        return AccountId::parse_encoded(raw.trim())
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| {
+                format!("failed to parse `{flag}` for `{context}` as account id: {err}")
+            });
+    }
+
+    parse_account_id_arg(flag, raw, context)
 }
 
 fn parse_appeal_verdict(value: &str) -> Result<AppealVerdict, String> {
@@ -1756,7 +1780,7 @@ fn usage() -> String {
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest sign --manifest=PATH (--bundle-out=PATH | --signature-out=PATH) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--identity-token=JWT | --identity-token-env=VAR | --identity-token-file=PATH | --identity-token-provider=github-actions [--identity-token-audience=AUD]] [--include-token=true|false] [--issued-at=UNIX]
   sorafs_cli manifest verify-signature --manifest=PATH (--bundle=PATH | (--signature=PATH --public-key-hex=HEX)) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--expect-token-hash=HEX]
-  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
+  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
@@ -4415,6 +4439,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let mut submitted_epoch: Option<u64> = None;
     let mut resolve_submitted_epoch = false;
     let mut authority_str: Option<String> = None;
+    let mut authority_network_prefix: Option<u16> = None;
     let mut private_key_inline: Option<String> = None;
     let mut private_key_path: Option<PathBuf> = None;
     let mut alias_namespace: Option<String> = None;
@@ -4446,6 +4471,13 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
                 resolve_submitted_epoch = parse_bool_flag(value, "--resolve-submitted-epoch")?;
             }
             "--authority" => authority_str = Some(value.to_string()),
+            "--network-prefix" => {
+                authority_network_prefix = Some(parse_u16_arg(
+                    "--network-prefix",
+                    value,
+                    "sorafs_cli manifest submit",
+                )?);
+            }
             "--private-key" => {
                 if private_key_path.is_some() {
                     return Err(
@@ -4550,9 +4582,21 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         ));
     }
     let manifest_car_digest_hex = hex_encode(manifest.car_digest);
-    let authority = AccountId::parse_encoded(&authority_str)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| format!("invalid authority: {err}"))?;
+    let authority = parse_account_id_arg_with_prefix(
+        "--authority",
+        &authority_str,
+        "sorafs_cli manifest submit",
+        authority_network_prefix,
+    )
+    .map_err(|err| {
+        err.strip_prefix(
+            "failed to parse `--authority` for `sorafs_cli manifest submit` as account id: ",
+        )
+        .map_or_else(
+            || format!("invalid authority: {err}"),
+            |reason| format!("invalid authority: {reason}"),
+        )
+    })?;
     let private_key = match (private_key_inline, private_key_path) {
         (Some(inline), None) => parse_private_key_inline(&inline)?,
         (None, Some(path)) => load_private_key_from_file(&path)?,
@@ -7179,6 +7223,7 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
 mod tests {
     use std::{fs, path::Path};
 
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::json::Map;
     use sorafs_manifest::{
         GovernanceProofs, PinPolicy as ManifestPinPolicy, StorageClass as ManifestStorageClass,
@@ -7208,6 +7253,53 @@ mod tests {
             .extend_metadata([("release".into(), "test".into())])
             .build()
             .expect("manifest build")
+    }
+
+    #[test]
+    fn parse_account_id_arg_with_prefix_accepts_matching_i105_discriminant() {
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let encoded = account
+            .to_i105_for_discriminant(369)
+            .expect("encode i105 with taira discriminant");
+
+        let parsed = parse_account_id_arg_with_prefix(
+            "--authority",
+            &encoded,
+            "sorafs_cli manifest submit",
+            Some(369),
+        )
+        .expect("parse authority with explicit discriminant");
+
+        assert_eq!(parsed, account);
+    }
+
+    #[test]
+    fn parse_account_id_arg_with_prefix_rejects_mismatched_i105_discriminant() {
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x6B; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let encoded = account
+            .to_i105_for_discriminant(369)
+            .expect("encode i105 with taira discriminant");
+
+        let err = parse_account_id_arg_with_prefix(
+            "--authority",
+            &encoded,
+            "sorafs_cli manifest submit",
+            Some(753),
+        )
+        .expect_err("mismatched discriminant should fail");
+
+        assert!(
+            err.contains("ERR_UNEXPECTED_NETWORK_PREFIX"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

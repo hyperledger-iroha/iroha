@@ -3886,7 +3886,8 @@ mod tests {
                 register.object.id,
                 parse_account_id(&account_id).expect("account parses")
             );
-            assert_eq!(register.object.domain(), Some(&default_domain));
+            assert_eq!(register.object.linked_domains().len(), 1);
+            assert!(register.object.linked_domains().contains(&default_domain));
         });
     }
 
@@ -5999,7 +6000,7 @@ impl Instruction {
                 PyValueError::new_err(format!("invalid default account domain label: {err}"))
             })?;
         let metadata = py_to_metadata(py, metadata)?;
-        let mut new_account = Account::new_in_domain(account_id, home_domain);
+        let mut new_account = Account::new(account_id).with_linked_domain(home_domain);
         new_account.metadata = metadata;
         let instruction = Register::<Account>::account(new_account);
         Ok(Instruction::new(instruction.into()))

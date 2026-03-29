@@ -228,6 +228,11 @@ impl SignedBlock {
         self.payload.header.set_prev_roster_evidence_hash(hash);
     }
 
+    /// Set or clear the SCCP commitment root finalized in this block.
+    pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
+        self.payload.header.set_sccp_commitment_root(root);
+    }
+
     /// Replace the ordered external entrypoints and update Merkle material accordingly.
     pub fn set_external_entrypoints(&mut self, entrypoints: Vec<TransactionEntrypoint>) {
         let merkle = entrypoints
@@ -286,6 +291,9 @@ impl SignedBlock {
             return false;
         }
         if self.payload.previous_roster_evidence.is_some() {
+            return false;
+        }
+        if self.payload.header.sccp_commitment_root().is_some() {
             return false;
         }
         true

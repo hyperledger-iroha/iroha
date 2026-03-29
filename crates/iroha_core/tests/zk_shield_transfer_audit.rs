@@ -41,7 +41,8 @@ fn shield_and_transfer_emit_audit_roots_and_commitments() {
     let owner = AccountId::new(KeyPair::random().public_key().clone());
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone()).with_linked_domain(domain_id.clone()))
+            .into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),

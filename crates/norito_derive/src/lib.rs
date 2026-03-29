@@ -1974,43 +1974,28 @@ fn derive_struct_deserialize(
                         } else if is_self_delimiting(ty) {
                             quote!{
                                 #name: {
-                                    // Read the inner self-delimiting payload length header directly at pointer
-                                    let (field_len, hdr) = match unsafe {
-                                        norito::core::try_read_len_ptr_unchecked(data_base.add(__data_off))
-                                    } {
-                                        Ok(res) => res,
-                                        Err(err) => return Err(err),
-                                    };
+                                    // Self-delimiting fields determine their own boundary while decoding.
+                                    // This matters for packed sequences, maps, and `Option(Some)`, whose
+                                    // leading bytes are not a total-payload length header.
                                     let data_ptr = unsafe { data_base.add(__data_off) };
-                                    let total_len = hdr + field_len;
+                                    let remaining = total_rem
+                                        .checked_sub(__data_off)
+                                        .ok_or(norito::core::Error::LengthMismatch)?;
+                                    let field_data = unsafe { std::slice::from_raw_parts(data_ptr, remaining) };
                                     #[cfg(debug_assertions)]
                                     if norito::debug_trace_enabled() {
-                                        let preview_len = core::cmp::min(total_len, 16);
-                                        let preview = unsafe {
-                                            ::std::slice::from_raw_parts(data_ptr, preview_len)
-                                        };
+                                        let preview_len = core::cmp::min(field_data.len(), 16);
+                                        let preview = &field_data[..preview_len];
                                         eprintln!(
-                                            "packed decode {}::{} self_delim hdr={} field_len={} preview={:?}",
+                                            "packed decode {}::{} self_delim slice_len={} preview={:?}",
                                             stringify!(#ident),
                                             stringify!(#name),
-                                            hdr,
-                                            field_len,
+                                            field_data.len(),
                                             preview
                                         );
                                     }
-                                    __data_off += total_len;
-                                    let field_data = unsafe { std::slice::from_raw_parts(data_ptr, total_len) };
-                                    #[cfg(debug_assertions)]
-                                    if norito::debug_trace_enabled() {
-                                        let preview_len = core::cmp::min(total_len, 16);
-                                        eprintln!(
-                                            "packed decode {}::{} copied payload preview={:?}",
-                                            stringify!(#ident),
-                                            stringify!(#name),
-                                            &field_data[..preview_len]
-                                        );
-                                    }
-                                    let (value, _) = norito::core::decode_field_canonical::<#ty>(field_data)?;
+                                    let (value, used) = norito::core::decode_field_canonical::<#ty>(field_data)?;
+                                    __data_off += used;
                                     value
                                 }
                             }
@@ -2550,28 +2535,16 @@ fn derive_struct_deserialize(
                         } else if is_self_delimiting(ty) {
                             quote! {
                                 let #idx_var = {
-                                    let (field_len, hdr) = match unsafe {
-                                        norito::core::try_read_len_ptr_unchecked(data_base.add(__data_off))
-                                    } {
-                                        Ok(res) => res,
-                                        Err(err) => return Err(err),
-                                    };
                                     let data_ptr = unsafe { data_base.add(__data_off) };
-                                    let total_len = hdr + field_len;
-                                    __data_off += total_len;
-                                    unsafe {
-                                        let layout = std::alloc::Layout::from_size_align(total_len.max(1), core::mem::align_of::<norito::core::Archived<#ty>>()).unwrap();
-                                        let tmp_ptr = std::alloc::alloc(layout);
-                                        if tmp_ptr.is_null() {
-                                            std::alloc::handle_alloc_error(layout);
-                                        }
-                                        core::ptr::copy(data_ptr, tmp_ptr, total_len);
-                                        let tmp_slice = std::slice::from_raw_parts(tmp_ptr as *const u8, total_len);
-                                        let _g = norito::core::PayloadCtxGuard::enter(tmp_slice);
-                                        let v_res = <#ty as norito::core::NoritoDeserialize>::try_deserialize(&*(tmp_ptr as *const norito::core::Archived<#ty>));
-                                        std::alloc::dealloc(tmp_ptr, layout);
-                                        v_res?
-                                    }
+                                    let remaining = total_rem
+                                        .checked_sub(__data_off)
+                                        .ok_or(norito::core::Error::LengthMismatch)?;
+                                    let field_data =
+                                        unsafe { std::slice::from_raw_parts(data_ptr, remaining) };
+                                    let (value, used) =
+                                        norito::core::decode_field_canonical::<#ty>(field_data)?;
+                                    __data_off += used;
+                                    value
                                 };
                             }
                         } else if let Some(fixed_len) = fixed_size {

@@ -153,14 +153,29 @@ pub struct NexusBridgeFinalityProofV1 {
     pub height: u64,
     pub block_hash: H256,
     pub commitment_root: H256,
+    pub block_header_bytes: Vec<u8>,
     pub commit_qc: NexusCommitQcV1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum NexusParliamentSignatureSchemeV1 {
+    SimpleThreshold,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NexusParliamentSignatureV1 {
+    pub signer: String,
     pub public_key: String,
     pub signature: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct NexusParliamentRosterMemberV1 {
+    pub signer: String,
+    pub public_keys: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
@@ -171,6 +186,10 @@ pub struct NexusParliamentCertificateV1 {
     pub enactment_window_start: u64,
     pub enactment_window_end: u64,
     pub payload_bytes: Vec<u8>,
+    pub signature_scheme: NexusParliamentSignatureSchemeV1,
+    pub roster_epoch: u64,
+    pub roster_members: Vec<NexusParliamentRosterMemberV1>,
+    pub required_signatures: u16,
     pub signatures: Vec<NexusParliamentSignatureV1>,
 }
 
@@ -283,7 +302,11 @@ pub fn decode_nexus_parliament_certificate(
 }
 
 pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityProofV1) -> bool {
-    if proof.version != 1 || proof.chain_id.is_empty() || proof.height == 0 {
+    if proof.version != 1
+        || proof.chain_id.is_empty()
+        || proof.height == 0
+        || proof.block_header_bytes.is_empty()
+    {
         return false;
     }
     let qc = &proof.commit_qc;
@@ -326,6 +349,9 @@ pub fn verify_nexus_parliament_certificate_structure(
     if certificate.version != 1
         || certificate.payload_bytes.is_empty()
         || certificate.signatures.is_empty()
+        || certificate.roster_members.is_empty()
+        || certificate.required_signatures == 0
+        || usize::from(certificate.required_signatures) > certificate.roster_members.len()
         || certificate.enactment_window_start > certificate.enactment_window_end
         || proof_height < certificate.enactment_window_start
         || proof_height > certificate.enactment_window_end
@@ -334,12 +360,57 @@ pub fn verify_nexus_parliament_certificate_structure(
         return false;
     }
 
+    let mut seen_roster_members = Vec::with_capacity(certificate.roster_members.len());
+    for roster_member in &certificate.roster_members {
+        if roster_member.signer.is_empty() || roster_member.public_keys.is_empty() {
+            return false;
+        }
+        if seen_roster_members.contains(&roster_member.signer.as_str()) {
+            return false;
+        }
+        seen_roster_members.push(roster_member.signer.as_str());
+
+        let mut seen_public_keys = Vec::with_capacity(roster_member.public_keys.len());
+        for public_key in &roster_member.public_keys {
+            if public_key.is_empty() || seen_public_keys.contains(&public_key.as_str()) {
+                return false;
+            }
+            seen_public_keys.push(public_key.as_str());
+        }
+    }
+
+    let mut seen_signers = Vec::with_capacity(certificate.signatures.len());
     for signature in &certificate.signatures {
-        if signature.public_key.is_empty() || signature.signature.is_empty() {
+        if signature.signer.is_empty()
+            || signature.public_key.is_empty()
+            || signature.signature.is_empty()
+            || seen_signers.contains(&signature.signer.as_str())
+        {
+            return false;
+        }
+        seen_signers.push(signature.signer.as_str());
+
+        let Some(roster_member) = certificate
+            .roster_members
+            .iter()
+            .find(|member| member.signer == signature.signer)
+        else {
+            return false;
+        };
+        if !roster_member
+            .public_keys
+            .iter()
+            .any(|public_key| public_key == &signature.public_key)
+        {
             return false;
         }
     }
-    true
+
+    match certificate.signature_scheme {
+        NexusParliamentSignatureSchemeV1::SimpleThreshold => {
+            certificate.signatures.len() >= usize::from(certificate.required_signatures)
+        }
+    }
 }
 
 pub fn nexus_commit_vote_preimage(chain_id: &str, certificate: &NexusCommitQcV1) -> Vec<u8> {
@@ -518,6 +589,7 @@ mod tests {
             height: 7,
             block_hash: [7u8; 32],
             commitment_root,
+            block_header_bytes: vec![0x42; 4],
             commit_qc: NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -546,7 +618,22 @@ mod tests {
             enactment_window_start: 1,
             enactment_window_end: 10,
             payload_bytes: vec![9u8; 16],
+            signature_scheme: NexusParliamentSignatureSchemeV1::SimpleThreshold,
+            roster_epoch: 0,
+            roster_members: vec![NexusParliamentRosterMemberV1 {
+                signer:
+                    "i105:01:ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                        .to_owned(),
+                public_keys: vec![
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                        .to_owned(),
+                ],
+            }],
+            required_signatures: 1,
             signatures: vec![NexusParliamentSignatureV1 {
+                signer:
+                    "i105:01:ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                        .to_owned(),
                 public_key:
                     "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
                         .to_owned(),

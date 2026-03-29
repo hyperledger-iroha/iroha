@@ -11370,7 +11370,7 @@ pub mod isi {
         }
 
         fn new_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> NewAccount {
-            NewAccount::new_in_domain(account_id.clone(), domain_id.clone())
+            NewAccount::new(account_id.clone()).with_linked_domain(domain_id.clone())
         }
 
         fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {

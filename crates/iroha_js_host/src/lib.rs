@@ -113,11 +113,10 @@ use iroha_data_model::{
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::ContractManifest,
     transaction::{
-        Executable, TransactionSubmissionReceipt,
+        Executable, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
+        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
+        TransactionSubmissionReceipt,
         signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
-        PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
-        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate,
-        PrivateKaigiTransaction,
     },
     trigger::{
         Trigger, TriggerId,
@@ -8322,7 +8321,10 @@ pub fn build_private_end_kaigi_transaction(
         creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
         nonce: normalize_private_kaigi_nonce(nonce)?,
         metadata,
-        action: PrivateKaigiAction::End(PrivateEndKaigi { call_id, ended_at_ms }),
+        action: PrivateKaigiAction::End(PrivateEndKaigi {
+            call_id,
+            ended_at_ms,
+        }),
         artifacts,
         fee_spend,
     };
