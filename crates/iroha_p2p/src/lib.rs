@@ -125,6 +125,8 @@ pub enum Error {
     ConnectionResetByPeer,
     /// Incoming frame exceeds configured maximum size
     FrameTooLarge,
+    /// Decrypted frame carried a malformed inner payload
+    MalformedPayloadFrame,
     /// Handshake preface header invalid
     HandshakeBadPreface,
     /// Peer consensus handshake mismatch ({reason})

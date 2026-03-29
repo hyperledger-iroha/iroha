@@ -1,6 +1,49 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-29
+Last updated: 2026-03-30
+
+Latest sync (2026-03-30 transport-induced consensus stall chain fix):
+the March 29 Torii public-ingress regression is already fixed separately; the
+remaining preserved-peer stable stall chain was transport-induced and is now
+closed at the three internal failure points that were keeping the cluster from
+recovering.
+
+- `crates/iroha_core/src/sumeragi/message.rs` now makes `BlockMessageWire`
+  cache a full Norito-framed `BlockMessage`, re-emits the same framed bytes on
+  cached and uncached paths, and preserves the exact framed payload through
+  framed decode instead of treating cached consensus bytes as ambient-flag
+  sensitive bare payload slices;
+- `crates/iroha_p2p/src/peer.rs` and `crates/iroha_p2p/src/lib.rs` now treat
+  malformed inner peer payloads after successful decrypt/frame delimitation as
+  recoverable per-frame faults, count and rate-limit them, and only disconnect
+  after `3` consecutive malformed decrypted payload frames while keeping
+  decrypt failures, oversize frames, and broken encrypted envelopes fatal; and
+- `crates/iroha_core/src/sumeragi/main_loop/propose.rs` no longer suppresses
+  proposal attempts solely because the transient `online_peers` snapshot is
+  below commit quorum, so proposer flow now continues into the normal
+  proposal/timeout/view-change path while commit safety still depends on real
+  votes and QC quorum.
+
+Open work for this slice now remains:
+- identify the remaining source of cluster-wide malformed decrypted peer
+  payload frames that still shows up during stable soaks even after the
+  self-describing `BlockMessageWire` fix:
+  - permissioned preserved peers now show `3991` recovered malformed payload
+    drops and NPoS shows `3435`, both with zero threshold-triggered
+    disconnects, zero `LengthMismatch`, and zero low-online proposer deferral;
+- explain and fix the post-hardening permissioned failure visible in
+  `/tmp/izanami_permissioned_transportfix_20260329T210605Z.log`, where the run
+  now clears the old `16/18` stall band and reaches `strict_min_height=392`
+  before failing the 600s strict-progress watchdog at `392/394` amid heavy
+  `queue_full` / ingress-endpoint loss and continuing recovered malformed peer
+  payload drops; and
+- explain and fix the post-hardening NPoS failure visible in
+  `/tmp/izanami_npos_transportfix_20260329T213039Z.log`, where the run now
+  clears the old `8/10` stall band and lasts the full hour to
+  `strict_min_height=382`, but still fails the shared-host stable latency gate
+  at the duration deadline with `quorum p95 block interval 27509ms` against a
+  `1000ms` threshold while the same recovered malformed payload churn
+  continues under comparatively light ingress pressure.
 
 Latest sync (2026-03-29 Torii public SignedTransaction ingress correction + full preserved-peer stable reruns):
 the public `/transaction` API boundary is now corrected for release 1, and
