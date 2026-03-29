@@ -116,9 +116,13 @@ export {
   buildSetRwaKeyValueTransaction,
   buildRemoveRwaKeyValueTransaction,
   buildCreateKaigiTransaction,
+  buildPrivateKaigiFeeSpend,
+  buildPrivateCreateKaigiTransaction,
   buildJoinKaigiTransaction,
+  buildPrivateJoinKaigiTransaction,
   buildLeaveKaigiTransaction,
   buildEndKaigiTransaction,
+  buildPrivateEndKaigiTransaction,
   buildRecordKaigiUsageTransaction,
   buildSetKaigiRelayManifestTransaction,
   buildRegisterKaigiRelayTransaction,
@@ -145,6 +149,7 @@ export {
   buildTimeTriggerAction,
   buildPrecommitTriggerAction,
   submitSignedTransaction,
+  submitTransactionEntrypoint,
 } from "./transaction.js";
 export {
   buildOfflineEnvelope,

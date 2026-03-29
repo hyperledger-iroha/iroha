@@ -6143,6 +6143,61 @@ export interface EndKaigiTransactionInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
+export interface PrivateKaigiEntrypointResult {
+  transactionEntrypoint: Buffer;
+  hash: Buffer;
+  actionHash: Buffer;
+}
+
+export interface PrivateKaigiFeeSpendResult {
+  asset_definition_id: string;
+  anchor_root: Buffer;
+  nullifiers: ReadonlyArray<Buffer>;
+  output_commitments: ReadonlyArray<Buffer>;
+  encrypted_change_payloads: ReadonlyArray<Buffer>;
+  proof: Buffer;
+}
+
+export interface PrivateKaigiFeeSpendInput {
+  chainId: string;
+  assetDefinitionId: string;
+  actionHash: BinaryLike;
+  anchorRootHex: string;
+  feeAmount: NumericLike;
+  verifyingKey: Record<string, unknown>;
+}
+
+export interface PrivateCreateKaigiTransactionInput {
+  chainId: string;
+  call: Record<string, unknown>;
+  artifacts: Record<string, unknown>;
+  feeSpend: Record<string, unknown>;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  nonce?: number | null;
+}
+
+export interface PrivateJoinKaigiTransactionInput {
+  chainId: string;
+  callId: string;
+  artifacts: Record<string, unknown>;
+  feeSpend: Record<string, unknown>;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  nonce?: number | null;
+}
+
+export interface PrivateEndKaigiTransactionInput {
+  chainId: string;
+  callId: string;
+  endedAtMs?: number | null;
+  artifacts: Record<string, unknown>;
+  feeSpend: Record<string, unknown>;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  nonce?: number | null;
+}
+
 export interface RecordKaigiUsageTransactionInput {
   chainId: string;
   authority: string;
@@ -8253,15 +8308,27 @@ export function buildPrecommitTriggerAction(
 export function buildCreateKaigiTransaction(
   input: CreateKaigiTransactionInput,
 ): SignedTransactionResult;
+export function buildPrivateKaigiFeeSpend(
+  input: PrivateKaigiFeeSpendInput,
+): PrivateKaigiFeeSpendResult;
+export function buildPrivateCreateKaigiTransaction(
+  input: PrivateCreateKaigiTransactionInput,
+): PrivateKaigiEntrypointResult;
 export function buildJoinKaigiTransaction(
   input: JoinKaigiTransactionInput,
 ): SignedTransactionResult;
+export function buildPrivateJoinKaigiTransaction(
+  input: PrivateJoinKaigiTransactionInput,
+): PrivateKaigiEntrypointResult;
 export function buildLeaveKaigiTransaction(
   input: LeaveKaigiTransactionInput,
 ): SignedTransactionResult;
 export function buildEndKaigiTransaction(
   input: EndKaigiTransactionInput,
 ): SignedTransactionResult;
+export function buildPrivateEndKaigiTransaction(
+  input: PrivateEndKaigiTransactionInput,
+): PrivateKaigiEntrypointResult;
 export function buildRecordKaigiUsageTransaction(
   input: RecordKaigiUsageTransactionInput,
 ): SignedTransactionResult;
@@ -8340,6 +8407,17 @@ export function submitSignedTransaction(
     pollIntervalMs?: number;
     timeoutMs?: number;
     privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
+  },
+): Promise<{ hash: string; submission: unknown; status?: unknown }>;
+
+export function submitTransactionEntrypoint(
+  client: ToriiClient,
+  transactionEntrypoint: ArrayBufferView | ArrayBuffer | Buffer,
+  options: {
+    hashHex: string;
+    waitForCommit?: boolean;
+    pollIntervalMs?: number;
+    timeoutMs?: number;
   },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
 
