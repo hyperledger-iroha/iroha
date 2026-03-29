@@ -49,13 +49,13 @@ translator: machine-google-reviewed
 - `ScopedAccountId { account: AccountId, domain: DomainId }` 僅在需要範圍視圖時才攜帶明確域上下文。
 - `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` 是密鑰更新記錄使用的可選穩定別名，`uaid` 攜帶可選的 Nexus 範圍 [通用帳戶 ID](./universal_accounts_guide.md)，IX是派生索引狀態而非索引狀態的一部分規範身分。
 - 建設者：
-  - `NewAccount` 透過 `Account::new(scoped_id)` 實現明確網域連結註冊，因此需要 `ScopedAccountId`。
-  - `NewAccount` 透過 `Account::new_domainless(id)` 僅註冊沒有連結網域的通用帳戶主題。
+  - `NewAccount` 透過 `Account::new_in_domain(id, domain)` 實現明確網域連結註冊，因此需要 `ScopedAccountId`。
+  - `NewAccount` 透過 `Account::new(id)` 僅註冊沒有連結網域的通用帳戶主題。
 - 別名模型：
   - 規範帳戶身分從不包含網域或資料空間段。
   - 帳戶別名是位於 `AccountId` 之上的單獨 SNS/帳戶標籤綁定。
   - 域限定別名（例如 `merchant@hbl.sbp`）在別名綁定中同時攜帶域和資料空間。
-  - 資料空間根別名（例如 `merchant@sbp`）僅包含資料空間，因此與 `Account::new_domainless(...)` 自然配對。
+  - 資料空間根別名（例如 `merchant@sbp`）僅包含資料空間，因此與 `Account::new(...)` 自然配對。
   - 測試和固定裝置應先播種通用 `AccountId`，然後分別新增網域連結、別名租用和別名權限，而不是將網域假設編碼到帳戶身分本身。
 
 ### 資產定義與資產

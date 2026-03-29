@@ -49,13 +49,13 @@ Ce document explique les structures, les identifiants, les caractéristiques et 
 - `ScopedAccountId { account: AccountId, domain: DomainId }` comporte un contexte de domaine explicite uniquement lorsqu'une vue étendue est requise.
 - `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` est un alias stable facultatif utilisé par les enregistrements de rekey, `uaid` porte l'[ID de compte universel] facultatif Nexus (./universal_accounts_guide.md) et `linked_domains` est un état d'index dérivé plutôt qu'une partie de l'état canonique. identité.
 - Constructeurs :
-  - `NewAccount` via `Account::new(scoped_id)` matérialise un enregistrement explicite lié au domaine et nécessite donc un `ScopedAccountId`.
-  - `NewAccount` via `Account::new_domainless(id)` enregistre uniquement le sujet du compte universel sans domaine lié.
+  - `NewAccount` via `Account::new_in_domain(id, domain)` matérialise un enregistrement explicite lié au domaine et nécessite donc un `ScopedAccountId`.
+  - `NewAccount` via `Account::new(id)` enregistre uniquement le sujet du compte universel sans domaine lié.
 - Modèle d'alias :
   - L'identité canonique du compte n'inclut jamais de domaine ou de segment d'espace de données.
   - Les alias de compte sont des liaisons SNS/étiquette de compte distinctes superposées à `AccountId`.
   - Les alias qualifiés de domaine tels que `merchant@hbl.sbp` transportent à la fois un domaine et un espace de données dans la liaison d'alias.
-  - Les alias racine de l'espace de données tels que `merchant@sbp` transportent uniquement l'espace de données et s'associent donc naturellement avec `Account::new_domainless(...)`.
+  - Les alias racine de l'espace de données tels que `merchant@sbp` transportent uniquement l'espace de données et s'associent donc naturellement avec `Account::new(...)`.
   - Les tests et les appareils doivent d'abord amorcer le `AccountId` universel, puis ajouter les liens de domaine, les baux d'alias et les autorisations d'alias séparément au lieu de coder les hypothèses de domaine dans l'identité du compte lui-même.
 
 ### Définitions et actifs des actifs

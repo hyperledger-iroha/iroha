@@ -49,13 +49,13 @@ Este documento explica las estructuras, identificadores, rasgos y protocolos que
 - `ScopedAccountId { account: AccountId, domain: DomainId }` incluye contexto de dominio explícito solo cuando se requiere una vista con alcance.
 - `Account { id, metadata, label?, uaid?, linked_domains? }`: `label` es un alias estable opcional utilizado por los registros de nueva clave, `uaid` lleva el [ID de cuenta universal] Nexus opcional (./universal_accounts_guide.md) y `linked_domains` es un estado de índice derivado en lugar de parte del canónico. identidad.
 - Constructores:
-  - `NewAccount` a través de `Account::new(scoped_id)` materializa un registro explícito vinculado a un dominio y por lo tanto requiere un `ScopedAccountId`.
-  - `NewAccount` a través de `Account::new_domainless(id)` registra solo el sujeto de cuenta universal sin dominio vinculado.
+  - `NewAccount` a través de `Account::new_in_domain(id, domain)` materializa un registro explícito vinculado a un dominio y por lo tanto requiere un `ScopedAccountId`.
+  - `NewAccount` a través de `Account::new(id)` registra solo el sujeto de cuenta universal sin dominio vinculado.
 - Modelo de alias:
   - La identidad de la cuenta canónica nunca incluye un dominio o segmento de espacio de datos.
   - Los alias de cuenta son enlaces SNS/etiquetas de cuenta independientes superpuestos a `AccountId`.
   - Los alias calificados por dominio, como `merchant@hbl.sbp`, llevan tanto un dominio como un espacio de datos en el enlace de alias.
-  - Los alias de raíz del espacio de datos, como `merchant@sbp`, transportan solo el espacio de datos y, por lo tanto, se emparejan naturalmente con `Account::new_domainless(...)`.
+  - Los alias de raíz del espacio de datos, como `merchant@sbp`, transportan solo el espacio de datos y, por lo tanto, se emparejan naturalmente con `Account::new(...)`.
   - Las pruebas y accesorios deben generar primero el `AccountId` universal, luego agregar enlaces de dominio, arrendamientos de alias y permisos de alias por separado en lugar de codificar suposiciones de dominio en la identidad de la cuenta misma.
 
 ### Definiciones de activos y activos

@@ -3,12 +3,15 @@
 use iroha_crypto::Hash;
 use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
+    peer::PeerId,
     transaction::SignedTransaction,
 };
 use norito::codec::{Decode, Encode};
 
 /// Schema version for peer-to-peer Torii proxy requests.
 pub const TORII_PROXY_REQUEST_VERSION_V1: u16 = 1;
+/// Schema version for bounded multi-hop peer-to-peer Torii proxy requests.
+pub const TORII_PROXY_REQUEST_VERSION_V2: u16 = 2;
 /// Schema version for peer-to-peer Torii proxy responses.
 pub const TORII_PROXY_RESPONSE_VERSION_V1: u16 = 1;
 
@@ -147,13 +150,17 @@ pub enum ToriiProxyRequestKindV1 {
 
 /// P2P Torii proxy request sent from ingress to an authoritative peer.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct ToriiProxyRequestV1 {
+pub struct ToriiProxyRequestV2 {
     /// Version of the proxy request envelope.
     pub schema_version: u16,
     /// Correlation id selected by the ingress node.
     pub request_id: Hash,
-    /// Forwarding depth; authoritative peers must not proxy further.
+    /// Current forwarding depth observed by this hop.
     pub hop_count: u8,
+    /// Maximum number of hops allowed before the request is rejected.
+    pub max_hops: u8,
+    /// Peer ids already traversed by the request to prevent proxy loops.
+    pub visited_peer_ids: Vec<PeerId>,
     /// Canonical request to execute on the authoritative peer.
     pub request: ToriiProxyRequestKindV1,
 }

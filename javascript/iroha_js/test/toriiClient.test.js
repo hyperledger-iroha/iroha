@@ -18205,7 +18205,10 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
           dns_push_interval_secs: 90,
           meter_family: "soranet.vpn.standard",
           route_pushes: ["0.0.0.0/0", "::/0"],
+          excluded_routes: ["127.0.0.0/8"],
           dns_servers: ["1.1.1.1", "2606:4700:4700::1111"],
+          tunnel_addresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
+          mtu_bytes: 1280,
           display_billing_label: "standard · soranet.vpn.standard",
         },
         headers: { "content-type": "application/json" },
@@ -18229,7 +18232,10 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
     dnsPushIntervalSecs: 90,
     meterFamily: "soranet.vpn.standard",
     routePushes: ["0.0.0.0/0", "::/0"],
+    excludedRoutes: ["127.0.0.0/8"],
     dnsServers: ["1.1.1.1", "2606:4700:4700::1111"],
+    tunnelAddresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
+    mtuBytes: 1280,
     displayBillingLabel: "standard · soranet.vpn.standard",
   });
   const missing = await client.getVpnProfile();
@@ -18260,10 +18266,16 @@ test("createVpnSession signs the request and normalizes the response", async () 
         relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
         lease_secs: 600,
         expires_at_ms: 1_700_000_000_000,
+        connected_at_ms: 1_699_999_400_000,
         meter_family: "soranet.vpn.low-latency",
         route_pushes: [],
+        excluded_routes: [],
         dns_servers: ["1.1.1.1"],
+        tunnel_addresses: ["10.208.0.2/32"],
+        mtu_bytes: 1280,
         helper_ticket_hex: "ab".repeat(32),
+        bytes_in: 123,
+        bytes_out: 456,
         status: "active",
       },
       headers: { "content-type": "application/json" },
@@ -18283,10 +18295,16 @@ test("createVpnSession signs the request and normalizes the response", async () 
     relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
     leaseSecs: 600,
     expiresAtMs: 1_700_000_000_000,
+    connectedAtMs: 1_699_999_400_000,
     meterFamily: "soranet.vpn.low-latency",
     routePushes: [],
+    excludedRoutes: [],
     dnsServers: ["1.1.1.1"],
+    tunnelAddresses: ["10.208.0.2/32"],
+    mtuBytes: 1280,
     helperTicketHex: "ab".repeat(32),
+    bytesIn: 123,
+    bytesOut: 456,
     status: "active",
   });
 });
@@ -18326,6 +18344,156 @@ test("deleteVpnSession returns null when the session is already missing", async 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.deleteVpnSession("sess_123", { canonicalAuth });
   assert.equal(result, null);
+});
+
+test("getVpnSession and listVpnReceipts normalize authenticated responses", async () => {
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 5),
+  };
+  let callCount = 0;
+  const fetchImpl = async (url, init = {}) => {
+    callCount += 1;
+    assert.equal(init.headers.Accept, "application/json");
+    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    if (callCount === 1) {
+      assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_live`);
+      assert.equal(init.method, "GET");
+      return createResponse({
+        status: 200,
+        jsonData: {
+          session_id: "sess_live",
+          account_id: SAMPLE_ACCOUNT_ID,
+          exit_class: "standard",
+          relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+          lease_secs: 600,
+          expires_at_ms: 1_700_000_000_000,
+          connected_at_ms: 1_699_999_800_000,
+          meter_family: "soranet.vpn.standard",
+          route_pushes: ["0.0.0.0/0"],
+          excluded_routes: ["127.0.0.0/8"],
+          dns_servers: ["1.1.1.1"],
+          tunnel_addresses: ["10.208.0.2/32"],
+          mtu_bytes: 1280,
+          helper_ticket_hex: "ab".repeat(32),
+          bytes_in: 11,
+          bytes_out: 22,
+          status: "active",
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/vpn/receipts`);
+    assert.equal(init.method, "GET");
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [
+          {
+            session_id: "sess_live",
+            account_id: SAMPLE_ACCOUNT_ID,
+            exit_class: "standard",
+            relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+            meter_family: "soranet.vpn.standard",
+            connected_at_ms: 1_699_999_800_000,
+            disconnected_at_ms: 1_700_000_100_000,
+            duration_ms: 300000,
+            bytes_in: 11,
+            bytes_out: 22,
+            status: "disconnected",
+            receipt_source: "torii",
+          },
+        ],
+        total: 1,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+
+  const session = await client.getVpnSession("sess_live", { canonicalAuth });
+  assert.deepEqual(session, {
+    sessionId: "sess_live",
+    accountId: SAMPLE_ACCOUNT_ID,
+    exitClass: "standard",
+    relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
+    leaseSecs: 600,
+    expiresAtMs: 1_700_000_000_000,
+    connectedAtMs: 1_699_999_800_000,
+    meterFamily: "soranet.vpn.standard",
+    routePushes: ["0.0.0.0/0"],
+    excludedRoutes: ["127.0.0.0/8"],
+    dnsServers: ["1.1.1.1"],
+    tunnelAddresses: ["10.208.0.2/32"],
+    mtuBytes: 1280,
+    helperTicketHex: "ab".repeat(32),
+    bytesIn: 11,
+    bytesOut: 22,
+    status: "active",
+  });
+
+  const receipts = await client.listVpnReceipts({ canonicalAuth });
+  assert.deepEqual(receipts, [
+    {
+      sessionId: "sess_live",
+      accountId: SAMPLE_ACCOUNT_ID,
+      exitClass: "standard",
+      relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
+      meterFamily: "soranet.vpn.standard",
+      connectedAtMs: 1_699_999_800_000,
+      disconnectedAtMs: 1_700_000_100_000,
+      durationMs: 300000,
+      bytesIn: 11,
+      bytesOut: 22,
+      status: "disconnected",
+      receiptSource: "torii",
+    },
+  ]);
+});
+
+test("deleteVpnSession normalizes canonical receipts", async () => {
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 6),
+  };
+  const fetchImpl = async (url, init = {}) => {
+    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_789`);
+    assert.equal(init.method, "DELETE");
+    return createResponse({
+      status: 200,
+      jsonData: {
+        session_id: "sess_789",
+        account_id: SAMPLE_ACCOUNT_ID,
+        exit_class: "high-security",
+        relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+        meter_family: "soranet.vpn.high-security",
+        connected_at_ms: 1_699_999_700_000,
+        disconnected_at_ms: 1_700_000_000_000,
+        duration_ms: 300000,
+        bytes_in: 99,
+        bytes_out: 33,
+        status: "disconnected",
+        receipt_source: "torii",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const receipt = await client.deleteVpnSession("sess_789", { canonicalAuth });
+  assert.deepEqual(receipt, {
+    sessionId: "sess_789",
+    accountId: SAMPLE_ACCOUNT_ID,
+    exitClass: "high-security",
+    relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
+    meterFamily: "soranet.vpn.high-security",
+    connectedAtMs: 1_699_999_700_000,
+    disconnectedAtMs: 1_700_000_000_000,
+    durationMs: 300000,
+    bytesIn: 99,
+    bytesOut: 33,
+    status: "disconnected",
+    receiptSource: "torii",
+  });
 });
 
 test("registerSnsName posts payload and normalizes response", async () => {

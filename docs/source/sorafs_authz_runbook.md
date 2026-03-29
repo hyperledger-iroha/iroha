@@ -4,8 +4,8 @@ This note summarises the authorization and abuse controls around SoraFS control-
 
 ## Surfaces and tokens
 
-- `RegisterPinManifest` is public on the universal lane. Submission relies on the standard Nexus XOR-denominated transaction fee schedule instead of a dedicated SoraFS permission token.
-- The remaining SoraFS instructions are gated by dedicated tokens: pin approve/retire/alias, capacity declare/telemetry/dispute, replication order issue/complete, pricing set, and provider credit upsert.
+- `RegisterPinManifest` is public on the universal lane. Submission relies on the standard Nexus XOR-denominated transaction fee schedule instead of a dedicated SoraFS permission token, activates the manifest immediately, and auto-issues the minimum replication order whenever active capacity declarations can satisfy the manifest policy.
+- The remaining SoraFS instructions are gated by dedicated tokens: pin approve/retire/alias, capacity declare/telemetry/dispute, replication order issue/complete, pricing set, and provider credit upsert. `ApprovePinManifest` remains available to attach or ratify the council envelope on an already active manifest.
 - Provider→account bindings must be present before issuing replication orders or submitting capacity telemetry; use the governance config seed or the `RegisterProviderOwner`/`UnregisterProviderOwner` instructions to manage bindings.
 - Repair worker endpoints (`/v1/sorafs/audit/repair/{claim,heartbeat,complete,fail}`) require signed `RepairWorkerSignaturePayloadV1` requests from a worker account (i105 account id/signatory key) that holds `CanOperateSorafsRepair { provider_id }`. The signed payload includes `manifest_digest` and must match `manifest_digest_hex` in the request; provider owners are auto-granted this permission and may delegate it via `GrantPermission`; revoke with `RevokePermission` during rotation.
 - The SoraFS storage pin API (`/v1/sorafs/storage/pin`) enforces bearer tokens, CIDR allow-lists, and a token-bucket limit from `sorafs.storage.pin`.

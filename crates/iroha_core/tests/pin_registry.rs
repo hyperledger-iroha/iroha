@@ -542,7 +542,7 @@ fn register_manifest_rejects_self_successor() {
 }
 
 #[test]
-fn register_manifest_rejects_unapproved_successor() {
+fn register_manifest_accepts_active_successor() {
     let state = make_state();
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
@@ -566,7 +566,7 @@ fn register_manifest_rejects_unapproved_successor() {
     let mut block = state.block(block_header(2));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-    let err = RegisterPinManifest {
+    RegisterPinManifest {
         digest: ManifestDigest::new([0xE4; 32]),
         chunker: default_chunker(),
         chunk_digest_sha3_256: default_chunk_digest(),
@@ -576,17 +576,14 @@ fn register_manifest_rejects_unapproved_successor() {
         successor_of: Some(parent),
     }
     .execute(&alice(), &mut tx)
-    .expect_err("successor must reject pending predecessor");
+    .expect("active predecessor should accept successor");
 
-    match err {
-        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            message,
-        )) => assert!(
-            message.contains("must be approved"),
-            "expected unapproved successor guard message, got {message}"
-        ),
-        other => panic!("expected invalid parameter error, received {other:?}"),
-    }
+    let stored = tx
+        .world()
+        .pin_manifests()
+        .get(&ManifestDigest::new([0xE4; 32]))
+        .expect("successor stored");
+    assert_eq!(stored.successor_of, Some(parent));
 }
 
 #[test]
@@ -727,11 +724,11 @@ fn bind_alias_rejects_bound_epoch_before_approval() {
 
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
 
-    let alias_binding = alias_binding_for(digest, "sora", "docs", 6, 20, &council_keys);
+    let alias_binding = alias_binding_for(digest, "sora", "docs", 4, 20, &council_keys);
     let err = BindManifestAlias {
         digest,
         binding: alias_binding,
-        bound_epoch: 6,
+        bound_epoch: 4,
         expiry_epoch: 20,
     }
     .execute(&alice(), &mut tx)
@@ -741,7 +738,7 @@ fn bind_alias_rejects_bound_epoch_before_approval() {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
             message,
         )) => assert!(
-            message.contains("bound_epoch 6 precedes manifest approval epoch 7"),
+            message.contains("bound_epoch 4 precedes manifest approval epoch 5"),
             "expected approval-bound guard message, got {message}"
         ),
         other => panic!("expected invalid parameter error, received {other:?}"),
@@ -792,7 +789,20 @@ fn bind_alias_rejects_expiry_after_retention_epoch() {
 fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
-    State::new_for_testing(World::new(), kura, live)
+    let default_domain: DomainId = iroha_data_model::account::address::default_domain_name()
+        .parse()
+        .expect("default account domain label");
+    let alice = alice();
+    let bob = iroha_test_samples::BOB_ID.clone();
+    let domain = Domain::new(default_domain.clone()).build(&alice);
+    let alice_account = Account::new_in_domain(alice.clone(), default_domain.clone()).build(&alice);
+    let bob_account = Account::new_in_domain(bob.clone(), default_domain).build(&bob);
+    let world = World::with(
+        [domain],
+        [alice_account, bob_account],
+        std::iter::empty::<AssetDefinition>(),
+    );
+    State::new_for_testing(world, kura, live)
 }
 
 fn default_block_header() -> iroha_data_model::block::BlockHeader {
@@ -913,7 +923,7 @@ fn register_and_approve(
 
     ApprovePinManifest {
         digest,
-        approved_epoch: 7,
+        approved_epoch: 5,
         council_envelope: Some(envelope),
         council_envelope_digest: None,
     }

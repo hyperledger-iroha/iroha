@@ -4379,11 +4379,44 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch an authenticated active Sora VPN session (`GET /v1/vpn/sessions/{session_id}`).
+   * Returns null when the session is already absent.
+   * @param {string} sessionId
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
+   * @returns {Promise<ToriiVpnSession | null>}
+   */
+  async getVpnSession(sessionId, options) {
+    const normalizedSessionId = requireNonEmptyString(sessionId, "sessionId");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      options,
+      "getVpnSession",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/vpn/sessions/${encodeURIComponent(normalizedSessionId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+        canonicalAuth,
+      },
+    );
+    if (response.status === 404) {
+      return null;
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("vpn session status endpoint returned no payload");
+    }
+    return normalizeVpnSessionResponse(payload, "vpn session status response");
+  }
+
+  /**
    * Delete a signed Sora VPN session (`DELETE /v1/vpn/sessions/{session_id}`).
    * Returns null when the session is already absent.
    * @param {string} sessionId
    * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
-   * @returns {Promise<ToriiVpnSessionDeleteResult | null>}
+   * @returns {Promise<ToriiVpnReceipt | null>}
    */
   async deleteVpnSession(sessionId, options) {
     const normalizedSessionId = requireNonEmptyString(sessionId, "sessionId");
@@ -4408,7 +4441,30 @@ export class ToriiClient {
     if (!payload) {
       throw new Error("vpn delete endpoint returned no payload");
     }
-    return normalizeVpnSessionDeleteResponse(payload);
+    return normalizeVpnReceiptResponse(payload, "vpn delete response");
+  }
+
+  /**
+   * Fetch canonical Sora VPN receipt history for the authenticated account (`GET /v1/vpn/receipts`).
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
+   * @returns {Promise<ReadonlyArray<ToriiVpnReceipt>>}
+   */
+  async listVpnReceipts(options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(
+      options,
+      "listVpnReceipts",
+    );
+    const response = await this._request("GET", "/v1/vpn/receipts", {
+      headers: { Accept: "application/json" },
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("vpn receipts endpoint returned no payload");
+    }
+    return normalizeVpnReceiptListResponse(payload);
   }
 
   /**
@@ -13641,9 +13697,22 @@ function normalizeVpnProfileResponse(payload) {
       record.route_pushes ?? [],
       "vpn profile response.route_pushes",
     ),
+    excludedRoutes: requireStringArray(
+      record.excluded_routes ?? [],
+      "vpn profile response.excluded_routes",
+    ),
     dnsServers: requireStringArray(
       record.dns_servers ?? [],
       "vpn profile response.dns_servers",
+    ),
+    tunnelAddresses: requireStringArray(
+      record.tunnel_addresses ?? [],
+      "vpn profile response.tunnel_addresses",
+    ),
+    mtuBytes: ToriiClient._normalizeUnsignedInteger(
+      record.mtu_bytes ?? 0,
+      "vpn profile response.mtu_bytes",
+      { allowZero: true },
     ),
     displayBillingLabel: requireNonEmptyString(
       record.display_billing_label ?? "",
@@ -13672,28 +13741,98 @@ function normalizeVpnSessionResponse(payload, context = "vpn session response") 
       `${context}.expires_at_ms`,
       { allowZero: true },
     ),
+    connectedAtMs: ToriiClient._normalizeUnsignedInteger(
+      record.connected_at_ms ?? 0,
+      `${context}.connected_at_ms`,
+      { allowZero: true },
+    ),
     meterFamily: requireNonEmptyString(record.meter_family ?? "", `${context}.meter_family`),
     routePushes: requireStringArray(record.route_pushes ?? [], `${context}.route_pushes`),
+    excludedRoutes: requireStringArray(
+      record.excluded_routes ?? [],
+      `${context}.excluded_routes`,
+    ),
     dnsServers: requireStringArray(record.dns_servers ?? [], `${context}.dns_servers`),
+    tunnelAddresses: requireStringArray(
+      record.tunnel_addresses ?? [],
+      `${context}.tunnel_addresses`,
+    ),
+    mtuBytes: ToriiClient._normalizeUnsignedInteger(
+      record.mtu_bytes ?? 0,
+      `${context}.mtu_bytes`,
+      { allowZero: true },
+    ),
     helperTicketHex: requireHexString(
       record.helper_ticket_hex ?? "",
       `${context}.helper_ticket_hex`,
+    ),
+    bytesIn: ToriiClient._normalizeUnsignedInteger(
+      record.bytes_in ?? 0,
+      `${context}.bytes_in`,
+      { allowZero: true },
+    ),
+    bytesOut: ToriiClient._normalizeUnsignedInteger(
+      record.bytes_out ?? 0,
+      `${context}.bytes_out`,
+      { allowZero: true },
     ),
     status: requireNonEmptyString(record.status ?? "", `${context}.status`),
   };
 }
 
-function normalizeVpnSessionDeleteResponse(payload) {
-  const record = ensureRecord(payload ?? {}, "vpn delete response");
+function normalizeVpnReceiptResponse(payload, context = "vpn receipt response") {
+  const record = ensureRecord(payload ?? {}, context);
   return {
-    sessionId: requireNonEmptyString(record.session_id ?? "", "vpn delete response.session_id"),
-    status: requireNonEmptyString(record.status ?? "", "vpn delete response.status"),
-    disconnectedAtMs: ToriiClient._normalizeUnsignedInteger(
-      record.disconnected_at_ms ?? 0,
-      "vpn delete response.disconnected_at_ms",
+    sessionId: requireNonEmptyString(record.session_id ?? "", `${context}.session_id`),
+    accountId: requireNonEmptyString(record.account_id ?? "", `${context}.account_id`),
+    exitClass: requireNonEmptyString(record.exit_class ?? "", `${context}.exit_class`),
+    relayEndpoint: requireNonEmptyString(
+      record.relay_endpoint ?? "",
+      `${context}.relay_endpoint`,
+    ),
+    meterFamily: requireNonEmptyString(record.meter_family ?? "", `${context}.meter_family`),
+    connectedAtMs: ToriiClient._normalizeUnsignedInteger(
+      record.connected_at_ms ?? 0,
+      `${context}.connected_at_ms`,
       { allowZero: true },
     ),
+    disconnectedAtMs: ToriiClient._normalizeUnsignedInteger(
+      record.disconnected_at_ms ?? 0,
+      `${context}.disconnected_at_ms`,
+      { allowZero: true },
+    ),
+    durationMs: ToriiClient._normalizeUnsignedInteger(
+      record.duration_ms ?? 0,
+      `${context}.duration_ms`,
+      { allowZero: true },
+    ),
+    bytesIn: ToriiClient._normalizeUnsignedInteger(
+      record.bytes_in ?? 0,
+      `${context}.bytes_in`,
+      { allowZero: true },
+    ),
+    bytesOut: ToriiClient._normalizeUnsignedInteger(
+      record.bytes_out ?? 0,
+      `${context}.bytes_out`,
+      { allowZero: true },
+    ),
+    status: requireNonEmptyString(record.status ?? "", `${context}.status`),
+    receiptSource: requireNonEmptyString(
+      record.receipt_source ?? "",
+      `${context}.receipt_source`,
+    ),
   };
+}
+
+function normalizeVpnReceiptListResponse(payload) {
+  const record = ensureRecord(payload ?? {}, "vpn receipts response");
+  if (!Array.isArray(record.items)) {
+    throw new TypeError("vpn receipts response.items must be an array");
+  }
+  const items = record.items.map((item, index) =>
+    normalizeVpnReceiptResponse(item, `vpn receipts response.items[${index}]`),
+  );
+  return items;
 }
 
 function normalizeVpnSessionOptions(options, context) {
