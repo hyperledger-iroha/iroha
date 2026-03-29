@@ -1776,6 +1776,9 @@ impl CommittedTransaction {
             TransactionEntrypoint::External(entrypoint) => {
                 entrypoint.inject_instructions(additions.clone());
             }
+            // Private Kaigi entrypoints do not carry an instruction list, so
+            // fault injection cannot append synthetic instructions here.
+            TransactionEntrypoint::PrivateKaigi(_) => {}
             TransactionEntrypoint::Time(entrypoint) => {
                 let mut modified = entrypoint.instructions.0.clone().into_vec();
                 modified.extend(additions);
