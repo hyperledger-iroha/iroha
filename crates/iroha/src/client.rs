@@ -5928,7 +5928,8 @@ impl Client {
             crate::data_model::transaction::TransactionEntrypoint::External(entry) => {
                 entry.hash() == target
             }
-            crate::data_model::transaction::TransactionEntrypoint::Time(_) => false,
+            crate::data_model::transaction::TransactionEntrypoint::Time(_)
+            | crate::data_model::transaction::TransactionEntrypoint::PrivateKaigi(_) => false,
         }
     }
 

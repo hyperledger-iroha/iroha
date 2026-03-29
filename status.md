@@ -2,6 +2,46 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: Kaigi CLI privacy-artifact parity and merge-drift cleanup
+- Updated `crates/iroha_cli/src/commands/kaigi.rs` so `kaigi create` and
+  `kaigi end` now accept and forward the optional privacy artifacts required by
+  the current `CreateKaigi` / `EndKaigi` instructions
+  (`commitment`, `nullifier`, `roster_root`, `proof`), and `quickstart` now
+  populates explicit `None` values for those fields.
+- Added shared optional Kaigi privacy-artifact parsing in the CLI plus focused
+  parser tests covering `create`, `end`, and artifact decoding.
+- Fixed two additional merge-drift compile breaks found while revalidating the
+  CLI path:
+  - `crates/iroha_core/src/sumeragi/mod.rs` no longer calls the removed
+    `quorum_recovery_vote_drain_urgent` hook from the worker bridge; and
+  - `crates/iroha/src/client.rs` now handles
+    `TransactionEntrypoint::PrivateKaigi(_)` in committed-transaction hash
+    matching.
+- Resolved the outstanding merge markers in `status.md` and `roadmap.md` while
+  preserving both branches' notes.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_cli kaigi -- --nocapture` (pass)
+  - `cargo check -p iroha_cli --bins --tests` (pass)
+
+## 2026-03-29 Follow-up: routed GET filters keep JSON literals as query strings during Torii proxying
+- Fixed the routed read proxy query decoder in `crates/iroha_torii/src/lib.rs`
+  so proxied GET parameters now use the same scalar coercion rules as the
+  normal `NoritoQuery` path instead of eagerly decoding each value as JSON.
+- This restores the intended validation flow for compact `filter=` query
+  parameters on proxied list endpoints such as `/v1/accounts`: JSON filter
+  literals now stay strings until the route handler canonicalizes and validates
+  them, so dotted/non-canonical I105 account literals are rejected with the
+  underlying canonical-account error instead of `failed to decode proxied query
+  params`.
+- Added a focused routed-read regression in `crates/iroha_torii/src/lib.rs`
+  that locks in round-tripping JSON filter literals as strings across
+  `encode_torii_proxy_query(...)` and `decode_torii_proxy_query(...)`.
+- Verification:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii --lib torii_proxy_query_roundtrip_preserves_json_filter_literals_as_strings -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation accounts_listing_filter_rejects_dotted_i105_literals -- --nocapture` (pass)
+
 ## 2026-03-29 Full preserved-peer stable reruns on the queued-only / local-trigger-query patch set
 - Reran the full preserved-peer stable permissioned and NPoS izanami soaks on
   the exact tree that makes queue pressure queued-only and keeps trigger

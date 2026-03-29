@@ -10,7 +10,7 @@ use iroha_version::Version;
 use norito::codec::{Decode, DecodeAll, Encode};
 
 use crate::{
-    ChainId, AssetDefinitionId,
+    AssetDefinitionId, ChainId,
     kaigi::{
         KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
         KaigiRelayManifest, KaigiRoomPolicy,
@@ -135,17 +135,7 @@ mod model {
     }
 
     /// Authority-free private Kaigi action carried by a dedicated entrypoint.
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Decode,
-        Encode,
-        IntoSchema,
-    )]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -320,7 +310,9 @@ mod tests {
             room_policy: KaigiRoomPolicy::Authenticated,
             relay_manifest: Some(KaigiRelayManifest {
                 hops: vec![KaigiRelayHop {
-                    relay_id: crate::account::AccountId::new(KeyPair::random().public_key().clone()),
+                    relay_id: crate::account::AccountId::new(
+                        KeyPair::random().public_key().clone(),
+                    ),
                     hpke_public_key: vec![1, 2, 3],
                     weight: 1,
                 }],

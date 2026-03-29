@@ -26737,7 +26737,6 @@ pub(crate) mod tests_runtime_handlers {
     };
     use base64::Engine as _;
     use futures::executor;
-    use parity_scale_codec::Encode;
     use iroha_config::{
         client_api::ConfigGetDTO,
         parameters::{
@@ -26785,6 +26784,7 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
+    use parity_scale_codec::Encode;
 
     use super::*;
     #[cfg(feature = "telemetry")]
@@ -29736,15 +29736,21 @@ pub(crate) mod tests_runtime_handlers {
         let block_hash = block.hash();
         store_block(&app, block);
 
-        let (qc, validator_pop) =
-            sample_commit_qc(block_hash, expected_root, height, height.saturating_add(1), 0);
+        let (qc, validator_pop) = sample_commit_qc(
+            block_hash,
+            expected_root,
+            height,
+            height.saturating_add(1),
+            0,
+        );
         record_commit_qc(qc.clone());
         let mut app = app;
         let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
         let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for test");
-        state
-            .world
-            .register_validator_pop_for_testing(qc.validator_set[0].public_key().clone(), validator_pop);
+        state.world.register_validator_pop_for_testing(
+            qc.validator_set[0].public_key().clone(),
+            validator_pop,
+        );
         state.insert_commit_qc_for_testing(block_hash, qc);
         app
     }
@@ -29765,12 +29771,10 @@ pub(crate) mod tests_runtime_handlers {
         let bundle =
             routing::publish_sccp_burn_bundle(app.state.as_ref(), 1, payload).expect("publish");
 
-        let response = routing::handle_v1_sccp_burn_bundle(
-            hex::encode(bundle.commitment.message_id),
-            None,
-        )
-        .await
-        .expect("json response");
+        let response =
+            routing::handle_v1_sccp_burn_bundle(hex::encode(bundle.commitment.message_id), None)
+                .await
+                .expect("json response");
         assert_eq!(
             response
                 .headers()
@@ -29829,21 +29833,20 @@ pub(crate) mod tests_runtime_handlers {
         };
         let certificate = iroha_data_model::governance::types::ParliamentEnactmentCertificate {
             payload: enactment.clone(),
-            signatures:
-                iroha_data_model::governance::types::ParliamentEnactmentSignatureSet {
-                    scheme:
-                        iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold,
-                    signatures: vec![
-                        iroha_data_model::governance::types::ParliamentEnactmentSignature {
-                            signer,
-                            public_key: keypair.public_key().clone(),
-                            signature: iroha_crypto::SignatureOf::new(
-                                keypair.private_key(),
-                                &enactment,
-                            ),
-                        },
-                    ],
-                },
+            signatures: iroha_data_model::governance::types::ParliamentEnactmentSignatureSet {
+                scheme:
+                    iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold,
+                signatures: vec![
+                    iroha_data_model::governance::types::ParliamentEnactmentSignature {
+                        signer,
+                        public_key: keypair.public_key().clone(),
+                        signature: iroha_crypto::SignatureOf::new(
+                            keypair.private_key(),
+                            &enactment,
+                        ),
+                    },
+                ],
+            },
         };
         let bundle = routing::publish_sccp_governance_bundle(
             app.state.as_ref(),

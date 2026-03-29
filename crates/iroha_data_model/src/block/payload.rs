@@ -104,16 +104,19 @@ impl fmt::Display for BlockResult {
 
 impl SignedBlock {
     fn external_entrypoints_slice(&self) -> Option<&[TransactionEntrypoint]> {
-        self.result
-            .as_ref()
-            .and_then(|result| (!result.external_entrypoints.is_empty()).then_some(result.external_entrypoints.as_slice()))
+        self.result.as_ref().and_then(|result| {
+            (!result.external_entrypoints.is_empty())
+                .then_some(result.external_entrypoints.as_slice())
+        })
     }
 
     /// Number of external entrypoints (signed or authority-free) recorded in the block.
     #[inline]
     pub fn external_entrypoint_count(&self) -> usize {
-        self.external_entrypoints_slice()
-            .map_or(self.payload.transactions.len(), <[TransactionEntrypoint]>::len)
+        self.external_entrypoints_slice().map_or(
+            self.payload.transactions.len(),
+            <[TransactionEntrypoint]>::len,
+        )
     }
 
     /// Return error for the transaction index
@@ -447,20 +450,18 @@ struct ExternalEntrypointIterator {
 
 impl ExternalEntrypointIterator {
     fn new(block: &SignedBlock) -> Self {
-        let entries = block
-            .external_entrypoints_slice()
-            .map_or_else(
-                || {
-                    block
-                        .payload
-                        .transactions
-                        .iter()
-                        .cloned()
-                        .map(TransactionEntrypoint::from)
-                        .collect()
-                },
-                ToOwned::to_owned,
-            );
+        let entries = block.external_entrypoints_slice().map_or_else(
+            || {
+                block
+                    .payload
+                    .transactions
+                    .iter()
+                    .cloned()
+                    .map(TransactionEntrypoint::from)
+                    .collect()
+            },
+            ToOwned::to_owned,
+        );
         let len = entries.len();
         Self {
             entries,

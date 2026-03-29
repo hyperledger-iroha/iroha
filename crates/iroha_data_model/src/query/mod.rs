@@ -3738,11 +3738,15 @@ mod tests {
     use crate::{
         AssetDefinitionId,
         domain::DomainId,
-        kaigi::{KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode, KaigiRoomPolicy},
+        kaigi::{
+            KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
+            KaigiRoomPolicy,
+        },
         name::Name,
         transaction::{
             PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
-            PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionEntrypoint, TransactionResult,
+            PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionEntrypoint,
+            TransactionResult,
         },
     };
 

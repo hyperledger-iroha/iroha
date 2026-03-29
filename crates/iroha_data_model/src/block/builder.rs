@@ -16,7 +16,9 @@ use crate::{
     },
     transaction::{
         PrivateKaigiTransaction,
-        signed::{SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner},
+        signed::{
+            SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner,
+        },
     },
     trigger::TimeTriggerEntrypoint,
 };

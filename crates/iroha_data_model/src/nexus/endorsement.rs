@@ -11,17 +11,7 @@ pub const DOMAIN_ENDORSEMENT_VERSION_V1: u8 = 1;
 
 /// Scope covered by a domain endorsement (dataspace and optional block window).
 #[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Default,
-    Encode,
-    Decode,
-    IntoSchema,
+    Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Encode, Decode, IntoSchema,
 )]
 #[cfg_attr(
     feature = "json",
@@ -55,17 +45,7 @@ impl DomainEndorsementScope {
 }
 
 /// Signature over a domain endorsement statement.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -78,17 +58,7 @@ pub struct DomainEndorsementSignature {
 }
 
 /// Canonical domain endorsement body covered by signatures.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -125,17 +95,7 @@ impl DomainEndorsement {
 }
 
 /// Committee configuration for a protected domain.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -161,17 +121,7 @@ impl DomainCommittee {
 }
 
 /// Endorsement policy bound to a domain.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -186,17 +136,7 @@ pub struct DomainEndorsementPolicy {
 }
 
 /// Stored endorsement entry used to detect replay and stale use.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

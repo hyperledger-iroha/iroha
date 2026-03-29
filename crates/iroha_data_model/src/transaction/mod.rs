@@ -31,10 +31,9 @@ pub mod prelude {
     pub use super::{
         DataTriggerSequence, DataTriggerStep, Executable, ExecutionStep, IvmBytecode, IvmProved,
         PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
-        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate,
-        PrivateKaigiTransaction, SignedTransaction, TX_SUBMISSION_RECEIPT_DOMAIN,
-        TimeTriggerEntrypoint, TransactionBuilder, TransactionEntrypoint, TransactionResult,
-        TransactionResultInner, TransactionSignature, TransactionSubmissionReceipt,
-        TransactionSubmissionReceiptPayload, error::prelude::*,
+        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
+        SignedTransaction, TX_SUBMISSION_RECEIPT_DOMAIN, TimeTriggerEntrypoint, TransactionBuilder,
+        TransactionEntrypoint, TransactionResult, TransactionResultInner, TransactionSignature,
+        TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload, error::prelude::*,
     };
 }

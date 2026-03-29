@@ -282,9 +282,7 @@ pub fn decode_nexus_parliament_certificate(
     NexusParliamentCertificateV1::decode(&mut &certificate_bytes[..]).ok()
 }
 
-pub fn verify_nexus_bridge_finality_proof_structure(
-    proof: &NexusBridgeFinalityProofV1,
-) -> bool {
+pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityProofV1) -> bool {
     if proof.version != 1 || proof.chain_id.is_empty() || proof.height == 0 {
         return false;
     }

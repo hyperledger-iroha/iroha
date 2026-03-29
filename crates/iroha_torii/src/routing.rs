@@ -142,9 +142,9 @@ use iroha_primitives::json::Json as IrohaJson;
 use iroha_sccp::{
     BurnPayloadV1, GovernancePayloadV1, NexusBridgeFinalityProofV1, NexusCommitQcV1,
     NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentSignatureV1,
-    NexusSccpBurnProofV1, NexusSccpGovernanceProofV1, SccpHubCommitmentV1,
-    SccpHubMessageKind, SccpMerkleProofV1, burn_message_id, commitment_leaf_hash,
-    parliament_certificate_hash, payload_hash,
+    NexusSccpBurnProofV1, NexusSccpGovernanceProofV1, SccpHubCommitmentV1, SccpHubMessageKind,
+    SccpMerkleProofV1, burn_message_id, commitment_leaf_hash, parliament_certificate_hash,
+    payload_hash,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
@@ -1845,7 +1845,9 @@ fn kaigi_signal_from_transaction(
             reveal_authorities.then(|| crate::account_literal::display_literal(signed.authority())),
             u64::try_from(signed.creation_time().as_millis()).ok(),
         ),
-        TransactionEntrypoint::PrivateKaigi(private) => (&private.metadata, None, Some(private.creation_time_ms)),
+        TransactionEntrypoint::PrivateKaigi(private) => {
+            (&private.metadata, None, Some(private.creation_time_ms))
+        }
         TransactionEntrypoint::Time(_) => return None,
     };
     let key: Name = "kaigi_signal".parse().ok()?;
@@ -4493,9 +4495,7 @@ fn sccp_consensus_phase(
     phase: iroha_data_model::block::consensus::CertPhase,
 ) -> NexusConsensusPhaseV1 {
     match phase {
-        iroha_data_model::block::consensus::CertPhase::Prepare => {
-            NexusConsensusPhaseV1::Prepare
-        }
+        iroha_data_model::block::consensus::CertPhase::Prepare => NexusConsensusPhaseV1::Prepare,
         iroha_data_model::block::consensus::CertPhase::Commit => NexusConsensusPhaseV1::Commit,
         iroha_data_model::block::consensus::CertPhase::NewView => NexusConsensusPhaseV1::NewView,
     }
@@ -21960,7 +21960,8 @@ fn project_tx(
     // Use shared extractor to ensure parity with other filter/projection logic
     let authority = tx_field_value(tx, "authority");
     let timestamp_ms = tx_field_value(tx, "timestamp_ms").and_then(|s| s.parse::<u64>().ok());
-    let entrypoint_kind = tx_field_value(tx, "entrypoint_kind").unwrap_or_else(|| "unknown".to_owned());
+    let entrypoint_kind =
+        tx_field_value(tx, "entrypoint_kind").unwrap_or_else(|| "unknown".to_owned());
     let entry_hash = format!("{}", tx.entrypoint_hash());
     let result_ok = {
         let default_ok = match tx.entrypoint() {

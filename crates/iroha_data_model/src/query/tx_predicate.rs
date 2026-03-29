@@ -131,7 +131,9 @@ impl CommittedTxPredicate {
     }
 
     fn metadata_value<'tx>(tx: &'tx CommittedTransaction, key: &Name) -> Option<&'tx Json> {
-        tx.entrypoint.metadata().and_then(|metadata| metadata.get(key))
+        tx.entrypoint
+            .metadata()
+            .and_then(|metadata| metadata.get(key))
     }
 
     fn metadata_json_value(json: &Json) -> Option<norito::json::Value> {
@@ -828,7 +830,8 @@ mod tests {
         name::Name,
         transaction::{
             PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
-            PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionEntrypoint, TransactionResult,
+            PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionEntrypoint,
+            TransactionResult,
         },
     };
 
@@ -981,11 +984,13 @@ mod tests {
 
         assert!(CommittedTxPredicate::AuthorityExists(false).applies(&tx));
         assert!(CommittedTxPredicate::TsEq(77).applies(&tx));
-        assert!(CommittedTxPredicate::MetadataEq {
-            key: Name::from_str("topic").expect("metadata key"),
-            value: iroha_primitives::json::Json::new("private"),
-        }
-        .applies(&tx));
+        assert!(
+            CommittedTxPredicate::MetadataEq {
+                key: Name::from_str("topic").expect("metadata key"),
+                value: iroha_primitives::json::Json::new("private"),
+            }
+            .applies(&tx)
+        );
         assert!(!CommittedTxPredicate::AuthorityExists(true).applies(&tx));
     }
 }

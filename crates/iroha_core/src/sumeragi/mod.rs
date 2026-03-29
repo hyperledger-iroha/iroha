@@ -11470,7 +11470,7 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
     }
 
     fn prioritize_vote_drain(&self) -> bool {
-        crate::sumeragi::main_loop::Actor::quorum_recovery_vote_drain_urgent(self)
+        false
     }
 
     fn should_bypass_tick_gap(&self) -> bool {

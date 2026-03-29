@@ -2,6 +2,45 @@
 
 Last updated: 2026-03-29
 
+Latest sync (2026-03-29 Kaigi CLI privacy-artifact parity + merge-drift cleanup):
+the reported `iroha_cli` Kaigi compile break is closed: the CLI now matches the
+privacy-aware `CreateKaigi` / `EndKaigi` ISI surface again, and the extra merge
+drift uncovered during validation is fixed too.
+
+- updated `crates/iroha_cli/src/commands/kaigi.rs` so `create` and `end`
+  accept/forward the same optional privacy artifacts as the data model, while
+  `quickstart` now fills explicit `None` values for the new fields; and
+- added focused `iroha_cli` Kaigi parser/artifact tests, then revalidated with
+  `cargo test -p iroha_cli kaigi -- --nocapture` and
+  `cargo check -p iroha_cli --bins --tests`; and
+- fixed the stale `quorum_recovery_vote_drain_urgent` worker bridge in
+  `crates/iroha_core/src/sumeragi/mod.rs` and the missing
+  `TransactionEntrypoint::PrivateKaigi(_)` match arm in
+  `crates/iroha/src/client.rs` that surfaced during the targeted validation
+  pass.
+
+Open work for this slice now remains:
+- rerun a broader workspace validation pass when the next longer compile window
+  is available; this fix was revalidated on `iroha_cli` only.
+
+Latest sync (2026-03-29 Torii proxied list-filter decoding):
+the immediate routed-read regression on `/v1/accounts` is closed: proxied GET
+query params now keep compact JSON filter literals as strings, matching the
+normal query extractor semantics instead of failing early during proxy decode.
+
+- updated `crates/iroha_torii/src/lib.rs` so `decode_torii_proxy_query(...)`
+  uses scalar query coercion for proxied GET params, which preserves
+  `ListFilterParams.filter` as a string and lets the downstream account-id
+  canonicalization path return the expected I105 validation error; and
+- added a focused regression in the Torii routed-read test module plus reran
+  the originally failing integration case
+  `accounts_listing_filter_rejects_dotted_i105_literals`.
+
+Open work for this slice now remains:
+- rerun a broader `integration_tests` or workspace validation pass when the
+  next longer test window is available; this fix was verified with the routed
+  Torii unit test and the single reported integration regression only.
+
 Latest sync (2026-03-29 full preserved-peer stable reruns on the queued-only / local-trigger-query patch set):
 the node-side root-cause fixes did land, but full-envelope acceptance still
 fails. The old symptom families stayed collapsed on these reruns, yet both
