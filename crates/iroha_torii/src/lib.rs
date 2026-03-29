@@ -10465,6 +10465,12 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
             let commit_topology: Vec<_> = state_view.commit_topology().iter().cloned().collect();
             if commit_topology.is_empty() {
                 authoritative_peer_ids.extend(state_view.world().peers().iter().cloned());
+                if authoritative_peer_ids.is_empty() {
+                    if let Some(local_peer_id) = app.local_peer_id.as_ref() {
+                        authoritative_peer_ids.insert(local_peer_id.clone());
+                    }
+                    authoritative_peer_ids.extend(online_peer_ids.iter().cloned());
+                }
             } else {
                 authoritative_peer_ids.extend(commit_topology);
             }
@@ -30087,6 +30093,81 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             super::is_local_authoritative_for_route(app.as_ref(), route),
             "NPoS core-lane ingress should treat committed topology peers as authoritative during bootstrap"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn authoritative_lane_peer_ids_fall_back_to_online_peers_for_npos_core_lane_when_state_is_empty()
+     {
+        let local_keypair = KeyPair::random();
+        let remote_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            let local_peer = Peer::new(
+                "127.0.0.1:10001".parse().expect("valid local address"),
+                local_keypair.public_key().clone(),
+            );
+            let remote_peer = Peer::new(
+                "127.0.0.1:10002".parse().expect("valid remote address"),
+                remote_keypair.public_key().clone(),
+            );
+            online_tx
+                .send(HashSet::from([local_peer, remote_peer]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.commit();
+        }
+
+        {
+            let header = BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = app.state.block(header);
+            block
+                .world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                ));
+            let mut peers = block.world.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.apply();
+            block.commit().expect("commit empty npos peer roster");
+        }
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+
+        assert!(
+            authoritative.contains(&local_peer_id),
+            "local NPoS core-lane ingress should fall back to the local connected peer when state snapshots are empty"
+        );
+        assert!(
+            authoritative.contains(&remote_peer_id),
+            "remote connected peers should keep NPoS core-lane ingress routable when state snapshots are empty"
+        );
+        assert!(
+            super::is_local_authoritative_for_route(app.as_ref(), route),
+            "NPoS core-lane ingress should remain locally authoritative under the connected-peer fallback"
         );
     }
 
