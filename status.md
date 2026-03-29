@@ -2,6 +2,41 @@
 
 Last updated: 2026-03-28
 
+## 2026-03-28 Follow-up: Taira localnet now seeds Kaigi relay data on restart
+- Set up Kaigi relay visibility on the served local Taira deployment by adding
+  a repo-owned bootstrap path that re-signs the live localnet genesis with
+  seeded relay registration and relay-health metadata, then restarts the
+  detached `taira-localnet` screen session from clean storage.
+- Added the helper example
+  `crates/iroha_kagami/examples/taira_kaigi_localnet.rs`, which overlays
+  `kaigi_relay__*` and `kaigi_relay_feedback__*` domain metadata onto the
+  existing Taira genesis manifest and signs the resulting `.nrt` with the
+  deterministic `taira-localgenesis` key.
+- Added `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` to automate the
+  local rollout. The script now validates helper binaries before reusing them,
+  so it skips `cargo test --example ...` harnesses that do not expose the
+  `--genesis` CLI.
+- Updated `configs/soranexus/taira/README.md` with the local Kaigi bootstrap
+  flow, the `IROHA_TAIRA_KAIGI_HELPER_BIN` override for non-default build
+  directories, and the note that the health snapshot can report
+  `registrations_total = 0` even while the relay list itself is populated.
+- Validation:
+  - `cargo test -p iroha_kagami --example taira_kaigi_localnet -- --nocapture`
+    (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha_taira_kaigi_helper cargo build -p iroha_kagami --example taira_kaigi_localnet`
+    (pass)
+  - `IROHA_TAIRA_KAIGI_HELPER_BIN=/tmp/iroha_taira_kaigi_helper/debug/examples/taira_kaigi_localnet bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+    (pass; rotated local storage, re-signed the served genesis, and restarted
+    the live localnet)
+  - `curl -sk https://taira.sora.org/v1/kaigi/relays | jq .`
+    (pass; `total = 3`, all relays `Healthy`)
+  - `curl -sk https://taira.sora.org/v1/kaigi/relays/health | jq .`
+    (pass; `healthy_total = 3`)
+  - `curl -sk https://taira-explorer.sora.org/v1/kaigi/relays | jq .`
+    (pass; explorer proxy sees the same `total = 3` data)
+  - `curl -sk https://taira.sora.org/status | jq '{peers, blocks, txs_approved, txs_rejected}'`
+    (pass; network remained healthy after the restart)
+
 ## 2026-03-28 Follow-up: Taira Sorafs upload path no longer fails at nginx body-size limits
 - Investigated the static-site publish blocker reported by the Sorafs deploy
   wrapper and confirmed the proxy-layer issue on this machine: the active

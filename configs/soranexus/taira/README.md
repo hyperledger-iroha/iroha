@@ -15,6 +15,9 @@ network online quickly.
   the shipped Taira config and genesis.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout.
+- `bootstrap_kaigi_localnet.sh`: local-only relay bootstrap that re-signs the
+  served `dist/taira-localnet` genesis with seeded Kaigi relay metadata and
+  health samples, then restarts the detached `taira-localnet` session.
 - `taira-explorer.nginx.conf`: multi-domain nginx edge config for
   `taira.sora.org` and `taira-explorer.sora.org`.
 
@@ -205,3 +208,46 @@ From `../iroha2-block-explorer-web`:
 
 The Explorer runtime config targets `https://taira.sora.org`, so both UI reads
 and `/v1/*` proxy traffic follow the Taira Torii endpoint.
+
+## Local Kaigi bootstrap
+
+The served local Taira testnet on this machine does not expose a working public
+lane write path after a fresh reset yet, so Kaigi relay metadata must be seeded
+into the localnet's signed genesis overlay rather than submitted live through
+Torii. Without that overlay, `/v1/kaigi/relays` will stay empty.
+
+For the local `dist/taira-localnet` deployment, use:
+
+1. Build the helper used to re-sign the localnet genesis overlay:
+   - `cargo build -p iroha_kagami --example taira_kaigi_localnet --release`
+2. Run the local bootstrap:
+   - `bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+   - if you built the helper in a non-default target dir, point the bootstrap
+     at it explicitly, for example:
+     `IROHA_TAIRA_KAIGI_HELPER_BIN=/tmp/iroha_taira_kaigi_helper/debug/examples/taira_kaigi_localnet bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+3. Verify the relay endpoints and explorer page:
+   - `curl -sk https://taira.sora.org/v1/kaigi/relays | jq .`
+   - `curl -sk https://taira.sora.org/v1/kaigi/relays/health | jq .`
+   - open `https://taira-explorer.sora.org/kaigi/relays`
+
+The script is intentionally localnet-specific:
+
+- it reuses the first three validator accounts already present in
+  `dist/taira-localnet/peer{0,1,2}.toml`, so no extra linked-domain account
+  registration is required;
+- it derives the local client account from `dist/taira-localnet/client.toml`,
+  signs a fresh `genesis.signed.nrt` overlay from `genesis.json`, and seeds the
+  `nexus` domain metadata keys `kaigi_relay__*` and
+  `kaigi_relay_feedback__*` so Torii's Kaigi relay endpoints have data to
+  serve immediately after restart; and
+- it skips `cargo test --example ...` harness binaries during helper
+  auto-detection, so the bootstrap only reuses executables that actually
+  expose the `--genesis` overlay CLI; and
+- after any fresh local Taira reset, rerun this script if you want the Kaigi
+  explorer page to reflect live relay data again.
+
+The health snapshot's `healthy_total` will reflect the seeded relay feedback,
+but `registrations_total` can remain `0` because that counter comes from live
+telemetry rather than the seeded metadata overlay. The explorer overview still
+shows the correct relay count because it floors the overview total to the
+actual relay list length.
