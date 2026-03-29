@@ -57,12 +57,12 @@ use crate::{
     gas as isi_gas,
     governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
     interlane::verify_lane_privacy_proofs,
-    smartcontracts::Execute,
     nexus::space_directory::{
         LaneIdentityMetadataError,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     queue::evaluate_policy_with_catalog,
+    smartcontracts::Execute,
     smartcontracts::ivm::cache::IvmCache,
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
@@ -295,12 +295,11 @@ fn json_object_string(
 fn decode_private_kaigi_fee_binding(
     proof_bytes: &[u8],
 ) -> Result<PrivateKaigiFeeBinding, TransactionRejectionReason> {
-    let envelope: OpenVerifyEnvelope =
-        norito::decode_from_bytes(proof_bytes).map_err(|_| {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
-            ))
-        })?;
+    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes).map_err(|_| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
+        ))
+    })?;
     if envelope.aux.is_empty() {
         return Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted(
@@ -967,31 +966,41 @@ impl<'tx> AcceptedTransaction<'tx> {
             .map_err(AcceptTransactionFail::TransactionLimit)?;
 
         if tx.artifacts.proof.is_empty() {
-            return Err(AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                reason: "private Kaigi proof payload must be non-empty".into(),
-            }));
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi proof payload must be non-empty".into(),
+                },
+            ));
         }
         if tx.fee_spend.proof.is_empty() {
-            return Err(AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                reason: "private Kaigi fee spend proof must be non-empty".into(),
-            }));
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi fee spend proof must be non-empty".into(),
+                },
+            ));
         }
         if tx.fee_spend.nullifiers.is_empty() {
-            return Err(AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                reason: "private Kaigi fee spend must consume at least one nullifier".into(),
-            }));
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi fee spend must consume at least one nullifier".into(),
+                },
+            ));
         }
         if tx.fee_spend.output_commitments.len() != tx.fee_spend.encrypted_change_payloads.len() {
-            return Err(AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                reason:
-                    "private Kaigi fee spend outputs must match encrypted change payload count"
-                        .into(),
-            }));
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason:
+                        "private Kaigi fee spend outputs must match encrypted change payload count"
+                            .into(),
+                },
+            ));
         }
         if tx.fee_spend.asset_definition_id.to_string() != "xor#universal" {
-            return Err(AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                reason: "private Kaigi fee spend asset must be xor#universal".into(),
-            }));
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi fee spend asset must be xor#universal".into(),
+                },
+            ));
         }
 
         match &tx.action {
@@ -1177,9 +1186,11 @@ impl<'tx> AcceptedTransaction<'tx> {
                 AccountId::new(public_key)
             });
 
-        transfer.execute(&fee_payer, state_transaction).map_err(|error| {
-            TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
-        })
+        transfer
+            .execute(&fee_payer, state_transaction)
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+            })
     }
 
     /// Like [`Self::accept_genesis`], but without wrapping.
@@ -1830,9 +1841,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     }
 
     /// Create [`Self`] assuming the entrypoint is acceptable.
-    pub fn new_unchecked_entrypoint(
-        tx: impl Into<Cow<'tx, TransactionEntrypoint>>,
-    ) -> Self {
+    pub fn new_unchecked_entrypoint(tx: impl Into<Cow<'tx, TransactionEntrypoint>>) -> Self {
         Self(tx.into())
     }
 
@@ -1971,7 +1980,14 @@ impl AcceptedTransaction<'static> {
         let now = current_unix_time();
         match &tx {
             TransactionEntrypoint::External(signed) => {
-                Self::validate_with_now(signed, expected_chain_id, max_clock_drift, limits, crypto, now)?;
+                Self::validate_with_now(
+                    signed,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    crypto,
+                    now,
+                )?;
                 enforce_nts_health_for_time_sensitive(signed)?;
             }
             TransactionEntrypoint::PrivateKaigi(private) => {
@@ -1984,9 +2000,11 @@ impl AcceptedTransaction<'static> {
                 )?;
             }
             TransactionEntrypoint::Time(_) => {
-                return Err(AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                    reason: "direct time entrypoints are not accepted on ingress".into(),
-                }));
+                return Err(AcceptTransactionFail::TransactionLimit(
+                    TransactionLimitError {
+                        reason: "direct time entrypoints are not accepted on ingress".into(),
+                    },
+                ));
             }
         }
         Ok(Self(Cow::Owned(tx)))

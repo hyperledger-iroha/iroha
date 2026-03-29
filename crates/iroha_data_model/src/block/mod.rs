@@ -22,8 +22,8 @@ use iroha_version::{UnsupportedVersion, Version};
 use norito::{
     codec::{Decode, Encode},
     core::{
-        default_encode_flags, hardware_crc64 as norito_crc64, Compression,
-        Error as NoritoFrameError, MAGIC, VERSION_MAJOR, VERSION_MINOR,
+        Compression, Error as NoritoFrameError, MAGIC, VERSION_MAJOR, VERSION_MINOR,
+        default_encode_flags, hardware_crc64 as norito_crc64,
     },
 };
 
@@ -452,6 +452,7 @@ impl SignedBlock {
             creation_time_ms,
             view_change_index: 0,
             confidential_features,
+            sccp_commitment_root: None,
         };
 
         let signature = BlockSignature::new(0, SignatureOf::from_hash(private_key, header.hash()));
@@ -1244,7 +1245,7 @@ fn decode_versioned_signed_block_inner(
 
 pub mod prelude {
     //! For glob-import
-    pub use super::{error::BlockRejectionReason, BlockHeader, BlockSignature, SignedBlock};
+    pub use super::{BlockHeader, BlockSignature, SignedBlock, error::BlockRejectionReason};
 }
 
 #[cfg(test)]
@@ -1258,13 +1259,13 @@ mod tests {
     use super::*;
     // Bring commonly used types referenced in transparent API tests.
     #[cfg(feature = "transparent_api")]
+    use crate::ValidationFail;
+    #[cfg(feature = "transparent_api")]
     use crate::transaction::signed::{TransactionEntrypoint, TransactionResultInner};
     #[cfg(feature = "transparent_api")]
     use crate::trigger::DataTriggerSequence;
     #[cfg(feature = "transparent_api")]
     use crate::trigger::TimeTriggerEntrypoint;
-    #[cfg(feature = "transparent_api")]
-    use crate::ValidationFail;
     use crate::{
         da::{
             commitment::{DaCommitmentBundle, DaCommitmentRecord, DaProofScheme, KzgCommitment},
@@ -1473,6 +1474,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 123_456_789_000,
             view_change_index: 123,
             confidential_features: None,
@@ -1496,7 +1498,7 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder, ChainId,
+            ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
         let chain: ChainId = "genesis-default-conf-digest".parse().expect("chain id");
@@ -1542,10 +1544,10 @@ mod tests {
     #[test]
     fn versioned_block_roundtrip_preserves_instruction_order() {
         use crate::{
-            account::AccountId,
-            parameter::{system::SumeragiParameter, Parameter},
-            transaction::{signed::TransactionBuilder, Executable},
             ChainId,
+            account::AccountId,
+            parameter::{Parameter, system::SumeragiParameter},
+            transaction::{Executable, signed::TransactionBuilder},
         };
 
         let key_pair = iroha_crypto::KeyPair::random();
@@ -1765,7 +1767,7 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder, ChainId,
+            ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
         let keypair = KeyPair::random();
@@ -1840,8 +1842,8 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            account::AccountId, domain::DomainId, isi::InstructionBox,
-            transaction::signed::TransactionBuilder, ChainId,
+            ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
+            transaction::signed::TransactionBuilder,
         };
 
         let keypair = KeyPair::random();
@@ -2016,7 +2018,7 @@ mod tests {
         use nonzero_ext::nonzero;
 
         use crate::consensus::{
-            PreviousRosterEvidence, ValidatorSetCheckpoint, VALIDATOR_SET_HASH_VERSION_V1,
+            PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
         };
         use crate::peer::PeerId;
 
@@ -2092,8 +2094,8 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            account::AccountId, domain::DomainId, isi::InstructionBox,
-            transaction::signed::TransactionBuilder, ChainId,
+            ChainId, account::AccountId, domain::DomainId, isi::InstructionBox,
+            transaction::signed::TransactionBuilder,
         };
 
         let keypair = KeyPair::random();
@@ -2119,13 +2121,13 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
+            ChainId,
             account::AccountId,
             da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
             domain::DomainId,
             isi::InstructionBox,
             nexus::{DataSpaceId, LaneId},
             transaction::signed::TransactionBuilder,
-            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2265,12 +2267,12 @@ mod tests {
         use iroha_primitives::numeric::Numeric;
 
         use crate::{
+            ChainId,
             account::AccountId,
             asset::id::AssetDefinitionId,
             domain::DomainId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
-            transaction::{signed::TransactionBuilder, TransactionResultInner},
-            ChainId,
+            transaction::{TransactionResultInner, signed::TransactionBuilder},
         };
 
         let keypair = KeyPair::random();
@@ -2379,14 +2381,14 @@ mod tests {
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
+            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::{
-                signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
                 ExecutionStep,
+                signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
-            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2447,10 +2449,10 @@ mod tests {
         use iroha_crypto::{KeyPair, MerkleTree, SignatureOf};
 
         use crate::{
+            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
-            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2521,14 +2523,14 @@ mod tests {
         use iroha_primitives::const_vec::ConstVec;
 
         use crate::{
+            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::{
-                signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
                 ExecutionStep,
+                signed::{TransactionBuilder, TransactionResult, TransactionResultInner},
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
-            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2602,10 +2604,10 @@ mod tests {
         use iroha_crypto::{Hash, KeyPair, SignatureOf};
 
         use crate::{
+            ChainId,
             account::AccountId,
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
-            ChainId,
         };
 
         let keypair = KeyPair::random();
@@ -2642,8 +2644,8 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            account::AccountId, block::deframe_versioned_signed_block_bytes, domain::DomainId,
-            transaction::signed::TransactionBuilder, ChainId,
+            ChainId, account::AccountId, block::deframe_versioned_signed_block_bytes,
+            domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
         let keypair = KeyPair::random();
@@ -2677,7 +2679,7 @@ mod tests {
         use iroha_crypto::KeyPair;
 
         use crate::{
-            account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder, ChainId,
+            ChainId, account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
 
         let keypair = KeyPair::random();

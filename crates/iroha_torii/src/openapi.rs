@@ -270,6 +270,13 @@ fn tags_section() -> Value {
         Value::String("Iroha Connect session and relay endpoints.".to_owned()),
     );
 
+    let mut vpn = Map::new();
+    vpn.insert("name".into(), Value::String("VPN".to_owned()));
+    vpn.insert(
+        "description".into(),
+        Value::String("Sora VPN profile, session, and receipt endpoints.".to_owned()),
+    );
+
     let mut mcp = Map::new();
     mcp.insert("name".into(), Value::String("MCP".to_owned()));
     mcp.insert(
@@ -372,6 +379,7 @@ fn tags_section() -> Value {
         Value::Object(parameters),
         Value::Object(explorer),
         Value::Object(connect),
+        Value::Object(vpn),
         Value::Object(mcp),
         Value::Object(push),
         Value::Object(webhooks),
@@ -1684,6 +1692,69 @@ fn connect_paths() -> Map {
             "Connect",
             "Fetch Connect status.",
             "Return Connect relay status information.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths
+}
+
+fn vpn_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/vpn/profile".to_owned(),
+        Value::Object(json_get_operation(
+            "VPN",
+            "Fetch the public VPN profile.",
+            "Return the wallet-facing Sora VPN profile advertised by this node.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/vpn/sessions".to_owned(),
+        Value::Object(json_post_operation(
+            "VPN",
+            "Create a VPN session.",
+            "Create a signed Sora VPN session for the active wallet account.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/vpn/sessions/{session_id}".to_owned(),
+        Value::Object({
+            let get_op = json_get_operation(
+                "VPN",
+                "Fetch a VPN session.",
+                "Return the current status of a signed Sora VPN session.",
+                "#/components/schemas/JsonValue",
+                vec![string_path_param("session_id", "VPN session identifier.")],
+            );
+            let delete_op = json_delete_operation(
+                "VPN",
+                "Delete a VPN session.",
+                "Tear down a signed Sora VPN session and return the canonical receipt.",
+                "#/components/schemas/JsonValue",
+                vec![string_path_param("session_id", "VPN session identifier.")],
+            );
+            let mut methods = Map::new();
+            if let Some(get_value) = get_op.get("get") {
+                methods.insert("get".to_owned(), get_value.clone());
+            }
+            if let Some(delete_value) = delete_op.get("delete") {
+                methods.insert("delete".to_owned(), delete_value.clone());
+            }
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/vpn/receipts".to_owned(),
+        Value::Object(json_get_operation(
+            "VPN",
+            "List VPN receipts.",
+            "List canonical Sora VPN receipts for the active wallet account.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -5645,6 +5716,7 @@ fn paths_section() -> Map {
     paths.extend(query_paths());
     paths.extend(stream_paths());
     paths.extend(connect_paths());
+    paths.extend(vpn_paths());
     paths.extend(mcp_paths());
     paths.extend(proof_paths());
     paths.extend(contracts_paths());
@@ -9861,6 +9933,10 @@ mod tests {
         assert!(paths.contains_key("/events"));
         assert!(paths.contains_key("/v1/da/ingest"));
         assert!(paths.contains_key("/v1/connect/session"));
+        assert!(paths.contains_key("/v1/vpn/profile"));
+        assert!(paths.contains_key("/v1/vpn/sessions"));
+        assert!(paths.contains_key("/v1/vpn/sessions/{session_id}"));
+        assert!(paths.contains_key("/v1/vpn/receipts"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
         assert!(paths.contains_key("/v1/multisig/propose"));
@@ -10717,13 +10793,17 @@ mod tests {
             _ => panic!("tags section should be an array"),
         };
         let mut has_push = false;
+        let mut has_vpn = false;
         for tag in tags {
             let Some(obj) = tag.as_object() else { continue };
             if obj.get("name").and_then(Value::as_str) == Some("Push") {
                 has_push = true;
-                break;
+            }
+            if obj.get("name").and_then(Value::as_str) == Some("VPN") {
+                has_vpn = true;
             }
         }
         assert!(has_push, "tags should include Push");
+        assert!(has_vpn, "tags should include VPN");
     }
 }

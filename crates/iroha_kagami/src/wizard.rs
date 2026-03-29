@@ -1144,5 +1144,21 @@ mod tests {
             Some(EXPECTED_TAIRA_CHAIN_ID),
             "public Taira genesis.json must match the shipped live chain id"
         );
+        assert!(
+            config_text.contains("testu"),
+            "public Taira config.toml must render testnet i105 literals"
+        );
+        assert!(
+            !config_text.contains("sorau"),
+            "public Taira config.toml must not leak mainnet i105 literals"
+        );
+        assert!(
+            genesis_text.contains("testu"),
+            "public Taira genesis.json must render testnet i105 literals"
+        );
+        assert!(
+            !genesis_text.contains("sorau"),
+            "public Taira genesis.json must not leak mainnet i105 literals"
+        );
     }
 }

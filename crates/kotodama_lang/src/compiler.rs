@@ -2369,6 +2369,23 @@ seiyaku Test {
     }
 
     #[test]
+    fn explicit_global_wildcards_suppress_access_hint_diagnostics() {
+        let src = r#"
+seiyaku Test {
+  #[access(read="*", write="*")]
+  kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
+    transfer_asset(from, to, asset, amount);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, _manifest, diag) = compiler
+            .compile_source_with_manifest_and_diagnostics(src)
+            .expect("compile manifest");
+        assert!(diag.is_empty());
+    }
+
+    #[test]
     fn manifest_access_set_hints_include_explicit_access() {
         let account_literal = sample_account_literal();
         let account_key = format!("account:{account_literal}");
@@ -3153,6 +3170,9 @@ impl Compiler {
                 &mut access_sets,
                 &mut hint_diagnostics,
             );
+        }
+        if entrypoints_explicitly_wildcard_everything(&typed) {
+            hint_diagnostics = AccessHintDiagnostics::default();
         }
         let has_any_hints = access_sets
             .iter()
@@ -7868,6 +7888,31 @@ fn apply_explicit_access_hints(
         }
     }
     saw_hint
+}
+
+fn entrypoints_explicitly_wildcard_everything(typed: &TypedProgram) -> bool {
+    let mut saw_entrypoint = false;
+    for item in &typed.items {
+        let TypedItem::Function(func) = item;
+        if entrypoint_kind_from_modifiers(&func.modifiers).is_none() {
+            continue;
+        }
+        saw_entrypoint = true;
+        let reads_global = func
+            .modifiers
+            .access_reads
+            .iter()
+            .any(|key| key == GLOBAL_WILDCARD_KEY);
+        let writes_global = func
+            .modifiers
+            .access_writes
+            .iter()
+            .any(|key| key == GLOBAL_WILDCARD_KEY);
+        if !(reads_global && writes_global) {
+            return false;
+        }
+    }
+    saw_entrypoint
 }
 
 fn derive_isi_access_hints(

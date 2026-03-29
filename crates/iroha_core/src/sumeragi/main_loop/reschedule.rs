@@ -547,12 +547,6 @@ impl Actor {
                     pending.view,
                     now,
                 );
-            let same_height_missing_payload_recovery_active = contiguous_frontier
-                && self.frontier_recovery_same_slot_missing_payload_recovery_active(
-                    pending.height,
-                    pending.view,
-                    now,
-                );
             let same_height_rbc_sender_activity_active = contiguous_frontier
                 && self
                     .frontier_recovery_same_height_rbc_sender_activity_active(pending.height, now);
@@ -586,7 +580,6 @@ impl Actor {
                     });
             let same_height_actionable_progress_active = same_height_dependency_backlog_active
                 || same_height_vote_backed_work_active
-                || same_height_missing_payload_recovery_active
                 || same_height_rbc_sender_activity_active
                 || same_height_fresh_missing_block_request;
             if near_commit_quorum
@@ -1253,15 +1246,20 @@ impl Actor {
             .unwrap_or(u64::MAX)
             .saturating_add(1);
         let contiguous_frontier = height == frontier_height;
+        if contiguous_frontier {
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnBodyAvailable {
+                    block_hash,
+                    view,
+                    sender: None,
+                },
+            );
+        }
         let same_height_vote_backed_evidence =
             contiguous_frontier && self.height_has_vote_backed_consensus_evidence(height);
-        let mut frontier_slot_owner_active =
+        let frontier_slot_owner_active =
             contiguous_frontier && self.frontier_slot_has_active_owner_state(height);
-        if same_height_vote_backed_evidence && !frontier_slot_owner_active {
-            let _ = self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
-            frontier_slot_owner_active =
-                contiguous_frontier && self.frontier_slot_has_active_owner_state(height);
-        }
         let effective_has_reschedule_votes =
             has_reschedule_votes || same_height_vote_backed_evidence || frontier_slot_owner_active;
         // Once quorum timeout expires with no same-height evidence, this block is just zombie
@@ -1362,6 +1360,7 @@ impl Actor {
                 )
                 .is_empty()
         {
+            self.pending.pending_blocks.insert(block_hash, pending);
             if handoff_frontier_quorum_timeout_owner {
                 let created_frontier_owner =
                     self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
@@ -1387,7 +1386,6 @@ impl Actor {
                 quorum_stall_age_ms = quorum_stall_age.as_millis(),
                 "skipping no-op commit-quorum reschedule: no actionable retransmit targets remain"
             );
-            self.pending.pending_blocks.insert(block_hash, pending);
             if rotate_authoritative_frontier_immediately || rotate_zero_vote_frontier_immediately {
                 info!(
                     block = %block_hash,
@@ -1423,7 +1421,7 @@ impl Actor {
                 "suppressing repeated commit-quorum reschedule in current deterministic recovery bundle window"
             );
             self.pending.pending_blocks.insert(block_hash, pending);
-            if rotate_authoritative_frontier_immediately || rotate_zero_vote_frontier_immediately {
+            if rotate_zero_vote_frontier_immediately {
                 info!(
                     block = %block_hash,
                     height,
@@ -1457,6 +1455,7 @@ impl Actor {
             || rebroadcast.block_sync
             || rebroadcast.block;
         if !action_taken {
+            self.pending.pending_blocks.insert(block_hash, pending);
             if handoff_frontier_quorum_timeout_owner {
                 let created_frontier_owner =
                     self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
@@ -1482,7 +1481,6 @@ impl Actor {
                 quorum_stall_age_ms = quorum_stall_age.as_millis(),
                 "skipping no-op commit-quorum reschedule after pacing/cooldown suppressed all retransmit work"
             );
-            self.pending.pending_blocks.insert(block_hash, pending);
             if rotate_zero_vote_frontier_immediately {
                 info!(
                     block = %block_hash,
@@ -1504,20 +1502,6 @@ impl Actor {
         } else {
             pending.mark_quorum_reschedule(now);
         }
-        let frontier_recovery_advance = if handoff_frontier_quorum_timeout_owner {
-            let _ = self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
-            Some(self.advance_frontier_recovery(
-                "quorum_timeout",
-                height,
-                view,
-                false,
-                false,
-                true,
-                now,
-            ))
-        } else {
-            None
-        };
 
         if drop_pending {
             if !keep_commit_qc {
@@ -1545,6 +1529,20 @@ impl Actor {
             // own progress, and quorum reschedule must stay a bounded retransmit side effect.
             self.pending.pending_blocks.insert(block_hash, pending);
         }
+        let frontier_recovery_advance = if handoff_frontier_quorum_timeout_owner {
+            let _ = self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
+            Some(self.advance_frontier_recovery(
+                "quorum_timeout",
+                height,
+                view,
+                false,
+                false,
+                true,
+                now,
+            ))
+        } else {
+            None
+        };
 
         let queue_depths = super::status::worker_queue_depth_snapshot();
         warn!(
@@ -1583,7 +1581,7 @@ impl Actor {
             rotate_immediately = rotate_authoritative_frontier_immediately,
             "commit quorum missing past timeout; rescheduling block for reassembly"
         );
-        if rotate_authoritative_frontier_immediately || rotate_zero_vote_frontier_immediately {
+        if rotate_zero_vote_frontier_immediately {
             self.trigger_view_change_with_cause(height, view, direct_view_change_cause);
         }
         true

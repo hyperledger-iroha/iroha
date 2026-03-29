@@ -2205,6 +2205,13 @@ mod chained {
             self
         }
 
+        /// Attach an SCCP commitment root to the block header.
+        #[must_use]
+        pub fn with_sccp_commitment_root(mut self, root: Option<[u8; 32]>) -> Self {
+            self.0.header.set_sccp_commitment_root(root);
+            self
+        }
+
         /// Attach the confidential feature digest that this block commits to.
         #[must_use]
         pub fn with_confidential_features(

@@ -15,10 +15,10 @@ use crate::{
         pin_intent::DaPinIntentBundle,
     },
     transaction::{
+        PrivateKaigiTransaction,
         signed::{
             SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner,
         },
-        PrivateKaigiTransaction,
     },
     trigger::TimeTriggerEntrypoint,
 };
@@ -115,6 +115,11 @@ impl BlockBuilder {
     /// Attach previous-height roster evidence that will be embedded in the resulting block.
     pub fn set_previous_roster_evidence(&mut self, evidence: Option<PreviousRosterEvidence>) {
         self.previous_roster_evidence = evidence;
+    }
+
+    /// Commit an SCCP commitment root in the resulting block header.
+    pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
+        self.header.set_sccp_commitment_root(root);
     }
 
     /// Build a `SignedBlock` with the provided signatures.

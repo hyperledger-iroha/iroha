@@ -15,6 +15,7 @@ use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
+    account::address::ChainDiscriminantGuard,
     isi::staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     parameter::system::{
         SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
@@ -33,7 +34,10 @@ use iroha_version::BuildLine;
 
 use crate::{
     Outcome, RunArgs,
-    genesis::{ConsensusPolicy, generate_default, validate_consensus_mode_for_line},
+    genesis::{
+        ConsensusPolicy, generate_default, profile::known_chain_discriminant_for_chain_id,
+        validate_consensus_mode_for_line,
+    },
     tui,
 };
 
@@ -775,8 +779,22 @@ fn account_id_raw_string(account_id: &AccountId) -> String {
     account_id.to_string()
 }
 
-fn account_id_runtime_literal(account_id: &AccountId) -> String {
-    account_id_raw_string(account_id)
+fn account_id_runtime_literal(account_id: &AccountId, chain_discriminant: Option<u16>) -> String {
+    chain_discriminant.map_or_else(
+        || account_id_raw_string(account_id),
+        |discriminant| {
+            account_id
+                .to_i105_for_discriminant(discriminant)
+                .expect("known localnet account id must render for requested chain discriminant")
+        },
+    )
+}
+
+fn account_literal_for_chain_discriminant(raw: &str, chain_discriminant: u16) -> String {
+    let account_id = AccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("known account literal must parse");
+    account_id_runtime_literal(&account_id, Some(chain_discriminant))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -798,6 +816,7 @@ fn generate_localnet_with_line<T: Write>(
 
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_id = configured_chain_id();
+    let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     let peers = build_peers(
         opts.peers.get(),
         seed_bytes,
@@ -892,13 +911,16 @@ fn generate_localnet_with_line<T: Write>(
         &genesis,
         &genesis_public_key,
         genesis_private.clone(),
+        chain_discriminant,
         &genesis_json_path,
         &genesis_signed_path,
     )?;
     tui::success("Genesis ready");
 
     tui::status("Writing peer configs");
-    let gas_account_id = gas_account_id.as_ref().map(account_id_runtime_literal);
+    let gas_account_id = gas_account_id
+        .as_ref()
+        .map(|account_id| account_id_runtime_literal(account_id, chain_discriminant));
     let trusted = peers
         .iter()
         .map(|p| format!("{}@{}", p.public_key, hosts.public.addr_literal(p.p2p_port)))
@@ -943,6 +965,7 @@ fn generate_localnet_with_line<T: Write>(
             &tiered_state_dir,
             &da_store_dir,
             &chain_id,
+            chain_discriminant,
             (&hosts.bind, &hosts.public),
             opts.consensus_mode,
             mcp_enabled,
@@ -1183,6 +1206,7 @@ fn render_peer_config(
     tiered_state_root: &Path,
     da_store_root: &Path,
     chain_id: &str,
+    chain_discriminant: Option<u16>,
     hosts: (&CanonicalHost, &CanonicalHost),
     consensus_mode: SumeragiConsensusMode,
     mcp_enabled: bool,
@@ -1224,6 +1248,12 @@ fn render_peer_config(
 
     let mut root = Table::new();
     root.insert("chain".into(), Value::String(chain_id.to_owned()));
+    if let Some(chain_discriminant) = chain_discriminant {
+        root.insert(
+            "chain_discriminant".into(),
+            Value::Integer(i64::from(chain_discriminant)),
+        );
+    }
     root.insert(
         "private_key".into(),
         Value::String(peer.private_key.to_string()),
@@ -1520,6 +1550,56 @@ fn render_peer_config(
     );
     root.insert("streaming".into(), Value::Table(streaming));
 
+    if let Some(chain_discriminant) = chain_discriminant {
+        let mut governance = Table::new();
+        let citizenship_escrow_account = account_id_runtime_literal(
+            &iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
+            Some(chain_discriminant),
+        );
+        let bond_escrow_account = account_id_runtime_literal(
+            &iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
+            Some(chain_discriminant),
+        );
+        let slash_receiver_account = account_id_runtime_literal(
+            &iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
+            Some(chain_discriminant),
+        );
+        governance.insert(
+            "citizenship_escrow_account".into(),
+            Value::String(citizenship_escrow_account),
+        );
+        governance.insert(
+            "bond_escrow_account".into(),
+            Value::String(bond_escrow_account),
+        );
+        governance.insert(
+            "slash_receiver_account".into(),
+            Value::String(slash_receiver_account.clone()),
+        );
+        governance.insert(
+            "viral_incentive_pool_account".into(),
+            Value::String(slash_receiver_account.clone()),
+        );
+        governance.insert(
+            "viral_escrow_account".into(),
+            Value::String(slash_receiver_account),
+        );
+        let telemetry_submitters =
+            iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
+                .into_iter()
+                .map(|literal| {
+                    Value::String(account_literal_for_chain_discriminant(
+                        &literal,
+                        chain_discriminant,
+                    ))
+                })
+                .collect();
+        let mut sorafs_telemetry = Table::new();
+        sorafs_telemetry.insert("submitters".into(), Value::Array(telemetry_submitters));
+        governance.insert("sorafs_telemetry".into(), Value::Table(sorafs_telemetry));
+        root.insert("gov".into(), Value::Table(governance));
+    }
+
     let mut confidential = Table::new();
     confidential.insert("enabled".into(), Value::Boolean(true));
     confidential.insert("assume_valid".into(), Value::Boolean(false));
@@ -1756,10 +1836,9 @@ fn extend_genesis(
         let domain_id: DomainId = "wonderland"
             .parse()
             .expect("default genesis must include wonderland domain");
-        builder = builder.append_instruction(Register::account(Account::new_in_domain(
-            AccountId::new(pk.clone()),
-            domain_id,
-        )));
+        builder = builder.append_instruction(Register::account(
+            Account::new(AccountId::new(pk.clone())).with_linked_domain(domain_id),
+        ));
     }
 
     for asset in assets {
@@ -2061,10 +2140,9 @@ fn append_localnet_npos_bootstrap(
         registrations.domains.insert(universal_domain.clone());
     }
     if !registrations.accounts.contains(gas_account_id) {
-        builder = builder.append_instruction(Register::account(Account::new_in_domain(
-            gas_account_id.clone(),
-            ivm_domain.clone(),
-        )));
+        builder = builder.append_instruction(Register::account(
+            Account::new(gas_account_id.clone()).with_linked_domain(ivm_domain.clone()),
+        ));
         registrations.accounts.insert(gas_account_id.clone());
     }
 
@@ -2086,10 +2164,9 @@ fn append_localnet_npos_bootstrap(
     for peer in peers {
         let validator_id = AccountId::new(peer.public_key.clone());
         if !registrations.accounts.contains(&validator_id) {
-            builder = builder.append_instruction(Register::account(Account::new_in_domain(
-                validator_id.clone(),
-                nexus_domain.clone(),
-            )));
+            builder = builder.append_instruction(Register::account(
+                Account::new(validator_id.clone()).with_linked_domain(nexus_domain.clone()),
+            ));
             registrations.accounts.insert(validator_id.clone());
         }
         builder = builder.append_instruction(Mint::asset_numeric(
@@ -2131,9 +2208,11 @@ fn write_genesis(
     genesis: &RawGenesisTransaction,
     genesis_public_key: &iroha_crypto::PublicKey,
     genesis_private_key: ExposedPrivateKey,
+    chain_discriminant: Option<u16>,
     json_path: &Path,
     signed_path: &Path,
 ) -> Result<()> {
+    let _chain_discriminant = chain_discriminant.map(ChainDiscriminantGuard::enter);
     let json = norito::json::to_json_pretty(genesis)?;
     fs::write(json_path, json).wrap_err("failed to write genesis.json")?;
 
@@ -4771,7 +4850,7 @@ mod tests {
             Some(true),
             "npos iroha3 localnet should enable nexus without a sora profile"
         );
-        let gas_account_id = account_id_runtime_literal(&gas_account_id);
+        let gas_account_id = account_id_runtime_literal(&gas_account_id, None);
         let staking = nexus
             .get("staking")
             .and_then(toml::Value::as_table)
@@ -4854,8 +4933,36 @@ mod tests {
         let seed_bytes = Some(b"localnet-gas-runtime-literal".as_slice());
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let gas_account_id = localnet_gas_account_id(&genesis_public_key);
-        let literal = account_id_runtime_literal(&gas_account_id);
+        let literal = account_id_runtime_literal(&gas_account_id, None);
         assert_eq!(literal, gas_account_id.to_string());
+    }
+
+    #[test]
+    fn account_id_runtime_literal_respects_requested_chain_discriminant() {
+        let seed_bytes = Some(b"localnet-gas-runtime-taira".as_slice());
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
+        let literal = account_id_runtime_literal(&gas_account_id, Some(369));
+        assert!(
+            literal.starts_with("test"),
+            "expected testnet i105 literal, got {literal}"
+        );
+        assert!(
+            !literal.starts_with("sora"),
+            "localnet runtime literal must not use mainnet prefix under Taira"
+        );
+    }
+
+    #[test]
+    fn default_sorafs_telemetry_submitter_literal_respects_requested_chain_discriminant() {
+        let source = iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
+            .into_iter()
+            .next()
+            .expect("default submitter");
+        let literal = account_literal_for_chain_discriminant(&source, 369);
+        println!("{literal}");
+        assert!(literal.starts_with("testu"));
+        assert!(!literal.starts_with("sorau"));
     }
 
     #[test]
@@ -4892,7 +4999,8 @@ mod tests {
             .filter_map(|instruction| instruction.as_any().downcast_ref::<Register<Account>>())
             .filter(|register| {
                 register.object.id == genesis_account_id
-                    && register.object.domain() == Some(&ivm_domain)
+                    && register.object.linked_domains().len() == 1
+                    && register.object.linked_domains().contains(&ivm_domain)
             })
             .count();
 

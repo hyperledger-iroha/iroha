@@ -3096,10 +3096,12 @@ pub mod query {
             );
 
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = NewAccount::new_in_domain(ALICE_ID.clone(), domain_id.clone())
+            let alice_account = NewAccount::new(ALICE_ID.clone())
+                .with_linked_domain(domain_id.clone())
                 .with_uaid(Some(uaid_alice))
                 .build(&ALICE_ID);
-            let bob_account = NewAccount::new_in_domain(BOB_ID.clone(), domain_id.clone())
+            let bob_account = NewAccount::new(BOB_ID.clone())
+                .with_linked_domain(domain_id.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
@@ -3427,10 +3429,12 @@ pub mod query {
                 iroha_crypto::Hash::new(b"uaid:bob"),
             );
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-            let alice_account = NewAccount::new_in_domain(ALICE_ID.clone(), domain_id.clone())
+            let alice_account = NewAccount::new(ALICE_ID.clone())
+                .with_linked_domain(domain_id.clone())
                 .with_uaid(Some(uaid_alice))
                 .build(&ALICE_ID);
-            let bob_account = NewAccount::new_in_domain(BOB_ID.clone(), domain_id.clone())
+            let bob_account = NewAccount::new(BOB_ID.clone())
+                .with_linked_domain(domain_id.clone())
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 

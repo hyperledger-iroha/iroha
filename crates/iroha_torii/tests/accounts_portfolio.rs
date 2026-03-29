@@ -236,7 +236,8 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(
-            NewAccount::new_in_domain(first_account.clone(), domain_id.clone())
+            NewAccount::new(first_account.clone())
+                .with_linked_domain(domain_id.clone())
                 .with_uaid(Some(uaid)),
         )
         .into(),
@@ -290,7 +291,8 @@ fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(
-            NewAccount::new_in_domain(first_account.clone(), domain_id.clone())
+            NewAccount::new(first_account.clone())
+                .with_linked_domain(domain_id.clone())
                 .with_uaid(Some(uaid)),
         )
         .into(),

@@ -100,6 +100,7 @@ pub mod payloads {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,

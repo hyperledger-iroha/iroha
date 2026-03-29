@@ -145,13 +145,13 @@ mod tests {
 
     use super::*;
     use crate::{
+        ChainId,
         account::AccountId,
         domain::DomainId,
         transaction::{
-            signed::{TransactionBuilder, TransactionResult},
             TransactionResultInner,
+            signed::{TransactionBuilder, TransactionResult},
         },
-        ChainId,
     };
 
     fn sample_entrypoint_hash() -> HashOf<TransactionEntrypoint> {

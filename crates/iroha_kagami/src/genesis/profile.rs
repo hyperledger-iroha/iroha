@@ -6,6 +6,13 @@ use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::ChainId;
 
+/// Canonical I105 discriminant for the public Taira testnet.
+pub const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
+/// Canonical I105 discriminant for the public Nexus mainnet.
+pub const NEXUS_CHAIN_DISCRIMINANT: u16 = 753;
+const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
+
 /// Profile presets for `kagami genesis`/`kagami verify`.
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)] // Keep network names explicit.
@@ -23,6 +30,8 @@ pub enum GenesisProfile {
 pub struct ProfileDefaults {
     /// Expected chain identifier.
     pub chain_id: ChainId,
+    /// Optional canonical I105 chain discriminant to use when rendering account literals.
+    pub chain_discriminant: Option<u16>,
     /// Collector quorum size.
     pub collectors_k: u16,
     /// Redundant send fanout.
@@ -48,6 +57,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
     match profile {
         GenesisProfile::Iroha3Dev => ProfileDefaults {
             chain_id: ChainId::from("iroha3-dev.local"),
+            chain_discriminant: None,
             collectors_k: 1,
             min_peers: 1,
             collectors_redundant_send_r: redundant_send_r_from_len(1),
@@ -55,6 +65,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         },
         GenesisProfile::Iroha3Taira => ProfileDefaults {
             chain_id: ChainId::from("iroha3-taira"),
+            chain_discriminant: Some(TAIRA_CHAIN_DISCRIMINANT),
             collectors_k: 3,
             min_peers: 4,
             collectors_redundant_send_r: redundant_send_r_from_len(4),
@@ -62,6 +73,7 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
         },
         GenesisProfile::Iroha3Nexus => ProfileDefaults {
             chain_id: ChainId::from("iroha3-nexus"),
+            chain_discriminant: Some(NEXUS_CHAIN_DISCRIMINANT),
             collectors_k: 5,
             min_peers: 4,
             collectors_redundant_send_r: redundant_send_r_from_len(4),
@@ -74,6 +86,16 @@ pub fn profile_defaults(profile: GenesisProfile) -> ProfileDefaults {
 #[must_use]
 pub fn profile_requires_npos(profile: GenesisProfile) -> bool {
     matches!(profile, GenesisProfile::Iroha3Nexus)
+}
+
+/// Return the canonical I105 chain discriminant for well-known network ids.
+#[must_use]
+pub fn known_chain_discriminant_for_chain_id(chain_id: &str) -> Option<u16> {
+    match chain_id {
+        "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
+        "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID => Some(NEXUS_CHAIN_DISCRIMINANT),
+        _ => None,
+    }
 }
 
 /// Parse a hex-encoded VRF seed into the fixed 32-byte array required by `SumeragiNposParameters`.
@@ -123,18 +145,21 @@ mod tests {
     fn profile_defaults_assign_expected_values() {
         let dev = profile_defaults(GenesisProfile::Iroha3Dev);
         assert_eq!(dev.chain_id, ChainId::from("iroha3-dev.local"));
+        assert_eq!(dev.chain_discriminant, None);
         assert_eq!(dev.collectors_k, 1);
         assert_eq!(dev.collectors_redundant_send_r, 1);
         assert_eq!(dev.min_peers, 1);
 
         let taira = profile_defaults(GenesisProfile::Iroha3Taira);
         assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
+        assert_eq!(taira.chain_discriminant, Some(TAIRA_CHAIN_DISCRIMINANT));
         assert_eq!(taira.collectors_k, 3);
         assert_eq!(taira.collectors_redundant_send_r, 3);
         assert_eq!(taira.min_peers, 4);
 
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
+        assert_eq!(nexus.chain_discriminant, Some(NEXUS_CHAIN_DISCRIMINANT));
         assert_eq!(nexus.collectors_k, 5);
         assert_eq!(nexus.collectors_redundant_send_r, 3);
         assert_eq!(nexus.min_peers, 4);
@@ -178,5 +203,26 @@ mod tests {
         assert!(!profile_requires_npos(GenesisProfile::Iroha3Dev));
         assert!(!profile_requires_npos(GenesisProfile::Iroha3Taira));
         assert!(profile_requires_npos(GenesisProfile::Iroha3Nexus));
+    }
+
+    #[test]
+    fn known_chain_discriminant_maps_taira_and_nexus() {
+        assert_eq!(
+            known_chain_discriminant_for_chain_id("809574f5-fee7-5e69-bfcf-52451e42d50f"),
+            Some(TAIRA_CHAIN_DISCRIMINANT)
+        );
+        assert_eq!(
+            known_chain_discriminant_for_chain_id("iroha3-taira"),
+            Some(TAIRA_CHAIN_DISCRIMINANT)
+        );
+        assert_eq!(
+            known_chain_discriminant_for_chain_id("00000000-0000-0000-0000-000000000753"),
+            Some(NEXUS_CHAIN_DISCRIMINANT)
+        );
+        assert_eq!(
+            known_chain_discriminant_for_chain_id("iroha3-nexus"),
+            Some(NEXUS_CHAIN_DISCRIMINANT)
+        );
+        assert_eq!(known_chain_discriminant_for_chain_id("unknown"), None);
     }
 }

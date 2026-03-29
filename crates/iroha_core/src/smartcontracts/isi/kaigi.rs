@@ -12,12 +12,12 @@ use iroha_data_model::{
         prelude::{DomainEvent, MetadataChanged},
     },
     isi::{
+        InstructionBox,
         error::{InstructionExecutionError as Error, InvalidParameterError},
         kaigi::{
             CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
             ReportKaigiRelayHealth, SetKaigiRelayManifest,
         },
-        InstructionBox,
     },
     kaigi::{
         KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
@@ -27,7 +27,7 @@ use iroha_data_model::{
     },
     prelude::{AccountId, DomainId, Json, Name},
     query::error::FindError,
-    transaction::{PrivateKaigiAction, PrivateKaigiTransaction, PrivateKaigiTemplate},
+    transaction::{PrivateKaigiAction, PrivateKaigiTemplate, PrivateKaigiTransaction},
 };
 use privacy::{HostPrivacyArtifacts, PrivacyArtifacts};
 
@@ -53,7 +53,10 @@ fn opaque_account_from_seed(label: &str, seed: &[u8]) -> Result<AccountId, Error
 }
 
 fn opaque_host_account(commitment: &KaigiParticipantCommitment) -> Result<AccountId, Error> {
-    opaque_account_from_seed("iroha.private_kaigi.host.v1", commitment.commitment.as_ref())
+    opaque_account_from_seed(
+        "iroha.private_kaigi.host.v1",
+        commitment.commitment.as_ref(),
+    )
 }
 
 fn opaque_participant_account(
@@ -114,17 +117,15 @@ pub(crate) fn private_instruction_box(
             }
             .into()
         }
-        PrivateKaigiAction::End(end) => {
-            EndKaigi {
-                call_id: end.call_id.clone(),
-                ended_at_ms: end.ended_at_ms,
-                commitment: Some(tx.artifacts.commitment.clone()),
-                nullifier: Some(tx.artifacts.nullifier.clone()),
-                roster_root: Some(tx.artifacts.roster_root),
-                proof: Some(tx.artifacts.proof.clone()),
-            }
-            .into()
+        PrivateKaigiAction::End(end) => EndKaigi {
+            call_id: end.call_id.clone(),
+            ended_at_ms: end.ended_at_ms,
+            commitment: Some(tx.artifacts.commitment.clone()),
+            nullifier: Some(tx.artifacts.nullifier.clone()),
+            roster_root: Some(tx.artifacts.roster_root),
+            proof: Some(tx.artifacts.proof.clone()),
         }
+        .into(),
     })
 }
 

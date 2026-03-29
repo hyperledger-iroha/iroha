@@ -610,7 +610,8 @@ impl Queue {
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
                     }
-                    Executable::Ivm(_) => match crate::executor::parse_gas_limit(signed.metadata()) {
+                    Executable::Ivm(_) => match crate::executor::parse_gas_limit(signed.metadata())
+                    {
                         Ok(Some(limit)) => limit,
                         Ok(None) => {
                             warn!(
@@ -1792,9 +1793,7 @@ impl Queue {
         if let Some(status) = manifest_status {
             if let Some(rules) = status.rules() {
                 let alias = status.alias.clone();
-                if !rules.validators.is_empty()
-                    && checked.as_ref().authority_opt().is_none()
-                {
+                if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
                     #[cfg(feature = "telemetry")]
                     telemetry_handle.record_manifest_admission("missing_authority");
                     return Err(Failure {
@@ -1808,7 +1807,10 @@ impl Queue {
                     });
                 }
                 if let Some(authority) = checked.as_ref().authority_opt()
-                    && !rules.validators.iter().any(|validator| validator == authority)
+                    && !rules
+                        .validators
+                        .iter()
+                        .any(|validator| validator == authority)
                 {
                     iroha_logger::warn!(
                         lane = %alias,
@@ -3344,7 +3346,9 @@ impl Queue {
                         let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
                         gas::meter_instructions(&instructions)
                     }
-                    Executable::IvmProved(proved) => gas::meter_instructions(proved.overlay.as_ref()),
+                    Executable::IvmProved(proved) => {
+                        gas::meter_instructions(proved.overlay.as_ref())
+                    }
                     Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
                 }
             }
