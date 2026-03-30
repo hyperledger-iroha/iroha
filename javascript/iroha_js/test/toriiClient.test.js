@@ -17182,6 +17182,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
       headers: { "content-type": "application/json" },
     });
   };
+  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const session = await client.createVpnSession(
@@ -17242,6 +17243,7 @@ test("deleteVpnSession returns null when the session is already missing", async 
       headers: { "content-type": "application/json" },
     });
   };
+  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.deleteVpnSession("sess_123", { canonicalAuth });
   assert.equal(result, null);
@@ -17310,6 +17312,7 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
       headers: { "content-type": "application/json" },
     });
   };
+  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const session = await client.getVpnSession("sess_live", { canonicalAuth });
@@ -17379,6 +17382,7 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
       headers: { "content-type": "application/json" },
     });
   };
+  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const receipt = await client.deleteVpnSession("sess_789", { canonicalAuth });
   assert.deepEqual(receipt, {
@@ -18114,6 +18118,11 @@ function createResponse({ status, jsonData = {}, arrayData, textBody, headers })
       },
     },
   };
+}
+
+function markFetchSupportsRawUtf8Headers(fetchImpl) {
+  fetchImpl.__irohaSupportsRawUtf8Headers = true;
+  return fetchImpl;
 }
 
 test("ToriiClient._normalizeUnsignedInteger enforces integer inputs", () => {

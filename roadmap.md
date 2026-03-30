@@ -2,6 +2,13 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 JS SDK UTF-8 canonical-auth transport fallback):
+the JS Torii client now has a built-in raw Node HTTP/TLS path for UTF-8
+`X-Iroha-Account` headers, and the focused canonical-auth/VPN regression suite
+passes. The remaining work is live application validation in the Electron VPN
+stack against `https://taira.sora.org` so the patched app repo can confirm
+that `vpn:connect` now completes end to end with a funded Taira wallet.
+
 Latest sync (2026-03-30 fresh full preserved-peer reruns on the current worktree):
 the fixed transport signatures remain gone, but the current-tree 4-peer stable
 envelopes now fail on a shared synchronized `no lagging peers` stall instead
