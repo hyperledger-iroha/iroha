@@ -192,7 +192,9 @@ use crate::{
     block::{CommittedBlock, ValidBlock},
     compliance::LaneComplianceEngine,
     executor::Executor,
-    governance::manifest::{LaneManifestRegistry, LaneManifestRegistryHandle},
+    governance::manifest::{
+        LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
+    },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::Kura,
     nexus::space_directory::{
@@ -6898,11 +6900,11 @@ where
     I: IntoIterator<Item = P>,
     P: std::borrow::Borrow<PeerId>,
 {
-    let peer_keys: BTreeSet<PublicKey> = peers
+    let peer_ids: BTreeSet<PeerId> = peers
         .into_iter()
-        .map(|peer| peer.borrow().public_key().clone())
+        .map(|peer| peer.borrow().clone())
         .collect();
-    if peer_keys.is_empty() {
+    if peer_ids.is_empty() {
         return BTreeSet::new();
     }
 
@@ -6910,8 +6912,7 @@ where
         .public_lane_validators()
         .iter()
         .filter_map(|((_lane_id, _validator_id), record)| {
-            let signatory = record.validator.try_signatory()?;
-            peer_keys.contains(signatory).then_some(record.lane_id)
+            peer_ids.contains(&record.peer_id).then_some(record.lane_id)
         })
         .collect()
 }
@@ -7029,6 +7030,43 @@ where
     } else {
         BTreeSet::new()
     };
+    let validator_peer_ids_by_account: BTreeMap<AccountId, PeerId> = world
+        .public_lane_validators()
+        .iter()
+        .filter(|(_, record)| {
+            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
+        })
+        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| {
+            matches!(
+                nexus
+                    .staking
+                    .validator_mode(record.lane_id, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            )
+        })
+        .filter_map(|(_, record)| {
+            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                &record.self_stake,
+                nexus.staking.min_validator_stake,
+            ) else {
+                return None;
+            };
+            if !meets_min {
+                return None;
+            }
+            if !present_peers.contains(&record.peer_id) {
+                return None;
+            }
+            if enforce_topology_membership && !topology_peers.contains(&record.peer_id) {
+                return None;
+            }
+            if !peer_has_live_consensus_key(world, &record.peer_id, block_height) {
+                return None;
+            }
+            Some((record.validator.clone(), record.peer_id.clone()))
+        })
+        .collect();
     if enforce_topology_membership {
         let mut active_candidates: std::collections::BTreeSet<PeerId> =
             std::collections::BTreeSet::new();
@@ -7056,10 +7094,7 @@ where
             if !meets_min {
                 continue;
             }
-            let Some(pk) = record.validator.try_signatory() else {
-                continue;
-            };
-            let pid = PeerId::from(pk.clone());
+            let pid = record.peer_id.clone();
             if !present_peers.contains(&pid) {
                 continue;
             }
@@ -7088,17 +7123,11 @@ where
     }
     // Preferred path: council-derived roster for the epoch.
     if let Some(c) = world.council().get(&epoch).cloned() {
-        // Build PeerIds from council members' signatories.
-        let mut ids: Vec<PeerId> = c
+        let ids: Vec<PeerId> = c
             .members
             .into_iter()
-            .map(|acct| PeerId::from(acct.signatory().clone()))
+            .filter_map(|acct| validator_peer_ids_by_account.get(&acct).cloned())
             .collect();
-        // Filter to peers known in WSV and preserve order.
-        ids.retain(|pid| present_peers.contains(pid));
-        if enforce_topology_membership {
-            ids.retain(|pid| topology_peers.contains(pid));
-        }
         if !ids.is_empty() {
             return Some(ids);
         }
@@ -7128,8 +7157,7 @@ where
             if !meets_min {
                 return None;
             }
-            let pk = record.validator.try_signatory()?;
-            let pid = PeerId::from(pk.clone());
+            let pid = record.peer_id.clone();
             if !present_peers.contains(&pid) {
                 return None;
             }
@@ -7370,6 +7398,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: active_validator.clone(),
+                peer_id: PeerId::from(active_validator.signatory().clone()),
                 stake_account: active_validator.clone(),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -7385,6 +7414,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: jailed_validator.clone(),
+                peer_id: PeerId::from(jailed_validator.signatory().clone()),
                 stake_account: jailed_validator.clone(),
                 total_stake: Numeric::new(10_000, 0),
                 self_stake: Numeric::new(10_000, 0),
@@ -7432,6 +7462,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: present_validator.clone(),
+                peer_id: PeerId::from(present_validator.signatory().clone()),
                 stake_account: present_validator.clone(),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -7447,6 +7478,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: missing_validator.clone(),
+                peer_id: PeerId::from(missing_validator.signatory().clone()),
                 stake_account: missing_validator,
                 total_stake: Numeric::new(2_000, 0),
                 self_stake: Numeric::new(2_000, 0),
@@ -7496,6 +7528,7 @@ mod stake_snapshot_tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::SINGLE,
                     validator: validator.clone(),
+                    peer_id: PeerId::from(kp.public_key().clone()),
                     stake_account: validator.clone(),
                     total_stake: Numeric::new(1_000, 0),
                     self_stake: Numeric::new(1_000, 0),
@@ -7576,6 +7609,7 @@ mod stake_snapshot_tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::SINGLE,
                     validator: validator.clone(),
+                    peer_id: PeerId::from(kp.public_key().clone()),
                     stake_account: validator,
                     total_stake: Numeric::new(1_000, 0),
                     self_stake: Numeric::new(1_000, 0),
@@ -7594,6 +7628,7 @@ mod stake_snapshot_tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: validator.clone(),
+                    peer_id: PeerId::from(kp.public_key().clone()),
                     stake_account: validator,
                     total_stake: Numeric::new(2_000, 0),
                     self_stake: Numeric::new(2_000, 0),
@@ -7681,6 +7716,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: live_validator.clone(),
+                peer_id: live_peer.clone(),
                 stake_account: live_validator.clone(),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -7696,6 +7732,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: expired_validator.clone(),
+                peer_id: expired_peer.clone(),
                 stake_account: expired_validator,
                 total_stake: Numeric::new(2_000, 0),
                 self_stake: Numeric::new(2_000, 0),
@@ -7740,6 +7777,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator,
+                peer_id: peer.clone(),
                 stake_account: DMAccountId::of(kp.public_key().clone()),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -7811,6 +7849,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: stake_validator,
+                peer_id: stake_peer.clone(),
                 stake_account: DMAccountId::of(stake_kp.public_key().clone()),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -7826,6 +7865,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::new(1),
                 validator: admin_validator,
+                peer_id: admin_peer.clone(),
                 stake_account: DMAccountId::of(admin_kp.public_key().clone()),
                 total_stake: Numeric::new(2_000, 0),
                 self_stake: Numeric::new(2_000, 0),
@@ -7886,6 +7926,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator_id.clone(),
+                peer_id: peer_a.clone(),
                 stake_account: validator_id,
                 total_stake: Numeric::new(500, 0),
                 self_stake: Numeric::new(500, 0),
@@ -18079,6 +18120,46 @@ impl State {
         )
     }
 
+    /// Resolve the authoritative validator peer ids for a lane from manifests or staking state.
+    pub fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
+        let manifest_registry = self.lane_manifests.read().clone();
+        let nexus = self.nexus_snapshot();
+        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
+        let block_height = self
+            .latest_block_header_fast()
+            .map(|header| header.height().get())
+            .unwrap_or_else(|| {
+                self.world
+                    .view()
+                    .consensus_keys()
+                    .iter()
+                    .map(|(_, record)| record.activation_height)
+                    .max()
+                    .unwrap_or(0)
+            });
+        let commit_topology = self.commit_topology_snapshot();
+        Self::authoritative_lane_peer_ids_from_sources(
+            &self.world.view(),
+            lane_id,
+            validator_mode,
+            manifest_registry.as_ref(),
+            &nexus,
+            &commit_topology,
+            block_height,
+        )
+    }
+
+    /// Return the explicit manifest validator bindings configured for a lane, if any.
+    pub fn manifest_lane_validator_bindings(
+        &self,
+        lane_id: LaneId,
+    ) -> Vec<ManifestValidatorBinding> {
+        self.lane_manifests
+            .read()
+            .lane_validator_bindings(lane_id)
+            .unwrap_or_default()
+    }
+
     fn lane_relay_committee_seed(
         &self,
         dataspace_id: DataSpaceId,
@@ -18187,6 +18268,84 @@ impl State {
             .into_iter()
             .take(max)
             .map(|(account, _)| account)
+            .collect()
+    }
+
+    fn authoritative_lane_peer_ids_from_sources(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
+        manifest_registry: &LaneManifestRegistry,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        commit_topology: &[PeerId],
+        block_height: u64,
+    ) -> Vec<PeerId> {
+        if let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id) {
+            let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
+            let topology_peers: BTreeSet<PeerId> = commit_topology.iter().cloned().collect();
+            let enforce_topology_membership = !topology_peers.is_empty();
+            bindings.retain(|binding| {
+                present_peers.contains(&binding.peer_id)
+                    && (!enforce_topology_membership || topology_peers.contains(&binding.peer_id))
+                    && peer_has_live_consensus_key(world, &binding.peer_id, block_height)
+            });
+            bindings.sort_by(|lhs, rhs| {
+                lhs.validator
+                    .cmp(&rhs.validator)
+                    .then_with(|| lhs.peer_id.cmp(&rhs.peer_id))
+            });
+            bindings.dedup_by(|lhs, rhs| lhs.peer_id == rhs.peer_id);
+            return bindings
+                .into_iter()
+                .map(|binding| binding.peer_id)
+                .collect();
+        }
+
+        if !matches!(
+            validator_mode,
+            iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+        ) {
+            return Vec::new();
+        }
+
+        let mut candidates: Vec<(AccountId, PeerId, Numeric)> = world
+            .public_lane_validators()
+            .iter()
+            .filter(|((lane, _), record)| {
+                *lane == lane_id && matches!(record.status, PublicLaneValidatorStatus::Active)
+            })
+            .filter_map(|(_, record)| {
+                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                    &record.self_stake,
+                    nexus.staking.min_validator_stake,
+                ) else {
+                    return None;
+                };
+                if !meets_min {
+                    return None;
+                }
+                Some((
+                    record.validator.clone(),
+                    record.peer_id.clone(),
+                    record.total_stake.clone(),
+                ))
+            })
+            .collect();
+        candidates.sort_by(|lhs, rhs| {
+            rhs.2
+                .cmp(&lhs.2)
+                .then_with(|| lhs.0.cmp(&rhs.0))
+                .then_with(|| lhs.1.cmp(&rhs.1))
+        });
+        candidates.dedup_by(|lhs, rhs| lhs.1 == rhs.1);
+
+        let max = usize::try_from(nexus.staking.max_validators.get())
+            .unwrap_or(usize::MAX)
+            .min(candidates.len());
+        candidates
+            .into_iter()
+            .take(max)
+            .map(|(_, peer_id, _)| peer_id)
             .collect()
     }
 
@@ -28030,7 +28189,9 @@ mod tests {
     use crate::{
         block::{BlockBuilder, BlockValidationError, ValidBlock, valid::validate_axt_envelopes},
         da::DaShardCursorJournal,
-        governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        },
         kura::Kura,
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         query::store::LiveQueryStore,
@@ -30398,8 +30559,21 @@ mod tests {
     ) {
         let mut statuses = BTreeMap::new();
         for (lane_id, dataspace_id, validators) in lanes {
+            let validator_bindings = validators
+                .iter()
+                .map(|validator| ManifestValidatorBinding {
+                    validator: validator.clone(),
+                    peer_id: PeerId::from(
+                        validator
+                            .try_signatory()
+                            .expect("manifest test validators must be single-signatory")
+                            .clone(),
+                    ),
+                })
+                .collect();
             let rules = GovernanceRules {
                 validators: validators.clone(),
+                validator_bindings,
                 ..GovernanceRules::default()
             };
             let status = LaneManifestStatus {
@@ -31537,6 +31711,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
+                peer_id: PeerId::from(validator.signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: Numeric::new(1_000_000, 0),
                 self_stake: Numeric::new(1_000_000, 0),

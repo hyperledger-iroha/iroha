@@ -126,7 +126,11 @@ LaneConfigEntry {
 - Lanes declare their governance module via the catalog. `LaneConfigEntry` carries the original alias and slug to keep telemetry and audit trails readable.
 - The Nexus registry distributes signed lane manifests that include the `LaneId`, dataspace binding, governance handle, settlement handle, and metadata.
 - Runtime-upgrade hooks continue to enforce governance policies (`gov_upgrade_id` by default) and log diffs via the telemetry bridge (`nexus.config.diff` events).
-- Lane manifests define the dataspace validator pool for admin-managed lanes; stake-elected lanes derive their validator pool from public-lane staking records.
+- Lane manifests define the dataspace validator pool for admin-managed lanes
+  using explicit `{ validator, peer_id }` bindings; stake-elected lanes derive
+  their validator pool from public-lane staking records. In both modes,
+  authoritative routing and roster selection use the stored `peer_id` rather
+  than deriving peers from validator account signatories.
 
 ## Telemetry & Status
 

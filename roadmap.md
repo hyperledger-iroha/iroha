@@ -88,6 +88,31 @@ stalls:
     permissioned and NPoS stable envelopes to see whether the shared liveness
     stop is actually resolved.
 
+Latest sync (2026-03-30 Nexus public-lane authoritative peer binding):
+stake-elected public-lane validators now bind an explicit `peer_id` instead of
+relying on `validator AccountId.signatory == live peer identity`, and Torii
+routed public-lane proxying now uses only authoritative peer bindings and
+fails closed with `503 route_unavailable` when those bindings are missing,
+stale, or offline. The remaining routing-model gaps are closed too:
+stake-elected lanes now have `RebindPublicLaneValidatorPeer` for deterministic
+peer repair, admin-managed manifests now declare explicit
+`{ validator, peer_id }` bindings instead of string validator lists, Torii
+validator snapshots expose non-null `peer_id` values for both authority
+sources, and the Nexus cross-dataspace harnesses compile again with
+intentionally divergent validator accounts vs peer ids. This slice still
+intentionally avoids new retry logic or deployment-pressure workarounds; the
+reset-path `429 queue_full` issue remains tracked separately from routing. The
+downstream Kagami/deploy serialization gap is also closed now:
+`iroha_genesis` preserves `peer_id` in JSON
+`RegisterPublicLaneValidator` output, so rendered genesis files keep the
+authoritative binding end to end instead of dropping it during export.
+
+Open work for this slice now remains:
+- run the broader long-lived verification suites (`cargo test --workspace` and
+  longer multi-peer Nexus envelopes) when time budget allows; the targeted
+  data-model/core/Torii checks and the cross-dataspace integration harness
+  compile path are already green.
+
 Latest sync (2026-03-30 JS SDK UTF-8 canonical-auth transport fallback):
 the JS Torii client now has a built-in raw Node HTTP/TLS path for UTF-8
 `X-Iroha-Account` headers, and the focused canonical-auth/VPN regression suite
@@ -866,6 +891,85 @@ Open work for this slice now remains:
   `no reachable authoritative peers are available` under load; and
 - rerun both full envelopes only after those two failure classes are addressed;
   do not widen consensus or client semantics again before then.
+
+Latest sync (2026-03-29 C# Torii VPN/SoraFS + managed query + explorer inventory REST/SSE + proof-SSE + contract runtime/write sync):
+the preview `.NET 8` SDK now covers the latest public Torii additions, exposes
+managed signed `/query` coverage plus typed SSE entry points, and no longer
+stops at pure asset-quantity transactions.
+
+- `csharp/src/Hyperledger.Iroha.Sdk/Torii/` now includes typed models and
+  `ToriiClient` helpers for `/v1/vpn/profile`, signed `/v1/vpn/sessions`,
+  `/v1/sorafs/cid/{cid}`, `/v1/sorafs/denylist/catalog`, and
+  `/v1/sorafs/denylist/packs/{pack_id}`, plus raw/buffered helpers for
+  `/sorafs/cid/{cid}/...` content reads, raw signed `/query` submission,
+  managed singular `SignedQueryBuilder` coverage for the full current
+  singular set (`FindExecutorDataModel`, `FindParameters`,
+  `FindAliasesByAccountId`, `FindProofRecordById`,
+  `FindContractManifestByCodeHash`, `FindAbiVersion`, `FindAssetById`,
+  `FindAssetDefinitionById`, `FindTwitterBindingByHash`,
+  `FindDomainEndorsements`, `FindDomainEndorsementPolicy`,
+  `FindDomainCommittee`, `FindDaPinIntentByTicket`,
+  `FindDaPinIntentByManifest`, `FindDaPinIntentByAlias`,
+  `FindDaPinIntentByLaneEpochSequence`, `FindSorafsProviderOwner`,
+  `FindDataspaceNameOwnerById`), `SignedIterableQueryBuilder` coverage for the
+  current fast_dsl iterable subset (`FindDomains`, `FindAccounts`,
+  `FindAssets`, `FindAssetDefinitions`, `FindRepoAgreements`, `FindNfts`,
+  `FindRwas`, `FindTransactions`, `FindRoles`, `FindRoleIds`, `FindPeers`,
+  `FindActiveTriggerIds`, `FindTriggers`, `FindAccountsWithAsset`,
+  `FindPermissionsByAccountId`, `FindRolesByAccountId`, `FindBlocks`,
+  `FindBlockHeaders`, `FindProofRecords`, `FindOfflineAllowances`,
+  `FindOfflineAllowanceByCertificateId`, `FindOfflineToOnlineTransfers`,
+  `FindOfflineToOnlineTransferById`, `FindOfflineCounterSummaries`,
+  `FindOfflineVerdictRevocations`, and cursor `Continue(...)`), plus
+  raw/parsed `/v1/events/sse` consumption, typed
+  `StreamPipelineEventsAsync(...)` / `StreamProofEventsAsync(...)`
+  projections for pipeline and proof payloads, and typed explorer
+  block/transaction/instruction SSE projections for `/v1/explorer/*/stream`,
+  plus typed explorer account/domain/asset/NFT/RWA inventory page/detail
+  reads, asset-definition detail/econometrics/holder-snapshot reads,
+  block/transaction/instruction page/detail plus latest/health/metrics
+  snapshot reads, instruction contract-view reads for the explorer
+  instruction contract-view endpoint, typed contract metadata/code-bytes/
+  namespace-instance/state reads, typed contract deploy/instance-activate/
+  call/multisig propose/approve helpers, read-only `/v1/contracts/view`
+  execution with typed validation errors, verified-source job submit/status
+  helpers, and typed contract code-view reads;
+- `csharp/src/Hyperledger.Iroha.Sdk/Transactions/` now also covers
+  `TransferDomain`, `TransferAssetDefinition`, `TransferNft`,
+  `SetAssetKeyValue` / `RemoveAssetKeyValue`,
+  `SetDomainKeyValue` / `RemoveDomainKeyValue`,
+  `SetAccountKeyValue` / `RemoveAccountKeyValue`, and
+  `SetAssetDefinitionKeyValue` / `RemoveAssetDefinitionKeyValue`,
+  `SetNftKeyValue` / `RemoveNftKeyValue`,
+  `SetTriggerKeyValue` / `RemoveTriggerKeyValue`,
+  `MintTriggerRepetitions` / `BurnTriggerRepetitions`, and
+  `ExecuteTrigger` for concrete domain/asset/asset-definition/NFT transfers,
+  domain/asset/account/asset-definition/NFT/trigger metadata edits, plus
+  trigger execution-window controls;
+- the unit suite now pins those new JSON contracts, and the README plus
+  integration smoke document that the VPN session helpers require
+  canonical-request credentials, how to use the CID content helpers, and which
+  extra env vars enable the new live smoke probes; and
+- `cd csharp && PATH="$HOME/.dotnet:$PATH" dotnet build Hyperledger.Iroha.Sdk.sln -c Release -nodeReuse:false -maxcpucount:1`
+  and
+  `cd csharp && PATH="$HOME/.dotnet:$PATH" dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build -nodeReuse:false -maxcpucount:1`
+  both pass on the current tree.
+
+Open work for this slice now remains:
+- add broader iterable/query families beyond the new fast_dsl subset instead
+  of stopping at the first erased iterable slice plus cursor continuation;
+- extend the new typed SSE/event coverage beyond the current
+  pipeline/proof/explorer projections instead of stopping at raw `JsonNode`
+  payloads plus those typed families;
+- add broader contract admin/lifecycle helpers beyond the new deploy/
+  activate/call/multisig plus verified-source job surface;
+- keep extending the managed transaction encoder beyond the current
+  asset/domain/asset-definition/NFT transfer + asset quantity +
+  domain/asset/account/asset-definition/NFT/trigger metadata plus trigger
+  repetition/execution slice; and
+- keep filling the remaining Connect/offline/Nexus/SoraFS parity surfaces,
+  with any additional live-smoke expansion driven by stable public Taira
+  coverage for those routes.
 
 Latest sync (2026-03-29 Taira shared-roster deploy bundle):
 the checked-in Taira deploy path no longer assumes operators will hand-edit one

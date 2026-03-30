@@ -38,7 +38,8 @@ funds to the originating account once the timer expires.
 | Field | Description |
 |-------|-------------|
 | `lane_id: LaneId` | Lane the validator services. |
-| `validator: AccountId` | Account that signs consensus messages. |
+| `validator: AccountId` | Authority account used for staking, governance, and reward accounting. |
+| `peer_id: PeerId` | Consensus and transport peer identity bound to the validator record. |
 | `stake_account: AccountId` | Account that supplies the self-bond (may differ from the validator identity). |
 | `total_stake: Numeric` | Self stake + approved delegations. |
 | `self_stake: Numeric` | Stake provided by the validator. |
@@ -63,11 +64,11 @@ Pending validators are promoted automatically at the start of the first block wh
 scheduled boundary, and the activation metrics counter (`nexus_public_lane_validator_activation_total`)
 records the promotion alongside the status change.
 
-Permissioned deployments keep the genesis peer roster active even before any
-public-lane validator stake exists: as long as the peers have live consensus
-keys, the runtime falls back to the genesis peers for the validator set. This
-avoids a bootstrap deadlock while staking admission is disabled or still being
-rolled out.
+For stake-elected public lanes the validator authority account and live peer
+identity are intentionally decoupled. `validator` remains the staking/governance
+identity, while `peer_id` is the authoritative routing and consensus identity.
+Torii and stake-derived roster selection read the stored `peer_id` directly and
+must not infer a peer from `validator` account signatories.
 
 ### 1.2 Stake Shares & Unbonding
 
@@ -142,6 +143,7 @@ Registers a validator and bonds an initial stake:
 {
   "lane_id": 1,
   "validator": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+  "peer_id": "ed0120F4s1C9m2m4G8Dqv4HY2Q8g7iATgJx6Y5wM1U3Q9H3bQJ7Lh",
   "stake_account": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
   "initial_stake": "150000",
   "metadata": {
@@ -155,30 +157,50 @@ Registers a validator and bonds an initial stake:
 Validation rules:
 
 - `initial_stake` ≥ `min_self_stake` (governance parameter).
+- `peer_id` MUST resolve to a registered world-state peer with a live consensus
+  key that is present in the current commit topology.
+- A public lane cannot bind the same `peer_id` to multiple non-exited validator
+  records at once.
 - Metadata MUST include contact/telemetry hooks before activation.
 - Governance approves/denies the entry; until then the status is `PendingActivation` and the runtime promotes the validator to `Active` at the next epoch boundary once the target activation epoch (`current_epoch + 1` at registration, or `current_epoch` for genesis bootstrap) is reached.
 
-### 2.2 `BondPublicLaneStake`
+### 2.2 `RebindPublicLaneValidatorPeer`
+
+Repairs the authoritative `validator -> peer_id` binding for a stake-elected
+validator without forcing an exit/re-register cycle.
+
+Validation rules:
+
+- Authority MUST be the `validator` account itself.
+- Rebinding is allowed only while the validator is
+  `PendingActivation`, `Active`, or `Jailed`.
+- `Exiting`, `Exited`, and `Slashed` validator records reject rebinding.
+- The replacement `peer_id` MUST satisfy the same runtime checks as
+  `RegisterPublicLaneValidator` (registered peer, live consensus key, current
+  commit-topology membership, and no duplicate non-terminal lane binding).
+- Rebinding to the already-bound `peer_id` succeeds idempotently.
+
+### 2.3 `BondPublicLaneStake`
 
 Bonds additional stake (validator self-bond or delegator contribution).
 
 Key fields: `staker`, `amount`, optional metadata for statements. Runtime must
 enforce lane-specific limits (`max_delegators`, `min_bond`, `commission caps`).
 
-### 2.3 `SchedulePublicLaneUnbond`
+### 2.4 `SchedulePublicLaneUnbond`
 
 Starts the unbonding timer. Submitters provide a deterministic `request_id`
 (recommendation: `blake2b(invoice)`), `amount`, and `release_at_ms`. Runtime must
 verify the amount ≤ bonded stake and clamp `release_at_ms` to the configured
 unbonding period.
 
-### 2.4 `FinalizePublicLaneUnbond`
+### 2.5 `FinalizePublicLaneUnbond`
 
 After the timer expires, this ISI unlocks the pending stake and returns it to
 `staker`. The executor validates the request id, ensures the unlock timestamp is
 in the past, emits a `PublicLaneStakeShare` update, and records telemetry.
 
-### 2.5 `SlashPublicLaneValidator`
+### 2.6 `SlashPublicLaneValidator`
 
 Governance uses this instruction to debit stake and jail/eject validators.
 
@@ -191,7 +213,7 @@ Slashes ripple to delegators based on governance policy (proportional or
 validator-first loss). Runtime logic will emit `PublicLaneRewardRecord`
 annotations once NX-9 lands.
 
-### 2.6 `RecordPublicLaneRewards`
+### 2.7 `RecordPublicLaneRewards`
 
 Records the payout for an epoch. Fields:
 
@@ -199,7 +221,7 @@ Records the payout for an epoch. Fields:
 - `total_reward`: minted/transferred total.
 - `shares`: vector of `PublicLaneRewardShare` entries.
 
-### 2.7 `CancelConsensusEvidencePenalty`
+### 2.8 `CancelConsensusEvidencePenalty`
 
 Cancels consensus slashing before the delayed penalty applies.
 
@@ -214,12 +236,15 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
 - **Lifecycle + modes:** stake-elected lanes are enabled via
   `nexus.staking.public_validator_mode = stake_elected` while restricted lanes
   stay admin-managed (`nexus.staking.restricted_validator_mode = admin_managed`).
-  Permissioned deployments keep genesis peers active until stake exists; for
-  stake-elected lanes we still require a registered peer with a live consensus
-  key present in the commit topology before `RegisterPublicLaneValidator`
-  succeeds. Genesis fingerprints and `use_stake_snapshot_roster` decide whether
-  the runtime derives the roster from stake snapshots or falls back to genesis
-  peers.
+  For stake-elected lanes, `RegisterPublicLaneValidator` now binds an explicit
+  `peer_id`, and the runtime requires that peer to be registered, online with a
+  live consensus key, and present in the commit topology before the
+  registration succeeds. Stake-elected operators can repair stale bindings with
+  `RebindPublicLaneValidatorPeer` instead of waiting for routing timeouts or
+  exiting the validator. Admin-managed lanes now declare explicit manifest
+  validator bindings of the form `{ "validator": "<i105-account-id>",
+  "peer_id": "<peer-id>" }`; both lane modes route against stored `peer_id`
+  bindings and neither derives authoritative peers from account signatories.
 - **Activation/exit operations:** registrations land in `PendingActivation` for
   `current_epoch + 1` (genesis bootstrap registrations use `current_epoch`) and
   auto-promote at the first block whose epoch meets that boundary (epochs are
@@ -244,13 +269,19 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   - `iroha app nexus lane-report --summary` shows lane catalog entries, manifest
     readiness, and validator modes (stake-elected vs admin-managed) so operators
     can confirm whether staking admission is enabled for a lane.
+  - The staking CLI requires `--peer-id` on validator registration and exposes
+    `staking rebind --lane-id <id> --validator <i105-account-id> --peer-id <peer-id>`
+    to repair stake-elected validator peer bindings in place.
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     surfaces lifecycle/activation markers (pending target epoch, `activation_epoch` /
-    `activation_height`, exit release, slash id) alongside bonded/self stake.
+    `activation_height`, exit release, slash id) alongside bonded/self stake
+    and the bound `peer_id`. `peer_id` is non-null for both stake-elected and
+    admin-managed lanes.
     `iroha_cli app nexus public-lane stake --lane <id> [--validator <i105-account-id>] [--summary]`
     mirrors the `/stake` endpoint with pending-unbond hints per `(validator, staker)` pair.
   - Torii snapshots for dashboards and SDKs:
-    - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
+    - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, authoritative
+      `peer_id`, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation
       epoch/height, release timers, bonded stake, last reward epoch.
       Optional `canonical I105 literal rendering` controls the literal rendering
@@ -279,6 +310,13 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
       }
     ]
     ```
+- **Torii authoritative routing:** routed public-lane proxy requests use only
+  the authoritative peer set resolved from explicit manifest validator bindings
+  (admin-managed lanes) or stored validator `peer_id` bindings (stake-elected
+  lanes). Torii does not spray unrelated online peers for routed public-lane
+  traffic. If authoritative bindings are missing, stale, or all authoritative
+  peers are offline, Torii returns deterministic `503 route_unavailable`
+  instead of probing non-authoritative peers and timing out.
 - **Telemetry + runbooks:** metrics expose validator counts, bonded and pending
   stake, reward totals, and slash counters under the
   `nexus_public_lane_*` family. Wire dashboards to the same data set used by
@@ -289,10 +327,16 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
 ## 4. Roadmap alignment
 
 - ✅ Runtime and WSV storages implement the NX-9 validator lifecycle; regressions
-  cover activation timing, peer prerequisites, delayed exits, and
+  cover activation timing, explicit peer bindings, peer prerequisites, delayed exits, and
   re-registration after slashes.
 - ✅ Torii exposes `/v1/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` with
   Norito JSON so SDKs and dashboards can monitor lane state without custom RPCs.
+- ✅ Torii public-lane proxying now fails closed on missing authoritative peer
+  bindings instead of spraying generic online peers.
+- ✅ Stake-elected lanes can repair authoritative peer drift with
+  `RebindPublicLaneValidatorPeer`, while admin-managed lanes publish explicit
+  `{ validator, peer_id }` bindings and expose non-null `peer_id` values
+  through Torii snapshots.
 - ✅ Config and telemetry knobs are documented; mixed deployments keep
   stake-elected and admin-managed lanes isolated so validator rosters stay
   deterministic.

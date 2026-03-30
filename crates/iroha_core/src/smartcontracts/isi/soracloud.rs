@@ -10346,6 +10346,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: ALICE_ID.clone(),
+                peer_id: PeerId::from(ALICE_ID.signatory().clone()),
                 stake_account: ALICE_ID.clone(),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -10371,6 +10372,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
+                peer_id: PeerId::from(validator.signatory().clone()),
                 stake_account: validator,
                 total_stake: Numeric::new(total_stake, 0),
                 self_stake: Numeric::new(total_stake, 0),

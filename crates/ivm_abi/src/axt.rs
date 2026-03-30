@@ -1095,6 +1095,7 @@ mod tests {
             manifest_root: [0xAB; 32],
             da_commitment: None,
             proof: vec![0x01, 0x02],
+            fastpq_binding: None,
             committed_amount,
             amount_commitment,
         })

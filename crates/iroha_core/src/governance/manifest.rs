@@ -22,6 +22,7 @@ use iroha_crypto::privacy::{
 use iroha_data_model::{
     account::AccountId,
     nexus::{DataSpaceId, LaneCatalog, LaneId, LaneStorageProfile, LaneVisibility},
+    peer::PeerId,
     prelude::Name,
 };
 use iroha_logger::{debug, info, warn};
@@ -36,9 +37,9 @@ struct ManifestFile {
     pub governance: Option<String>,
     /// Semantic version (major) used to interpret the manifest.
     pub version: Option<u32>,
-    /// Committee members or validator identifiers (human readable).
+    /// Committee members or validator bindings (human readable).
     #[norito(default)]
-    pub validators: Option<Vec<String>>,
+    pub validators: Option<Vec<ManifestValidatorBindingFile>>,
     /// Quorum threshold applied to the validator set.
     pub quorum: Option<u32>,
     /// Namespaces protected by governance (transactions require explicit approval).
@@ -50,6 +51,15 @@ struct ManifestFile {
     /// Optional privacy commitment descriptors consumed by private lanes.
     #[norito(default)]
     pub privacy_commitments: Option<Vec<ManifestPrivacyCommitment>>,
+}
+
+/// Manifest-level validator binding descriptor.
+#[derive(Debug, Clone, JsonSerialize, JsonDeserialize, Default)]
+struct ManifestValidatorBindingFile {
+    /// Validator authority account literal.
+    pub validator: Option<String>,
+    /// Consensus/transport peer identity literal.
+    pub peer_id: Option<String>,
 }
 
 /// Manifest-level privacy commitment descriptor.
@@ -286,12 +296,23 @@ pub struct GovernanceRules {
     pub version: u32,
     /// Committee members / validators configured for the lane.
     pub validators: Vec<AccountId>,
+    /// Explicit validator-account to peer-id bindings configured for the lane.
+    pub validator_bindings: Vec<ManifestValidatorBinding>,
     /// Quorum threshold applied to the validator set.
     pub quorum: Option<u32>,
     /// Protected namespaces enforced by the lane governance module.
     pub protected_namespaces: BTreeSet<Name>,
     /// Typed governance hooks with optional raw values for unknown entries.
     pub hooks: GovernanceHooks,
+}
+
+/// Explicit validator binding declared in an admin-managed lane manifest.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ManifestValidatorBinding {
+    /// Validator authority account.
+    pub validator: AccountId,
+    /// Consensus and routed-traffic peer identity.
+    pub peer_id: PeerId,
 }
 
 /// Artifacts derived from a manifest file.
@@ -447,19 +468,49 @@ impl GovernanceRules {
         }
 
         let mut validators = Vec::new();
+        let mut validator_bindings = Vec::new();
         if let Some(entries) = manifest.validators.as_ref() {
-            let mut seen = BTreeSet::new();
-            for raw in entries {
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
+            let mut seen_validators = BTreeSet::new();
+            let mut seen_peer_ids = BTreeSet::new();
+            for entry in entries {
+                let validator_raw = entry
+                    .validator
+                    .as_deref()
+                    .ok_or_else(|| "validator entry missing validator account".to_owned())?;
+                let validator_trimmed = validator_raw.trim();
+                if validator_trimmed.is_empty() {
                     return Err("validator entry cannot be blank".into());
                 }
-                let account = AccountId::parse_encoded(trimmed)
+                let account = AccountId::parse_encoded(validator_trimmed)
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                    .map_err(|err| format!("invalid validator id `{trimmed}`: {err}"))?;
-                if seen.insert(account.clone()) {
-                    validators.push(account);
+                    .map_err(|err| format!("invalid validator id `{validator_trimmed}`: {err}"))?;
+                if !seen_validators.insert(account.clone()) {
+                    return Err(format!(
+                        "duplicate validator id `{validator_trimmed}` in lane `{alias}`"
+                    ));
                 }
+
+                let peer_raw = entry
+                    .peer_id
+                    .as_deref()
+                    .ok_or_else(|| "validator entry missing peer_id".to_owned())?;
+                let peer_trimmed = peer_raw.trim();
+                if peer_trimmed.is_empty() {
+                    return Err("validator peer_id cannot be blank".into());
+                }
+                let peer_id = PeerId::from_str(peer_trimmed)
+                    .map_err(|err| format!("invalid validator peer_id `{peer_trimmed}`: {err}"))?;
+                if !seen_peer_ids.insert(peer_id.clone()) {
+                    return Err(format!(
+                        "duplicate validator peer_id `{peer_trimmed}` in lane `{alias}`"
+                    ));
+                }
+
+                validators.push(account.clone());
+                validator_bindings.push(ManifestValidatorBinding {
+                    validator: account,
+                    peer_id,
+                });
             }
         }
 
@@ -498,6 +549,7 @@ impl GovernanceRules {
         Ok(Self {
             version,
             validators,
+            validator_bindings,
             quorum,
             protected_namespaces,
             hooks,
@@ -1074,6 +1126,15 @@ impl LaneManifestRegistry {
             .map(|rules| rules.validators.clone())
     }
 
+    /// Retrieve explicit validator-account to peer-id bindings declared for `lane_id`, if present.
+    pub fn lane_validator_bindings(
+        &self,
+        lane_id: LaneId,
+    ) -> Option<Vec<ManifestValidatorBinding>> {
+        self.lane_rules(lane_id)
+            .map(|rules| rules.validator_bindings.clone())
+    }
+
     /// Retrieve the quorum declared for `lane_id`, if present.
     pub fn lane_quorum(&self, lane_id: LaneId) -> Option<u32> {
         self.lane_rules(lane_id).and_then(|rules| rules.quorum)
@@ -1505,9 +1566,12 @@ mod tests {
             .insert("parliament".to_string(), ConfigGovernanceModule::default());
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
+        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
         fs::write(
             &path,
-            r#"{"lane":"gov","governance":"parliament","validators":["not_an_account"]}"#,
+            format!(
+                r#"{{"lane":"gov","governance":"parliament","validators":[{{"validator":"not_an_account","peer_id":"{alice_peer}"}}]}}"#
+            ),
         )
         .expect("write manifest");
         let registry_cfg = LaneRegistry {
@@ -1539,10 +1603,11 @@ mod tests {
         let dir = tempdir().expect("tmp dir");
         let path = dir.path().join("gov.manifest.json");
         let alice = account_id_literal(&ALICE_ID);
+        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
         fs::write(
             &path,
             format!(
-                r#"{{"lane":"gov","governance":"parliament","validators":["{alice}"],"quorum":2}}"#
+                r#"{{"lane":"gov","governance":"parliament","validators":[{{"validator":"{alice}","peer_id":"{alice_peer}"}}],"quorum":2}}"#
             ),
         )
         .expect("write manifest");
@@ -1576,13 +1641,18 @@ mod tests {
         let path = dir.path().join("gov.manifest.json");
         let alice = account_id_literal(&ALICE_ID);
         let bob = account_id_literal(&BOB_ID);
+        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
+        let bob_peer = PeerId::from(BOB_ID.signatory().clone());
         fs::write(
             &path,
             format!(
                 r#"{{
                 "lane": "gov",
                 "governance": "parliament",
-                "validators": ["  {alice}  ", "   {alice}  ", "{bob}"],
+                "validators": [
+                    {{"validator":"  {alice}  ","peer_id":" {alice_peer} "}},
+                    {{"validator":"{bob}","peer_id":"{bob_peer}"}}
+                ],
                 "quorum": 2,
                 "protected_namespaces": [" treasury ", "compliance"],
                 "hooks": {{
@@ -1609,8 +1679,13 @@ mod tests {
             .lane_rules(LaneId::new(0))
             .expect("governance rules present");
         assert_eq!(rules.validators.len(), 2);
+        assert_eq!(rules.validator_bindings.len(), 2);
         assert_eq!(rules.quorum, Some(2));
         assert_eq!(rules.protected_namespaces.len(), 2);
+        assert_eq!(rules.validator_bindings[0].validator, ALICE_ID.clone());
+        assert_eq!(rules.validator_bindings[0].peer_id, alice_peer);
+        assert_eq!(rules.validator_bindings[1].validator, BOB_ID.clone());
+        assert_eq!(rules.validator_bindings[1].peer_id, bob_peer);
         let runtime_hook = rules
             .hooks
             .runtime_upgrade
@@ -1663,11 +1738,16 @@ mod tests {
         let dir = tempdir().expect("tmp dir");
         let alice = account_id_literal(&ALICE_ID);
         let bob = account_id_literal(&BOB_ID);
+        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
+        let bob_peer = PeerId::from(BOB_ID.signatory().clone());
         let manifest_body = format!(
             r#"{{
             "lane": "%ALIAS%",
             "governance": "parliament",
-            "validators": ["{alice}", "{bob}"],
+            "validators": [
+                {{"validator":"{alice}","peer_id":"{alice_peer}"}},
+                {{"validator":"{bob}","peer_id":"{bob_peer}"}}
+            ],
             "quorum": 2
         }}"#
         );
@@ -1694,7 +1774,131 @@ mod tests {
         assert_eq!(core_validators.len(), 2);
         assert_eq!(payments_validators.len(), 2);
         assert_eq!(core_validators, payments_validators);
+        assert_eq!(
+            registry
+                .lane_validator_bindings(LaneId::new(0))
+                .expect("core validator bindings parsed")
+                .len(),
+            2
+        );
+        assert_eq!(
+            registry
+                .lane_validator_bindings(LaneId::new(1))
+                .expect("payments validator bindings parsed")
+                .len(),
+            2
+        );
         assert_eq!(registry.lane_quorum(LaneId::new(0)), Some(2));
         assert_eq!(registry.lane_quorum(LaneId::new(1)), Some(2));
+    }
+
+    #[test]
+    fn manifest_rejects_legacy_string_validator_entries() {
+        crate::test_alias::ensure();
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                id: LaneId::new(0),
+                alias: "gov".to_string(),
+                governance: Some("parliament".to_string()),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("valid catalog");
+        let mut governance = GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_string(), ConfigGovernanceModule::default());
+        let dir = tempdir().expect("tmp dir");
+        let path = dir.path().join("gov.manifest.json");
+        let alice = account_id_literal(&ALICE_ID);
+        fs::write(
+            &path,
+            format!(r#"{{"lane":"gov","governance":"parliament","validators":["{alice}"]}}"#),
+        )
+        .expect("write manifest");
+        let registry_cfg = LaneRegistry {
+            manifest_directory: Some(path.parent().unwrap().to_path_buf()),
+            ..LaneRegistry::default()
+        };
+
+        let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
+        assert!(registry.ensure_lane_ready(LaneId::new(0)).is_err());
+    }
+
+    #[test]
+    fn manifest_rejects_duplicate_validator_binding() {
+        crate::test_alias::ensure();
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                id: LaneId::new(0),
+                alias: "gov".to_string(),
+                governance: Some("parliament".to_string()),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("valid catalog");
+        let mut governance = GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_string(), ConfigGovernanceModule::default());
+        let dir = tempdir().expect("tmp dir");
+        let path = dir.path().join("gov.manifest.json");
+        let alice = account_id_literal(&ALICE_ID);
+        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
+        let bob_peer = PeerId::from(BOB_ID.signatory().clone());
+        fs::write(
+            &path,
+            format!(
+                r#"{{"lane":"gov","governance":"parliament","validators":[{{"validator":"{alice}","peer_id":"{alice_peer}"}},{{"validator":"{alice}","peer_id":"{bob_peer}"}}]}}"#
+            ),
+        )
+        .expect("write manifest");
+        let registry_cfg = LaneRegistry {
+            manifest_directory: Some(path.parent().unwrap().to_path_buf()),
+            ..LaneRegistry::default()
+        };
+
+        let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
+        assert!(registry.ensure_lane_ready(LaneId::new(0)).is_err());
+    }
+
+    #[test]
+    fn manifest_rejects_duplicate_peer_binding() {
+        crate::test_alias::ensure();
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(1_u32),
+            vec![LaneConfig {
+                id: LaneId::new(0),
+                alias: "gov".to_string(),
+                governance: Some("parliament".to_string()),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("valid catalog");
+        let mut governance = GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_string(), ConfigGovernanceModule::default());
+        let dir = tempdir().expect("tmp dir");
+        let path = dir.path().join("gov.manifest.json");
+        let alice = account_id_literal(&ALICE_ID);
+        let bob = account_id_literal(&BOB_ID);
+        let alice_peer = PeerId::from(ALICE_ID.signatory().clone());
+        fs::write(
+            &path,
+            format!(
+                r#"{{"lane":"gov","governance":"parliament","validators":[{{"validator":"{alice}","peer_id":"{alice_peer}"}},{{"validator":"{bob}","peer_id":"{alice_peer}"}}]}}"#
+            ),
+        )
+        .expect("write manifest");
+        let registry_cfg = LaneRegistry {
+            manifest_directory: Some(path.parent().unwrap().to_path_buf()),
+            ..LaneRegistry::default()
+        };
+
+        let registry = LaneManifestRegistry::from_config(&lane_catalog, &governance, &registry_cfg);
+        assert!(registry.ensure_lane_ready(LaneId::new(0)).is_err());
     }
 }

@@ -618,3 +618,167 @@ async fn manifest_revoke_endpoint_enqueues_transaction() {
     assert_eq!(resp.status(), StatusCode::ACCEPTED);
     assert_eq!(queue.queued_len(), 1, "revocation transaction queued");
 }
+
+#[tokio::test]
+async fn api_router_registers_space_directory_manifest_mutation_routes() {
+    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut world = World::default();
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+    let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
+    let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+    #[cfg(feature = "telemetry")]
+    let telemetry = {
+        use iroha_core::telemetry as core_telemetry;
+        let metrics = fixtures::shared_metrics();
+        let (_mh, ts) =
+            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
+        core_telemetry::start(
+            metrics,
+            state.clone(),
+            kura.clone(),
+            queue.clone(),
+            peers_rx.clone(),
+            local_peer_id,
+            ts,
+            false,
+        )
+        .0
+    };
+    let da_receipt_signer = cfg.common.key_pair.clone();
+    let torii = {
+        #[cfg(feature = "telemetry")]
+        {
+            Torii::new(
+                iroha_data_model::ChainId::from("test-chain"),
+                kiso,
+                cfg.torii.clone(),
+                queue.clone(),
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer.clone(),
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+                telemetry,
+                true,
+            )
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            Torii::new(
+                iroha_data_model::ChainId::from("test-chain"),
+                kiso,
+                cfg.torii.clone(),
+                queue.clone(),
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer,
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+            )
+        }
+    };
+
+    let creds = iroha_torii::test_utils::random_authority();
+    let dataspace = DataSpaceId::new(11);
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"router-manifest"));
+    let manifest = AssetPermissionManifest {
+        version: ManifestVersion::V1,
+        uaid,
+        dataspace,
+        issued_ms: 1_762_723_200_000,
+        activation_epoch: 4_096,
+        expiry_epoch: Some(8_192),
+        entries: vec![ManifestEntry {
+            scope: CapabilityScope {
+                dataspace: Some(dataspace),
+                program: Some("cbdc.transfer".parse().unwrap()),
+                method: Some("transfer".parse().unwrap()),
+                asset: Some(AssetDefinitionId::new(
+                    "bank".parse().expect("domain id"),
+                    "cbdc".parse().expect("asset definition name"),
+                )),
+                role: None,
+            },
+            effect: ManifestEffect::Allow(Allowance {
+                max_amount: Some(Numeric::from(500u64)),
+                window: AllowanceWindow::PerDay,
+            }),
+            notes: Some("router registration".into()),
+        }],
+    };
+    let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
+    let publish_body = norito::json::to_json(&iroha_torii::json_object(vec![
+        iroha_torii::json_entry("authority", creds.account.clone()),
+        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
+        iroha_torii::json_entry("manifest", manifest_value),
+        iroha_torii::json_entry("reason", "router publish"),
+    ]))
+    .expect("serialize publish request");
+    let publish_resp = torii
+        .api_router_for_tests()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/space-directory/manifests")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(publish_body))
+                .expect("publish request"),
+        )
+        .await
+        .expect("publish response");
+    assert_ne!(
+        publish_resp.status(),
+        StatusCode::METHOD_NOT_ALLOWED,
+        "publish route must be registered on the Torii API router",
+    );
+    assert_ne!(
+        publish_resp.status(),
+        StatusCode::NOT_FOUND,
+        "publish route must be registered on the Torii API router",
+    );
+
+    let uaid_literal = format!(
+        "uaid:{}",
+        Hash::new(b"router-revoke").as_ref().encode_hex::<String>()
+    );
+    let revoke_body = norito::json::to_json(&iroha_torii::json_object(vec![
+        iroha_torii::json_entry("authority", creds.account.clone()),
+        iroha_torii::json_entry("private_key", creds.private_key.to_string()),
+        iroha_torii::json_entry("uaid", uaid_literal),
+        iroha_torii::json_entry("dataspace", dataspace.as_u64()),
+        iroha_torii::json_entry("revoked_epoch", 4096u64),
+        iroha_torii::json_entry("reason", "router revoke"),
+    ]))
+    .expect("serialize revoke request");
+    let revoke_resp = torii
+        .api_router_for_tests()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/space-directory/manifests/revoke")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(revoke_body))
+                .expect("revoke request"),
+        )
+        .await
+        .expect("revoke response");
+    assert_ne!(
+        revoke_resp.status(),
+        StatusCode::METHOD_NOT_ALLOWED,
+        "revoke route must be registered on the Torii API router",
+    );
+    assert_ne!(
+        revoke_resp.status(),
+        StatusCode::NOT_FOUND,
+        "revoke route must be registered on the Torii API router",
+    );
+}

@@ -31,10 +31,10 @@ use iroha_data_model::{
     },
     nexus::{
         AxtBinding, AxtDescriptor as ModelAxtDescriptor, AxtEnvelopeRecord, AxtHandleFragment,
-        AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtProofFragment,
-        AxtRejectContext, AxtRejectReason, AxtReplayRecord, AxtTouchFragment,
-        AxtTouchSpec as ModelAxtTouchSpec, ProofBlob as ModelProofBlob,
-        TouchManifest as ModelTouchManifest, proof_matches_manifest,
+        AxtHandleReplayKey, AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot,
+        AxtProofEnvelope as ModelAxtProofEnvelope, AxtProofFragment, AxtRejectContext,
+        AxtRejectReason, AxtReplayRecord, AxtTouchFragment, AxtTouchSpec as ModelAxtTouchSpec,
+        ProofBlob as ModelProofBlob, TouchManifest as ModelTouchManifest, proof_matches_manifest,
     },
     parameter::{Parameters, system::ivm_metadata},
     permission::Permissions,
@@ -2843,6 +2843,54 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.prune_axt_replay_ledger(current_slot);
     }
 
+    fn verify_fastpq_envelope_binding(
+        &mut self,
+        dsid: DataSpaceId,
+        envelope: &ModelAxtProofEnvelope,
+        policy: AxtPolicyEntry,
+    ) -> Result<(), ivm::VMError> {
+        let Some(binding) = envelope.fastpq_binding.as_ref() else {
+            return Ok(());
+        };
+        if binding.source_dsid != dsid.as_u64() {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                "FASTPQ binding source_dsid mismatch",
+            );
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let batch = fastpq_prover::build_batch_from_binding(binding).map_err(|err| {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!("FASTPQ binding invalid: {err}"),
+            );
+            ivm::VMError::NoritoInvalid
+        })?;
+        let proof = decode_from_bytes::<fastpq_prover::Proof>(&envelope.proof).map_err(|err| {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!("FASTPQ proof decode failed: {err}"),
+            );
+            ivm::VMError::NoritoInvalid
+        })?;
+        fastpq_prover::verify(&batch, &proof).map_err(|err| {
+            self.record_axt_reject(
+                AxtRejectReason::Proof,
+                Some(dsid),
+                Some(policy.target_lane),
+                format!("FASTPQ verification failed: {err}"),
+            );
+            ivm::VMError::PermissionDenied
+        })?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)]
     fn validate_axt_proof(
         &mut self,
@@ -2983,6 +3031,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 );
                 return Err(ivm::VMError::PermissionDenied);
             }
+        }
+
+        if let Ok(envelope) = norito::decode_from_bytes::<ModelAxtProofEnvelope>(&proof.payload) {
+            self.verify_fastpq_envelope_binding(dsid, &envelope, policy)?;
         }
 
         let state = self.axt_state.as_mut().expect("axt_state checked above");

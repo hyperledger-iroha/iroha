@@ -50,6 +50,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_da_pin_intent_by_manifest(FindDaPinIntentByManifest),
         visit_find_da_pin_intent_by_alias(FindDaPinIntentByAlias),
         visit_find_da_pin_intent_by_lane_epoch_sequence(FindDaPinIntentByLaneEpochSequence),
+        visit_find_lane_relay_envelope_by_ref(FindLaneRelayEnvelopeByRef),
         visit_find_sorafs_provider_owner(FindSorafsProviderOwner),
     }
 }
@@ -137,6 +138,9 @@ macro_rules! query_visitors {
             visit_find_da_pin_intent_by_lane_epoch_sequence(
                 &$crate::query::da::prelude::FindDaPinIntentByLaneEpochSequence
             ),
+            visit_find_lane_relay_envelope_by_ref(
+                &$crate::query::nexus::prelude::FindLaneRelayEnvelopeByRef
+            ),
             visit_find_sorafs_provider_owner(
                 &$crate::query::sorafs::prelude::FindSorafsProviderOwner
             ),
@@ -214,6 +218,7 @@ mod tests {
             SingularQueryBox::FindDaPinIntentByManifest(_) => {}
             SingularQueryBox::FindDaPinIntentByAlias(_) => {}
             SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_) => {}
+            SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {}
             SingularQueryBox::FindSorafsProviderOwner(_) => {}
             SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
             SingularQueryBox::FindDomainEndorsements(_) => {}

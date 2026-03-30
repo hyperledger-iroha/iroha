@@ -16005,7 +16005,7 @@ async function performNodeRawUtf8Request({
       signal.addEventListener("abort", onAbort, { once: true });
     }
     try {
-      socket.end(requestBuffer);
+      socket.write(requestBuffer);
     } catch (error) {
       finishWithError(error);
     }
@@ -16023,6 +16023,7 @@ async function openNodeRawUtf8Socket(url) {
     return tls.connect({
       host: url.hostname,
       port,
+      ALPNProtocols: ["http/1.1"],
       servername: url.hostname.includes(":") ? undefined : url.hostname,
     });
   }

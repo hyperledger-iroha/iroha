@@ -25,7 +25,7 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
     fetchImpl,
   });
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 9) });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
 
   await client.listAccountAssets(accountId, {
     canonicalAuth: { accountId, privateKey },
@@ -60,15 +60,29 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
 
 test("ToriiClient canonical auth falls back to a raw Node transport for UTF-8 account headers", async (t) => {
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 10) });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
   const requests = [];
   const server = createServer({ allowHalfOpen: true }, (socket) => {
     const chunks = [];
-    socket.on("data", (chunk) => {
-      chunks.push(Buffer.from(chunk));
-    });
-    socket.on("end", () => {
-      requests.push(Buffer.concat(chunks));
+    let responded = false;
+    const tryRespond = () => {
+      if (responded) {
+        return;
+      }
+      const request = Buffer.concat(chunks);
+      const headerTerminator = request.indexOf(Buffer.from("\r\n\r\n", "ascii"));
+      if (headerTerminator === -1) {
+        return;
+      }
+      const headerBlock = request.subarray(0, headerTerminator).toString("latin1");
+      const contentLengthMatch = /(?:^|\r\n)content-length:\s*(\d+)/iu.exec(headerBlock);
+      const contentLength = contentLengthMatch ? Number.parseInt(contentLengthMatch[1], 10) : 0;
+      const totalLength = headerTerminator + 4 + contentLength;
+      if (request.length < totalLength) {
+        return;
+      }
+      responded = true;
+      requests.push(request.subarray(0, totalLength));
       const responseBody = Buffer.from(
         JSON.stringify({
           session_id: "sess_utf8",
@@ -103,6 +117,10 @@ test("ToriiClient canonical auth falls back to a raw Node transport for UTF-8 ac
           Buffer.from("\r\n0\r\n\r\n", "ascii"),
         ]),
       );
+    };
+    socket.on("data", (chunk) => {
+      chunks.push(Buffer.from(chunk));
+      tryRespond();
     });
   });
   await new Promise((resolve, reject) => {

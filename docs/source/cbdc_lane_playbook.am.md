@@ -104,10 +104,10 @@ description = "Route CBDC contracts to the restricted lane"
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>"
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" }
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,18 @@ description = "Route CBDC contracts to the restricted lane"
 }
 ```
 
-ቁልፍ መስፈርቶች፡- አረጋጋጮች ** አለባቸው** ቀኖናዊ የi105 መለያ መታወቂያዎች (አይ18NI00000043X የለም፤ ​​`@domain` እንደ ግልጽ የማዞሪያ ፍንጭ ብቻ አባሪ) በካታሎግ ውስጥ አለ። `quorum` ወደ ባለብዙ ሲግ ገደብ (≥2) አዘጋጅ።
+ቁልፍ መስፈርቶች፡-
+
+- Validators **must** be declared as explicit bindings with a canonical I105
+  authority account plus a concrete `peer_id`. Legacy string-only validator
+  arrays are rejected.
+- Each manifest `peer_id` must resolve to a registered runtime peer with a live
+  consensus key that is present in the current commit topology; Torii routes
+  only to those authoritative peer bindings and fails closed when the runtime
+  truth disagrees with the manifest.
+- Validator accounts should remain stable governance identities even if the
+  underlying host or peer keys rotate; update the manifest `peer_id` binding
+  when the serving peer changes. Set `quorum` to the multisig threshold (≥2).
 - የተጠበቁ የስም ቦታዎች በ `Queue::push` (`crates/iroha_core/src/queue.rs` ይመልከቱ) ተፈጻሚዎች ናቸው, ስለዚህ ሁሉም የ CBDC ኮንትራቶች `gov_namespace` + `gov_contract_id` መግለጽ አለባቸው.
 - `composability_group` መስኮች በ `docs/source/nexus.md` §8.6 ውስጥ የተገለጸውን እቅድ ይከተላሉ; ባለቤቱ (CBDC ሌን) የተፈቀደላቸው ዝርዝር እና ኮታዎችን ያቀርባል። የተፈቀደላቸው DS አንጸባራቂዎች `group_id_hex` + `activation_epoch` ብቻ ይጠቅሳሉ።
 - አንጸባራቂውን ከገለበጡ በኋላ `LaneManifestRegistry::from_config` መጫኑን ለማረጋገጥ `cargo test -p integration_tests nexus::lane_registry -- --nocapture` ን ያሂዱ።

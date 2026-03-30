@@ -39,7 +39,7 @@ use iroha::{
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
-use iroha_crypto::Hash;
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
@@ -72,6 +72,27 @@ const CIRCUIT_ID_VALID: &str = "stark/fri/sha256-goldilocks-v1:cross-dataspace-v
 const CIRCUIT_ID_MISMATCH: &str = "stark/fri/sha256-goldilocks-v1:cross-dataspace-verifyproof-v2";
 const SCHEMA_VALID: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v1";
 const SCHEMA_MISMATCH: &[u8] = b"nexus:cross-dataspace:verifyproof:schema:v2";
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct ExpectedLaneValidatorBinding {
+    validator: String,
+    peer_id: String,
+}
+
+fn validator_authority_account_for_peer(index: usize) -> AccountId {
+    let mut seed = vec![0_u8; 32];
+    seed[0] = 0xD3;
+    seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
+    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+    AccountId::new(keypair.public_key().clone())
+}
+
+fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLaneValidatorBinding {
+    ExpectedLaneValidatorBinding {
+        validator: validator_authority_account_for_peer(index).to_string(),
+        peer_id: peer_id.to_string(),
+    }
+}
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
@@ -330,8 +351,8 @@ fn npos_multilane_genesis_post_topology_transactions(
     let mint_amount =
         VALIDATOR_STAKE_PER_LANE.saturating_mul(u64::try_from(lanes.len()).unwrap_or(u64::MAX));
 
-    for peer in topology {
-        let validator_id = AccountId::new(peer.public_key().clone());
+    for (index, peer) in topology.iter().enumerate() {
+        let validator_id = validator_authority_account_for_peer(index);
         bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         bootstrap_tx.push(
             Mint::asset_numeric(
@@ -354,6 +375,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 RegisterPublicLaneValidator::new(
                     lane_id,
                     validator_id.clone(),
+                    peer.clone(),
                     validator_id.clone(),
                     Numeric::from(VALIDATOR_STAKE_PER_LANE),
                     Metadata::default(),
@@ -398,18 +420,21 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     proof_policy_bundle(&lane_config)
 }
 
-fn expected_lane_validators(network: &sandbox::SerializedNetwork) -> BTreeSet<String> {
+fn expected_lane_validators(
+    network: &sandbox::SerializedNetwork,
+) -> BTreeSet<ExpectedLaneValidatorBinding> {
     network
         .peers()
         .iter()
-        .map(|peer| AccountId::new(peer.id().public_key().clone()).to_string())
+        .enumerate()
+        .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
         .collect()
 }
 
 fn lane_validator_snapshot(
     snapshot: &norito::json::Value,
     context: &str,
-) -> Result<(usize, BTreeSet<String>)> {
+) -> Result<(usize, BTreeSet<ExpectedLaneValidatorBinding>)> {
     let root = snapshot
         .as_object()
         .ok_or_else(|| eyre!("{context}: lane validator response is not an object"))?;
@@ -431,6 +456,10 @@ fn lane_validator_snapshot(
             .get("validator")
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("{context}: validator entry missing validator literal"))?;
+        let peer_id = entry
+            .get("peer_id")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre!("{context}: validator entry missing peer_id literal"))?;
         let status_type = entry
             .get("status")
             .and_then(norito::json::Value::as_object)
@@ -438,7 +467,10 @@ fn lane_validator_snapshot(
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("{context}: validator entry missing status.type"))?;
         if status_type == "Active" {
-            active.insert(validator.to_owned());
+            active.insert(ExpectedLaneValidatorBinding {
+                validator: validator.to_owned(),
+                peer_id: peer_id.to_owned(),
+            });
         }
     }
 
@@ -448,7 +480,7 @@ fn lane_validator_snapshot(
 async fn wait_for_active_lane_validators(
     client: &Client,
     lane_id: LaneId,
-    expected_active: &BTreeSet<String>,
+    expected_active: &BTreeSet<ExpectedLaneValidatorBinding>,
     context: &str,
 ) -> Result<()> {
     let started = tokio::time::Instant::now();

@@ -20,7 +20,7 @@ use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::{
         GovernanceHooks, GovernanceRules, LaneManifestRegistry, LaneManifestStatus,
-        RuntimeUpgradeHook,
+        ManifestValidatorBinding, RuntimeUpgradeHook,
     },
     state::StateReadOnly,
     telemetry::LaneTeuGaugeUpdate,
@@ -520,9 +520,17 @@ fn governance_rules(validators: &[AccountId], allowed_ids: &BTreeSet<String>) ->
         .into_iter()
         .map(|ns| Name::from_str(ns).expect("namespace"))
         .collect::<BTreeSet<_>>();
+    let validator_bindings = validators
+        .iter()
+        .map(|validator| ManifestValidatorBinding {
+            validator: validator.clone(),
+            peer_id: PeerId::from(validator.signatory().clone()),
+        })
+        .collect();
     GovernanceRules {
         version: 1,
         validators: validators.to_vec(),
+        validator_bindings,
         quorum: Some(2),
         protected_namespaces,
         hooks: GovernanceHooks {

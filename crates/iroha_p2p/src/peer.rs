@@ -3226,46 +3226,39 @@ mod run {
                 let decrypted_len = decrypted.len();
                 if decrypted_len == 0 {
                     return Err(Error::MalformedPayloadFrame);
-                } else {
-                    // Decrypted payload may contain multiple Norito-framed messages.
-                    let align = core::mem::align_of::<ncore::Archived<M>>();
-                    let mut offset = 0usize;
-                    let mut frame_messages = VecDeque::new();
-                    while offset < decrypted_len {
-                        let remaining = decrypted
-                            .get(offset..)
-                            .ok_or(Error::MalformedPayloadFrame)?;
-                        let frame_len = framed_message_len::<M>(
-                            remaining,
-                            self.framed_schema,
-                            self.framed_padding,
-                        )
-                        .map_err(|_| Error::MalformedPayloadFrame)?;
-                        let frame = remaining
-                            .get(..frame_len)
-                            .ok_or(Error::MalformedPayloadFrame)?;
-                        let misaligned = align > 1
-                            && !frame.is_empty()
-                            && !((frame.as_ptr() as usize).is_multiple_of(align));
-                        let decoded = if misaligned {
-                            let aligned = Self::copy_to_aligned_scratch(
-                                &mut self.decode_scratch,
-                                frame,
-                                align,
-                            );
-                            ncore::decode_from_bytes::<M>(aligned)
-                        } else {
-                            ncore::decode_from_bytes::<M>(frame)
-                        };
-                        let decoded = decoded.map_err(|_| Error::MalformedPayloadFrame)?;
-                        frame_messages.push_back((decoded, frame_len));
-                        offset = offset.saturating_add(frame_len);
-                    }
-                    if offset != decrypted_len {
-                        Err(Error::MalformedPayloadFrame)
+                }
+                // Decrypted payload may contain multiple Norito-framed messages.
+                let align = core::mem::align_of::<ncore::Archived<M>>();
+                let mut offset = 0usize;
+                let mut frame_messages = VecDeque::new();
+                while offset < decrypted_len {
+                    let remaining = decrypted
+                        .get(offset..)
+                        .ok_or(Error::MalformedPayloadFrame)?;
+                    let frame_len =
+                        framed_message_len::<M>(remaining, self.framed_schema, self.framed_padding)
+                            .map_err(|_| Error::MalformedPayloadFrame)?;
+                    let frame = remaining
+                        .get(..frame_len)
+                        .ok_or(Error::MalformedPayloadFrame)?;
+                    let misaligned = align > 1
+                        && !frame.is_empty()
+                        && !((frame.as_ptr() as usize).is_multiple_of(align));
+                    let decoded = if misaligned {
+                        let aligned =
+                            Self::copy_to_aligned_scratch(&mut self.decode_scratch, frame, align);
+                        ncore::decode_from_bytes::<M>(aligned)
                     } else {
-                        Ok(frame_messages)
-                    }
+                        ncore::decode_from_bytes::<M>(frame)
+                    };
+                    let decoded = decoded.map_err(|_| Error::MalformedPayloadFrame)?;
+                    frame_messages.push_back((decoded, frame_len));
+                    offset = offset.saturating_add(frame_len);
+                }
+                if offset == decrypted_len {
+                    Ok(frame_messages)
+                } else {
+                    Err(Error::MalformedPayloadFrame)
                 }
             })();
 

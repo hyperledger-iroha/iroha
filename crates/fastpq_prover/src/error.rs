@@ -197,4 +197,10 @@ pub enum Error {
         /// Human-readable description of the violation.
         details: String,
     },
+    /// Structured AXT FASTPQ binding was malformed.
+    #[error("invalid AXT FASTPQ binding: {details}")]
+    InvalidAxtBinding {
+        /// Human-readable description of the violation.
+        details: String,
+    },
 }

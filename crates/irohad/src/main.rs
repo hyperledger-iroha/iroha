@@ -8158,6 +8158,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: account_id.clone(),
+                peer_id: PeerId::from(keypair.public_key().clone()),
                 stake_account: account_id,
                 total_stake: stake.clone(),
                 self_stake: stake,

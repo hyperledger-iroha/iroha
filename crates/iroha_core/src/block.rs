@@ -13791,6 +13791,7 @@ mod commit {
                 manifest_root: policy.manifest_root,
                 da_commitment: None,
                 proof: vec![0xAA],
+                fastpq_binding: None,
                 committed_amount: None,
                 amount_commitment: None,
             };
@@ -14359,6 +14360,7 @@ mod commit {
                 manifest_root: policy.manifest_root,
                 da_commitment: None,
                 proof: vec![0xAB],
+                fastpq_binding: None,
                 committed_amount: Some(5),
                 amount_commitment: None,
             };
@@ -14429,6 +14431,7 @@ mod commit {
                 manifest_root: policy.manifest_root,
                 da_commitment: None,
                 proof: vec![0xCD],
+                fastpq_binding: None,
                 committed_amount: Some(5),
                 amount_commitment: None,
             };

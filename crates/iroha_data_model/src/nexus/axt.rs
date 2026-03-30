@@ -262,12 +262,92 @@ pub struct AxtProofEnvelope {
     /// Backend-specific proof payload.
     #[norito(default)]
     pub proof: Vec<u8>,
+    /// Structured FASTPQ binding used to reconstruct the verified batch.
+    #[norito(default)]
+    pub fastpq_binding: Option<AxtFastpqBinding>,
     /// Optional cleartext amount committed by the proof envelope.
     #[norito(default)]
     pub committed_amount: Option<u128>,
     /// Optional commitment for hidden-amount intents.
     #[norito(default)]
     pub amount_commitment: Option<[u8; 32]>,
+}
+
+/// Structured FASTPQ receipt/effect binding embedded in AXT proof envelopes.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AxtFastpqBinding {
+    /// Canonical FASTPQ parameter set.
+    pub parameter: String,
+    /// Source dataspace identifier.
+    pub source_dsid: u64,
+    /// Source dataspace alias.
+    pub source_dataspace: String,
+    /// Canonical receipt identifier bound to the proof.
+    pub source_receipt_id: String,
+    /// Canonical source transaction commitment.
+    pub source_tx_commitment: String,
+    /// Claim family proven by FASTPQ.
+    pub claim_type: String,
+    /// Canonical claim digest.
+    pub claim_digest: String,
+    /// Canonical witness commitment.
+    pub witness_commitment: String,
+    /// Canonical policy commitment.
+    pub policy_commitment: String,
+    /// Business effect type verified by the proof.
+    pub verified_effect_type: String,
+    /// Optional corridor label used by maintained flows.
+    #[norito(default)]
+    pub corridor: String,
+    /// Verifier identifier.
+    #[norito(default)]
+    pub verifier_id: String,
+    /// Verifier version.
+    #[norito(default)]
+    pub verifier_version: String,
+    /// Target dataspace ids committed by the proof.
+    #[norito(default)]
+    pub target_dsids: Vec<u64>,
+    /// Business-effect bindings that maintained contracts compare on-ledger.
+    #[norito(default)]
+    pub effect_binding: Option<AxtEffectBinding>,
+}
+
+/// Business-effect bindings committed by a FASTPQ proof envelope.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct AxtEffectBinding {
+    /// Destination dataspace/domain label when applicable.
+    #[norito(default)]
+    pub destination_domain: Option<String>,
+    /// Destination account id in canonical encoded form.
+    #[norito(default)]
+    pub destination_account_id: Option<String>,
+    /// Vault account id in canonical encoded form.
+    #[norito(default)]
+    pub vault_account_id: Option<String>,
+    /// Issuance account id in canonical encoded form.
+    #[norito(default)]
+    pub issuance_account_id: Option<String>,
+    /// Source asset definition id in canonical literal form.
+    #[norito(default)]
+    pub source_asset_definition_id: Option<String>,
+    /// Destination asset definition id in canonical literal form.
+    #[norito(default)]
+    pub destination_asset_definition_id: Option<String>,
+    /// Source-side business amount, when present.
+    #[norito(default)]
+    pub source_amount_i64: Option<i64>,
+    /// Destination-side business amount, when present.
+    #[norito(default)]
+    pub destination_amount_i64: Option<i64>,
 }
 
 /// Proof fragment associated with a dataspace.
@@ -966,6 +1046,7 @@ mod tests {
             manifest_root,
             da_commitment: None,
             proof: vec![0xCC],
+            fastpq_binding: None,
             committed_amount: None,
             amount_commitment: None,
         };
@@ -994,6 +1075,7 @@ mod tests {
             manifest_root: bad_root,
             da_commitment: None,
             proof: vec![0xCC],
+            fastpq_binding: None,
             committed_amount: None,
             amount_commitment: None,
         };
