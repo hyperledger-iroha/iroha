@@ -1363,7 +1363,7 @@ pub mod torii {
     use nonzero_ext::nonzero;
 
     /// Maximum request payload size accepted by Torii (bytes).
-    pub const MAX_CONTENT_LEN: Bytes<u64> = Bytes(2_u64.pow(20) * 16);
+    pub const MAX_CONTENT_LEN: Bytes<u64> = Bytes(64_000_000);
     /// Idle time before closing unused query subscriptions.
     pub const QUERY_IDLE_TIME: Duration = Duration::from_secs(10);
     /// Capacity of in-memory query result cache for all authorities.

@@ -29,6 +29,7 @@ public_address = "127.0.0.1:1337"
 
 [torii]
 address = "0.0.0.0:8080"
+max_content_len = 64_000_000
 
 [torii.mcp]
 enabled = true
@@ -55,6 +56,10 @@ pow_adaptive_lookback_blocks = 64
 pow_adaptive_claims_per_extra_bit = 4
 pow_adaptive_max_extra_bits = 2
 pow_vrf_seed_enabled = true
+
+[sorafs.quota]
+storage_pin_max_events = 64
+storage_pin_window_secs = 3600
 
 [streaming]
 identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"

@@ -221,7 +221,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 
 [torii]
 # address =
-# max_content_len = 16_000_000
+# max_content_len = 64_000_000
 # receipt_public_key = "ed0120..."  # optional; defaults to an ephemeral Ed25519 signer when unset
 # receipt_private_key = "802620..." # optional; must be set alongside receipt_public_key
 # query_idle_time_ms = 30_000

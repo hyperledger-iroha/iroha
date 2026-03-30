@@ -68,6 +68,10 @@ catalog_path = "configs/soranexus/taira/sorafs_gateway_denylist.catalog.json"
 opt_out_packs = []
 extra_packs = []
 
+[sorafs.quota]
+storage_pin_max_events = 64
+storage_pin_window_secs = 3600
+
 [sorafs.repair]
 enabled = false
 # state_dir = "./storage/sorafs/repair"

@@ -397,6 +397,9 @@ const LOCALNET_TORII_TX_BURST_PER_AUTHORITY: u32 = 2_000_000;
 const LOCALNET_TORII_PREAUTH_RATE_PER_IP_PER_SEC: u32 = 1_000_000;
 /// Default Torii pre-auth burst limit (per IP) for localnet.
 const LOCALNET_TORII_PREAUTH_BURST_PER_IP: u32 = 2_000_000;
+/// Torii request body cap emitted explicitly in localnet configs.
+const LOCALNET_TORII_MAX_CONTENT_LEN: u64 =
+    iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
 /// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Multiplier applied to block+commit time for localnet commit inflight timeout.
@@ -1783,6 +1786,13 @@ fn render_peer_config(
         "api_high_load_tx_threshold".into(),
         Value::Integer(i64::try_from(queue_capacity).expect("queue capacity fits i64")),
     );
+    torii.insert(
+        "max_content_len".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_TORII_MAX_CONTENT_LEN)
+                .expect("LOCALNET_TORII_MAX_CONTENT_LEN fits i64"),
+        ),
+    );
     if mcp_enabled {
         let mut mcp = Table::new();
         mcp.insert("enabled".into(), Value::Boolean(true));
@@ -2975,6 +2985,19 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
 
+        assert_eq!(
+            peer_cfg
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|torii| torii.get("max_content_len"))
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_TORII_MAX_CONTENT_LEN)
+                    .expect("LOCALNET_TORII_MAX_CONTENT_LEN fits i64")
+            ),
+            "localnet configs should pin the resolved Torii body-cap default explicitly"
+        );
+
         let telemetry_enabled = peer_cfg
             .get("telemetry_enabled")
             .and_then(toml::Value::as_bool)
@@ -3025,6 +3048,18 @@ mod tests {
             .and_then(|torii| torii.get("mcp"))
             .and_then(toml::Value::as_table)
             .expect("torii.mcp table");
+        assert_eq!(
+            peer_cfg
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|torii| torii.get("max_content_len"))
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_TORII_MAX_CONTENT_LEN)
+                    .expect("LOCALNET_TORII_MAX_CONTENT_LEN fits i64")
+            ),
+            "Sora-profile localnet should pin the resolved Torii body-cap default explicitly"
+        );
         assert_eq!(
             mcp.get("enabled").and_then(toml::Value::as_bool),
             Some(true)
