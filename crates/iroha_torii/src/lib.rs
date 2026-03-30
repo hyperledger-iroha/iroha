@@ -10453,16 +10453,11 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
         .collect();
     let state_view = app.state.view();
     let mut authoritative_peer_ids = std::collections::BTreeSet::new();
-    for ((lane_id, _validator_id), record) in state_view.world().public_lane_validators().iter() {
-        if *lane_id != routing_decision.lane_id
-            || !matches!(
-                record.status,
-                iroha_data_model::nexus::PublicLaneValidatorStatus::Active
-            )
-        {
-            continue;
-        }
-        let Some(signatory) = record.validator.try_signatory() else {
+    for validator in app
+        .state
+        .authoritative_lane_validator_accounts(routing_decision.lane_id)
+    {
+        let Some(signatory) = validator.try_signatory() else {
             continue;
         };
         authoritative_peer_ids.insert(PeerId::from(signatory.clone()));
@@ -23028,6 +23023,11 @@ impl Torii {
                     "/v1/offline/allowances/query",
                     post(handler_offline_allowances_query),
                 )
+                .route("/v1/offline/cash/setup", post(handler_offline_cash_setup))
+                .route("/v1/offline/cash/load", post(handler_offline_cash_load))
+                .route("/v1/offline/cash/refresh", post(handler_offline_cash_refresh))
+                .route("/v1/offline/cash/sync", post(handler_offline_cash_sync))
+                .route("/v1/offline/cash/redeem", post(handler_offline_cash_redeem))
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))
                 .route(
                     "/v1/offline/transfers/{bundle_id_hex}",
@@ -26771,7 +26771,7 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
-    use parity_scale_codec::Encode;
+    use norito::codec::Encode;
 
     use super::*;
     #[cfg(feature = "telemetry")]
@@ -26878,6 +26878,60 @@ pub(crate) mod tests_runtime_handlers {
         state.set_nexus(nexus.clone()).expect("apply nexus config");
         let state_view = app_state.state.view();
         app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    }
+
+    fn install_lane_manifest_registry_for_test(
+        state: &IrohaState,
+        lanes: &[(LaneId, Vec<AccountId>)],
+    ) {
+        let manifest_root = std::env::temp_dir().join(format!(
+            "iroha-torii-manifests-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&manifest_root).expect("create manifest directory");
+        for (lane_id, validators) in lanes {
+            let alias = format!("lane-{}", lane_id.as_u32());
+            let validators_json = validators
+                .iter()
+                .map(|validator| format!("\"{validator}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let manifest = format!(
+                r#"{{"lane":"{alias}","governance":"parliament","version":1,"validators":[{validators_json}],"quorum":1}}"#
+            );
+            std::fs::write(
+                manifest_root.join(format!("{alias}.manifest.json")),
+                manifest,
+            )
+            .expect("write manifest");
+        }
+
+        let mut governance_modules = std::collections::BTreeMap::new();
+        governance_modules.insert(
+            "parliament".to_owned(),
+            iroha_config::parameters::actual::GovernanceModule::default(),
+        );
+        let governance_catalog = iroha_config::parameters::actual::GovernanceCatalog {
+            default_module: None,
+            modules: governance_modules,
+        };
+        let registry_cfg = iroha_config::parameters::actual::LaneRegistry {
+            manifest_directory: Some(manifest_root),
+            ..iroha_config::parameters::actual::LaneRegistry::default()
+        };
+        let nexus = state.nexus_snapshot();
+        let registry = std::sync::Arc::new(
+            iroha_core::governance::manifest::LaneManifestRegistry::from_config(
+                &nexus.lane_catalog,
+                &governance_catalog,
+                &registry_cfg,
+            ),
+        );
+        state.install_lane_manifests(&registry);
     }
 
     #[derive(Default)]
@@ -29787,7 +29841,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_burn_bundle_endpoint_roundtrips_json_and_scale() {
+    async fn sccp_burn_bundle_endpoint_roundtrips_json_and_norito() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::BurnPayloadV1 {
             version: 1,
@@ -29803,7 +29857,7 @@ pub(crate) mod tests_runtime_handlers {
             kind: iroha_sccp::SccpHubMessageKind::Burn,
             target_domain: payload.dest_domain,
             message_id: iroha_sccp::burn_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(&payload.encode()),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_burn_payload_bytes(&payload)),
             parliament_certificate_hash: None,
         };
         let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
@@ -29828,28 +29882,25 @@ pub(crate) mod tests_runtime_handlers {
             serde_json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
 
-        let scale_response = routing::handle_v1_sccp_burn_bundle(
+        let norito_response = routing::handle_v1_sccp_burn_bundle(
             hex::encode(bundle.commitment.message_id),
-            Some(HeaderValue::from_static("application/x-parity-scale")),
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
         )
         .await
-        .expect("scale response");
+        .expect("norito response");
         assert_eq!(
-            scale_response
+            norito_response
                 .headers()
                 .get(axum::http::header::CONTENT_TYPE)
                 .map(HeaderValue::as_bytes),
-            Some(b"application/x-parity-scale".as_slice())
+            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
         );
-        let scale_bytes = axum::body::to_bytes(scale_response.into_body(), usize::MAX)
+        let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
             .await
-            .expect("scale body");
-        let decoded_scale =
-            <iroha_sccp::NexusSccpBurnProofV1 as parity_scale_codec::Decode>::decode(
-                &mut &scale_bytes[..],
-            )
-            .expect("decode scale bundle");
-        assert_eq!(decoded_scale, bundle);
+            .expect("norito body");
+        let decoded_norito: iroha_sccp::NexusSccpBurnProofV1 =
+            norito::decode_from_bytes(&norito_bytes).expect("decode norito bundle");
+        assert_eq!(decoded_norito, bundle);
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -29870,7 +29921,7 @@ pub(crate) mod tests_runtime_handlers {
         let keypair = iroha_crypto::KeyPair::random();
         let signer = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let enactment = iroha_data_model::governance::types::ParliamentEnactment {
-            preimage_hash: iroha_sccp::payload_hash(&payload.encode()),
+            preimage_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_governance_payload_bytes(&payload)),
             at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 3 },
         };
         let parliament_certificate = {
@@ -29891,31 +29942,31 @@ pub(crate) mod tests_runtime_handlers {
                     ],
                 },
             };
-            let encoded =
-                parity_scale_codec::Encode::encode(&iroha_sccp::NexusParliamentCertificateV1 {
-                    version: 1,
-                    preimage_hash: enactment.preimage_hash,
-                    enactment_window_start: enactment.at_window.lower,
-                    enactment_window_end: enactment.at_window.upper,
-                    payload_bytes: norito::to_bytes(&enactment).expect("encode enactment"),
-                    signature_scheme: iroha_sccp::NexusParliamentSignatureSchemeV1::SimpleThreshold,
-                    roster_epoch,
-                    roster_members: vec![iroha_sccp::NexusParliamentRosterMemberV1 {
-                        signer: signer.to_string(),
-                        public_keys: vec![keypair.public_key().to_string()],
-                    }],
-                    required_signatures: 1,
-                    signatures: vec![iroha_sccp::NexusParliamentSignatureV1 {
-                        signer: signer.to_string(),
-                        public_key: keypair.public_key().to_string(),
-                        signature: iroha_crypto::SignatureOf::new(
-                            keypair.private_key(),
-                            &enactment,
-                        )
-                        .payload()
-                        .to_vec(),
-                    }],
-                });
+            let encoded = norito::to_bytes(&iroha_sccp::NexusParliamentCertificateV1 {
+                version: 1,
+                preimage_hash: enactment.preimage_hash,
+                enactment_window_start: enactment.at_window.lower,
+                enactment_window_end: enactment.at_window.upper,
+                payload_bytes: norito::to_bytes(&enactment).expect("encode enactment"),
+                signature_scheme: iroha_sccp::NexusParliamentSignatureSchemeV1::SimpleThreshold,
+                roster_epoch,
+                roster_members: vec![iroha_sccp::NexusParliamentRosterMemberV1 {
+                    signer: signer.to_string(),
+                    public_keys: vec![keypair.public_key().to_string()],
+                }],
+                required_signatures: 1,
+                signatures: vec![iroha_sccp::NexusParliamentSignatureV1 {
+                    signer: signer.to_string(),
+                    public_key: keypair.public_key().to_string(),
+                    signature: iroha_crypto::SignatureOf::new(
+                        keypair.private_key(),
+                        &enactment,
+                    )
+                    .payload()
+                    .to_vec(),
+                }],
+            })
+            .expect("encode parliament certificate");
             (certificate, encoded)
         };
         let commitment = iroha_sccp::SccpHubCommitmentV1 {
@@ -29923,7 +29974,7 @@ pub(crate) mod tests_runtime_handlers {
             kind: iroha_sccp::SccpHubMessageKind::TokenPause,
             target_domain: iroha_sccp::governance_target_domain(&payload),
             message_id: iroha_sccp::governance_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(&payload.encode()),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_governance_payload_bytes(&payload)),
             parliament_certificate_hash: Some(iroha_sccp::parliament_certificate_hash(
                 &parliament_certificate.1,
             )),
@@ -31238,6 +31289,100 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             !super::is_local_authoritative_for_route(app.as_ref(), route),
             "non-core NPoS routes should not treat commit topology peers as authoritative"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn authoritative_lane_peer_ids_use_manifest_validators_for_admin_managed_lane() {
+        let local_keypair = KeyPair::random();
+        let remote_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(1);
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([
+                    Peer::new(
+                        "127.0.0.1:10001".parse().expect("valid local address"),
+                        local_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10002".parse().expect("valid remote address"),
+                        remote_keypair.public_key().clone(),
+                    ),
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+
+            let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+                NonZeroU32::new(2).expect("non-zero lane count"),
+                vec![
+                    iroha_data_model::nexus::LaneConfig::default(),
+                    iroha_data_model::nexus::LaneConfig {
+                        id: lane_id,
+                        dataspace_id,
+                        alias: format!("lane-{}", lane_id.as_u32()),
+                        visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                        ..iroha_data_model::nexus::LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: dataspace_id,
+                    alias: "restricted".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            let nexus = iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog,
+                dataspace_catalog,
+                ..iroha_config::parameters::actual::Nexus::default()
+            };
+
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            state.set_nexus(nexus.clone()).expect("apply nexus config");
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    lane_id,
+                    vec![
+                        AccountId::new(local_keypair.public_key().clone()),
+                        AccountId::new(remote_keypair.public_key().clone()),
+                    ],
+                )],
+            );
+            let state_view = app_mut.state.view();
+            app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        }
+
+        let route = RoutingDecision::new(lane_id, dataspace_id);
+        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+
+        assert!(
+            authoritative.contains(&local_peer_id),
+            "manifest-backed restricted lane should treat the local validator as authoritative"
+        );
+        assert!(
+            authoritative.contains(&remote_peer_id),
+            "manifest-backed restricted lane should include the remote validator"
+        );
+        assert!(
+            super::is_local_authoritative_for_route(app.as_ref(), route),
+            "manifest-backed restricted lane should be routable without staking records"
         );
     }
 

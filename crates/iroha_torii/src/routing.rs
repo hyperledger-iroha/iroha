@@ -144,7 +144,8 @@ use iroha_sccp::{
     NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentRosterMemberV1,
     NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
     NexusSccpGovernanceProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
-    burn_message_id, commitment_leaf_hash, parliament_certificate_hash, payload_hash,
+    burn_message_id, canonical_burn_payload_bytes, canonical_governance_payload_bytes,
+    commitment_leaf_hash, parliament_certificate_hash, payload_hash,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
@@ -156,7 +157,6 @@ use norito::{
     json::{self, Map, Value},
     to_bytes,
 };
-use parity_scale_codec::Encode as ScaleEncode;
 #[cfg(feature = "telemetry")]
 use prometheus::core::Collector;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
@@ -4450,20 +4450,21 @@ fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
 
 fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
 where
-    T: ScaleEncode + serde::Serialize,
+    T: norito::core::NoritoSerialize + serde::Serialize,
 {
-    let accepts_scale = accept
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value.contains("application/octet-stream")
-                || value.contains("application/x-parity-scale")
-        });
+    let format = match crate::utils::negotiate_response_format(accept) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
 
-    if accepts_scale {
-        let mut resp = Response::new(Body::from(ScaleEncode::encode(bundle)));
+    if matches!(format, crate::utils::ResponseFormat::Norito) {
+        let body = to_bytes(bundle).map_err(|err| {
+            sccp_internal_error(format!("failed to serialize SCCP bundle Norito payload: {err}"))
+        })?;
+        let mut resp = Response::new(Body::from(body));
         resp.headers_mut().insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/x-parity-scale"),
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
         );
         return Ok(resp);
     }
@@ -4523,7 +4524,7 @@ fn build_sccp_finality_proof_bytes(
         ))
     })?;
 
-    Ok(ScaleEncode::encode(&NexusBridgeFinalityProofV1 {
+    to_bytes(&NexusBridgeFinalityProofV1 {
         version: 1,
         chain_id: finality_proof.chain_id.as_str().to_owned(),
         height: finality_proof.height,
@@ -4553,7 +4554,12 @@ fn build_sccp_finality_proof_bytes(
                 .bls_aggregate_signature
                 .clone(),
         },
-    }))
+    })
+    .map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode Nexus SCCP finality proof payload: {err}"
+        ))
+    })
 }
 
 fn min_votes_for_len(len: usize) -> u16 {
@@ -4600,7 +4606,7 @@ fn validate_parliament_certificate(
         ));
     }
 
-    let expected_preimage_hash = payload_hash(&ScaleEncode::encode(payload));
+    let expected_preimage_hash = payload_hash(&canonical_governance_payload_bytes(payload));
     if certificate.payload.preimage_hash != expected_preimage_hash {
         return Err(sccp_bad_request(
             "parliament certificate preimage_hash does not match the SCCP governance payload",
@@ -4691,7 +4697,7 @@ fn validate_parliament_certificate(
         ))
     })?;
 
-    Ok(ScaleEncode::encode(&NexusParliamentCertificateV1 {
+    to_bytes(&NexusParliamentCertificateV1 {
         version: 1,
         preimage_hash: certificate.payload.preimage_hash,
         enactment_window_start: certificate.payload.at_window.lower,
@@ -4711,7 +4717,12 @@ fn validate_parliament_certificate(
                 signature: signature.signature.payload().to_vec(),
             })
             .collect(),
-    }))
+    })
+    .map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode Nexus parliament certificate payload: {err}"
+        ))
+    })
 }
 
 pub fn publish_sccp_burn_bundle(
@@ -4726,7 +4737,7 @@ pub fn publish_sccp_burn_bundle(
         kind: SccpHubMessageKind::Burn,
         target_domain: payload.dest_domain,
         message_id: burn_message_id(&payload),
-        payload_hash: payload_hash(&ScaleEncode::encode(&payload)),
+        payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
         parliament_certificate_hash: None,
     };
     let commitment_root = commitment_leaf_hash(&commitment);
@@ -4760,7 +4771,7 @@ pub fn publish_sccp_governance_bundle(
         kind: sccp_governance_message_kind(&payload),
         target_domain: iroha_sccp::governance_target_domain(&payload),
         message_id: iroha_sccp::governance_message_id(&payload),
-        payload_hash: payload_hash(&ScaleEncode::encode(&payload)),
+        payload_hash: payload_hash(&canonical_governance_payload_bytes(&payload)),
         parliament_certificate_hash: Some(parliament_certificate_hash(&parliament_certificate)),
     };
     let commitment_root = commitment_leaf_hash(&commitment);
@@ -49039,6 +49050,14 @@ pub async fn handle_v1_nexus_public_lane_validators(
             entries.push(validator_record_to_json(record));
         }
     }
+    if entries.is_empty() {
+        entries.extend(
+            state
+                .authoritative_lane_validator_accounts(lane_id)
+                .into_iter()
+                .map(|validator| manifest_validator_to_json(lane_id, &validator)),
+        );
+    }
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
     let payload = build_lane_items_payload(
         lane_id,
@@ -49322,6 +49341,29 @@ fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Valu
             .map(Value::from)
             .unwrap_or(Value::Null),
     );
+    map.insert("authority_source".into(), Value::from("staking"));
+    (canonical_validator, Value::Object(map))
+}
+
+#[cfg(feature = "app_api")]
+fn manifest_validator_to_json(lane_id: LaneId, validator: &AccountId) -> (String, Value) {
+    let mut map = Map::new();
+    let canonical_validator = validator.to_string();
+    let validator_literal = crate::account_literal::display_literal(validator);
+    map.insert("lane_id".into(), Value::from(u64::from(lane_id)));
+    map.insert("validator".into(), Value::from(validator_literal.clone()));
+    map.insert("stake_account".into(), Value::from(validator_literal));
+    map.insert("total_stake".into(), Value::from("0"));
+    map.insert("self_stake".into(), Value::from("0"));
+    map.insert(
+        "status".into(),
+        validator_status_to_json(&PublicLaneValidatorStatus::Active),
+    );
+    map.insert("activation_epoch".into(), Value::Null);
+    map.insert("activation_height".into(), Value::Null);
+    map.insert("metadata".into(), metadata_to_json(&Metadata::default()));
+    map.insert("last_reward_epoch".into(), Value::Null);
+    map.insert("authority_source".into(), Value::from("manifest"));
     (canonical_validator, Value::Object(map))
 }
 
@@ -49420,19 +49462,81 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
 
 #[cfg(all(test, feature = "app_api"))]
 mod public_lane_tests {
+    use std::{num::NonZeroU32, sync::Arc};
+
+    use axum::body::to_bytes;
+    use axum::response::IntoResponse;
+    use iroha_core::{
+        governance::manifest::LaneManifestRegistry,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State as CoreState, World},
+    };
+    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         metadata::Metadata,
         nexus::{
-            PublicLanePendingReward, PublicLaneRewardRecord, PublicLaneRewardRole,
-            PublicLaneRewardShare,
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig,
+            LaneStorageProfile, LaneVisibility, PublicLanePendingReward, PublicLaneRewardRecord,
+            PublicLaneRewardRole, PublicLaneRewardShare,
         },
     };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     use super::*;
+
+    fn manifest_registry_for_test(
+        lane_catalog: &LaneCatalog,
+        lane_id: LaneId,
+        validators: &[AccountId],
+    ) -> Arc<LaneManifestRegistry> {
+        let manifest_root = std::env::temp_dir().join(format!(
+            "iroha-torii-routing-manifests-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&manifest_root).expect("create manifest directory");
+        let alias = format!("lane-{}", lane_id.as_u32());
+        let validators_json = validators
+            .iter()
+            .map(|validator| format!("\"{validator}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let manifest = format!(
+            r#"{{"lane":"{alias}","governance":"parliament","version":1,"validators":[{validators_json}],"quorum":1}}"#
+        );
+        std::fs::write(
+            manifest_root.join(format!("{alias}.manifest.json")),
+            manifest,
+        )
+        .expect("write manifest");
+
+        let mut governance_modules = std::collections::BTreeMap::new();
+        governance_modules.insert(
+            "parliament".to_owned(),
+            iroha_config::parameters::actual::GovernanceModule::default(),
+        );
+        let governance_catalog = iroha_config::parameters::actual::GovernanceCatalog {
+            default_module: None,
+            modules: governance_modules,
+        };
+        let registry_cfg = iroha_config::parameters::actual::LaneRegistry {
+            manifest_directory: Some(manifest_root),
+            ..iroha_config::parameters::actual::LaneRegistry::default()
+        };
+
+        Arc::new(LaneManifestRegistry::from_config(
+            lane_catalog,
+            &governance_catalog,
+            &registry_cfg,
+        ))
+    }
 
     #[test]
     fn validator_record_to_json_uses_canonical_i105_literals() {
@@ -49469,6 +49573,112 @@ mod public_lane_tests {
         assert_eq!(
             obj.get("lane_id").and_then(Value::as_u64),
             Some(u64::from(record.lane_id))
+        );
+        assert_eq!(
+            obj.get("authority_source").and_then(Value::as_str),
+            Some("staking")
+        );
+    }
+
+    #[test]
+    fn manifest_validator_to_json_marks_manifest_source() {
+        let validator = ALICE_ID.clone();
+        let (_, value) = manifest_validator_to_json(LaneId::new(7), &validator);
+        let obj = value
+            .as_object()
+            .expect("manifest validator should encode as object");
+        let expected_validator = crate::account_literal::display_literal(&validator);
+
+        assert_eq!(
+            obj.get("validator").and_then(Value::as_str),
+            Some(expected_validator.as_str())
+        );
+        assert_eq!(
+            obj.get("authority_source").and_then(Value::as_str),
+            Some("manifest")
+        );
+    }
+
+    #[tokio::test]
+    async fn lane_validators_endpoint_uses_manifest_roster_for_admin_managed_lane() {
+        let keypair = KeyPair::random();
+        let validator = AccountId::new(keypair.public_key().clone());
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("non-zero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: lane_id,
+                    dataspace_id,
+                    alias: format!("lane-{}", lane_id.as_u32()),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace_id,
+                alias: "restricted".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+
+        let mut state = Arc::new(CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        Arc::get_mut(&mut state)
+            .expect("unique state")
+            .set_nexus(nexus)
+            .expect("install nexus config");
+        let registry = manifest_registry_for_test(
+            &Arc::get_mut(&mut state)
+                .expect("unique state")
+                .nexus_snapshot()
+                .lane_catalog,
+            lane_id,
+            std::slice::from_ref(&validator),
+        );
+        Arc::get_mut(&mut state)
+            .expect("unique state")
+            .install_lane_manifests(&registry);
+
+        let response = handle_v1_nexus_public_lane_validators(
+            state,
+            lane_id,
+            PublicLaneValidatorsQueryParams::default(),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("validator endpoint should succeed")
+        .into_response();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let json: Value = norito::json::from_slice(&body).expect("response should decode");
+
+        assert_eq!(json["total"].as_u64(), Some(1));
+        assert_eq!(
+            json["items"][0]["validator"].as_str(),
+            Some(crate::account_literal::display_literal(&validator).as_str())
+        );
+        assert_eq!(
+            json["items"][0]["authority_source"].as_str(),
+            Some("manifest")
         );
     }
 

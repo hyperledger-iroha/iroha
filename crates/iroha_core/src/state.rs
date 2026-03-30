@@ -18167,6 +18167,20 @@ impl State {
         self.lane_compliance.read().clone()
     }
 
+    /// Resolve the authoritative validator accounts for a lane from manifests or staking state.
+    pub fn authoritative_lane_validator_accounts(&self, lane_id: LaneId) -> Vec<AccountId> {
+        let manifest_registry = self.lane_manifests.read().clone();
+        let nexus = self.nexus_snapshot();
+        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
+        Self::authoritative_lane_validator_accounts_from_sources(
+            &self.world.view(),
+            lane_id,
+            validator_mode,
+            manifest_registry.as_ref(),
+            &nexus,
+        )
+    }
+
     fn lane_relay_committee_seed(
         &self,
         dataspace_id: DataSpaceId,
@@ -18217,6 +18231,22 @@ impl State {
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
     ) -> Vec<AccountId> {
+        Self::authoritative_lane_validator_accounts_from_sources(
+            &self.world.view(),
+            lane_id,
+            validator_mode,
+            manifest_registry,
+            nexus,
+        )
+    }
+
+    fn authoritative_lane_validator_accounts_from_sources(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
+        manifest_registry: &LaneManifestRegistry,
+        nexus: &iroha_config::parameters::actual::Nexus,
+    ) -> Vec<AccountId> {
         if let Some(mut validators) = manifest_registry.lane_validators(lane_id) {
             validators.sort();
             validators.dedup();
@@ -18230,10 +18260,8 @@ impl State {
             return Vec::new();
         }
 
-        let mut candidates: Vec<(AccountId, Numeric)> = self
-            .world
-            .public_lane_validators
-            .view()
+        let mut candidates: Vec<(AccountId, Numeric)> = world
+            .public_lane_validators()
             .iter()
             .filter(|((lane, _), record)| {
                 *lane == lane_id && matches!(record.status, PublicLaneValidatorStatus::Active)
@@ -27781,7 +27809,11 @@ fn default_fraud_monitoring_cfg() -> iroha_config::parameters::actual::FraudMoni
 
 #[cfg(test)]
 mod tests {
-    use core::{mem, num::NonZeroU64, time::Duration};
+    use core::{
+        mem,
+        num::{NonZeroU32, NonZeroU64},
+        time::Duration,
+    };
     use std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
@@ -28295,7 +28327,7 @@ mod tests {
     fn has_committed_transaction_reads_transactions_index() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
         let tx = dummy_accepted_transaction();
         let tx_hash = tx.hash();
@@ -31905,6 +31937,64 @@ mod tests {
             &nexus,
         );
         assert_eq!(pool, vec![validator]);
+        assert_eq!(
+            state.authoritative_lane_validator_accounts(LaneId::SINGLE),
+            vec![ALICE_ID.clone()]
+        );
+    }
+
+    #[test]
+    fn authoritative_lane_validator_accounts_use_manifest_for_admin_managed_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(1);
+
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: LaneCatalog::new(
+                    NonZeroU32::new(2).expect("non-zero lane count"),
+                    vec![
+                        LaneConfig::default(),
+                        LaneConfig {
+                            id: lane_id,
+                            dataspace_id,
+                            alias: format!("lane-{}", lane_id.as_u32()),
+                            visibility: LaneVisibility::Restricted,
+                            ..LaneConfig::default()
+                        },
+                    ],
+                )
+                .expect("lane catalog"),
+                dataspace_catalog: DataSpaceCatalog::new(vec![
+                    DataSpaceMetadata::default(),
+                    DataSpaceMetadata {
+                        id: dataspace_id,
+                        alias: "restricted".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("dataspace catalog"),
+                ..iroha_config::parameters::actual::Nexus::default()
+            })
+            .expect("apply nexus config");
+
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                lane_id,
+                dataspace_id,
+                vec![ALICE_ID.clone(), BOB_ID.clone()],
+            )],
+        );
+
+        assert_eq!(
+            state.authoritative_lane_validator_accounts(lane_id),
+            vec![ALICE_ID.clone(), BOB_ID.clone()]
+        );
     }
 
     #[test]

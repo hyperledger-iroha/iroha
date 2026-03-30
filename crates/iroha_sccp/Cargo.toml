@@ -11,15 +11,13 @@ workspace = true
 [features]
 default = ["std"]
 std = [
-    "codec/std",
-    "scale-info/std",
     "serde/std",
+    "dep:norito",
 ]
 serde = ["dep:serde"]
 
 [dependencies]
-codec = { package = "parity-scale-codec", version = "3.7.5", default-features = false, features = ["derive"] }
-scale-info = { version = "2.11.6", default-features = false, features = ["derive"] }
 blake2 = { version = "0.10.6", default-features = false }
 tiny-keccak = { version = "2.0.2", default-features = false, features = ["keccak"] }
 serde = { version = "1.0.228", default-features = false, features = ["derive"], optional = true }
+norito = { path = "../norito", default-features = false, features = ["derive"], optional = true }

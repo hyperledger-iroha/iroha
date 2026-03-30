@@ -2,6 +2,83 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Fresh full preserved-peer stable reruns on the current worktree still fail on synchronized no-lagging-peers stalls
+- Rebuilt the current-tree release binaries and reran the canonical 4-peer
+  preserved-peer stable envelopes (`--duration 3600s --target-blocks 2000
+  --progress-interval 10s --progress-timeout 600s --tps 5 --max-inflight 8
+  --workload-profile stable`) with:
+  - `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`
+  - permissioned:
+    `/tmp/izanami_permissioned_post_txgossipfix_20260330T110147Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-permissioned-post-txgossipfix_20260330T110147Z/irohad_test_network_uEh1mM`;
+  - NPoS:
+    `/tmp/izanami_npos_post_txgossipfix_20260330T111513Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-npos-post-txgossipfix_20260330T111513Z/irohad_test_network_hf4kWS`.
+- The old transport/proposer signatures stayed fixed in both fresh reruns:
+  - `LengthMismatch=0`;
+  - `Failed to decode peer message=0`; and
+  - `deferring proposal: insufficient online peers for commit quorum=0`.
+- The remaining malformed decrypted peer-payload churn stayed low and did not
+  trigger the hardened disconnect threshold:
+  - permissioned preserved peers recorded `3`
+    `Dropped malformed decrypted peer payload frame` warnings total;
+  - NPoS preserved peers recorded `4` of the same warning total; and
+  - both runs recorded `0`
+    `disconnecting peer after consecutive malformed decrypted payload frames`
+    events.
+- Permissioned still fails early, but the current-tree rerun moved the
+  synchronized freeze slightly forward relative to the earlier March 30
+  tx-gossip rerun:
+  - the run advanced to `strict_min_height=260` / `quorum_min_height=260`
+    with `strict_reference_height=266`;
+  - the cluster then emitted `59`
+    `strict block height is stalled with no lagging peers` warnings before the
+    600s strict-progress watchdog fired;
+  - final summary:
+    `successes=1036`, `failures=65`,
+    `izanami_ingress_failover_total=170`,
+    `izanami_ingress_endpoint_unhealthy_total=142`;
+  - ingress distress remained the dominant visible workload signal:
+    `transaction queued for too long=68` and
+    `haven't got tx confirmation within 20s=52`; and
+  - peer logs still show no `no proposal observed before cutoff`, but do show
+    `commit quorum missing past timeout=12`,
+    `missing_qc=3045`, and
+    `payload missing=8`.
+- NPoS regressed sharply relative to the earlier March 30 tx-gossip rerun:
+  - the run advanced only to `strict_min_height=571` / `quorum_min_height=571`
+    and then emitted the same `59`
+    `strict block height is stalled with no lagging peers` warnings before the
+    600s strict-progress watchdog fired;
+  - final summary:
+    `successes=2391`, `failures=56`,
+    `izanami_ingress_failover_total=79`,
+    `izanami_ingress_endpoint_unhealthy_total=39`;
+  - the dominant workload failure signature here is query/confirmation
+    timeout, not queue overflow:
+    `transaction confirmation timed out; fallback status check failed=56` and
+    `transaction queued for too long=0`; and
+  - peer logs show higher consensus churn than permissioned even before the
+    stall:
+    `commit quorum missing past timeout=65`,
+    `missing_qc=5587`, and
+    `payload missing=42`.
+- Fresh critique for the current worktree:
+  - the March 30 transport-fix acceptance criteria that target
+    `LengthMismatch`, fatal peer decode, and low-online proposer deferral are
+    still satisfied;
+  - however, both full envelopes now fail on a different cluster-wide liveness
+    stop where `strict_min_height == quorum_min_height` and `lagging_peers=0`,
+    so the active blocker is no longer peer ejection or proposer gating;
+  - compared with the earlier March 30 tx-gossip reruns, permissioned improved
+    modestly (`199 -> 260`) while NPoS regressed substantially
+    (`1568 -> 571`), which means the current worktree no longer reproduces the
+    earlier one-hour NPoS behavior and needs a fresh root-cause pass focused on
+    the shared global no-lagging-peers freeze rather than the original
+    transport bug.
+
 ## 2026-03-30 Transaction-gossip framed-cache implementation now matches the transport-fix design
 - Completed the in-tree follow-through for the transaction-gossip transport
   root cause in `crates/iroha_core/src/gossiper.rs`:
@@ -19,6 +96,18 @@ Last updated: 2026-03-30
   - `cargo test -p iroha_core --lib gossip_transaction_decode_rejects_trailing_bytes -- --nocapture` (pass)
   - `cargo test -p iroha_core --lib queue_accepts_gossip_payload_cache -- --nocapture` (pass)
   - `cargo test -p iroha_core --lib queue_generated_gossip_payload_uses_framed_signed_transaction_wire -- --nocapture` (pass)
+
+## 2026-03-30 Misc status smoke now seeds a registrar-valid SNS lease before runtime domain registration
+- Updated `integration_tests/tests/misc.rs` so the status-endpoint smoke test
+  acquires the required SNS domain-name lease before calling
+  `Register::domain(...)`, matching the current executor invariant in
+  `crates/iroha_core/src/smartcontracts/isi/world.rs`.
+- Switched the smoke-test domain literal from `looking_glass` to
+  `lookingglass` because the registrar pricing-class-0 label policy rejects the
+  underscore form even though `DomainId` parsing accepts it.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test misc misc_status_endpoints_smoke -- --nocapture` (pass)
 
 ## 2026-03-30 Torii OpenAPI now covers the maintained PK browser and app routes
 - Closed the maintained Torii route-doc drift in `crates/iroha_torii/src/openapi.rs`:

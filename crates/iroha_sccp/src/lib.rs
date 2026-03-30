@@ -10,8 +10,6 @@ use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
 };
-use codec::{Decode, Encode, Error as CodecError, Input, Output};
-use scale_info::TypeInfo;
 use tiny_keccak::Hasher;
 
 pub const SCCP_DOMAIN_SORA: u32 = 0;
@@ -48,7 +46,12 @@ pub type H256 = [u8; 32];
 
 #[cfg(feature = "serde")]
 mod serde_utils {
-    use alloc::{format, string::String, vec::Vec};
+    use alloc::{
+        borrow::ToOwned,
+        format,
+        string::{String, ToString},
+        vec::Vec,
+    };
 
     use serde::{
         Deserialize, Deserializer, Serializer,
@@ -219,7 +222,7 @@ mod serde_utils {
     }
 
     pub mod hex32 {
-        use super::{Deserialize, Deserializer, Serializer, decode_hex_fixed, encode_hex};
+        use super::{Deserialize, Deserializer, Serializer, String, decode_hex_fixed, encode_hex};
 
         pub fn serialize<S>(value: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -238,7 +241,9 @@ mod serde_utils {
     }
 
     pub mod option_hex32 {
-        use super::{Deserialize, Deserializer, Serializer, decode_hex_fixed, encode_hex};
+        use super::{
+            Deserialize, Deserializer, Serializer, String, decode_hex_fixed, encode_hex,
+        };
 
         pub fn serialize<S>(value: &Option<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -262,7 +267,9 @@ mod serde_utils {
     }
 
     pub mod bytes_hex {
-        use super::{Deserialize, Deserializer, Serializer, decode_hex_vec, encode_hex};
+        use super::{
+            Deserialize, Deserializer, Serializer, String, Vec, decode_hex_vec, encode_hex,
+        };
 
         pub fn serialize<S>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -282,7 +289,8 @@ mod serde_utils {
 
     pub mod vec_bytes_hex {
         use super::{
-            Deserialize, Deserializer, SerializeSeq, Serializer, decode_hex_vec, encode_hex,
+            Deserialize, Deserializer, SerializeSeq, Serializer, String, Vec, decode_hex_vec,
+            encode_hex,
         };
 
         pub fn serialize<S>(value: &[Vec<u8>], serializer: S) -> Result<S::Ok, S::Error>
@@ -309,7 +317,7 @@ mod serde_utils {
     }
 
     pub mod u64_string {
-        use super::{DecimalStringVisitor, Deserializer, Serializer};
+        use super::{DecimalStringVisitor, Deserializer, Serializer, ToString};
 
         pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -327,7 +335,7 @@ mod serde_utils {
     }
 
     pub mod u128_string {
-        use super::{DecimalStringVisitor, Deserializer, Serializer};
+        use super::{DecimalStringVisitor, Deserializer, Serializer, ToString};
 
         pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -345,8 +353,12 @@ mod serde_utils {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct BurnPayloadV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -361,8 +373,12 @@ pub struct BurnPayloadV1 {
     pub recipient: H256,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct TokenAddPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -377,8 +393,12 @@ pub struct TokenAddPayloadV1 {
     pub symbol: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct TokenControlPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -388,14 +408,15 @@ pub struct TokenControlPayloadV1 {
     pub sora_asset_id: H256,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub enum GovernancePayloadV1 {
-    #[codec(index = 0)]
     Add(TokenAddPayloadV1),
-    #[codec(index = 1)]
     Pause(TokenControlPayloadV1),
-    #[codec(index = 2)]
     Resume(TokenControlPayloadV1),
 }
 
@@ -405,45 +426,12 @@ impl GovernancePayloadV1 {
     const RESUME_DISCRIMINANT: u8 = 2;
 }
 
-impl Encode for GovernancePayloadV1 {
-    fn size_hint(&self) -> usize {
-        1 + match self {
-            Self::Add(payload) => payload.size_hint(),
-            Self::Pause(payload) | Self::Resume(payload) => payload.size_hint(),
-        }
-    }
-
-    fn encode_to<T: Output + ?Sized>(&self, dest: &mut T) {
-        match self {
-            Self::Add(payload) => {
-                Self::ADD_DISCRIMINANT.encode_to(dest);
-                payload.encode_to(dest);
-            }
-            Self::Pause(payload) => {
-                Self::PAUSE_DISCRIMINANT.encode_to(dest);
-                payload.encode_to(dest);
-            }
-            Self::Resume(payload) => {
-                Self::RESUME_DISCRIMINANT.encode_to(dest);
-                payload.encode_to(dest);
-            }
-        }
-    }
-}
-
-impl Decode for GovernancePayloadV1 {
-    fn decode<I: Input>(input: &mut I) -> Result<Self, CodecError> {
-        match u8::decode(input)? {
-            Self::ADD_DISCRIMINANT => Ok(Self::Add(TokenAddPayloadV1::decode(input)?)),
-            Self::PAUSE_DISCRIMINANT => Ok(Self::Pause(TokenControlPayloadV1::decode(input)?)),
-            Self::RESUME_DISCRIMINANT => Ok(Self::Resume(TokenControlPayloadV1::decode(input)?)),
-            _ => Err("invalid GovernancePayloadV1 discriminant".into()),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub enum SccpHubMessageKind {
     Burn,
     TokenAdd,
@@ -451,8 +439,12 @@ pub enum SccpHubMessageKind {
     TokenResume,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct SccpHubCommitmentV1 {
     pub version: u8,
     pub kind: SccpHubMessageKind,
@@ -465,30 +457,46 @@ pub struct SccpHubCommitmentV1 {
     pub parliament_certificate_hash: Option<H256>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct SccpMerkleStepV1 {
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub sibling_hash: H256,
     pub sibling_is_left: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct SccpMerkleProofV1 {
     pub steps: Vec<SccpMerkleStepV1>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub enum NexusConsensusPhaseV1 {
     Prepare = 1,
     Commit = 2,
     NewView = 3,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct NexusCommitQcV1 {
     pub version: u8,
     pub phase: NexusConsensusPhaseV1,
@@ -511,8 +519,12 @@ pub struct NexusCommitQcV1 {
     pub bls_aggregate_signature: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct NexusBridgeFinalityProofV1 {
     pub version: u8,
     pub chain_id: String,
@@ -527,14 +539,22 @@ pub struct NexusBridgeFinalityProofV1 {
     pub commit_qc: NexusCommitQcV1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub enum NexusParliamentSignatureSchemeV1 {
     SimpleThreshold,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct NexusParliamentSignatureV1 {
     pub signer: String,
     pub public_key: String,
@@ -542,15 +562,23 @@ pub struct NexusParliamentSignatureV1 {
     pub signature: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct NexusParliamentRosterMemberV1 {
     pub signer: String,
     pub public_keys: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct NexusParliamentCertificateV1 {
     pub version: u8,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
@@ -569,8 +597,12 @@ pub struct NexusParliamentCertificateV1 {
     pub signatures: Vec<NexusParliamentSignatureV1>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct NexusSccpBurnProofV1 {
     pub version: u8,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
@@ -582,8 +614,12 @@ pub struct NexusSccpBurnProofV1 {
     pub finality_proof: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
 pub struct NexusSccpGovernanceProofV1 {
     pub version: u8,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
@@ -611,20 +647,126 @@ pub fn is_supported_domain(domain_id: u32) -> bool {
     )
 }
 
+fn push_u8(out: &mut Vec<u8>, value: u8) {
+    out.push(value);
+}
+
+fn push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u64(out: &mut Vec<u8>, value: u64) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_u128(out: &mut Vec<u8>, value: u128) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_option_h256(out: &mut Vec<u8>, value: Option<&H256>) {
+    match value {
+        Some(value) => {
+            push_u8(out, 1);
+            out.extend_from_slice(value);
+        }
+        None => push_u8(out, 0),
+    }
+}
+
+pub fn canonical_burn_payload_bytes(payload: &BurnPayloadV1) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + 4 + 4 + 8 + 32 + 16 + 32);
+    push_u8(&mut out, payload.version);
+    push_u32(&mut out, payload.source_domain);
+    push_u32(&mut out, payload.dest_domain);
+    push_u64(&mut out, payload.nonce);
+    out.extend_from_slice(&payload.sora_asset_id);
+    push_u128(&mut out, payload.amount);
+    out.extend_from_slice(&payload.recipient);
+    out
+}
+
+pub fn canonical_token_add_payload_bytes(payload: &TokenAddPayloadV1) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + 4 + 8 + 32 + 1 + 32 + 32);
+    push_u8(&mut out, payload.version);
+    push_u32(&mut out, payload.target_domain);
+    push_u64(&mut out, payload.nonce);
+    out.extend_from_slice(&payload.sora_asset_id);
+    push_u8(&mut out, payload.decimals);
+    out.extend_from_slice(&payload.name);
+    out.extend_from_slice(&payload.symbol);
+    out
+}
+
+pub fn canonical_token_control_payload_bytes(payload: &TokenControlPayloadV1) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + 4 + 8 + 32);
+    push_u8(&mut out, payload.version);
+    push_u32(&mut out, payload.target_domain);
+    push_u64(&mut out, payload.nonce);
+    out.extend_from_slice(&payload.sora_asset_id);
+    out
+}
+
+pub fn canonical_governance_payload_bytes(payload: &GovernancePayloadV1) -> Vec<u8> {
+    let mut out = Vec::new();
+    match payload {
+        GovernancePayloadV1::Add(payload) => {
+            push_u8(&mut out, GovernancePayloadV1::ADD_DISCRIMINANT);
+            out.extend_from_slice(&canonical_token_add_payload_bytes(payload));
+        }
+        GovernancePayloadV1::Pause(payload) => {
+            push_u8(&mut out, GovernancePayloadV1::PAUSE_DISCRIMINANT);
+            out.extend_from_slice(&canonical_token_control_payload_bytes(payload));
+        }
+        GovernancePayloadV1::Resume(payload) => {
+            push_u8(&mut out, GovernancePayloadV1::RESUME_DISCRIMINANT);
+            out.extend_from_slice(&canonical_token_control_payload_bytes(payload));
+        }
+    }
+    out
+}
+
+pub fn canonical_commitment_bytes(commitment: &SccpHubCommitmentV1) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + 1 + 4 + 32 + 32 + 1 + 32);
+    push_u8(&mut out, commitment.version);
+    push_u8(
+        &mut out,
+        match commitment.kind {
+            SccpHubMessageKind::Burn => 0,
+            SccpHubMessageKind::TokenAdd => 1,
+            SccpHubMessageKind::TokenPause => 2,
+            SccpHubMessageKind::TokenResume => 3,
+        },
+    );
+    push_u32(&mut out, commitment.target_domain);
+    out.extend_from_slice(&commitment.message_id);
+    out.extend_from_slice(&commitment.payload_hash);
+    push_option_h256(&mut out, commitment.parliament_certificate_hash.as_ref());
+    out
+}
+
 pub fn burn_message_id(payload: &BurnPayloadV1) -> H256 {
-    prefixed_keccak(SCCP_MSG_PREFIX_BURN_V1, &payload.encode())
+    prefixed_keccak(SCCP_MSG_PREFIX_BURN_V1, &canonical_burn_payload_bytes(payload))
 }
 
 pub fn token_add_message_id(payload: &TokenAddPayloadV1) -> H256 {
-    prefixed_keccak(SCCP_MSG_PREFIX_TOKEN_ADD_V1, &payload.encode())
+    prefixed_keccak(
+        SCCP_MSG_PREFIX_TOKEN_ADD_V1,
+        &canonical_token_add_payload_bytes(payload),
+    )
 }
 
 pub fn token_pause_message_id(payload: &TokenControlPayloadV1) -> H256 {
-    prefixed_keccak(SCCP_MSG_PREFIX_TOKEN_PAUSE_V1, &payload.encode())
+    prefixed_keccak(
+        SCCP_MSG_PREFIX_TOKEN_PAUSE_V1,
+        &canonical_token_control_payload_bytes(payload),
+    )
 }
 
 pub fn token_resume_message_id(payload: &TokenControlPayloadV1) -> H256 {
-    prefixed_keccak(SCCP_MSG_PREFIX_TOKEN_RESUME_V1, &payload.encode())
+    prefixed_keccak(
+        SCCP_MSG_PREFIX_TOKEN_RESUME_V1,
+        &canonical_token_control_payload_bytes(payload),
+    )
 }
 
 pub fn governance_message_id(payload: &GovernancePayloadV1) -> H256 {
@@ -653,7 +795,10 @@ pub fn parliament_certificate_hash(certificate: &[u8]) -> H256 {
 }
 
 pub fn commitment_leaf_hash(commitment: &SccpHubCommitmentV1) -> H256 {
-    prefixed_blake2b(SCCP_HUB_LEAF_PREFIX_V1, &commitment.encode())
+    prefixed_blake2b(
+        SCCP_HUB_LEAF_PREFIX_V1,
+        &canonical_commitment_bytes(commitment),
+    )
 }
 
 pub fn merkle_root_from_commitment(
@@ -671,16 +816,60 @@ pub fn merkle_root_from_commitment(
     current
 }
 
+#[cfg(feature = "std")]
 pub fn decode_nexus_bridge_finality_proof(
     proof_bytes: &[u8],
 ) -> Option<NexusBridgeFinalityProofV1> {
-    NexusBridgeFinalityProofV1::decode(&mut &proof_bytes[..]).ok()
+    norito::decode_from_bytes(proof_bytes).ok()
 }
 
+#[cfg(not(feature = "std"))]
+pub fn decode_nexus_bridge_finality_proof(
+    proof_bytes: &[u8],
+) -> Option<NexusBridgeFinalityProofV1> {
+    let _ = proof_bytes;
+    None
+}
+
+#[cfg(feature = "std")]
 pub fn decode_nexus_parliament_certificate(
     certificate_bytes: &[u8],
 ) -> Option<NexusParliamentCertificateV1> {
-    NexusParliamentCertificateV1::decode(&mut &certificate_bytes[..]).ok()
+    norito::decode_from_bytes(certificate_bytes).ok()
+}
+
+#[cfg(not(feature = "std"))]
+pub fn decode_nexus_parliament_certificate(
+    certificate_bytes: &[u8],
+) -> Option<NexusParliamentCertificateV1> {
+    let _ = certificate_bytes;
+    None
+}
+
+#[cfg(feature = "std")]
+pub fn decode_nexus_sccp_burn_proof(proof_bytes: &[u8]) -> Option<NexusSccpBurnProofV1> {
+    norito::decode_from_bytes(proof_bytes).ok()
+}
+
+#[cfg(not(feature = "std"))]
+pub fn decode_nexus_sccp_burn_proof(proof_bytes: &[u8]) -> Option<NexusSccpBurnProofV1> {
+    let _ = proof_bytes;
+    None
+}
+
+#[cfg(feature = "std")]
+pub fn decode_nexus_sccp_governance_proof(
+    proof_bytes: &[u8],
+) -> Option<NexusSccpGovernanceProofV1> {
+    norito::decode_from_bytes(proof_bytes).ok()
+}
+
+#[cfg(not(feature = "std"))]
+pub fn decode_nexus_sccp_governance_proof(
+    proof_bytes: &[u8],
+) -> Option<NexusSccpGovernanceProofV1> {
+    let _ = proof_bytes;
+    None
 }
 
 pub fn verify_nexus_bridge_finality_proof_structure(proof: &NexusBridgeFinalityProofV1) -> bool {
@@ -832,7 +1021,8 @@ pub fn verify_burn_bundle_structure(bundle: &NexusSccpBurnProofV1) -> bool {
         || bundle.commitment.kind != SccpHubMessageKind::Burn
         || bundle.commitment.target_domain != bundle.payload.dest_domain
         || bundle.commitment.message_id != burn_message_id(&bundle.payload)
-        || bundle.commitment.payload_hash != payload_hash(&bundle.payload.encode())
+        || bundle.commitment.payload_hash
+            != payload_hash(&canonical_burn_payload_bytes(&bundle.payload))
         || bundle.commitment.parliament_certificate_hash.is_some()
     {
         return false;
@@ -858,7 +1048,7 @@ pub fn verify_governance_bundle_structure(bundle: &NexusSccpGovernanceProofV1) -
     };
     if !verify_nexus_parliament_certificate_structure(
         &certificate,
-        &bundle.payload.encode(),
+        &canonical_governance_payload_bytes(&bundle.payload),
         finality_proof.height,
     ) {
         return false;
@@ -874,7 +1064,8 @@ pub fn verify_governance_bundle_structure(bundle: &NexusSccpGovernanceProofV1) -
         || bundle.commitment.kind != expected_kind
         || bundle.commitment.target_domain != target_domain
         || bundle.commitment.message_id != governance_message_id(&bundle.payload)
-        || bundle.commitment.payload_hash != payload_hash(&bundle.payload.encode())
+        || bundle.commitment.payload_hash
+            != payload_hash(&canonical_governance_payload_bytes(&bundle.payload))
         || bundle.commitment.parliament_certificate_hash
             != Some(parliament_certificate_hash(&bundle.parliament_certificate))
     {
@@ -963,9 +1154,10 @@ fn signer_indices_from_bitmap(bitmap: &[u8], roster_len: usize) -> Option<Vec<us
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norito::to_bytes;
 
     fn sample_finality_proof(commitment_root: H256) -> Vec<u8> {
-        NexusBridgeFinalityProofV1 {
+        to_bytes(&NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: "00000000-0000-0000-0000-000000000753".to_owned(),
             height: 7,
@@ -989,14 +1181,14 @@ mod tests {
                 signers_bitmap: vec![0b0000_0001],
                 bls_aggregate_signature: vec![2u8; 96],
             },
-        }
-        .encode()
+        })
+        .expect("encode finality proof")
     }
 
     fn sample_parliament_certificate(payload: &GovernancePayloadV1) -> Vec<u8> {
-        NexusParliamentCertificateV1 {
+        to_bytes(&NexusParliamentCertificateV1 {
             version: 1,
-            preimage_hash: payload_hash(&payload.encode()),
+            preimage_hash: payload_hash(&canonical_governance_payload_bytes(payload)),
             enactment_window_start: 1,
             enactment_window_end: 10,
             payload_bytes: vec![9u8; 16],
@@ -1021,8 +1213,8 @@ mod tests {
                         .to_owned(),
                 signature: vec![3u8; 64],
             }],
-        }
-        .encode()
+        })
+        .expect("encode parliament certificate")
     }
 
     #[test]
@@ -1041,7 +1233,7 @@ mod tests {
             kind: SccpHubMessageKind::Burn,
             target_domain: SCCP_DOMAIN_SORA,
             message_id: burn_message_id(&payload),
-            payload_hash: payload_hash(&payload.encode()),
+            payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
             parliament_certificate_hash: None,
         };
         let commitment_root = commitment_leaf_hash(&commitment);
@@ -1069,7 +1261,7 @@ mod tests {
             kind: SccpHubMessageKind::TokenPause,
             target_domain: SCCP_DOMAIN_SORA,
             message_id: governance_message_id(&payload),
-            payload_hash: payload_hash(&payload.encode()),
+            payload_hash: payload_hash(&canonical_governance_payload_bytes(&payload)),
             parliament_certificate_hash: Some([9u8; 32]),
         };
         let commitment_root = commitment_leaf_hash(&commitment);
@@ -1087,7 +1279,7 @@ mod tests {
     }
 
     #[test]
-    fn governance_payload_scale_roundtrip_preserves_discriminants() {
+    fn governance_payload_canonical_encoding_preserves_discriminants() {
         let add = GovernancePayloadV1::Add(TokenAddPayloadV1 {
             version: 1,
             target_domain: SCCP_DOMAIN_SORA,
@@ -1115,12 +1307,8 @@ mod tests {
             (pause, GovernancePayloadV1::PAUSE_DISCRIMINANT),
             (resume, GovernancePayloadV1::RESUME_DISCRIMINANT),
         ] {
-            let encoded = payload.encode();
+            let encoded = canonical_governance_payload_bytes(&payload);
             assert_eq!(encoded.first(), Some(&discriminant));
-            assert_eq!(
-                GovernancePayloadV1::decode(&mut &encoded[..]).unwrap(),
-                payload
-            );
         }
     }
 
@@ -1140,7 +1328,7 @@ mod tests {
             kind: SccpHubMessageKind::Burn,
             target_domain: SCCP_DOMAIN_SORA,
             message_id: burn_message_id(&payload),
-            payload_hash: payload_hash(&payload.encode()),
+            payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
             parliament_certificate_hash: None,
         };
         let commitment_root = commitment_leaf_hash(&commitment);
