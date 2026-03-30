@@ -2,6 +2,96 @@
 
 Last updated: 2026-03-29
 
+## 2026-03-29 Follow-up: C# SDK now tracks the new Torii VPN/SoraFS routes, adds managed query coverage, typed explorer inventory REST/SSE plus proof SSE, broadens contract runtime coverage, and expands transfer/metadata/trigger transactions
+- Extended the preview `.NET 8` SDK under `csharp/` so the typed Torii client
+  covers the public API additions that landed after the last C# sync:
+  - added `ToriiVpnProfile`, `ToriiVpnSessionCreateRequest`,
+    `ToriiVpnSession`, and `ToriiVpnSessionDeleteResponse`, plus
+    `ToriiClient.GetVpnProfileAsync(...)`,
+    `CreateVpnSessionAsync(...)`, and `DeleteVpnSessionAsync(...)` for
+    `/v1/vpn/profile` and `/v1/vpn/sessions`;
+  - added typed SoraFS discovery models and `ToriiClient` helpers for
+    `/v1/sorafs/cid/{cid}`, `/v1/sorafs/denylist/catalog`, and
+    `/v1/sorafs/denylist/packs/{pack_id}`;
+  - added `OpenSoraFsCidContentAsync(...)` and
+    `GetSoraFsCidContentAsync(...)` so the preview SDK can also fetch bytes and
+    gateway headers from `/sorafs/cid/{cid}/...`; and
+  - added `SubmitSignedQueryAsync(...)` for raw versioned Norito `/query`
+    submission, `SignedQueryBuilder` for managed singular
+    `FindExecutorDataModel` / `FindParameters` /
+    `FindAliasesByAccountId` / `FindProofRecordById` /
+    `FindContractManifestByCodeHash` / `FindAbiVersion` /
+    `FindAssetById` / `FindAssetDefinitionById` /
+    `FindTwitterBindingByHash` / `FindDomainEndorsements` /
+    `FindDomainEndorsementPolicy` / `FindDomainCommittee` /
+    `FindDaPinIntentByTicket` / `FindDaPinIntentByManifest` /
+    `FindDaPinIntentByAlias` / `FindDaPinIntentByLaneEpochSequence` /
+    `FindSorafsProviderOwner` / `FindDataspaceNameOwnerById`
+    construction and signing, `SignedIterableQueryBuilder` for the current
+    fast_dsl iterable subset (`FindDomains`, `FindAccounts`, `FindAssets`,
+    `FindAssetDefinitions`, `FindRepoAgreements`, `FindNfts`, `FindRwas`,
+    `FindTransactions`, `FindRoles`, `FindRoleIds`, `FindPeers`,
+    `FindActiveTriggerIds`, `FindTriggers`, `FindAccountsWithAsset`,
+    `FindPermissionsByAccountId`, `FindRolesByAccountId`, `FindBlocks`,
+    `FindBlockHeaders`, `FindProofRecords`, `FindOfflineAllowances`,
+    `FindOfflineAllowanceByCertificateId`, `FindOfflineToOnlineTransfers`,
+    `FindOfflineToOnlineTransferById`, `FindOfflineCounterSummaries`,
+    `FindOfflineVerdictRevocations`, and cursor `Continue(...)`),
+    `OpenEventSseAsync(...)` plus parsed `StreamEventsAsync(...)`, typed
+    `StreamPipelineEventsAsync(...)` / `StreamProofEventsAsync(...)` for
+    `/v1/events/sse`, typed explorer block/transaction/instruction stream
+    helpers for `/v1/explorer/*/stream`, typed explorer account/domain/asset/
+    NFT/RWA inventory page/detail reads plus asset-definition detail,
+    econometrics, holder-snapshot, block/transaction/instruction page/detail,
+    latest/health/metrics snapshot reads, and instruction contract-view reads
+    for the core `/v1/explorer/*` JSON endpoints, typed
+    `/v1/contracts/code/{code_hash}` metadata reads,
+    `/v1/contracts/code-bytes/{code_hash}` base64-byte reads,
+    `/v1/contracts/instances/{ns}` namespace inventory reads,
+    `/v1/contracts/state` state reads, typed
+    `/v1/contracts/code/{code_hash}/contract-view` reads,
+    `ExecuteContractViewAsync(...)` for read-only `/v1/contracts/view`
+    execution with typed `422` diagnostics, verified-source job submit/status
+    helpers for `/v1/contracts/code/{code_hash}/verified-source/jobs` plus
+    `/v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}`, typed
+    `DeployContractAsync(...)`,
+    `DeployAndActivateContractInstanceAsync(...)`,
+    `ActivateContractInstanceAsync(...)`,
+    `CallContractAsync(...)`,
+    `ProposeMultisigContractCallAsync(...)`, and
+    `ApproveMultisigContractCallAsync(...)` for the write-side contract
+    deploy/instance/call/multisig routes, and managed
+    `TransferDomain(...)`, `TransferAssetDefinition(...)`,
+    `TransferNft(...)`, `SetAssetKeyValue(...)` /
+    `RemoveAssetKeyValue(...)`,
+    `SetDomainKeyValue(...)` / `RemoveDomainKeyValue(...)`,
+    `SetAccountKeyValue(...)` / `RemoveAccountKeyValue(...)`,
+    `SetAssetDefinitionKeyValue(...)` /
+    `RemoveAssetDefinitionKeyValue(...)`,
+    `SetNftKeyValue(...)` / `RemoveNftKeyValue(...)`,
+    `SetTriggerKeyValue(...)` / `RemoveTriggerKeyValue(...)`,
+    `MintTriggerRepetitions(...)` / `BurnTriggerRepetitions(...)`, and
+    `ExecuteTrigger(...)` transaction-builder helpers for
+    domain/asset/asset-definition/NFT transfers, domain/asset/account/
+    asset-definition/NFT/trigger metadata edits, and trigger
+    execution-window instructions; and
+  - updated the C# README, unit suite, and live smoke so the preview SDK
+    documents the new signed VPN requirement, new live-smoke knobs, probes the
+    safer explorer inventory reads by default, and pins the latest JSON
+    contracts plus transaction-encoding expectations for the new surfaces.
+- Validation:
+  - `cd csharp && PATH="$HOME/.dotnet:$PATH" dotnet build Hyperledger.Iroha.Sdk.sln -c Release -nodeReuse:false -maxcpucount:1`
+  - `cd csharp && PATH="$HOME/.dotnet:$PATH" dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build -nodeReuse:false -maxcpucount:1`
+- Residual note:
+  - the C# preview still lacks broader iterable/query families beyond the new
+    fast_dsl subset, broader typed SSE/event coverage beyond the new
+    pipeline/proof/explorer projections, broader contract admin/lifecycle
+    helpers beyond the new deploy/activate/call/multisig plus verified-source
+    job surface, broader instruction families beyond the current asset/
+    domain/asset-definition/NFT transfer plus asset quantity, metadata,
+    and trigger repetition/execution slice, and the larger
+    Connect/offline/Nexus/SoraFS parity families.
+
 ## 2026-03-29 Follow-up: Taira deploy bundle now renders validator configs from a shared roster
 - Added `scripts/render_taira_validator_bundle.py` plus focused tests in
   `scripts/tests/render_taira_validator_bundle_test.py` so operators can render
