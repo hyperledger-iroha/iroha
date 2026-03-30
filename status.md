@@ -2,6 +2,18 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Misc status smoke now seeds a registrar-valid SNS lease before runtime domain registration
+- Updated `integration_tests/tests/misc.rs` so the status-endpoint smoke test
+  acquires the required SNS domain-name lease before calling
+  `Register::domain(...)`, matching the current executor invariant in
+  `crates/iroha_core/src/smartcontracts/isi/world.rs`.
+- Switched the smoke-test domain literal from `looking_glass` to
+  `lookingglass` because the registrar pricing-class-0 label policy rejects the
+  underscore form even though `DomainId` parsing accepts it.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test misc misc_status_endpoints_smoke -- --nocapture` (pass)
+
 ## 2026-03-30 Torii OpenAPI now covers the maintained PK browser and app routes
 - Closed the maintained Torii route-doc drift in `crates/iroha_torii/src/openapi.rs`:
   - added the currently mounted app/browser routes for `POST /v1/aliases/by_account`,
