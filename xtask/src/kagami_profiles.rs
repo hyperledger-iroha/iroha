@@ -56,6 +56,20 @@ const STREAM_ID_PUBLIC: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
 const STREAM_ID_PRIVATE: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
+const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
+    iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
+
+fn format_toml_integer_u64(value: u64) -> String {
+    let digits = value.to_string();
+    let mut reversed = String::with_capacity(digits.len() + digits.len() / 3);
+    for (idx, ch) in digits.chars().rev().enumerate() {
+        if idx != 0 && idx % 3 == 0 {
+            reversed.push('_');
+        }
+        reversed.push(ch);
+    }
+    reversed.chars().rev().collect()
+}
 
 fn account_literal_for_chain_discriminant(
     account_id: &iroha_data_model::account::AccountId,
@@ -317,6 +331,7 @@ submitters = ["{telemetry_submitter}"]
 "#,
             )
         });
+    let torii_max_content_len = format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN);
     format!(
         r#"# Sample config for {slug} (generated via cargo xtask kagami-profiles)
 chain = "{chain}"
@@ -336,6 +351,7 @@ public_address = "127.0.0.1:{p2p}"
 
 [torii]
 address = "0.0.0.0:8080"
+max_content_len = {torii_max_content_len}
 
 [streaming]
 identity_public_key = "{stream_pub}"
@@ -357,6 +373,7 @@ public_key = "{genesis_pk}"
         trusted_peers = trusted_peers,
         trusted_peers_pop = trusted_peers_pop,
         p2p = node.address.split(':').next_back().unwrap_or("1337"),
+        torii_max_content_len = torii_max_content_len,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
         stream_pub = STREAM_ID_PUBLIC,
@@ -670,6 +687,25 @@ mod tests {
         let genesis_key = deterministic_keypair("readme-taira-genesis", Algorithm::Ed25519);
         let readme = render_readme(&PROFILES[1], &peers, genesis_key.public_key(), Some("ABCD"));
         assert!(readme.contains("- chain discriminant: 369"));
+    }
+
+    #[test]
+    fn all_profile_configs_pin_default_torii_max_content_len() {
+        let expected = format!(
+            "max_content_len = {}",
+            format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN)
+        );
+        for profile in PROFILES {
+            let peers = build_peers(&profile);
+            let seed = format!("config-{}-genesis", profile.slug);
+            let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519);
+            let rendered = render_config(&profile, &peers, genesis_key.public_key());
+            assert!(
+                rendered.contains(&expected),
+                "profile {} should pin the Torii body-cap default explicitly",
+                profile.slug
+            );
+        }
     }
 
     #[test]

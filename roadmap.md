@@ -2,6 +2,52 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 Torii body-cap default + Kagami emission):
+the Torii runtime default is now `64_000_000` bytes and Kagami now emits that
+resolved value explicitly across localnet and canned-profile configs, so deploy
+artifacts no longer depend on a Taira-only override to accept current SoraFS
+publish-sized JSON bodies.
+
+- `crates/iroha_config/src/parameters/defaults.rs` now defines
+  `defaults::torii::MAX_CONTENT_LEN = 64_000_000`;
+- `crates/iroha_kagami/src/localnet.rs` now writes
+  `torii.max_content_len` into every generated peer config;
+- `xtask/src/kagami_profiles.rs` now writes the same line into every generated
+  sample profile under `defaults/kagami/`; and
+- `docs/source/references/peer.template.toml` now documents the same default.
+
+Open work for this slice now remains:
+- refresh the stale `iroha_config` `minimal_config_snapshot` expect output when
+  the broader default/rendering drift on this checkout is intentionally
+  reconciled; the focused Torii default regression is already covered, but the
+  giant snapshot still reflects unrelated older expectations.
+
+Latest sync (2026-03-30 Taira live 64 MB Torii body cap):
+the served Taira localnet now keeps the checked-in
+`torii.max_content_len = 64_000_000` live across resets, so publish-sized
+SoraFS `storage/pin` JSON bodies no longer die at the old default transport
+cap before reaching the handler.
+
+- `crates/iroha_kagami/src/localnet.rs` now emits the higher Torii body cap for
+  Sora-profile localnets;
+- `xtask/src/kagami_profiles.rs` and
+  `defaults/kagami/iroha3-taira/config.toml` now keep the checked-in Taira
+  sample profile aligned with that cap;
+- `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` now patches the served
+  `dist/taira-localnet/peer*.toml` files with the checked-in Taira
+  `torii.max_content_len`; and
+- the restarted live Taira now returns handler-level `400` responses for
+  `20_000_037` byte and `24_000_037` byte `POST /v1/sorafs/storage/pin`
+  probes instead of the old `413 length limit exceeded`.
+
+Open work for this slice now remains:
+- rerun the real `yarn taira:publish` flow with the intended live
+  `SORAFS_AUTHORITY` / `SORAFS_PRIVATE_KEY` and confirm the actual Polkaswap
+  site payload clears `POST /v1/sorafs/storage/pin` end to end; and
+- if `https://taira.sora.org/` still needs named-host root serving, sync any
+  resulting `sorafs_sites.json` binding update to the serving nodes after the
+  successful publish.
+
 Latest sync (2026-03-30 misc status smoke SNS lease alignment):
 the `misc_status_endpoints_smoke` integration fixture now matches the current
 SNS-backed runtime domain-registration invariant and no longer uses a

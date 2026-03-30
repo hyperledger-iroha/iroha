@@ -23046,7 +23046,10 @@ impl Torii {
                 )
                 .route("/v1/offline/cash/setup", post(handler_offline_cash_setup))
                 .route("/v1/offline/cash/load", post(handler_offline_cash_load))
-                .route("/v1/offline/cash/refresh", post(handler_offline_cash_refresh))
+                .route(
+                    "/v1/offline/cash/refresh",
+                    post(handler_offline_cash_refresh),
+                )
                 .route("/v1/offline/cash/sync", post(handler_offline_cash_sync))
                 .route("/v1/offline/cash/redeem", post(handler_offline_cash_redeem))
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))

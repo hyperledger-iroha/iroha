@@ -2,6 +2,71 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Kagami now pins the runtime Torii body-cap default, and Iroha defaults to 64 MB
+- Raised the runtime Torii request-body default in
+  `crates/iroha_config/src/parameters/defaults.rs` from the old 16 MiB value to
+  `64_000_000` bytes so deployments no longer need a Taira-only override just
+  to accept current SoraFS publish-sized JSON bodies.
+- Tightened the generation path so Kagami always emits that resolved Torii
+  default explicitly instead of relying on implicit runtime defaults:
+  - `crates/iroha_kagami/src/localnet.rs` now writes `torii.max_content_len`
+    into every generated `peer*.toml`, not just the Sora-profile path;
+  - `xtask/src/kagami_profiles.rs` now renders `max_content_len` for every
+    canned Kagami profile; and
+  - the checked-in sample profiles under `defaults/kagami/` now match the
+    generator output for `iroha3-dev`, `iroha3-nexus`, and `iroha3-taira`.
+- Updated the generic operator reference in
+  `docs/source/references/peer.template.toml` to document the new
+  `64_000_000` Torii default, and added focused `iroha_config` / Kagami / xtask
+  regressions so both the runtime default and the generated configs stay in
+  sync.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_config --test fixtures torii_max_content_len_defaults_to_sixty_four_megabytes -- --nocapture` (pass)
+  - `cargo test -p iroha_kagami generated_configs_set_localnet_channel_caps -- --nocapture` (pass)
+  - `cargo test -p iroha_kagami generated_sora_profile_peer_config_includes_mcp_writer_profile -- --nocapture` (pass)
+  - `cargo test -p xtask all_profile_configs_pin_default_torii_max_content_len -- --nocapture` (pass)
+- Additional note:
+  - `cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+    still fails on this checkout because the expect snapshot has broader
+    pre-existing drift outside the Torii body-cap change (for example oracle
+    defaults and governance rendering), so I did not rewrite that giant
+    snapshot in this patch.
+
+## 2026-03-30 Taira now keeps the shipped 64 MB Torii body cap live across resets
+- Closed the remaining live SoraFS ingress drift on the served Taira localnet:
+  the checked-in Taira profile already carried
+  `torii.max_content_len = 64_000_000`, but the served
+  `dist/taira-localnet/peer*.toml` files were still missing it and were
+  restarting Torii on the old default request-body cap.
+- Fixed the generation and deploy paths so the higher cap persists:
+  - `crates/iroha_kagami/src/localnet.rs` now emits
+    `torii.max_content_len = 64_000_000` for Sora-profile localnets;
+  - `xtask/src/kagami_profiles.rs` and
+    `defaults/kagami/iroha3-taira/config.toml` now keep the checked-in Taira
+    sample profile aligned with that cap; and
+  - `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` now copies
+    `torii.max_content_len` from the checked-in Taira profile into the served
+    `dist/taira-localnet/peer*.toml` files so resets do not silently fall back
+    to the old default.
+- Restarted the detached `screen` session `taira-localnet` on the patched peer
+  configs. Live verification on March 30, 2026:
+  - `GET http://127.0.0.1:29080/status` and
+    `GET https://taira.sora.org/status` both returned `200` after the restart;
+  - `POST https://taira.sora.org/v1/sorafs/storage/pin` with a
+    `20_000_037` byte JSON body returned
+    `400 {"error":"invalid base64 in manifest_b64: Invalid symbol 63, offset 0."}`;
+  - `POST https://taira.sora.org/v1/sorafs/storage/pin` with a
+    `24_000_037` byte JSON body returned the same handler-level `400`;
+  - the live request path no longer returned the old `413 length limit
+    exceeded` response at publish-sized payloads.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_kagami generated_sora_profile_peer_config_includes_mcp_writer_profile -- --nocapture` (pass)
+  - `cargo test -p iroha_kagami generated_configs_set_localnet_channel_caps -- --nocapture` (pass)
+  - `cargo test -p xtask taira_config_raises_torii_max_content_len -- --nocapture` (pass)
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh` (pass)
+
 ## 2026-03-30 Misc status smoke now seeds a registrar-valid SNS lease before runtime domain registration
 - Updated `integration_tests/tests/misc.rs` so the status-endpoint smoke test
   acquires the required SNS domain-name lease before calling
