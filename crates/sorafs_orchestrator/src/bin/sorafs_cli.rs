@@ -151,6 +151,20 @@ fn parse_account_id_arg_with_prefix(
     parse_account_id_arg(flag, raw, context)
 }
 
+fn authority_payload_literal(
+    authority: &AccountId,
+    network_prefix: Option<u16>,
+) -> Result<String, String> {
+    match network_prefix {
+        Some(prefix) => authority
+            .to_i105_for_discriminant(prefix)
+            .map_err(|err| format!("failed to encode authority for payload: {err}")),
+        None => authority
+            .canonical_i105()
+            .map_err(|err| format!("failed to encode authority for payload: {err}")),
+    }
+}
+
 fn parse_appeal_verdict(value: &str) -> Result<AppealVerdict, String> {
     let normalized = value.trim().to_ascii_lowercase();
     let verdict = match normalized.as_str() {
@@ -4597,6 +4611,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
             |reason| format!("invalid authority: {reason}"),
         )
     })?;
+    let authority_literal = authority_payload_literal(&authority, authority_network_prefix)?;
     let private_key = match (private_key_inline, private_key_path) {
         (Some(inline), None) => parse_private_key_inline(&inline)?,
         (None, Some(path)) => load_private_key_from_file(&path)?,
@@ -4639,7 +4654,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     };
 
     let payload = build_pin_register_payload(
-        &authority,
+        &authority_literal,
         private_key.clone(),
         &manifest,
         chunk_digest,
@@ -4747,7 +4762,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         Value::from(response_status.as_u16() as u64),
     );
     summary.insert("submitted_epoch".into(), Value::from(submitted_epoch));
-    summary.insert("authority".into(), Value::from(authority.to_string()));
+    summary.insert("authority".into(), Value::from(authority_literal));
     summary.insert("submission_mode".into(), Value::from(submission_mode));
     summary.insert(
         "manifest_path".into(),
@@ -7003,7 +7018,7 @@ fn alias_inputs_from_flags(
 }
 
 fn build_pin_register_payload(
-    authority: &AccountId,
+    authority_literal: &str,
     private_key: PrivateKey,
     manifest: &ManifestV1,
     chunk_digest_sha3: [u8; 32],
@@ -7039,7 +7054,7 @@ fn build_pin_register_payload(
     );
 
     let mut map = Map::new();
-    map.insert("authority".into(), Value::from(authority.to_string()));
+    map.insert("authority".into(), Value::from(authority_literal.to_owned()));
     map.insert(
         "private_key".into(),
         to_value(&ExposedPrivateKey(private_key))
@@ -7313,6 +7328,53 @@ mod tests {
         assert!(
             err.contains("ERR_UNEXPECTED_NETWORK_PREFIX"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn authority_payload_literal_preserves_explicit_i105_discriminant() {
+        let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(753);
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x7C; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let expected = account
+            .to_i105_for_discriminant(369)
+            .expect("encode taira authority");
+
+        let literal =
+            authority_payload_literal(&account, Some(369)).expect("render authority payload");
+
+        assert_eq!(literal, expected);
+    }
+
+    #[test]
+    fn build_pin_register_payload_uses_supplied_authority_literal() {
+        let manifest = sample_manifest();
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x8D; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let authority_literal = account
+            .to_i105_for_discriminant(369)
+            .expect("encode taira authority");
+
+        let payload = build_pin_register_payload(
+            &authority_literal,
+            KeyPair::from_seed(vec![0x9E; 32], Algorithm::Ed25519).private_key().clone(),
+            &manifest,
+            [0xCD; 32],
+            99,
+            None,
+            None,
+        )
+        .expect("build payload");
+
+        assert_eq!(
+            payload["authority"].as_str().expect("authority literal"),
+            authority_literal
         );
     }
 
