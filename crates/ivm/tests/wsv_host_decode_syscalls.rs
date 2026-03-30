@@ -8,7 +8,7 @@ use iroha_data_model::prelude::{AssetDefinitionId, Name};
 use iroha_primitives::json::Json;
 use ivm::{
     IVM, PointerType,
-    mock_wsv::{DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, DomainId, MockWorldStateView, WsvHost},
     syscalls,
 };
 mod common;
@@ -25,10 +25,10 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+fn account(domain: &str, public_key: &str) -> AccountId {
     let domain: DomainId = domain.parse().expect("domain id");
     let public_key: PublicKey = public_key.parse().expect("public key");
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn wsv_host() -> WsvHost {
@@ -37,11 +37,7 @@ fn wsv_host() -> WsvHost {
         "wonderland",
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
-    WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&caller),
-        Default::default(),
-    )
+    WsvHost::new_with_subject(wsv, caller.clone(), Default::default())
 }
 
 #[test]

@@ -1484,7 +1484,6 @@ fn ensure_authority_registered(
     if account_exists && has_register && has_approve {
         return;
     }
-    let domain_id: dm::DomainId = "wonderland".parse().expect("domain id");
     drop(view);
 
     let prev_hash = harness
@@ -1504,11 +1503,10 @@ fn ensure_authority_registered(
     let mut tx = block.transaction();
 
     if !account_exists {
-        let account = dm::Account::new(authority.account.clone())
-            .build(&authority.account);
+        let account = dm::Account::new(authority.account.clone()).build(&authority.account);
         let (account_id, account_value) = account.into_key_value();
         tx.world_mut_for_testing()
-            .insert_account_with_links(account_id, account_value);
+            .insert_account_for_testing(account_id, account_value);
     }
 
     if !has_register {

@@ -284,7 +284,7 @@ fn account_matches(
         };
         state_view
             .world()
-            .domains_for_subject(authority)
+            .alias_domains_for_account(authority)
             .into_iter()
             .any(|linked| linked.name().as_ref().eq_ignore_ascii_case(domain))
     })
@@ -405,7 +405,7 @@ fn transfer_destination_matches_domain(
     };
     state_view
         .world()
-        .domains_for_subject(destination)
+        .alias_domains_for_account(destination)
         .into_iter()
         .any(|linked| linked.name().as_ref().eq_ignore_ascii_case(domain))
 }
@@ -829,9 +829,7 @@ mod tests {
             domain_owners
                 .entry(domain_id.clone())
                 .or_insert_with(|| account_id.clone());
-            account_models.push(
-                Account::new(account_id.clone()).build(account_id),
-            );
+            account_models.push(Account::new(account_id.clone()).build(account_id));
         }
         let domain_models = domain_owners
             .into_iter()

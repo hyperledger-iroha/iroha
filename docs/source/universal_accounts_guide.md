@@ -85,23 +85,22 @@ In concrete terms:
 Universal-account rollout does not change the canonical account identity model:
 
 - `AccountId` remains the canonical, domainless account subject.
-- `ScopedAccountId { account, domain }` is explicit domain context for views or
-  registrations that materialize a domain link. It is not a second canonical
-  identity.
-- SNS/account aliases are separate bindings on top of that subject. A
+- `AccountAlias` values are separate SNS bindings on top of that subject. A
   domain-qualified alias such as `merchant@hbl.sbp` and a dataspace-root alias
   such as `merchant@sbp` can both resolve to the same canonical `AccountId`.
-- `linked_domains` on stored account records is derived state from the
-  account-domain indexes. It describes currently materialized links for that
-  subject; it is not part of the canonical identifier.
+- Canonical account registration is always `Account::new(AccountId)` /
+  `NewAccount::new(AccountId)`; there is no domain-qualified or domain-materialized
+  registration path.
+- Domain ownership, alias permissions, and other domain-scoped behaviors live
+  in their own state and APIs rather than on the account identity itself.
 - Public account lookup follows that split: alias queries stay public, while
-  raw subject-domain membership remains an internal index/detail instead of a
-  dedicated account query surface.
+  canonical account identity remains a pure `AccountId`.
 
 Implementation rule for operators, SDKs, and tests: start from the canonical
-`AccountId`, then add alias leases, dataspace/domain permissions, and explicit
-domain links separately. Do not synthesize a fake domain-scoped canonical
-account just because an alias or route carries a domain segment.
+`AccountId`, then add alias leases, dataspace/domain permissions, and any
+domain-owned state separately. Do not synthesize a fake alias-derived account
+or expect any linked-domain field on account records just because an alias or
+route carries a domain segment.
 
 Current Torii routes:
 

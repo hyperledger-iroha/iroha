@@ -87,8 +87,7 @@ mod util {
                 .parse()
                 .unwrap();
         let genesis_account_id = AccountId::new(genesis_public_key);
-        let genesis_account = Account::new(genesis_account_id.clone())
-        .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let genesis_domain =
             Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account.id);
         (genesis_domain, genesis_account)

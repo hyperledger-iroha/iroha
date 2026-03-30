@@ -307,7 +307,7 @@ impl Default for Account {
 ///   `SMARTCONTRACT_EXECUTE_QUERY (0xA1)` and `SMARTCONTRACT_EXECUTE_INSTRUCTION (0xA0)`.
 ///   Supported envelopes include:
 ///   - Queries: `wsv.get_balance`, `wsv.list_triggers`, `wsv.has_permission`,
-///     `wsv.list_domains_for_subject`, `wsv.list_accounts_for_domain`.
+///     `wsv.list_domains_for_account`, `wsv.list_accounts_for_domain`.
 ///   - Admin: `wsv.create_role`, `wsv.grant_role`, `wsv.revoke_role`,
 ///     `wsv.grant_permission`, `wsv.revoke_permission`, `wsv.create_trigger`,
 ///     `wsv.set_trigger_enabled`, `wsv.remove_trigger`.
@@ -883,16 +883,17 @@ impl MockWorldStateView {
             .any(|subjects| subjects.contains(subject))
     }
 
-    /// List all domains currently linked to the supplied account subject.
+    /// List all domains currently associated with the supplied account.
     ///
     /// The returned list is sorted for deterministic test assertions.
     #[must_use]
-    pub fn linked_domains_for_subject(&self, subject: &AccountId) -> Vec<DomainId> {
+    pub fn domains_for_account(&self, account: &AccountId) -> Vec<DomainId> {
+        let subject = Self::account_subject(account);
         let mut domains: Vec<DomainId> = self
             .domain_accounts
             .iter()
             .filter_map(|(domain, subjects)| {
-                if subjects.contains(subject) {
+                if subjects.contains(&subject) {
                     Some(domain.clone())
                 } else {
                     None
@@ -1570,12 +1571,7 @@ impl MockWorldStateView {
     }
 
     /// Create an NFT with `owner` and `issuer` if it does not already exist.
-    pub fn create_nft(
-        &mut self,
-        owner: AccountId,
-        issuer: AccountId,
-        id: NftId,
-    ) -> bool {
+    pub fn create_nft(&mut self, owner: AccountId, issuer: AccountId, id: NftId) -> bool {
         if !self.account_is_linked(&owner) || !self.account_is_linked(&issuer) {
             return false;
         }
@@ -1884,8 +1880,8 @@ mod tests {
 
 #[cfg(test)]
 fn test_account_id(signatory: &str, domain: &str) -> AccountId {
+    let _domain: DomainId = domain.parse().expect("test domain id must parse");
     AccountId::new(
-        domain.parse().expect("test domain id must parse"),
         signatory
             .parse()
             .expect("test public key literal must parse"),
@@ -1933,8 +1929,7 @@ pub struct WsvHost {
     axt_policy_overridden: bool,
     sm_enabled: bool,
     allow_contract_runtime_asset_transfer_bypass: bool,
-    fastpq_batch_entries:
-        Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
+    fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
     tx_active: bool,
@@ -1959,8 +1954,7 @@ struct WsvHostSnapshot {
     axt_policy_overridden: bool,
     sm_enabled: bool,
     allow_contract_runtime_asset_transfer_bypass: bool,
-    fastpq_batch_entries:
-        Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
+    fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
     tx_active: bool,
@@ -1968,16 +1962,7 @@ struct WsvHostSnapshot {
 }
 
 impl WsvHost {
-    fn default_domain_id() -> DomainId {
-        iroha_data_model::account::address::default_domain_name()
-            .parse()
-            .expect("default domain name must parse as DomainId")
-    }
-
-    fn materialize_subject_account(
-        wsv: &mut MockWorldStateView,
-        subject: &AccountId,
-    ) -> AccountId {
+    fn materialize_subject_account(wsv: &mut MockWorldStateView, subject: &AccountId) -> AccountId {
         if let Some(existing) = wsv.canonical_account_id_for_subject(subject) {
             return existing;
         }
@@ -1987,7 +1972,7 @@ impl WsvHost {
         account_id
     }
 
-    fn new_scoped(
+    fn new_host(
         wsv: MockWorldStateView,
         caller: AccountId,
         account_map: HashMap<u64, AccountId>,
@@ -2017,11 +2002,7 @@ impl WsvHost {
         }
     }
 
-    /// Construct a host from a domainless caller/account index map.
-    ///
-    /// Subjects already linked in the world keep their canonical domain linkage.
-    /// Subjects without any domain linkage are materialized under the configured
-    /// default domain and linked into the world.
+    /// Construct a host from a canonical caller/account index map.
     pub fn new_with_subject_map(
         mut wsv: MockWorldStateView,
         caller: AccountId,
@@ -2029,14 +2010,14 @@ impl WsvHost {
         asset_map: HashMap<u64, AssetDefinitionId>,
     ) -> Self {
         let caller_account = Self::materialize_subject_account(&mut wsv, &caller);
-        let scoped_map = account_map
+        let account_map = account_map
             .into_iter()
             .map(|(idx, subject)| (idx, Self::materialize_subject_account(&mut wsv, &subject)))
             .collect();
-        Self::new_scoped(wsv, caller_account, scoped_map, asset_map)
+        Self::new_host(wsv, caller_account, account_map, asset_map)
     }
 
-    /// Construct a host from a single domainless caller with no account index map.
+    /// Construct a host from a single canonical caller with no account index map.
     pub fn new_with_subject(
         wsv: MockWorldStateView,
         caller: AccountId,
@@ -2045,16 +2026,13 @@ impl WsvHost {
         Self::new_with_subject_map(wsv, caller, HashMap::new(), asset_map)
     }
 
-    /// Return the current caller as a domainless account subject.
+    /// Return the current canonical caller identity.
     #[must_use]
     pub fn caller_subject(&self) -> AccountId {
         self.caller.clone()
     }
 
-    /// Switch the caller using a domainless account subject.
-    ///
-    /// If the subject has no existing domain linkage in the world, it is
-    /// materialized under the configured default domain first.
+    /// Switch the caller using a canonical account identity.
     pub fn set_caller_subject(&mut self, caller: AccountId) {
         self.caller = Self::materialize_subject_account(&mut self.wsv, &caller);
     }
@@ -2408,11 +2386,7 @@ impl WsvHost {
         self.decode_account_subject_payload(tlv.payload)
     }
 
-    fn decode_canonical_account_reg(
-        &self,
-        vm: &IVM,
-        reg: usize,
-    ) -> Result<AccountId, VMError> {
+    fn decode_canonical_account_reg(&self, vm: &IVM, reg: usize) -> Result<AccountId, VMError> {
         let subject = self.decode_account_subject_reg(vm, reg)?;
         self.wsv
             .canonical_account_id_for_subject(&subject)
@@ -4248,7 +4222,7 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY => {
                 // r10 = &Json envelope:
                 // {"type":"wsv.get_balance"|"wsv.list_triggers"|"wsv.has_permission"|
-                //          "wsv.list_domains_for_subject"|"wsv.list_accounts_for_domain",
+                //          "wsv.list_domains_for_account"|"wsv.list_accounts_for_domain",
                 //  "payload": {...}}
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
@@ -4356,17 +4330,16 @@ impl IVMHost for WsvHost {
                         vm.set_register(10, p);
                         Ok(0)
                     }
-                    // List domains linked to a subject identified by account literal:
+                    // List domains linked to an account identified by account literal:
                     // {account_id} -> {domains:[...]}
-                    "wsv.list_domains_for_subject" => {
+                    "wsv.list_domains_for_account" => {
                         let acc = parse_account_id_literal(
                             payload
                                 .get("account_id")
                                 .and_then(|v| v.as_str())
                                 .ok_or(VMError::NoritoInvalid)?,
                         )?;
-                        let subject = MockWorldStateView::account_subject(&acc);
-                        let domains = self.wsv.linked_domains_for_subject(&subject);
+                        let domains = self.wsv.domains_for_account(&acc);
                         let mut map = njson::Map::new();
                         map.insert(
                             "domains".to_owned(),
@@ -5469,19 +5442,13 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REGISTER_ASSET => {
-                // r10 = &AssetDefinitionId, or &Name (asset name) scoped to caller domain.
+                // r10 = &AssetDefinitionId. Bare names no longer inherit any account-domain
+                // context now that account identity is canonical and domainless.
                 let id = match vm.memory.validate_tlv(vm.register(10)) {
                     Ok(tlv) => match tlv.type_id {
                         PointerType::AssetDefinitionId => self.decode_asset_payload(tlv.payload)?,
                         PointerType::Name | PointerType::Blob => {
-                            let name = self.decode_name_payload(tlv.payload)?;
-                            let caller_domain = self
-                                .wsv
-                                .linked_domains_for_subject(&self.caller)
-                                .into_iter()
-                                .min()
-                                .unwrap_or_else(Self::default_domain_id);
-                            AssetDefinitionId::new(caller_domain, name)
+                            return Err(VMError::DecodeError);
                         }
                         _ => return Err(VMError::NoritoInvalid),
                     },
@@ -5875,9 +5842,9 @@ mod tests_permission_json {
     use iroha_data_model::domain::DomainId;
 
     fn account(domain: &str, controller: &str) -> AccountId {
-        let domain_id: DomainId = domain.parse().expect("test domain id");
+        let _domain_id: DomainId = domain.parse().expect("test domain id");
         let public_key: PublicKey = controller.parse().expect("test public key");
-        AccountId::new(domain_id, public_key)
+        AccountId::new(public_key)
     }
 
     #[test]
@@ -5891,7 +5858,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::ReadAccountAssets(id) if id == AccountId::from(&alice)
+            PermissionToken::ReadAccountAssets(id) if id == alice
         ));
     }
 
@@ -5948,7 +5915,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::AddSignatory(id) if id == AccountId::from(&bob)
+            PermissionToken::AddSignatory(id) if id == bob
         ));
     }
 
@@ -5963,7 +5930,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::RemoveSignatory(id) if id == AccountId::from(&bob)
+            PermissionToken::RemoveSignatory(id) if id == bob
         ));
     }
 
@@ -5978,7 +5945,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::SetAccountQuorum(id) if id == AccountId::from(&bob)
+            PermissionToken::SetAccountQuorum(id) if id == bob
         ));
     }
 
@@ -5993,7 +5960,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::SetAccountDetail(id) if id == AccountId::from(&bob)
+            PermissionToken::SetAccountDetail(id) if id == bob
         ));
     }
 
@@ -6249,12 +6216,12 @@ mod tests_governance_elections {
     }
 
     #[test]
-    fn wsv_host_new_with_subject_materializes_default_domain_membership() {
+    fn wsv_host_new_with_subject_registers_canonical_caller() {
         let caller = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "wonderland",
         );
-        let caller_subject = AccountId::from(&caller);
+        let caller_subject = caller.clone();
 
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
@@ -6262,16 +6229,12 @@ mod tests_governance_elections {
             HashMap::new(),
         );
 
-        let default_domain: DomainId = iroha_data_model::account::address::default_domain_name()
-            .parse()
-            .expect("default domain id must parse");
-        assert_eq!(host.caller.domain(), &default_domain);
-        assert_eq!(AccountId::from(&host.caller), caller_subject);
+        assert_eq!(host.caller, caller_subject);
         assert!(host.wsv.account_signatories(&host.caller).is_some());
     }
 
     #[test]
-    fn wsv_host_new_with_subject_map_materializes_index_subjects() {
+    fn wsv_host_new_with_subject_map_registers_index_subjects() {
         let caller = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "wonderland",
@@ -6280,8 +6243,8 @@ mod tests_governance_elections {
             "ed012021F5A4D9D9476A9C9B4F7A7E377B2F756D3A6B7CD57E9C535C84D0D4D716D404",
             "finance",
         );
-        let caller_subject = AccountId::from(&caller);
-        let mapped_subject = AccountId::from(&mapped);
+        let caller_subject = caller.clone();
+        let mapped_subject = mapped.clone();
         let mut account_map = HashMap::new();
         account_map.insert(7_u64, mapped_subject.clone());
 
@@ -6293,9 +6256,9 @@ mod tests_governance_elections {
         );
 
         let materialized = host.account_map.get(&7).expect("mapped account id");
-        assert_eq!(AccountId::from(materialized), mapped_subject);
+        assert_eq!(materialized, &mapped_subject);
         assert!(host.wsv.account_signatories(materialized).is_some());
-        assert_eq!(AccountId::from(&host.caller), caller_subject);
+        assert_eq!(host.caller, caller_subject);
     }
 
     #[test]
@@ -6308,8 +6271,8 @@ mod tests_governance_elections {
             "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
             "finance",
         );
-        let alice_subject = AccountId::from(&alice);
-        let bob_subject = AccountId::from(&bob);
+        let alice_subject = alice.clone();
+        let bob_subject = bob.clone();
         let mut host =
             WsvHost::new_with_subject(MockWorldStateView::new(), alice_subject, HashMap::new());
 
@@ -6327,7 +6290,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let mut host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         host.__test_set_verified_tally([0xAB; 32]);
 
         let fin = iroha_data_model::isi::zk::FinalizeElection {
@@ -6362,7 +6325,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let mut host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         host.__test_set_verified_tally([0xFE; 32]);
 
         let mut tally_proof = iroha_data_model::proof::ProofAttachment::new_inline(
@@ -6398,7 +6361,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(0);
         vm.set_host(host);
 
@@ -6469,7 +6432,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(0);
         vm.set_host(host);
 
@@ -6544,7 +6507,7 @@ mod tests_governance_elections {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(0);
         vm.set_host(host);
 
@@ -6690,11 +6653,8 @@ mod tests_nft_decode {
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
 
         let decoded = host.decode_nft_payload(&payload).expect("decode ok");
         assert_eq!(decoded, nft_id);
@@ -6737,11 +6697,8 @@ mod tests_null_decode {
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -6767,11 +6724,8 @@ mod tests_null_decode {
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let mut host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let mut host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         host.set_current_time_ms(1_717_171_717_000);
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
@@ -6781,20 +6735,20 @@ mod tests_null_decode {
     }
 
     #[test]
-    fn add_signatory_syscall_rejects_scoped_account_payloads() {
+    fn add_signatory_syscall_rejects_non_literal_account_payloads() {
         let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
         let mut wsv = MockWorldStateView::new();
         wsv.add_account_unchecked(caller.clone());
-        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
-        let scoped_payload = norito::to_bytes(&caller).expect("encode scoped account");
+        let opaque_payload = norito::to_bytes(&caller).expect("encode account id");
         let account_ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &scoped_payload))
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &opaque_payload))
             .expect("alloc account tlv");
         let signatory = Json::from_str_norito(
             "\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"",
@@ -6808,7 +6762,7 @@ mod tests_null_decode {
         vm.set_register(10, account_ptr);
         vm.set_register(11, signatory_ptr);
         let err = call_syscall(&mut vm, syscalls::SYSCALL_ADD_SIGNATORY)
-            .expect_err("scoped account payload should be rejected");
+            .expect_err("opaque account payload should be rejected");
         assert!(matches!(err, VMError::DecodeError));
     }
 
@@ -6826,12 +6780,11 @@ mod tests_null_decode {
             (caller.clone(), asset.clone()),
             Numeric::from(41_u64),
         )]);
-        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
-        let account_bytes =
-            norito::to_bytes(&AccountId::from(&caller)).expect("encode account subject");
+        let account_bytes = norito::to_bytes(&caller).expect("encode account subject");
         let account_ptr = vm
             .alloc_input_tlv(&make_tlv(PointerType::AccountId, &account_bytes))
             .expect("alloc account tlv");
@@ -6858,15 +6811,12 @@ mod tests_null_decode {
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        )
-        .with_zk_halo2_config(crate::host::ZkHalo2Config {
-            max_envelope_bytes: 64,
-            ..Default::default()
-        });
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
+                .with_zk_halo2_config(crate::host::ZkHalo2Config {
+                    max_envelope_bytes: 64,
+                    ..Default::default()
+                });
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -6886,15 +6836,12 @@ mod tests_null_decode {
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        )
-        .with_zk_halo2_config(crate::host::ZkHalo2Config {
-            max_envelope_bytes: 96,
-            ..Default::default()
-        });
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
+                .with_zk_halo2_config(crate::host::ZkHalo2Config {
+                    max_envelope_bytes: 96,
+                    ..Default::default()
+                });
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -6931,11 +6878,8 @@ mod tests_null_decode {
             "wonderland",
         );
         let payload = norito::to_bytes(&29_i64).expect("encode i64");
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
         let ptr = vm
@@ -6963,7 +6907,7 @@ mod tests_null_decode {
         for (label, payload) in cases {
             let host = WsvHost::new_with_subject(
                 MockWorldStateView::new(),
-                AccountId::from(&caller.clone()),
+                caller.clone(),
                 HashMap::new(),
             );
             let mut vm = IVM::new(u64::MAX);
@@ -6987,11 +6931,8 @@ mod tests_null_decode {
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -7012,11 +6953,8 @@ mod tests_null_decode {
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -7038,11 +6976,8 @@ mod tests_null_decode {
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 

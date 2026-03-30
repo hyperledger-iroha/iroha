@@ -263,11 +263,11 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
     let (source_holder, _source_key) = gen_account_in("source");
     let (foreign_holder, _foreign_key) = gen_account_in("foreign");
     Register::account(Account::new(source_holder.clone()))
-    .execute(&ALICE_ID, &mut stx_1)
-    .expect("register source holder");
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register source holder");
     Register::account(Account::new(foreign_holder.clone()))
-    .execute(&ALICE_ID, &mut stx_1)
-    .expect("register foreign holder");
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register foreign holder");
 
     let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "source".parse().unwrap(),
@@ -375,11 +375,11 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
     let (source_holder, _source_key) = gen_account_in("source");
     let (foreign_holder, _foreign_key) = gen_account_in("foreign");
     Register::account(Account::new(source_holder.clone()))
-    .execute(&ALICE_ID, &mut stx_1)
-    .expect("register source holder");
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register source holder");
     Register::account(Account::new(foreign_holder.clone()))
-    .execute(&ALICE_ID, &mut stx_1)
-    .expect("register foreign holder");
+        .execute(&ALICE_ID, &mut stx_1)
+        .expect("register foreign holder");
 
     let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "source".parse().unwrap(),

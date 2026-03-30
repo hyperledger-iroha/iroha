@@ -331,8 +331,7 @@ fn run_block_and_events(
     let mut world_accounts: Vec<Account> = Vec::new();
     let mut assets: Vec<Asset> = Vec::new();
     for acc_id in &accounts {
-        world_accounts
-            .push(Account::new(acc_id.clone()).build(&first_auth));
+        world_accounts.push(Account::new(acc_id.clone()).build(&first_auth));
         let asset_id = AssetId::new(ad.id().clone(), acc_id.clone());
         // Ensure the first bootstrap account has a larger balance so that
         // ordering differences in the scheduler don't affect validity.

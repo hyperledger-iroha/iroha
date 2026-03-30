@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, DomainId, MockWorldStateView, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -25,17 +25,17 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
-    ScopedAccountId::new(domain, public_key)
+fn test_account(domain: DomainId, public_key: PublicKey) -> AccountId {
+    AccountId::new(public_key)
 }
 
-fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let account = AccountId::from(account).to_string();
+fn make_account_tlv(account: &AccountId) -> Vec<u8> {
+    let account = account.to_string();
     make_tlv(PointerType::AccountId as u16, account.as_bytes())
 }
 
-fn make_scoped_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let payload = to_bytes(account).expect("encode scoped account into Norito");
+fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
+    let payload = to_bytes(account).expect("encode account into Norito");
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
     out.push(1);
@@ -66,11 +66,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     // Alice can register domain/account
     wsv.grant_permission(&alice, ivm::mock_wsv::PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, ivm::mock_wsv::PermissionToken::RegisterAccount);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -83,7 +79,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     vm.run().expect("register domain");
 
     // Register the recipient account
-    let acc = make_scoped_account_tlv(&bob);
+    let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -115,7 +111,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     // Switch caller to bob to burn NFT
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
-        host.set_caller_subject(AccountId::from(&bob));
+        host.set_caller_subject(bob.clone());
     }
 
     // Burn NFT (owner=bob)
@@ -129,7 +125,7 @@ fn nft_burn_asset_then_unregister_account_succeeds() {
     // Switch back to alice and unregister bob: should now succeed
     if let Some(any) = vm.host_mut_any() {
         let host = any.downcast_mut::<WsvHost>().expect("downcast WsvHost");
-        host.set_caller_subject(AccountId::from(&alice));
+        host.set_caller_subject(alice.clone());
     }
     let acc = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");

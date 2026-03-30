@@ -8,7 +8,7 @@ use std::{
 use iroha_crypto::PublicKey;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, DomainId, MockWorldStateView, WsvHost},
     syscalls,
 };
 mod common;
@@ -26,10 +26,10 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+fn account(domain: &str, public_key: &str) -> AccountId {
     let domain: DomainId = domain.parse().expect("domain id");
     let public_key: PublicKey = public_key.parse().expect("public key");
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 #[test]
@@ -40,11 +40,7 @@ fn wsv_host_state_set_get_del_roundtrip() {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
     let mut vm = IVM::new(u64::MAX);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&caller),
-        Default::default(),
-    );
+    let host = WsvHost::new_with_subject(wsv, caller.clone(), Default::default());
     vm.set_host(host);
 
     let path_tlv = make_tlv(PointerType::Name, b"bar");

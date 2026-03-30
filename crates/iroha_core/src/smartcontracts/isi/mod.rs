@@ -1029,8 +1029,7 @@ mod tests {
         let trigger_id = "test_trigger_id".parse::<TriggerId>()?;
 
         // register fake account
-        let register_account =
-            Register::account(Account::new(fake_account_id.clone()));
+        let register_account = Register::account(Account::new(fake_account_id.clone()));
         register_account.execute(&account_id, &mut state_transaction)?;
 
         // register the trigger
@@ -1124,13 +1123,13 @@ mod tests {
         ));
         let wonderland: DomainId = "wonderland".parse()?;
         Register::account(Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()))
-        .execute(&account_id, &mut state_transaction)?;
+            .execute(&account_id, &mut state_transaction)?;
         let genesis_account = state_transaction
             .world
             .account(&SAMPLE_GENESIS_ACCOUNT_ID)?;
         assert!(
-            genesis_account.linked_domains().contains(&wonderland),
-            "genesis account should be materialized in the requested domain scope"
+            genesis_account.id() == &*SAMPLE_GENESIS_ACCOUNT_ID,
+            "genesis account should remain canonical after registration"
         );
         state_transaction.apply();
         state_block.commit().unwrap();

@@ -64,7 +64,7 @@ use iroha_data_model::{
         LaneStorageProfile, LaneVisibility,
     },
     parameter::system::SumeragiConsensusMode,
-    prelude::{AccountId, Name, Numeric, ScopedAccountId},
+    prelude::{AccountId, Name, Numeric},
     role::RoleId,
     transaction::{SignedTransaction, TransactionBuilder},
 };
@@ -1309,9 +1309,7 @@ impl ComposerTemplate {
             }
             ComposerTemplate::RegisterAccountForDomain => {
                 app.composer_instruction_kind = ComposerInstructionKind::RegisterAccount;
-                let domain = "wonderland".to_owned();
-                app.composer_account_id =
-                    sample_scoped_account_id(&domain, SAMPLE_OTHER_PUBLIC_KEY);
+                app.composer_account_id = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded account registration template.".to_owned());
             }
             ComposerTemplate::RegisterAssetDefinitionLily => {
@@ -1475,14 +1473,6 @@ fn asset_literal(asset_id: &AssetId) -> String {
 fn sample_account_id(public_key: &str) -> String {
     let public_key = public_key.parse().expect("sample public key must parse");
     AccountId::new(public_key).to_string()
-}
-
-fn sample_scoped_account_id(domain: &str, public_key: &str) -> String {
-    let domain_id = domain
-        .parse::<DomainId>()
-        .unwrap_or_else(|_| "wonderland".parse().expect("valid fallback domain"));
-    let public_key = public_key.parse().expect("sample public key must parse");
-    ScopedAccountId::new(domain_id, public_key).to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

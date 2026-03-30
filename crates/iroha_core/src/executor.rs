@@ -2311,7 +2311,7 @@ impl Executor {
             // or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
             let trg_owner = reg_trg.object().action().authority().clone();
             let is_domain_owner =
-                authority_owns_any_subject_domain(&state_transaction.world, authority, &trg_owner)?;
+                authority_owns_any_alias_domain(&state_transaction.world, authority, &trg_owner)?;
 
             // Prefer cached permission check; parse once per tx/account.
             let has_permission =
@@ -3794,12 +3794,12 @@ fn authority_owns_domain(
     Ok(&owner == authority)
 }
 
-fn authority_owns_any_subject_domain(
+fn authority_owns_any_alias_domain(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     subject: &AccountId,
 ) -> Result<bool, ValidationFail> {
-    for domain_id in world.domains_for_subject(subject) {
+    for domain_id in world.alias_domains_for_account(subject) {
         if authority_owns_domain(world, authority, &domain_id)? {
             return Ok(true);
         }
@@ -3816,7 +3816,7 @@ fn can_transfer_domain(
         return Ok(true);
     }
 
-    if authority_owns_any_subject_domain(world, authority, transfer.source())? {
+    if authority_owns_any_alias_domain(world, authority, transfer.source())? {
         return Ok(true);
     }
 
@@ -3883,7 +3883,7 @@ fn can_transfer_asset(
         return Ok(true);
     }
 
-    if authority_owns_any_subject_domain(world, authority, transfer.source().account())? {
+    if authority_owns_any_alias_domain(world, authority, transfer.source().account())? {
         return Ok(true);
     }
 
@@ -4385,8 +4385,7 @@ mod tests {
     fn fixture_simple_custom_instruction_mints_for_all_accounts() {
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
@@ -4460,11 +4459,9 @@ mod tests {
 
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let (existing_signer, _existing_signer_keypair) = gen_account_in("wonderland");
-        let existing_account = Account::new(existing_signer.clone())
-            .build(&existing_signer);
+        let existing_account = Account::new(existing_signer.clone()).build(&existing_signer);
         let world = World::with([domain], [alice_account, existing_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -4532,8 +4529,7 @@ mod tests {
         let (bob_id, _bob_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(bob_id.clone()).build(&bob_id);
         let nft_id: NftId = "nft_detached$wonderland".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
@@ -4601,8 +4597,7 @@ mod tests {
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -4655,10 +4650,8 @@ mod tests {
 
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&genesis_id);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let genesis_account =
-            Account::new(genesis_id.clone()).build(&genesis_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
 
         let world = World::with([domain], [alice_account, genesis_account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -4701,8 +4694,7 @@ mod tests {
         let alice_id = ALICE_ID.clone();
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
 
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -4773,12 +4765,9 @@ mod tests {
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let foo_domain = Domain::new(foo_domain_id.clone()).build(&user1);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account =
-            Account::new(user1.clone()).build(&user1);
-        let user2_account =
-            Account::new(user2.clone()).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let world = World::with(
             [users_domain, foo_domain],
@@ -4845,12 +4834,9 @@ mod tests {
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account =
-            Account::new(user1.clone()).build(&user1);
-        let user2_account =
-            Account::new(user2.clone()).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let world = World::with(
             [users_domain],
@@ -4900,12 +4886,9 @@ mod tests {
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account =
-            Account::new(user1.clone()).build(&user1);
-        let user2_account =
-            Account::new(user2.clone()).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let world = World::with(
             [users_domain],
@@ -4975,12 +4958,9 @@ mod tests {
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account =
-            Account::new(user1.clone()).build(&user1);
-        let user2_account =
-            Account::new(user2.clone()).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
         let asset_definition_id: AssetDefinitionId =
             AssetDefinitionId::new(defs_domain_id.clone(), "coin".parse().unwrap());
         let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
@@ -5042,12 +5022,9 @@ mod tests {
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account =
-            Account::new(user1.clone()).build(&user1);
-        let user2_account =
-            Account::new(user2.clone()).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
         let asset_definition_id: AssetDefinitionId =
             AssetDefinitionId::new(defs_domain_id.clone(), "coin".parse().unwrap());
         let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
@@ -5116,12 +5093,9 @@ mod tests {
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account =
-            Account::new(user1.clone()).build(&user1);
-        let user2_account =
-            Account::new(user2.clone()).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
             defs_domain_id.clone(),
@@ -5187,12 +5161,9 @@ mod tests {
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&alice_id);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account =
-            Account::new(user1.clone()).build(&user1);
-        let user2_account =
-            Account::new(user2.clone()).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
             defs_domain_id.clone(),
@@ -5255,12 +5226,9 @@ mod tests {
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account =
-            Account::new(user1.clone()).build(&user1);
-        let user2_account =
-            Account::new(user2.clone()).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
         let nft_id: NftId = "ticket$users".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
@@ -5317,12 +5285,9 @@ mod tests {
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let user1_account =
-            Account::new(user1.clone()).build(&user1);
-        let user2_account =
-            Account::new(user2.clone()).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
         let nft_id: NftId = "ticket$users".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
@@ -5365,8 +5330,7 @@ mod tests {
         let (bob_id, bob_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(bob_id.clone()).build(&bob_id);
         let nft_id: NftId = "nft_owner_modify$wonderland".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
@@ -5398,8 +5362,7 @@ mod tests {
     fn bench_profile_runs_without_logger() {
         let authority = ALICE_ID.clone();
         let authority_domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let account =
-            Account::new(authority.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -5427,14 +5390,11 @@ mod tests {
         crate::sumeragi::status::reset_nexus_economics_for_tests();
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
-        let sink_account =
-            Account::new(sink_id.clone()).build(&sink_id);
-        let sponsor_account =
-            Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
         let world = World::with([domain], [alice_account, sink_account, sponsor_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -5480,10 +5440,8 @@ mod tests {
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let authority_account =
-            Account::new(authority_id.clone()).build(&authority_id);
-        let sponsor_account =
-            Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
         let world = World::with([domain], [authority_account, sponsor_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -5533,12 +5491,9 @@ mod tests {
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let authority_account =
-            Account::new(authority_id.clone()).build(&authority_id);
-        let sponsor_account =
-            Account::new(sponsor_id.clone()).build(&sponsor_id);
-        let sink_account =
-            Account::new(sink_id.clone()).build(&sink_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "xor".parse().unwrap(),
@@ -5652,10 +5607,8 @@ mod tests {
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let dom: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let alice: Account =
-            Account::new(alice_id.clone()).build(&alice_id);
-        let sink: Account =
-            Account::new(sink_id.clone()).build(&sink_id);
+        let alice: Account = Account::new(alice_id.clone()).build(&alice_id);
+        let sink: Account = Account::new(sink_id.clone()).build(&sink_id);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "xor".parse().unwrap(),
@@ -5728,12 +5681,9 @@ mod tests {
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let dom: Domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer: Account =
-            Account::new(payer_id.clone()).build(&payer_id);
-        let recipient: Account =
-            Account::new(recipient_id.clone()).build(&recipient_id);
-        let sink: Account =
-            Account::new(sink_id.clone()).build(&sink_id);
+        let payer: Account = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient: Account = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink: Account = Account::new(sink_id.clone()).build(&sink_id);
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
         let ad: AssetDefinition =
@@ -5837,10 +5787,8 @@ mod tests {
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let dom: Domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer: Account =
-            Account::new(payer_id.clone()).build(&payer_id);
-        let sink: Account =
-            Account::new(sink_id.clone()).build(&sink_id);
+        let payer: Account = Account::new(payer_id.clone()).build(&payer_id);
+        let sink: Account = Account::new(sink_id.clone()).build(&sink_id);
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
         let ad: AssetDefinition =
@@ -5915,10 +5863,8 @@ mod tests {
         let (tech_id, _tech_kp) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let dom: Domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer: Account =
-            Account::new(payer_id.clone()).build(&payer_id);
-        let tech: Account =
-            Account::new(tech_id.clone()).build(&tech_id);
+        let payer: Account = Account::new(payer_id.clone()).build(&payer_id);
+        let tech: Account = Account::new(tech_id.clone()).build(&tech_id);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "gas".parse().unwrap(),
@@ -6004,8 +5950,7 @@ mod tests {
         let multisig_id = AccountId::new_multisig(policy);
 
         let domain: Domain = Domain::new(domain_id.clone()).build(&multisig_id);
-        let multisig_account =
-            Account::new(multisig_id.clone()).build(&multisig_id);
+        let multisig_account = Account::new(multisig_id.clone()).build(&multisig_id);
 
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -6201,8 +6146,7 @@ mod tests {
 
         let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -6271,8 +6215,7 @@ mod tests {
 
         let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -6309,8 +6252,7 @@ mod tests {
 
         let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -6339,8 +6281,7 @@ mod tests {
 
         let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
         let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();

@@ -597,10 +597,6 @@ fn instruction_self_registers_authority(
         return false;
     };
 
-    if !registration.linked_domains().is_empty() {
-        return false;
-    }
-
     registration.clone().build(authority).id == *authority
 }
 
@@ -8438,10 +8434,7 @@ pub mod tests {
                     .clone()
                     .into_iter()
                     .chain([("genesis", GENESIS_ACCOUNT.clone())])
-                    .map(|(_name, cred)| {
-                        Account::new(cred.id.clone())
-                            .build(&GENESIS_ACCOUNT.id)
-                    });
+                    .map(|(_name, cred)| Account::new(cred.id.clone()).build(&GENESIS_ACCOUNT.id));
                 let assets = INIT_BALANCE
                     .iter()
                     .map(|(name, num)| Asset::new(asset(name), *num));

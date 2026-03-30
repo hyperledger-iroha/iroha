@@ -1246,6 +1246,20 @@ impl Actor {
             .unwrap_or(u64::MAX)
             .saturating_add(1);
         let contiguous_frontier = height == frontier_height;
+        let passive_frontier_catchup_owner =
+            contiguous_frontier && self.frontier_slot_passive_catchup_owns_height(height);
+        if passive_frontier_catchup_owner {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "suppressing quorum reschedule while committed-anchor catch-up passively owns the contiguous frontier"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         if contiguous_frontier {
             let _ = self.handle_frontier_slot_event(
                 now,
@@ -1256,12 +1270,12 @@ impl Actor {
                 },
             );
         }
-        let same_height_vote_backed_evidence =
-            contiguous_frontier && self.height_has_vote_backed_consensus_evidence(height);
+        let same_slot_vote_backed_evidence =
+            contiguous_frontier && self.slot_has_vote_backed_consensus_evidence(height, view);
         let frontier_slot_owner_active =
-            contiguous_frontier && self.frontier_slot_has_active_owner_state(height);
+            contiguous_frontier && self.frontier_slot_has_active_owner_state_for_view(height, view);
         let effective_has_reschedule_votes =
-            has_reschedule_votes || same_height_vote_backed_evidence || frontier_slot_owner_active;
+            has_reschedule_votes || same_slot_vote_backed_evidence || frontier_slot_owner_active;
         // Once quorum timeout expires with no same-height evidence, this block is just zombie
         // state: keeping and rebroadcasting it only multiplies conflicting frontier candidates.
         let drop_pending = !effective_has_reschedule_votes;
@@ -1568,7 +1582,7 @@ impl Actor {
             rebroadcasted_block = rebroadcast.block,
             rebroadcasted_block_sync = rebroadcast.block_sync,
             drop_pending,
-            same_height_vote_backed_evidence,
+            same_slot_vote_backed_evidence,
             frontier_slot_owner_active,
             effective_has_reschedule_votes,
             handoff_frontier_quorum_timeout_owner,

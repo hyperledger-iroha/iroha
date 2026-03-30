@@ -638,9 +638,7 @@ mod tests {
         let accounts = accounts
             .iter()
             .cloned()
-            .map(|account_id| {
-                Account::new(account_id.clone()).build(&account_id)
-            })
+            .map(|account_id| Account::new(account_id.clone()).build(&account_id))
             .collect::<Vec<_>>();
         World::with([domain], accounts, [])
     }

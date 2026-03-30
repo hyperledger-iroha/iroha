@@ -391,13 +391,20 @@ impl Actor {
                 view,
                 highest_height = highest_qc.height,
                 block = %highest_qc.subject_block_hash,
-                "caching proposal hint without local highest QC block; awaiting sync"
+                "deferring proposal hint until highest QC dependency is repaired"
             );
-            if self.should_force_missing_highest_fetch(highest_qc.subject_block_hash) {
-                self.request_missing_block_for_highest_qc_force(highest_qc, "proposal_hint");
-            } else {
-                self.request_missing_block_for_highest_qc(highest_qc, "proposal_hint");
-            }
+            self.defer_round_until_highest_qc_dependency_resolves(
+                height,
+                view,
+                highest_qc,
+                "proposal_hint",
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::ProposalHint,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::MissingHighestQc,
+            );
+            return Ok(());
         }
         if let Some((local_height, local_view)) =
             self.local_block_height_view(highest_qc.subject_block_hash)
@@ -544,6 +551,36 @@ impl Actor {
             requested_range,
             source,
             "deferring highest QC update while locked ancestry catch-up is unresolved"
+        );
+        true
+    }
+
+    fn defer_round_until_highest_qc_dependency_resolves(
+        &mut self,
+        height: u64,
+        view: u64,
+        highest_qc: super::consensus::QcHeaderRef,
+        source: &'static str,
+    ) -> bool {
+        if self.defer_highest_qc_update_for_lock_catchup(height, view, highest_qc, source) {
+            return true;
+        }
+        let marked = self.mark_highest_qc_missing_defer_for_round(height, view, highest_qc);
+        let requested = if self.should_force_missing_highest_fetch(highest_qc.subject_block_hash) {
+            self.request_missing_block_for_highest_qc_force(highest_qc, source)
+        } else {
+            self.request_missing_block_for_highest_qc(highest_qc, source)
+        };
+        debug!(
+            height,
+            view,
+            highest_height = highest_qc.height,
+            highest_view = highest_qc.view,
+            highest_hash = %highest_qc.subject_block_hash,
+            marked,
+            requested,
+            source,
+            "deferring slot until highest QC dependency is resolved locally"
         );
         true
     }
@@ -781,13 +818,17 @@ impl Actor {
                 highest_height = highest_qc.height,
                 block = %highest_qc.subject_block_hash,
                 payload = %proposal.payload_hash,
-                "caching proposal without local highest QC block; awaiting sync"
+                "deferring proposal until highest QC dependency is repaired"
             );
-            if self.should_force_missing_highest_fetch(highest_qc.subject_block_hash) {
-                self.request_missing_block_for_highest_qc_force(highest_qc, "proposal");
-            } else {
-                self.request_missing_block_for_highest_qc(highest_qc, "proposal");
-            }
+            self.defer_round_until_highest_qc_dependency_resolves(
+                height, view, highest_qc, "proposal",
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Proposal,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::MissingHighestQc,
+            );
+            return Ok(());
         }
         if let Some((local_height, local_view)) =
             self.local_block_height_view(highest_qc.subject_block_hash)
@@ -2183,6 +2224,28 @@ impl Actor {
         if let Some(hint) = cached_hint {
             let mut hint_highest = hint.highest_qc;
             let hint_highest_missing = !self.block_known_for_lock(hint_highest.subject_block_hash);
+            if hint_highest_missing {
+                info!(
+                    height,
+                    view,
+                    highest_height = hint_highest.height,
+                    highest_view = hint_highest.view,
+                    highest_hash = %hint_highest.subject_block_hash,
+                    "deferring BlockCreated until highest QC dependency is repaired"
+                );
+                self.defer_round_until_highest_qc_dependency_resolves(
+                    height,
+                    view,
+                    hint_highest,
+                    "block_created_hint",
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockCreated,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::MissingHighestQc,
+                );
+                return Ok(());
+            }
             if let Err(initial_reason) = ensure_locked_qc_allows(self.locked_qc, hint_highest) {
                 if let Some(new_lock) = realign_locked_to_committed_if_extends(
                     self.locked_qc,
@@ -2238,22 +2301,6 @@ impl Actor {
                             hint.highest_qc.view,
                             Some(hint.highest_qc.subject_block_hash),
                         );
-                    } else if hint_highest_missing {
-                        if let Some(lock) = self.locked_qc {
-                            info!(
-                                ?reason,
-                                locked_qc_height = lock.height,
-                                locked_qc_view = lock.view,
-                                locked_qc_hash = %lock.subject_block_hash,
-                                hint_highest_qc_height = hint.highest_qc.height,
-                                hint_highest_qc_view = hint.highest_qc.view,
-                                hint_highest_qc_hash = %hint.highest_qc.subject_block_hash,
-                                height,
-                                view,
-                                "highest QC block missing locally; accepting BlockCreated on locked chain"
-                            );
-                            hint_highest = lock;
-                        }
                     } else if let Some(lock) = self.locked_qc.filter(|lock| {
                         matches!(reason, LockedQcRejection::HeightRegressed { .. })
                             && lock.height == height

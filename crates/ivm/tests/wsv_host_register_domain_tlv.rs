@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 
@@ -24,10 +24,10 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
+fn account(domain: &str, public_key: &str) -> AccountId {
     let domain: DomainId = domain.parse().unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 #[test]
@@ -40,11 +40,7 @@ fn register_domain_with_permission_via_tlv() {
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
 
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -66,11 +62,7 @@ fn register_domain_without_permission_rejected() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
 
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 

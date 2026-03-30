@@ -98,10 +98,8 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         Numeric::new(0, 0),
     );
 
-    let proposer_account =
-        Account::new(proposer_id.clone()).build(&proposer_id);
-    let escrow_account =
-        Account::new(escrow_id.clone()).build(&proposer_id);
+    let proposer_account = Account::new(proposer_id.clone()).build(&proposer_id);
+    let escrow_account = Account::new(escrow_id.clone()).build(&proposer_id);
     let citizen_accounts = citizens
         .iter()
         .cloned()

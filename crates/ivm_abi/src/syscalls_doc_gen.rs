@@ -26,26 +26,8 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
         gas: "asset:gas/G_debug@ivm.core/v2",
     },
     crate::syscalls::SyscallDoc {
-        number: 16,
-        args: "r10=&DomainId",
-        ret: "u64=0",
-        gas: "asset:gas/G_reg_domain@ivm.core/v2",
-    },
-    crate::syscalls::SyscallDoc {
-        number: 17,
-        args: "r10=&DomainId",
-        ret: "u64=0",
-        gas: "asset:gas/G_unreg_domain@ivm.core/v2",
-    },
-    crate::syscalls::SyscallDoc {
-        number: 18,
-        args: "r10=&DomainId, r11=&AccountId",
-        ret: "u64=0",
-        gas: "asset:gas/G_xfer_domain@ivm.core/v2",
-    },
-    crate::syscalls::SyscallDoc {
         number: 19,
-        args: "r10=&ScopedAccountId",
+        args: "r10=&AccountId",
         ret: "u64=0",
         gas: "asset:gas/G_reg_acct@ivm.core/v2",
     },

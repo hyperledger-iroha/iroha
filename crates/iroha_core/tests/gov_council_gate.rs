@@ -28,8 +28,7 @@ fn setup_council_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let domain_id: DomainId = "wonderland".parse().expect("domain id");
-    let alice_account =
-        Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
     let domain = Domain::new(domain_id).build(&ALICE_ID);
     let world = World::with(

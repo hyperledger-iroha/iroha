@@ -771,7 +771,7 @@ provider on emulators or desktop JVMs. Pass custom `KeyGenParameters` when you
 need to enforce StrongBox-only keys or user-authentication requirements while
 retaining a deterministic software fallback for local testing.
 If your desktop JVM lacks built-in Ed25519 support, drop in BouncyCastle (the test harness ships a stub provider) so the software fallback can generate keys without the Android keystore.
-Hardware-backed keys remain non-extractable; for user-scoped accounts that must
+Hardware-backed keys remain non-extractable; for user-managed accounts that must
 roam across devices, prefer `SOFTWARE_ONLY` (or `withSoftwareFallback`) and use
 `exportDeterministicKey(...)` / `importDeterministicKey(...)` to move key
 material between devices securely. When you need fully exportable keys, build

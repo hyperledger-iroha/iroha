@@ -419,23 +419,16 @@ fn rekey_account_id(
         ));
     }
 
-    let linked_domains = state_transaction
-        .world
-        .domains_for_subject(&old_account.subject_id());
-
     let account_value = state_transaction
         .world
-        .remove_account_with_links(old_account)
+        .accounts
+        .remove(old_account.clone())
         .ok_or_else(|| InstructionExecutionError::Find(FindError::Account(old_account.clone())))?;
 
     state_transaction
         .world
-        .insert_account_with_links(new_account.clone(), account_value.clone());
-    for domain in linked_domains {
-        state_transaction
-            .world
-            .link_account_subject_domain(&new_account, &domain);
-    }
+        .accounts
+        .insert(new_account.clone(), account_value.clone());
 
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
         .world
@@ -1809,7 +1802,7 @@ fn ensure_signatory_account_exists(
     state_transaction: &mut StateTransaction<'_, '_>,
     signatory: &AccountId,
     authority: &AccountId,
-    home_domain: Option<&iroha_data_model::domain::DomainId>,
+    _home_domain: Option<&iroha_data_model::domain::DomainId>,
 ) -> Result<(), ValidationFail> {
     match resolve_signatory_account(state_transaction, signatory) {
         Ok(_) => Ok(()),
@@ -2512,9 +2505,13 @@ mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId, IntoKeyValue,
-        account::{AccountId, rekey::AccountAlias},
+        account::{
+            AccountId,
+            rekey::{AccountAlias, AccountAliasDomain},
+        },
         block::BlockHeader,
         isi::{AddSignatory, RemoveSignatory, SetAccountQuorum, SetPrimaryAccountAlias},
+        nexus::DataSpaceId,
         prelude::{Domain, InstructionBox, Register},
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -2542,10 +2539,9 @@ mod tests {
         account_id: &AccountId,
         label: &str,
     ) {
-        Register::account(
-            iroha_data_model::account::NewAccount::new(account_id.clone())
-                ,
-        )
+        Register::account(iroha_data_model::account::NewAccount::new(
+            account_id.clone(),
+        ))
         .execute(authority, state_transaction)
         .expect(label);
     }
@@ -2566,9 +2562,7 @@ mod tests {
             Json::new(Some(domain_id.clone())),
         );
         Register::account(
-            iroha_data_model::account::NewAccount::new(multisig_id.clone())
-                
-                .with_metadata(metadata),
+            iroha_data_model::account::NewAccount::new(multisig_id.clone()).with_metadata(metadata),
         )
         .execute(owner_id, state_transaction)
         .expect(label);
@@ -2607,8 +2601,9 @@ mod tests {
         label: &str,
     ) -> AccountAlias {
         let label = AccountAlias::new(
-            domain_id.clone(),
             label.parse().expect("account label name"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            DataSpaceId::GLOBAL,
         );
         SetPrimaryAccountAlias {
             account: account_id.clone(),
@@ -3873,49 +3868,14 @@ mod tests {
                 state_transaction.world.account(&old_account),
                 Err(FindError::Account(_))
             ),
-            "old scoped account should be removed after rekey"
+            "old canonical account should be removed after rekey"
         );
         assert!(
             state_transaction.world.account(&new_account).is_ok(),
-            "new scoped account should be present after rekey"
+            "new canonical account should be present after rekey"
         );
 
-        let old_subject = old_account.subject_id();
-        let old_subject_domains = state_transaction
-            .world
-            .account_subject_domains
-            .get(&old_subject)
-            .expect("old subject record should remain materialized");
-        assert!(
-            old_subject_domains.is_empty(),
-            "old subject should have no linked domains after rekey"
-        );
-
-        let new_subject = new_account.subject_id();
-        let new_subject_domains = state_transaction
-            .world
-            .account_subject_domains
-            .get(&new_subject)
-            .expect("new subject should be linked to the account domain");
-        assert_eq!(
-            new_subject_domains,
-            &std::collections::BTreeSet::from([domain_id.clone()]),
-            "new subject should be linked to the rekeyed domain"
-        );
-
-        let domain_subjects = state_transaction
-            .world
-            .domain_account_subjects
-            .get(&domain_id)
-            .expect("domain membership index should exist");
-        assert!(
-            !domain_subjects.contains(&old_subject),
-            "domain subject index must not keep old subject after rekey"
-        );
-        assert!(
-            domain_subjects.contains(&new_subject),
-            "domain subject index should contain new subject after rekey"
-        );
+        let _ = domain_id;
     }
 
     #[test]
@@ -4091,19 +4051,12 @@ mod tests {
             state_transaction
                 .world
                 .account(&registered_multisig_id)
-                .expect("registered multisig")
-                .linked_domains()
-                .is_empty(),
-            "domainless multisig should not link to any domain"
+                .is_ok(),
+            "registered multisig should remain present"
         );
         assert!(
-            state_transaction
-                .world
-                .account(&signer)
-                .expect("materialized signatory")
-                .linked_domains()
-                .is_empty(),
-            "materialized signatory should remain domainless"
+            state_transaction.world.account(&signer).is_ok(),
+            "materialized signatory should remain present"
         );
     }
 
@@ -4925,9 +4878,6 @@ mod tests {
                 "register account",
             );
         }
-        state_transaction
-            .world
-            .link_account_subject_domain(&shared_account, &alt_domain);
         assert_eq!(
             domain_owner(&state_transaction, &home_domain).expect("domain owner lookup"),
             owner_id,

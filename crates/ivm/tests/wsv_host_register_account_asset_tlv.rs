@@ -5,7 +5,7 @@ use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{
-        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
     },
     syscalls,
 };
@@ -33,13 +33,13 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
-fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let account = ivm::mock_wsv::AccountId::from(account).to_string();
+fn make_account_tlv(account: &AccountId) -> Vec<u8> {
+    let account = account.to_string();
     make_tlv(PointerType::AccountId as u16, account.as_bytes())
 }
 
-fn make_scoped_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let payload = to_bytes(account).expect("encode scoped account into Norito");
+fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
+    let payload = to_bytes(account).expect("encode account into Norito");
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
     out.push(1);
@@ -50,8 +50,9 @@ fn make_scoped_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
     out
 }
 
-fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
-    ScopedAccountId::new(domain, public_key)
+fn test_account(domain: DomainId, public_key: PublicKey) -> AccountId {
+    let _domain = domain;
+    AccountId::new(public_key)
 }
 
 #[test]
@@ -76,11 +77,7 @@ fn register_account_and_asset_then_mint() {
         "rose".parse().unwrap(),
     );
     wsv.grant_permission(&alice, PermissionToken::MintAsset(rose.clone()));
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -99,7 +96,7 @@ fn register_account_and_asset_then_mint() {
             .parse()
             .unwrap();
     let bob = test_account(bob_domain, bob_pk);
-    let acc = make_scoped_account_tlv(&bob);
+    let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -141,7 +138,7 @@ fn register_account_and_asset_then_mint() {
 }
 
 #[test]
-fn register_asset_accepts_name_pointer_scoped_to_caller_domain() {
+fn register_asset_rejects_name_pointer_without_explicit_definition_id() {
     let alice_domain: DomainId = "domain".parse().unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
@@ -154,11 +151,7 @@ fn register_asset_accepts_name_pointer_scoped_to_caller_domain() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
 
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -170,7 +163,7 @@ fn register_asset_accepts_name_pointer_scoped_to_caller_domain() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    // Register an asset using a Name pointer; host scopes it to the caller domain.
+    // Bare asset names no longer inherit a domain from the caller.
     let invalid_name = make_tlv(PointerType::Name as u16, b"rose");
     vm.memory
         .preload_input(0, &invalid_name)
@@ -178,5 +171,6 @@ fn register_asset_accepts_name_pointer_scoped_to_caller_domain() {
     vm.set_register(10, Memory::INPUT_START);
     let prog_ad = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ASSET as u8]);
     vm.load_program(&prog_ad).unwrap();
-    vm.run().expect("name pointer should be accepted");
+    let err = vm.run().expect_err("bare asset names should be rejected");
+    assert!(matches!(err, ivm::VMError::DecodeError));
 }

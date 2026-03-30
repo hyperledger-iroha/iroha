@@ -218,7 +218,7 @@ pub mod isi {
             let owner = new_trigger.action().authority().clone();
             let is_genesis = state_transaction._curr_block.is_genesis();
             let mut is_domain_owner = false;
-            for domain_id in state_transaction.world.domains_for_subject(&owner) {
+            for domain_id in state_transaction.world.alias_domains_for_account(&owner) {
                 let domain_owner = state_transaction
                     .world
                     .domain(&domain_id)

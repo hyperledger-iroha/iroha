@@ -14,8 +14,8 @@ companion tooling. It provides:
   `AccountAddress::to_i105` that binds a chain discriminant to the account
   controller and offers deterministic interop-friendly textual forms.
 - A domainless canonical account payload keyed only by the controller.
-  Explicit domain context now lives outside the payload via
-  `ScopedAccountId { account, domain }` and domain-link state.
+  Alias routing and domain ownership now live outside the payload through
+  dataspace-aware `AccountAlias` bindings and domain-owned entities.
 
 ## Motivation
 
@@ -58,20 +58,17 @@ and a deterministic mapping from an on-chain alias to the authoritative chain/ac
 AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
-ScopedAccountId {
-    account: AccountId,
-    domain: DomainId,
-}
 
 Display / JSON text: canonical I105 literal only
 Parse accepts:
 - Canonical I105 account literals only.
 - Runtime parsers reject non-canonical/dotted i105 literals, legacy `norito:<hex>`,
-  canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as
+  canonical hex (`0x...`), any `@...` suffix, and account-alias literals such as
   `name@dataspace` or `name@domain.dataspace`.
 
-Domain context is explicit and out-of-band. There is no public
-`AccountSubjectId`; subject identity is `AccountId`.
+Account aliases are parsed separately through `AccountAlias`, not through
+`AccountId`. There is no public `AccountSubjectId`; subject identity is
+`AccountId`.
 ```
 
 `ChainId` lives outside of `AccountId`. Nodes check the transaction’s `ChainId`
@@ -168,13 +165,15 @@ class 1, norm v1, extension flag cleared).
 
 Canonical payload bytes are domainless: the wire layout is `header · controller`
 with no selector segment, no implicit default-domain reconstruction, and no
-public decode fallback for legacy scoped-account literals.
+decode fallback that reinterprets alias or domain-qualified literals as
+canonical accounts.
 
-Explicit domain context is modeled separately as `ScopedAccountId { account,
-domain }` and via account-domain link state. Converting an `AccountAddress`
-into a scoped account therefore requires the caller to supply the domain
-explicitly. The public subject-identity surface is just `AccountId`;
-`AccountSubjectId` is not part of the public API.
+Alias routing and domain ownership are modeled separately from the canonical
+account payload. `AccountAddress` decodes only into `AccountId`; callers that
+need alias context must carry an `AccountAlias` literal or an explicit
+domain-owned resource identifier alongside the account. The public
+subject-identity surface is just `AccountId`; `AccountSubjectId` is not part of
+the public API.
 
 Account aliases are a separate binding layer on top of that canonical subject:
 
@@ -183,16 +182,15 @@ Account aliases are a separate binding layer on top of that canonical subject:
   domainless `AccountId`.
 - `merchant@sbp` is a dataspace-root alias with no domain segment at all; it
   still resolves to a canonical `AccountId` and should not force a synthetic
-  domain-scoped account identity.
-- `linked_domains` on stored `Account` values is derived index state that
-  reflects which explicit domain links are currently materialized for the
-  subject. It is not part of the canonical account identity.
+  alias-derived account identity.
+- Stored account values keep only account metadata, an optional primary alias,
+  an optional UAID, and opaque identifiers. Alias leases/bindings and
+  domain-owned resources live in dedicated state instead of on the account.
 
 Implementation rule for tests and fixtures: seed the universal `AccountId`
-first, then add explicit domain links, alias leases, and alias permissions as
-separate state. Use a domainless registration when testing dataspace-root
-aliases, and use a scoped registration only when the behavior under test
-actually depends on an explicit domain-linked materialization.
+first, then add alias leases, alias permissions, and any domain-owned state as
+separate records. Account registration is always domainless; tests that need
+alias context should bind the alias after registering the canonical account.
 
 #### 2.3 Controller payload encodings (ADDR-1a)
 

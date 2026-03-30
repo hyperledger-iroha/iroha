@@ -176,10 +176,7 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
     let state = State::new_for_testing(
         World::with(
             domains,
-            [
-                Account::new(authority_id.clone())
-                    .build(&authority_id),
-            ],
+            [Account::new(authority_id.clone()).build(&authority_id)],
             [],
         ),
         kura,
@@ -407,11 +404,7 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
         );
         defs.push(ad);
     }
-    let world = World::with(
-        [domain],
-        [Account::new(auth.clone()).build(&auth)],
-        defs,
-    );
+    let world = World::with([domain], [Account::new(auth.clone()).build(&auth)], defs);
     // Provide default telemetry only when enabled; otherwise call 3-arg ctor
     let state = {
         #[cfg(feature = "telemetry")]

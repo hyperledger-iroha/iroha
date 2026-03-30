@@ -20,7 +20,7 @@ use std::{
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
-    account::rekey::{AccountAlias, AccountAliasDomain},
+    account::rekey::AccountAlias,
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
     events::time::Schedule,
     isi::{
@@ -7590,7 +7590,8 @@ mod pointer_abi_tests {
 
         let account: AccountId = fixture_account("bob");
         let payload = norito_blob(&account);
-        let expected_account: AccountId = norito::decode_from_bytes(&payload).expect("decode account");
+        let expected_account: AccountId =
+            norito::decode_from_bytes(&payload).expect("decode account");
         let ptr = store_tlv(&mut vm, PointerType::AccountId, &payload);
         vm.set_register(10, ptr);
 
@@ -9712,18 +9713,13 @@ mod tests {
         let alias_account_id: AccountId = fixture_account_in_domain("banking", &alias_domain_label);
         let domain = Domain::new(alias_domain.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let aliased_account =
-            Account::new(alias_account_id.clone())
-                .with_label(Some(AccountAlias::new(
-                    alias_label.clone(),
-                    Some(AccountAliasDomain::new(
-                        alias_domain
-                            .name()
-                            .clone(),
-                    )),
-                    DataSpaceId::GLOBAL,
-                )))
-                .build(&authority);
+        let aliased_account = Account::new(alias_account_id.clone())
+            .with_label(Some(AccountAlias::new(
+                alias_label.clone(),
+                Some(AccountAliasDomain::new(alias_domain.name().clone())),
+                DataSpaceId::GLOBAL,
+            )))
+            .build(&authority);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with([domain], [authority_account, aliased_account], []);
@@ -9740,7 +9736,9 @@ mod tests {
         tx.world_mut_for_testing().add_account_permission(
             &authority,
             Permission::from(CanResolveAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(alias_domain.clone().into()),
+                scope: AccountAliasPermissionScope::Domain(AccountAliasDomain::new(
+                    alias_domain.name().clone(),
+                )),
             }),
         );
         tx.apply();

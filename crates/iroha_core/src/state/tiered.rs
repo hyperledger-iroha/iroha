@@ -2451,7 +2451,7 @@ mod measured_bytes_impls {
     };
     use iroha_data_model::{
         account::{
-            AccountController, AccountDetails, AccountId, AccountAlias, AccountRekeyRecord,
+            AccountAlias, AccountController, AccountDetails, AccountId, AccountRekeyRecord,
             MultisigMember, MultisigPolicy, OpaqueAccountId, rekey::AccountAliasDomain,
         },
         asset::{

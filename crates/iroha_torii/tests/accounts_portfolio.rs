@@ -235,12 +235,7 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
     let first_account = account_id_from_signatory(domain_id.clone(), ACCOUNT_SIGNATORY);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(
-            NewAccount::new(first_account.clone())
-                
-                .with_uaid(Some(uaid)),
-        )
-        .into(),
+        Register::account(NewAccount::new(first_account.clone()).with_uaid(Some(uaid))).into(),
         Register::asset_definition(AssetDefinition::numeric(cash_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(points_id.clone())).into(),
         Mint::asset_numeric(500u64, AssetId::new(cash_id, first_account.clone())).into(),
@@ -290,12 +285,7 @@ fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     let first_account = account_id_from_seed(&domain_id, 0x11);
     let register: [InstructionBox; 6] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(
-            NewAccount::new(first_account.clone())
-                
-                .with_uaid(Some(uaid)),
-        )
-        .into(),
+        Register::account(NewAccount::new(first_account.clone()).with_uaid(Some(uaid))).into(),
         Register::asset_definition(AssetDefinition::numeric(cash_id.clone())).into(),
         Register::asset_definition(AssetDefinition::numeric(points_id.clone())).into(),
         Mint::asset_numeric(875u64, AssetId::new(cash_id, first_account.clone())).into(),

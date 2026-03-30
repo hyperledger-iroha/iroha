@@ -23,8 +23,8 @@ fn kotodama_create_and_grant_role_enables_mint() {
     "#;
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
-    let caller: ivm::mock_wsv::ScopedAccountId = ivm::mock_wsv::ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
@@ -35,8 +35,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
@@ -59,8 +58,8 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
     "#;
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
-    let caller: ivm::mock_wsv::ScopedAccountId = ivm::mock_wsv::ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
@@ -70,8 +69,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
@@ -93,8 +91,8 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
     "#;
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
-    let caller: ivm::mock_wsv::ScopedAccountId = ivm::mock_wsv::ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
@@ -102,8 +100,7 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::ManagePermissions);
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
@@ -126,8 +123,8 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
     "#;
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
-    let caller: ivm::mock_wsv::ScopedAccountId = ivm::mock_wsv::ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
@@ -135,8 +132,7 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::ManagePermissions);
-    let mut host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
+    let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     host.set_current_time_ms(1_717_171_717_000);
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -155,16 +151,15 @@ fn kotodama_authority_matches_domainless_account_literal() {
     "#;
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
-    let caller: ivm::mock_wsv::ScopedAccountId = ivm::mock_wsv::ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
     );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

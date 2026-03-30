@@ -4,7 +4,7 @@ use iroha_crypto::Hash;
 use iroha_data_model::peer::Peer;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
 
@@ -25,9 +25,9 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn sample_account() -> ScopedAccountId {
-    ScopedAccountId::new(
-        "domain".parse().expect("domain id"),
+fn sample_account() -> AccountId {
+    let _domain: ivm::mock_wsv::DomainId = "domain".parse().expect("domain id");
+    AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
             .expect("public key"),
@@ -36,10 +36,9 @@ fn sample_account() -> ScopedAccountId {
 
 #[test]
 fn register_peer_then_unregister() {
-    let alice: ScopedAccountId = sample_account();
+    let alice: AccountId = sample_account();
     let wsv = MockWorldStateView::new();
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(100);
     vm.set_host(host);
 
@@ -81,10 +80,9 @@ fn register_peer_then_unregister() {
 
 #[test]
 fn create_enable_disable_remove_trigger() {
-    let alice: ScopedAccountId = sample_account();
+    let alice: AccountId = sample_account();
     let wsv = MockWorldStateView::new();
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(100);
     vm.set_host(host);
 

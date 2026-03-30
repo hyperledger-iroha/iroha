@@ -7,8 +7,7 @@ use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, PointerType, VMError,
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, Name, PermissionToken,
-        ScopedAccountId, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, Name, PermissionToken, WsvHost,
     },
     syscalls,
 };
@@ -32,8 +31,8 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
-fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
-    ScopedAccountId::new(domain, public_key)
+fn test_account(domain: DomainId, public_key: PublicKey) -> AccountId {
+    AccountId::new(public_key)
 }
 
 #[test]
@@ -58,17 +57,12 @@ fn test_balance_syscall_permission() {
     )]);
     // Bob has no permission initially
     let mut acc_map = HashMap::new();
-    acc_map.insert(1, AccountId::from(&alice));
-    acc_map.insert(2, AccountId::from(&bob));
+    acc_map.insert(1, alice.clone());
+    acc_map.insert(2, bob.clone());
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
 
-    let host = WsvHost::new_with_subject_map(
-        wsv,
-        AccountId::from(&bob),
-        acc_map.clone(),
-        asset_map.clone(),
-    );
+    let host = WsvHost::new_with_subject_map(wsv, bob.clone(), acc_map.clone(), asset_map.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.set_register(10, 1); // account index alice
@@ -83,11 +77,8 @@ fn test_balance_syscall_permission() {
         (alice.clone(), asset.clone()),
         Numeric::from(50_u64),
     )]);
-    wsv2.grant_permission(
-        &bob,
-        PermissionToken::ReadAccountAssets(AccountId::from(&alice)),
-    );
-    let host = WsvHost::new_with_subject_map(wsv2, AccountId::from(&bob), acc_map, asset_map);
+    wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
+    let host = WsvHost::new_with_subject_map(wsv2, bob.clone(), acc_map, asset_map);
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("balance syscall failed");
@@ -121,17 +112,12 @@ fn test_transfer_syscall_permission() {
         ((bob.clone(), asset.clone()), Numeric::from(0_u64)),
     ]);
     let mut acc_map = HashMap::new();
-    acc_map.insert(1, AccountId::from(&alice));
-    acc_map.insert(2, AccountId::from(&bob));
+    acc_map.insert(1, alice.clone());
+    acc_map.insert(2, bob.clone());
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
 
-    let host = WsvHost::new_with_subject_map(
-        wsv,
-        AccountId::from(&bob),
-        acc_map.clone(),
-        asset_map.clone(),
-    );
+    let host = WsvHost::new_with_subject_map(wsv, bob.clone(), acc_map.clone(), asset_map.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.set_register(10, 1); // from alice
@@ -150,7 +136,7 @@ fn test_transfer_syscall_permission() {
         ((bob.clone(), asset.clone()), Numeric::from(0_u64)),
     ]);
     wsv2.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
-    let host = WsvHost::new_with_subject_map(wsv2, AccountId::from(&bob), acc_map, asset_map);
+    let host = WsvHost::new_with_subject_map(wsv2, bob.clone(), acc_map, asset_map);
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer syscall failed");
@@ -175,16 +161,11 @@ fn test_mint_syscall_permission() {
     let wsv =
         MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Numeric::from(0_u64))]);
     let mut acc_map = HashMap::new();
-    acc_map.insert(1, AccountId::from(&bob));
+    acc_map.insert(1, bob.clone());
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
 
-    let host = WsvHost::new_with_subject_map(
-        wsv,
-        AccountId::from(&bob),
-        acc_map.clone(),
-        asset_map.clone(),
-    );
+    let host = WsvHost::new_with_subject_map(wsv, bob.clone(), acc_map.clone(), asset_map.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.set_register(10, 1); // account index bob
@@ -200,7 +181,7 @@ fn test_mint_syscall_permission() {
     let mut wsv2 =
         MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Numeric::from(0_u64))]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
-    let host = WsvHost::new_with_subject_map(wsv2, AccountId::from(&bob), acc_map, asset_map);
+    let host = WsvHost::new_with_subject_map(wsv2, bob.clone(), acc_map, asset_map);
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("mint syscall failed");
@@ -216,7 +197,7 @@ fn test_json_get_numeric_reads_decimal_strings() {
     let scoped_subject = test_account(domain, public_key);
     let host = WsvHost::new_with_subject(
         MockWorldStateView::new(),
-        AccountId::from(&scoped_subject),
+        scoped_subject.clone(),
         HashMap::new(),
     );
     let mut vm = IVM::new(u64::MAX);

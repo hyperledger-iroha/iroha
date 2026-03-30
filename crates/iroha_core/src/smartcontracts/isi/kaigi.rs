@@ -992,16 +992,16 @@ fn relay_domain(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
 ) -> Result<DomainId, Error> {
-    let linked_domains = state_transaction
+    let alias_domains = state_transaction
         .world
-        .domains_for_subject(&relay_id.subject_id());
-    match linked_domains.as_slice() {
+        .alias_domains_for_account(&relay_id.subject_id());
+    match alias_domains.as_slice() {
         [domain_id] => Ok(domain_id.clone()),
         [] => Err(relay_error(
-            "relay account is not linked to any domain; explicit relay domain is required",
+            "relay account has no domain-qualified alias; explicit relay domain is required",
         )),
         _ => Err(relay_error(
-            "relay account is linked to multiple domains; explicit relay domain is required",
+            "relay account has aliases in multiple domains; explicit relay domain is required",
         )),
     }
 }
@@ -1760,8 +1760,8 @@ mod tests {
                         .expect("register relay domain");
                 }
                 Register::account(Account::new(hop.relay_id.clone()))
-                .execute(&ALICE_ID, stx)
-                .expect("register relay account");
+                    .execute(&ALICE_ID, stx)
+                    .expect("register relay account");
                 add_relay_to_allowlist(stx, &relay_domain, &hop.relay_id);
                 RegisterKaigiRelay {
                     relay: KaigiRelayRegistration {
@@ -2162,8 +2162,8 @@ mod tests {
                         .expect("register relay domain");
                 }
                 Register::account(Account::new(hop.relay_id.clone()))
-                .execute(&ALICE_ID, stx)
-                .expect("register relay account");
+                    .execute(&ALICE_ID, stx)
+                    .expect("register relay account");
                 stx.world.take_external_events();
                 add_relay_to_allowlist(stx, &relay_domain, &hop.relay_id);
 

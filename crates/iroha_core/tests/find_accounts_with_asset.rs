@@ -53,8 +53,8 @@ fn multi_account_mint_returns_only_positive_holders() {
 
     for account_id in [&holder_a, &holder_b, &zero_holder, &untouched] {
         Register::account(Account::new(account_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account");
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register account");
     }
 
     let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(

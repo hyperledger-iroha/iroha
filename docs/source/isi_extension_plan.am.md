@@ -2,98 +2,16 @@
 lang: am
 direction: ltr
 source: docs/source/isi_extension_plan.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
-source_last_modified: "2025-12-29T18:16:35.969398+00:00"
-translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
+source_hash: 9648381ac7cc1716ffd3c48aca425ed17a6afe1ac73bdeff866ebbbd9147cf68
+source_last_modified: "2026-03-30T17:00:58.141591+00:00"
+translation_last_reviewed: 2026-03-30
 ---
 
-# የISI የኤክስቴንሽን እቅድ (v1)
+# Translation Refresh Required
 
-ይህ ማስታወሻ ለአዲሱ Iroha ልዩ መመሪያዎች እና ቀረጻዎች ቅድሚያ የሚሰጠውን ትዕዛዝ ይፈርማል
-ከመተግበሩ በፊት ለእያንዳንዱ መመሪያ የማይደራደሩ ተለዋዋጮች። ማዘዙ ይዛመዳል
-የደህንነት እና የተግባር አደጋ በመጀመሪያ ፣ የ UX ፍሰት ሁለተኛ።
+This localized document is pending refresh after the domainless `AccountId` / alias-only account naming cleanup.
 
-## የቅድሚያ ቁልል
-
-1. **አካውንት ማሽከርከር** - አጥፊ ፍልሰቶች ሳይኖሩበት ለንፅህና ቁልፍ መዞር ያስፈልጋል።
-2. **የኮንትራት ሁኔታን አቦዝን** / **ብልጥ ኮንትራት ባይትስ አስወግድ** - የሚወስን ውል ያቅርቡ።
-   ማብሪያና ማጥፊያዎችን መግደል እና የማከማቻ መልሶ ማቋቋም ለተበላሹ ማሰማራት።
-3. **AssetKeyValue** / **የቁልፍ እሴትን አስወግድ** - የሜታዳታ እኩልነትን ወደ ተጨባጭ ንብረት ያራዝሙ።
-   ሚዛኖች ስለዚህ ታዛቢነት ያለው መሣሪያ ለይዞታዎች መለያ መስጠት ይችላል።
-4. **BatchMintAsset** / ** ባች ማስተላለፍ ንብረት** - የመጫኛ መጠንን ለመጠበቅ ቆራጥ ደጋፊ ረዳቶች
-   እና VM ውድቀት ግፊት ማስተዳደር ይቻላል.
-
-## መመሪያ Invariants
-
-### የቁልፍ እሴት አዘጋጅ/የቁልፍ እሴትን አስወግድ
-- የ `AssetMetadataKey` የስም ቦታ (`state.rs`) እንደገና ተጠቀም ስለዚህ ቀኖናዊ WSV ቁልፎች ተረጋግተው ይቆያሉ።
-- የ JSON መጠንን እና የመርሃግብር ገደቦችን ከሜታዳታ ረዳቶች ጋር በተመሳሳይ መልኩ ያስፈጽሙ።
-- Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` ከተጎዳው `AssetId` ጋር።
-- እንደ ነባር የንብረት ሜታዳታ አርትዖቶች ተመሳሳይ የፍቃድ ማስመሰያዎች ያስፈልጉ (የፍቺ ባለቤት ወይም
-  `CanModifyAssetMetadata`-style ስጦታዎች)።
-- የንብረቱ መዝገብ ከጠፋ ማቋረጥ (የተዘዋዋሪ ፈጠራ የለም)።
-
-### አሽከርክር መለያ ፈራሚ
-- የመለያ ሜታዳታ እና ተያያዥነት ባለው መልኩ በ `AccountId` ውስጥ የፈራሚውን አቶሚክ መለዋወጥ
-  ግብዓቶች (ንብረት፣ ቀስቅሴዎች፣ ሚናዎች፣ ፈቃዶች፣ በመጠባበቅ ላይ ያሉ ክስተቶች)።
-- አሁን ያለው ፈራሚ ከደዋዩ (ወይንም የተወከለው ባለስልጣን በግልፅ ማስመሰያ) የሚዛመድ መሆኑን ያረጋግጡ።
-- አዲሱ የአደባባይ ቁልፍ አስቀድሞ በተመሳሳይ ጎራ ውስጥ ያለ ሌላ መለያ የሚደግፍ ከሆነ ውድቅ ያድርጉ።
-- ከመግባትዎ በፊት የመለያ መታወቂያውን ያካተቱ ሁሉንም ቀኖናዊ ቁልፎች ያዘምኑ እና መሸጎጫዎችን ያበላሹ።
-- የተወሰነ `AccountEvent::SignatoryRotated` ለኦዲት መንገዶች ከአሮጌ/አዲስ ቁልፎች ጋር ያውጡ።
-- የስደት ስካፎል፡ `AccountLabel` + `AccountRekeyRecord` ያስተዋውቁ (`account::rekey` ይመልከቱ) ስለዚህ
-  ያለ ሃሽ መግቻዎች በሚሽከረከርበት ጊዜ ነባር መለያዎች በተረጋጋ መለያዎች ሊቀረጹ ይችላሉ።
-
-### የኮንትራት ሁኔታን አቦዝን
-- የፕሮቬንቴንስ መረጃን በሚቀጥልበት ጊዜ የ `(namespace, contract_id)` ማሰሪያውን ያስወግዱ ወይም ይቀብሩ
-  (ማን, መቼ, ምክንያት ኮድ) ለመላ ፍለጋ.
-- እንደ ገቢር የተቀናበረ ተመሳሳይ የአስተዳደር ፈቃድ ጠይቅ፣ ላለመፍቀድ ከፖሊሲ መንጠቆዎች ጋር
-  ከፍ ያለ ፈቃድ ሳይኖር የዋና ስርዓት ስም ቦታዎችን ማቦዘን።
-- የክስተት ምዝግብ ማስታወሻዎችን ለመወሰን ምሳሌው የቦዘነ ከሆነ ውድቅ ያድርጉ።
-- የታችኛው ተፋሰስ ተመልካቾች ሊፈጁ የሚችሉትን `ContractInstanceEvent::Deactivated` ያውጡ።### SmartContractBytesን ያስወግዱ
-- ምንም ግልጽ ወይም ንቁ አጋጣሚዎች በሌሉበት ጊዜ ብቻ በ `code_hash` የተከማቸ ባይት ኮድ መቁረጥን ይፍቀዱ
-  ቅርሱን ማጣቀስ; አለበለዚያ በማብራሪያ ስህተት አይሳካም.
-- የፍቃድ በር መስተዋቶች ምዝገባ (`CanRegisterSmartContractCode`) እና ከዋኝ-ደረጃ ጋር
-  ጠባቂ (ለምሳሌ `CanManageSmartContractStorage`)።
-- ለማስቀረት የቀረበው `code_hash` ከተከማቸ የሰውነት መፈጨት ጋር የሚዛመድ መሆኑን ያረጋግጡ።
-  የቆዩ እጀታዎች.
-- ኢሚት `ContractCodeEvent::Removed` በሃሽ እና የደዋይ ዲበ ዳታ።
-
-### BatchMintAsset / Batch TransferAsset
-- ሁሉም-ወይም-ምንም የትርጓሜዎች-እያንዳንዱ ቱፕል ይሳካል ወይም መመሪያው ያለ ወገን ይቋረጣል
-  ተፅዕኖዎች.
-- የግቤት ቬክተሮች በወሰነው ቅደም ተከተል (የተዘዋዋሪ መደርደር የለም) እና በማዋቀር የታሰሩ መሆን አለባቸው
-  (`max_batch_isi_items`)።
-- የታችኛው ተፋሰስ የሂሳብ አያያዝ ወጥነት ያለው ሆኖ እንዲቆይ በንብረት ንብረት ክስተቶችን ያስወጣል; የምድብ አውድ ተጨማሪ ነው፣
-  ምትክ አይደለም.
-- የፈቃድ ፍተሻዎች በአንድ ኢላማ ነባር ነጠላ-ንጥል አመክንዮ እንደገና ጥቅም ላይ ይውላሉ (ንብረት ባለቤት፣ የፍቺ ባለቤት፣
-  ወይም የተሰጠው ችሎታ) ከስቴት ሚውቴሽን በፊት.
-- የአማካሪ መዳረሻ ስብስቦች ብሩህ ተስፋን ለመጠበቅ ሁሉንም የተነበበ/የመፃፍ ቁልፎችን አንድ ማድረግ አለባቸው።
-
-## የትግበራ ስካፎልዲንግ
-
-- የውሂብ ሞዴል አሁን `SetAssetKeyValue` / `RemoveAssetKeyValue` ስካፎልዶችን ለተመጣጣኝ ሜታዳታ ይይዛል
-  አርትዖቶች (`transparent.rs`)።
-- አስፈፃሚ ጎብኝዎች የወልና መሬቶችን አንዴ ካስተናገዱ ፈቃዶችን የሚከፍሉ ቦታ ያዥዎችን ያጋልጣሉ
-  (`default/mod.rs`)።
-- የሪኪ ፕሮቶታይፕ አይነቶች (`account::rekey`) ለሚሽከረከሩ ፍልሰቶች የማረፊያ ዞን ይሰጣሉ።
-- የአለም ግዛት `account_rekey_records` በ `AccountLabel` የተቆለፈውን ያካትታል ስለዚህ የመድረክ መለያ →
-  ታሪካዊውን `AccountId` ኢንኮዲንግ ሳይነኩ የፈራሚ ፍልሰት።
-
-## IVM Syscall ረቂቅ
-
-- ለ`DeactivateContractInstance` / `RemoveSmartContractBytes` መርከብ አስተናጋጅ shims እንደ
-  `SYSCALL_DEACTIVATE_CONTRACT_INSTANCE` (0x43) እና
-  `SYSCALL_REMOVE_SMART_CONTRACT_BYTES` (0x44)፣ ሁለቱም Norito TLVዎችን የሚያንፀባርቁ ይበላሉ
-  ቀኖናዊ ISI መዋቅሮች.
-- የአስተናጋጅ ተቆጣጣሪዎች `iroha_core` የማስፈጸሚያ መንገዶችን ካስተዋሉ በኋላ `abi_syscall_list()` ያራዝሙ
-  ABI hashes በልማት ጊዜ የተረጋጋ።
-- syscall ቁጥሮች ሲረጋጉ Kotodama ዝቅ በማድረግ ያዘምኑ። ለተስፋፋው ወርቃማ ሽፋን ይጨምሩ
-  በተመሳሳይ ጊዜ ላይ ላዩን.
-
-#ሁኔታ
-
-ከላይ ያሉት ቅደም ተከተሎች እና ተለዋዋጭዎች ለትግበራ ዝግጁ ናቸው. የክትትል ቅርንጫፎች መጠቀስ አለባቸው
-ይህ ሰነድ የማስፈጸሚያ መንገዶችን እና የ sscall መጋለጥን ሲገጣጠም.
+Refer to the current English source: `docs/source/isi_extension_plan.md`.

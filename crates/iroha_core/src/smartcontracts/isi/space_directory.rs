@@ -409,9 +409,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = NewAccount::new(account_id.clone())
-            
-            .with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -479,9 +477,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = NewAccount::new(account_id.clone())
-            
-            .with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -544,9 +540,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         let kp = KeyPair::random();
         let account_id = AccountId::new(kp.public_key().clone());
-        let new_account = NewAccount::new(account_id.clone())
-            
-            .with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -637,9 +631,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         let kp = KeyPair::random();
         let account_id = AccountId::new(kp.public_key().clone());
-        let new_account = NewAccount::new(account_id.clone())
-            
-            .with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);

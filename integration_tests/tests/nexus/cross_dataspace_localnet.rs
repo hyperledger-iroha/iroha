@@ -414,10 +414,7 @@ fn npos_multilane_genesis_post_topology_transactions(
         };
         let lane_id = LaneId::new(lane_index);
         let validator_id = AccountId::new(peer.public_key().clone());
-        bootstrap_tx.push(
-            Register::account(Account::new(validator_id.clone()))
-            .into(),
-        );
+        bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         bootstrap_tx.push(
             Mint::asset_numeric(
                 VALIDATOR_STAKE,

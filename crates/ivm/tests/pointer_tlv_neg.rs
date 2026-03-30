@@ -10,7 +10,7 @@ fn valid_account_id_literal() -> Vec<u8> {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("valid public key");
-    ivm::mock_wsv::ScopedAccountId::new(domain, public_key)
+    ivm::mock_wsv::AccountId::new(public_key)
         .to_string()
         .into_bytes()
 }

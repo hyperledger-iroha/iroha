@@ -1175,7 +1175,10 @@ pub fn active_dataspace_owner_by_id(
 mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        account::{Account, AccountAddress, AccountId, rekey::AccountAlias},
+        account::{
+            Account, AccountAddress, AccountId,
+            rekey::{AccountAlias, AccountAliasDomain},
+        },
         block::SignedBlock,
         domain::Domain,
         isi::{InstructionBox, Register, domain_link::SetPrimaryAccountAlias},
@@ -1301,19 +1304,23 @@ mod tests {
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
         let domain_id: DomainId = "ivm".parse().expect("domain");
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let label = AccountAlias::new(domain_id.clone(), "gas".parse().expect("label"));
+        let label = AccountAlias::new(
+            "gas".parse().expect("label"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            DataSpaceId::GLOBAL,
+        );
         let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
             .with_instructions([
                 InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
                 InstructionBox::from(Register::account(
-                    Account::new(account_id.clone())
-                        .with_label(Some(label.clone())),
+                    Account::new(account_id.clone()).with_label(Some(label.clone())),
                 )),
                 InstructionBox::from(SetPrimaryAccountAlias {
                     account: genesis_account.clone(),
                     alias: Some(AccountAlias::new(
-                        domain_id.clone(),
                         "ops".parse().expect("label"),
+                        Some(AccountAliasDomain::new(domain_id.name().clone())),
+                        DataSpaceId::GLOBAL,
                     )),
                     lease_expiry_ms: None,
                 }),
@@ -1335,7 +1342,11 @@ mod tests {
         let label_selector =
             selector_for_account_alias(&label, &DataSpaceCatalog::default()).expect("selector");
         let relabel_selector = selector_for_account_alias(
-            &AccountAlias::new(domain_id.clone(), "ops".parse().expect("label")),
+            &AccountAlias::new(
+                "ops".parse().expect("label"),
+                Some(AccountAliasDomain::new(domain_id.name().clone())),
+                DataSpaceId::GLOBAL,
+            ),
             &DataSpaceCatalog::default(),
         )
         .expect("selector");
@@ -1366,7 +1377,9 @@ mod tests {
         );
         assert!(
             permissions.contains(&Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(domain_id.into()),
+                scope: AccountAliasPermissionScope::Domain(AccountAliasDomain::new(
+                    domain_id.name().clone(),
+                )),
             })),
             "genesis authority must be able to manage the alias domain used at genesis"
         );

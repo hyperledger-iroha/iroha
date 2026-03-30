@@ -10324,11 +10324,6 @@ pub mod isi {
         ) -> Result<(), Error> {
             let domain_id = self.object().clone();
 
-            let unlink_subjects: BTreeSet<AccountId> = state_transaction
-                .world
-                .account_subjects_in_domain(&domain_id)
-                .into_iter()
-                .collect();
             let relabeled_accounts: Vec<AccountId> = state_transaction
                 .world
                 .accounts_in_domain_iter(&domain_id)
@@ -10679,7 +10674,7 @@ pub mod isi {
                         label
                             .domain
                             .as_ref()
-                            .is_some_and(|label_domain| label_domain == &domain_id)
+                            .is_some_and(|label_domain| label_domain.name() == domain_id.name())
                     })
                     .collect();
                 if let Some(account) = state_transaction.world.accounts.get_mut(&account_id)
@@ -10687,7 +10682,7 @@ pub mod isi {
                         label
                             .domain
                             .as_ref()
-                            .is_some_and(|label_domain| label_domain == &domain_id)
+                            .is_some_and(|label_domain| label_domain.name() == domain_id.name())
                     })
                 {
                     account.set_label(None);
@@ -10700,12 +10695,6 @@ pub mod isi {
                     state_transaction.world.remove_account_alias_binding(&label);
                 }
             }
-            for subject in unlink_subjects {
-                state_transaction
-                    .world
-                    .unlink_account_subject_domain(&subject, &domain_id);
-            }
-
             let selector = iroha_data_model::account::AccountDomainSelector::from_domain(
                 &domain_id,
             )
@@ -12064,7 +12053,11 @@ pub mod isi {
 
             let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
             let other_domain_id: DomainId = "other.world".parse().expect("domain id parses");
-            let account_label = AccountAlias::new(domain_id.clone(), "primary".parse().unwrap());
+            let account_label = AccountAlias::new(
+                "primary".parse().unwrap(),
+                Some(AccountAliasDomain::new(domain_id.name().clone())),
+                DataSpaceId::GLOBAL,
+            );
             let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::domain_unregister"));
             let dataspace = DataSpaceId::new(17);
 
@@ -12359,7 +12352,7 @@ pub mod isi {
         }
 
         #[test]
-        fn unregister_domain_removes_only_selected_link_for_configured_subject() {
+        fn unregister_domain_preserves_configured_canonical_account() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -12387,9 +12380,6 @@ pub mod isi {
             Register::account(new_account_in_domain(&account_id, &remove_domain))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup-domain account");
-            stx.world
-                .link_account_subject_domain(&account_id, &retained_domain);
-
             let (holder_id, _) = gen_account_in(&holder_domain);
             Register::account(new_account_in_domain(&holder_id, &holder_domain))
                 .execute(&ALICE_ID, &mut stx)
@@ -12407,7 +12397,7 @@ pub mod isi {
 
             Unregister::domain(remove_domain.clone())
                 .execute(&ALICE_ID, &mut stx)
-                .expect("removing one linked domain should preserve surviving account state");
+                .expect("removing an unrelated domain should preserve canonical account state");
 
             assert!(
                 stx.world.domains.get(&remove_domain).is_none(),
@@ -12417,19 +12407,11 @@ pub mod isi {
                 stx.world.accounts.get(&account_id).is_some(),
                 "configured account should remain"
             );
-            let linked_domains = stx
+            let account = stx
                 .world
-                .account_subject_domains
-                .get(&account_id.subject_id())
-                .expect("subject links should remain present");
-            assert!(
-                !linked_domains.contains(&remove_domain),
-                "removed domain link should be pruned"
-            );
-            assert!(
-                linked_domains.contains(&retained_domain),
-                "retained domain link should remain"
-            );
+                .account(&account_id)
+                .expect("configured account should exist");
+            assert!(account.label().is_none());
             assert!(
                 stx.world
                     .account_permissions
@@ -13666,9 +13648,6 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
-            stx.world
-                .link_account_subject_domain(&target_id, &retained_domain_id);
-
             let (holder_id, _) = gen_account_in(&holder_domain_id);
             Register::account(new_account_in_domain(&holder_id, &holder_domain_id))
                 .execute(&ALICE_ID, &mut stx)
@@ -13704,20 +13683,11 @@ pub mod isi {
             );
             assert!(
                 stx.world.accounts.get(&target_id).is_some(),
-                "linked subject should remain materialized under retained domain"
-            );
-            let linked_domains = stx
-                .world
-                .account_subject_domains
-                .get(&target_id.subject_id())
-                .expect("subject domain links should remain materialized");
-            assert!(
-                !linked_domains.contains(&"cleanup.world".parse().expect("domain id parses")),
-                "removed domain must be unlinked from surviving subject"
+                "canonical account should remain materialized"
             );
             assert!(
-                linked_domains.contains(&retained_domain_id),
-                "retained domain link must stay for surviving subject"
+                stx.world.account(&target_id).is_ok(),
+                "canonical account should remain addressable"
             );
             assert!(
                 stx.world

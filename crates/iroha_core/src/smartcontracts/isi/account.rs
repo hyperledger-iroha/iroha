@@ -484,7 +484,7 @@ pub mod query {
     };
 
     fn account_from_entry(
-        world: &impl WorldReadOnly,
+        _world: &impl WorldReadOnly,
         account_id: &AccountId,
         account_value: &AccountValue,
     ) -> Account {
@@ -544,6 +544,11 @@ pub mod query {
     }
 
     #[cfg(test)]
+    fn alias_domain(domain: &DomainId) -> AccountAliasDomain {
+        AccountAliasDomain::new(domain.name().clone())
+    }
+
+    #[cfg(test)]
     fn seed_manage_account_alias_permissions(
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -557,7 +562,7 @@ pub mod query {
                 iroha_executor_data_model::permission::account::CanManageAccountAlias {
                     scope:
                         iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            domain.clone().into(),
+                            alias_domain(domain),
                         ),
                 },
             ),
@@ -572,7 +577,6 @@ pub mod query {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
         };
         let (account_id, account_value) = iroha_data_model::IntoKeyValue::into_key_value(account);
         world.accounts.insert(account_id, account_value);
@@ -1344,55 +1348,6 @@ pub mod query {
             assert_eq!(results, vec![acc1]);
         }
 
-        #[test]
-        fn find_accounts_projects_linked_domains_from_subject_index() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let wonderland: DomainId = "wonderland".parse().unwrap();
-            let sbp: DomainId = "sbp".parse().unwrap();
-            Register::domain(Domain::new(wonderland.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-            Register::domain(Domain::new(sbp.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-
-            let (account, _kp) = gen_account_in("wonderland");
-            Register::account(Account::new(account.clone()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
-
-            stx.world.link_account_subject_domain(&account, &sbp);
-            stx.world
-                .account_mut(&account)
-                .expect("account must exist")
-                .set_linked_domains(std::collections::BTreeSet::new());
-
-            stx.apply();
-            state_block.commit().unwrap();
-
-            let view = state.view();
-            let account = FindAccounts
-                .execute(
-                    CompoundPredicate::<Account>::build(|p| p.equals("id", account.to_string())),
-                    &view,
-                )
-                .unwrap()
-                .next()
-                .expect("account should be returned");
-            assert_eq!(
-                account.linked_domains,
-                std::collections::BTreeSet::from([sbp, wonderland])
-            );
-        }
-
-        #[test]
         fn find_accounts_applies_id_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -1809,16 +1764,13 @@ pub mod query {
             let (account_id, _) = gen_account_in("hbl");
             let primary_label = AccountAlias::new_in_dataspace(
                 "merchant".parse().expect("label"),
-                Some(linked_domain.clone().into()),
+                Some(alias_domain(&linked_domain)),
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
-            Register::account(
-                Account::new(account_id.clone())
-                    .with_label(Some(primary_label)),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+            Register::account(Account::new(account_id.clone()).with_label(Some(primary_label)))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
 
             stx.apply();
             state_block.commit().unwrap();
@@ -1876,16 +1828,13 @@ pub mod query {
             let (account_id, _) = gen_account_in("hbl");
             let primary_label = AccountAlias::new_in_dataspace(
                 "merchant".parse().expect("label"),
-                Some(linked_domain.clone().into()),
+                Some(alias_domain(&linked_domain)),
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
             seed_account_alias_lease(&mut stx, &ALICE_ID, &primary_label);
-            Register::account(
-                Account::new(account_id.clone())
-                    .with_label(Some(primary_label)),
-            )
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+            Register::account(Account::new(account_id.clone()).with_label(Some(primary_label)))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
 
             stx.apply();
             state_block.commit().unwrap();
@@ -1977,8 +1926,8 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             Register::account(Account::new(destination.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
             Register::account(Account::new(intruder.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2045,8 +1994,8 @@ pub mod query {
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             Register::account(Account::new(destination.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
 
             let asset_definition: AssetDefinitionId =
                 iroha_data_model::asset::AssetDefinitionId::new(

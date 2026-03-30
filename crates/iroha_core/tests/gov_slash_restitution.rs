@@ -33,15 +33,10 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
 
     let domain = Domain::new(wonderland.clone()).build(&alice_id);
-    let alice_account =
-        iroha_data_model::account::Account::new(ALICE_ID.clone())
-            .build(&alice_id);
-    let escrow_account =
-        iroha_data_model::account::Account::new(BOB_ID.clone())
-            .build(&alice_id);
+    let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&alice_id);
+    let escrow_account = iroha_data_model::account::Account::new(BOB_ID.clone()).build(&alice_id);
     let receiver_account =
-        iroha_data_model::account::Account::new(receiver_id.clone())
-            .build(&alice_id);
+        iroha_data_model::account::Account::new(receiver_id.clone()).build(&alice_id);
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),

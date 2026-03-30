@@ -143,8 +143,7 @@ mod tests {
     };
 
     fn alice_account_in(domain: &str) -> Account {
-        Account::new(ALICE_ID.clone())
-            .build(&ALICE_ID)
+        Account::new(ALICE_ID.clone()).build(&ALICE_ID)
     }
 
     #[tokio::test]

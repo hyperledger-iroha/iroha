@@ -3,9 +3,9 @@ use ivm::{self, IVM, IVMHost, Memory};
 // Exercise the NoritoBytes fallback decode in WsvHost for typed ZK ISIs
 // (SubmitBallot/FinalizeElection) when an InstructionBox wrapper is not used.
 
-fn sample_account() -> ivm::mock_wsv::ScopedAccountId {
-    ivm::mock_wsv::ScopedAccountId::new(
-        "domain".parse().expect("domain id"),
+fn sample_account() -> ivm::mock_wsv::AccountId {
+    let _domain: ivm::mock_wsv::DomainId = "domain".parse().expect("domain id");
+    ivm::mock_wsv::AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
             .expect("public key"),
@@ -23,14 +23,10 @@ fn decode_typed_submitballot_fallback_yields_permission_denied_without_verify() 
     assert!(wsv.create_election("e1".to_string(), 2, [0u8; 32], 0, u64::MAX));
 
     // Caller/account (matches other tests' format)
-    let caller: ivm::mock_wsv::ScopedAccountId = sample_account();
+    let caller: ivm::mock_wsv::AccountId = sample_account();
 
     // Host + VM
-    let host = ivm::mock_wsv::WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&caller),
-        HashMap::new(),
-    );
+    let host = ivm::mock_wsv::WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(0);
     vm.set_host(host);
 
@@ -84,12 +80,8 @@ fn decode_typed_finalize_fallback_yields_permission_denied_without_verify() {
     let mut wsv = ivm::MockWorldStateView::new();
     assert!(wsv.create_election("e2".to_string(), 3, [0u8; 32], 0, u64::MAX));
 
-    let caller: ivm::mock_wsv::ScopedAccountId = sample_account();
-    let host = ivm::mock_wsv::WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&caller),
-        HashMap::new(),
-    );
+    let caller: ivm::mock_wsv::AccountId = sample_account();
+    let host = ivm::mock_wsv::WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(0);
     vm.set_host(host);
 

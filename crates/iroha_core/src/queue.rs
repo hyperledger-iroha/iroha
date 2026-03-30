@@ -8036,8 +8036,7 @@ pub mod tests {
         let world = {
             let domain_id: DomainId = "wonderland".parse().expect("Valid");
             let domain = Domain::new(domain_id.clone()).build(&alice_id);
-            let alice_account =
-                Account::new(alice_id.clone()).build(&alice_id);
+            let alice_account = Account::new(alice_id.clone()).build(&alice_id);
             let bob_account = Account::new(bob_id.clone()).build(&bob_id);
             World::with([domain], [alice_account, bob_account], [])
         };

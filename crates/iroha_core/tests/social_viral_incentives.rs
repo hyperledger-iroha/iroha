@@ -200,10 +200,8 @@ fn social_world_with_owner(
         }
         builder.build(provider)
     };
-    let oracle_reward_pool_account =
-        Account::new(oracle_reward_pool.clone()).build(&alice);
-    let oracle_slash_receiver_account =
-        Account::new(oracle_slash_receiver.clone()).build(&alice);
+    let oracle_reward_pool_account = Account::new(oracle_reward_pool.clone()).build(&alice);
+    let oracle_slash_receiver_account = Account::new(oracle_slash_receiver.clone()).build(&alice);
 
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice);
     let oracle_asset_def = AssetDefinition::numeric(oracle_reward_asset.clone()).build(&alice);

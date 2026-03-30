@@ -54,8 +54,7 @@ fn setup_world() -> AdversarialSetup {
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let alice_account =
-        Account::new(alice_id.clone()).build(&alice_id);
+    let alice_account = Account::new(alice_id.clone()).build(&alice_id);
     let bob_account = Account::new(bob_id.clone()).build(&alice_id);
 
     let alice_asset_id = AssetId::of(ad.id().clone(), alice_id.clone());

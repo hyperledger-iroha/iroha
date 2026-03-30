@@ -21,8 +21,8 @@ fn kotodama_register_account_and_unregister_asset() {
     let prog = compiler.compile_source(src).expect("compile");
 
     // Prepare WSV host with permissions for the caller
-    let caller: ivm::mock_wsv::ScopedAccountId = ivm::mock_wsv::ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
@@ -35,12 +35,7 @@ fn kotodama_register_account_and_unregister_asset() {
 
     let account_map: HashMap<u64, ivm::mock_wsv::AccountId> = HashMap::new();
     let asset_map: HashMap<u64, ivm::AssetDefinitionId> = HashMap::new();
-    let host = WsvHost::new_with_subject_map(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&caller),
-        account_map,
-        asset_map,
-    );
+    let host = WsvHost::new_with_subject_map(wsv, caller.clone(), account_map, asset_map);
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);

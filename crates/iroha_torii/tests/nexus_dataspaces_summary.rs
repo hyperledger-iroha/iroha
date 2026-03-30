@@ -133,13 +133,9 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register domain");
-    Register::account(
-        NewAccount::new(account_id.clone())
-            
-            .with_uaid(Some(uaid)),
-    )
-    .execute(&ALICE_ID, &mut stx)
-    .expect("register account with uaid");
+    Register::account(NewAccount::new(account_id.clone()).with_uaid(Some(uaid)))
+        .execute(&ALICE_ID, &mut stx)
+        .expect("register account with uaid");
     Register::asset_definition(AssetDefinition::numeric(asset_definition_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");

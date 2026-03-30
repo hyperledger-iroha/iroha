@@ -4,9 +4,7 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{
-        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
-    },
+    mock_wsv::{AccountId, AssetDefinitionId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -33,19 +31,18 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
-    let domain: DomainId = domain.parse().unwrap();
+fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().unwrap();
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
-fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let account = ivm::mock_wsv::AccountId::from(account).to_string();
+fn make_account_tlv(account: &AccountId) -> Vec<u8> {
+    let account = account.to_string();
     make_tlv(PointerType::AccountId as u16, account.as_bytes())
 }
 
-fn make_scoped_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let payload = to_bytes(account).expect("encode scoped account into Norito");
+fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
+    let payload = to_bytes(account).expect("encode account into Norito");
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
     out.push(1);
@@ -80,11 +77,7 @@ fn create_role_grant_and_revoke_affects_permissions() {
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     // Note: No direct MintAsset permission for alice; the role will grant it.
 
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -97,7 +90,7 @@ fn create_role_grant_and_revoke_affects_permissions() {
     vm.run().expect("register domain");
 
     // Register bob account and rose asset definition
-    let acc = make_scoped_account_tlv(&bob);
+    let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -223,11 +216,7 @@ fn create_role_with_permissions_key_then_mint() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -239,7 +228,7 @@ fn create_role_with_permissions_key_then_mint() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_scoped_account_tlv(&bob);
+    let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);

@@ -13,7 +13,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     account::NewAccount,
-    account::rekey::AccountLabel,
+    account::rekey::{AccountAlias, AccountAliasDomain},
     events::{
         EventFilterBox,
         execute_trigger::ExecuteTriggerEventFilter,
@@ -393,8 +393,11 @@ pub fn prepare_state(
         let gas_label: Name = "gas"
             .parse()
             .map_err(|_| eyre!("failed to parse gas account label"))?;
-        let gas_account = Account::new(gas_account_id.clone())
-            .with_label(Some(AccountLabel::new(ivm_domain.clone(), gas_label)));
+        let gas_account = Account::new(gas_account_id.clone()).with_label(Some(AccountAlias::new(
+            gas_label,
+            Some(AccountAliasDomain::new(ivm_domain.name().clone())),
+            DataSpaceId::GLOBAL,
+        )));
 
         let stake_asset: AssetDefinitionId = config_defaults::nexus::staking::stake_asset_id()
             .parse()
@@ -436,9 +439,9 @@ pub fn prepare_state(
                 key_pair,
                 uaid: None,
             });
-            nexus_genesis.push(InstructionBox::from(Register::account(
-                Account::new(account_id.clone()),
-            )));
+            nexus_genesis.push(InstructionBox::from(Register::account(Account::new(
+                account_id.clone(),
+            ))));
         }
 
         for validator in &validator_accounts {
@@ -1207,9 +1210,9 @@ impl ChaosState {
             key_pair: key,
             uaid: None,
         };
-        let mut instructions = vec![InstructionBox::from(Register::account(
-            Account::new(account_id.clone()),
-        ))];
+        let mut instructions = vec![InstructionBox::from(Register::account(Account::new(
+            account_id.clone(),
+        )))];
         instructions.extend(self.maybe_prefund_nexus_fee_asset(&record.id));
         TransactionPlan {
             state_updates: vec![PlanUpdate::TrackAccount(record)],
@@ -1225,9 +1228,9 @@ impl ChaosState {
         Ok(TransactionPlan {
             state_updates: Vec::new(),
             label: "duplicate_account",
-            instructions: vec![InstructionBox::from(Register::account(
-                Account::new(candidate.id.clone()),
-            ))],
+            instructions: vec![InstructionBox::from(Register::account(Account::new(
+                candidate.id.clone(),
+            )))],
             signer: self.treasury.clone(),
             expect_success: false,
         })
@@ -3090,9 +3093,12 @@ mod tests {
             "slash sink should follow the deterministic gas account"
         );
 
-        let expected_label = AccountLabel::new(
-            "ivm".parse().expect("ivm domain"),
+        let expected_label = AccountAlias::new(
             "gas".parse().expect("gas label"),
+            Some(AccountAliasDomain::new(
+                "ivm".parse::<Name>().expect("ivm domain"),
+            )),
+            DataSpaceId::GLOBAL,
         );
         let mut found_fee_sink = false;
         for instruction in genesis.iter().flatten() {

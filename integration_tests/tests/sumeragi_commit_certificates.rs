@@ -541,10 +541,7 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
         let validator_id = AccountId::new(peer.public_key().clone());
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
         if validator_id != gas_account_id {
-            bootstrap_tx.push(
-                Register::account(Account::new(validator_id.clone()))
-                .into(),
-            );
+            bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         }
         bootstrap_tx.push(
             Mint::asset_numeric(stake, AssetId::new(stake_asset_id.clone(), validator_id)).into(),

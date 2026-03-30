@@ -40,14 +40,12 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn sample_account() -> ScopedAccountId {
-    let domain: DomainId = "wonderland".parse().expect("domain");
+fn sample_account() -> AccountId {
     AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
             .expect("public key"),
     )
-    .to_account_id(domain)
 }
 
 fn build_open_verify_envelope_bytes(k: u32) -> Vec<u8> {
@@ -78,7 +76,7 @@ fn build_open_verify_envelope_bytes(k: u32) -> Vec<u8> {
 fn wsv_verify_latch_allows_unshield_then_resets() {
     // Prepare caller and asset
     let caller = sample_account();
-    let caller_id = ivm::mock_wsv::AccountId::from(&caller);
+    let caller_id = caller.clone();
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),
         "rose".parse().unwrap(),
@@ -110,10 +108,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     // Unshield permission and read-balance permission for later query
     wsv.grant_permission(&caller, PermissionToken::Unshield(asset.clone()));
     assert!(wsv.has_permission(&caller, &PermissionToken::Unshield(asset.clone())));
-    wsv.grant_permission(
-        &caller,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&caller)),
-    );
+    wsv.grant_permission(&caller, PermissionToken::ReadAccountAssets(caller.clone()));
 
     // Host with ZK (Halo2 IPA) enabled and sufficient max_k
     let cfg = ZkHalo2Config {
@@ -126,8 +121,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
         ..ZkHalo2Config::default()
     };
     let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new())
-            .with_zk_halo2_config(cfg);
+        WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new()).with_zk_halo2_config(cfg);
 
     // VM
     let mut vm = IVM::new(1_000_000);
@@ -234,7 +228,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
 #[test]
 fn unshield_rejects_mismatched_verifying_key() {
     let caller = sample_account();
-    let caller_id = ivm::mock_wsv::AccountId::from(&caller);
+    let caller_id = caller.clone();
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),
         "iris".parse().unwrap(),
@@ -263,8 +257,7 @@ fn unshield_rejects_mismatched_verifying_key() {
         },
     ));
     wsv.grant_permission(&caller, PermissionToken::Unshield(asset.clone()));
-    let mut host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
+    let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
 
     // Successful verify latch
@@ -314,7 +307,7 @@ fn unshield_rejects_mismatched_verifying_key() {
 #[test]
 fn unshield_accepts_and_checks_inline_verifying_key() {
     let caller = sample_account();
-    let caller_id = ivm::mock_wsv::AccountId::from(&caller);
+    let caller_id = caller.clone();
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),
         "daisy".parse().unwrap(),
@@ -342,12 +335,8 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
         },
     ));
     wsv.grant_permission(&caller, PermissionToken::Unshield(asset.clone()));
-    wsv.grant_permission(
-        &caller,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&caller)),
-    );
-    let mut host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&caller), HashMap::new());
+    wsv.grant_permission(&caller, PermissionToken::ReadAccountAssets(caller.clone()));
+    let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
 
     let verify_env = build_open_verify_envelope_bytes(8);

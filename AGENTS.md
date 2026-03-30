@@ -26,9 +26,9 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - The entire workspace targets the Rust standard library (`std`). WASM/no-std builds are no longer supported and should not be considered when making changes.
 - Universal-account model:
   - `AccountId` is the canonical account identity and is always domainless.
-  - `ScopedAccountId { account, domain }` is only explicit domain context for operations or views that require a linked domain; it is not the canonical identity.
+  - Domain context for routing, aliasing, and ownership lives outside the canonical account identity in alias bindings and domain-owned entities.
   - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` bind to the same canonical `AccountId`.
-  - In tests and fixtures, seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately. Use `Account::new(...)` for dataspace-root aliases and `Account::new_in_domain(account, domain)` only when the behavior under test truly requires a domain-linked registration/materialization.
+  - In tests and fixtures, seed the universal `AccountId` first, then add alias leases, alias permissions, and any domain-owned state separately. Use `Account::new(...)` for account registration and bind aliases separately only when the behavior under test depends on them.
 
 ## Repository structure
 - `Cargo.toml` at the repository root defines the workspace and lists all member crates.

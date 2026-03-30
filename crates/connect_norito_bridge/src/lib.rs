@@ -34,7 +34,7 @@ use iroha_crypto::{
 use iroha_data_model::{
     ChainId,
     account::{
-        AccountId, ScopedAccountId,
+        AccountId,
         address::{AccountAddress, AccountAddressError},
     },
     asset::id::{AssetDefinitionId, AssetId},
@@ -388,10 +388,6 @@ fn parse_account_id(value: String) -> BridgeResult<AccountId> {
     AccountId::parse_encoded(&value)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| BridgeError::Authority)
-}
-
-fn parse_scoped_account_id(value: String) -> BridgeResult<ScopedAccountId> {
-    ScopedAccountId::from_str(&value).map_err(|_| BridgeError::Authority)
 }
 
 fn parse_destination(value: String) -> BridgeResult<AccountId> {
@@ -8249,15 +8245,7 @@ mod accel_tests {
         let authority_id = AccountId::parse_encoded(authority.to_str().unwrap())
             .expect("authority account id")
             .into_account_id();
-        let scoped_account = cstring(
-            &ScopedAccountId::from_account_id(
-                authority_id,
-                "governance.dataspace"
-                    .parse()
-                    .expect("governance.dataspace domain"),
-            )
-            .canonical_encoded(),
-        );
+        let scoped_account = cstring(authority.to_str().unwrap());
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
         let member_a = AccountId::parse_encoded(member_a_str.to_str().unwrap())
@@ -9000,7 +8988,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
-        let account = parse_scoped_account_id(account_str)?;
+        let account = parse_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key(key_slice)?;
@@ -9012,8 +9000,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                 let account = account.clone();
                 move || {
                     let register = MultisigRegister::with_account(
-                        account.account.clone(),
-                        account.domain.clone(),
+                        account.clone(),
+                        None::<DomainId>,
                         spec.clone(),
                     );
                     Executable::from([InstructionBox::from(register)])
@@ -9063,7 +9051,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
-        let account = parse_scoped_account_id(account_str)?;
+        let account = parse_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
@@ -9075,8 +9063,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                 let account = account.clone();
                 move || {
                     let register = MultisigRegister::with_account(
-                        account.account.clone(),
-                        account.domain.clone(),
+                        account.clone(),
+                        None::<DomainId>,
                         spec.clone(),
                     );
                     Executable::from([InstructionBox::from(register)])

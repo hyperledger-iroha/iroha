@@ -194,9 +194,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                 assets.push(AssetSpec {
                     id,
                     name,
-                    mint_to: ALICE_ID
-                        .clone()
-                        .to_account_id("wonderland".parse().expect("valid domain")),
+                    mint_to: ALICE_ID.clone(),
                     quantity: qty,
                 });
             }

@@ -3,12 +3,12 @@ use std::collections::HashMap;
 
 use iroha_primitives::numeric::Numeric;
 use ivm::{
-    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, ScopedAccountId,
+    AccountId, AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
 
-fn fixture_account(domain: &str, hex_public_key: &str) -> ScopedAccountId {
-    ScopedAccountId::new(
+fn fixture_account(domain: &str, hex_public_key: &str) -> AccountId {
+    AccountId::new(
         domain.parse().expect("domain id"),
         hex_public_key.parse().expect("public key"),
     )

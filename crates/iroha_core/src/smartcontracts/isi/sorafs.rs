@@ -2441,8 +2441,8 @@ mod sorafs_tests {
         }
         if stx.world.accounts.get(account_id).is_none() {
             Register::account(iroha_data_model::account::Account::new(account_id.clone()))
-            .execute(&alice(), stx)
-            .expect("register account");
+                .execute(&alice(), stx)
+                .expect("register account");
         }
     }
 

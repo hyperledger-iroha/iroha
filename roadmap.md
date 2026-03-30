@@ -2,6 +2,92 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 account de-scoping compile blockers cleared):
+the repo-wide `AccountId`/alias cleanup is now through the live-code compile
+sweep, so the earlier Torii/account-surface blocker is no longer the active
+roadblock on this branch.
+
+- the checked crates now compile again with the domainless-account surface:
+  `ivm --tests`, `iroha_core --tests`, `iroha_torii --tests`,
+  `iroha_kagami --tests`, `mochi-core`, `iroha_test_network`,
+  `integration_tests`, and `connect_norito_bridge`;
+- live-code grep targets for `ScopedAccountId`, `linked_domains`,
+  `Account::new_in_domain(...)`, `NewAccount::new_in_domain(...)`, the deleted
+  account-subject-domain helper names, and the old SDK `AccountLabel` surface
+  are now clean; and
+- the active-doc sweep is finished: authoritative English docs now describe the
+  domainless-account / alias-only model, and stale localized copies have been
+  downgraded to explicit translation-refresh stubs; and
+- remaining open work for the account-identity slice is now narrowed to:
+  - rerun the deferred repo-wide validation chain
+    (`cargo fmt --all`, `cargo test --workspace`, and
+    `cargo clippy --workspace --all-targets -- -D warnings`);
+  - reduce the broader warning surface left by the migration so the branch is
+    ready for strict lint gates and release rebuilds without noisy fallout; and
+  - once that verification chain is green, rerun the preserved-peer stable
+    permissioned and NPoS soaks on fresh current-tree release binaries.
+
+Latest sync (2026-03-30 fresh full release-binary reruns still red, but with clearer root-cause split):
+the branch rebuilds again and both preserved-peer stable envelopes were rerun
+on fresh `target/release` binaries, but liveness is still not fixed.
+
+- permissioned improved materially and now clears the old `260/266` and
+  `286/287` freeze bands, but it still dies later at `367/368` in repeated
+  contiguous-frontier unified-recovery churn with committed-anchor range pulls.
+- NPoS is still a separate, worse path: it now dies at `83/84`, where peers
+  first report “highest QC block missing locally” on the locked chain and then
+  collapse into height-`84` `missing_qc` / `no proposal observed` storms.
+- no renewed transport regression surfaced in either rerun.
+- next work for consensus is therefore split:
+  - permissioned: debug the same-height contiguous-frontier unified-recovery
+    loop around height `368`, especially why the cluster keeps re-anchoring
+    from committed height `368` while local height remains `367`; and
+  - NPoS: debug the payload/QC convergence failure at height `84`, where the
+    highest QC block is missing locally and locked/highest committed hashes
+    diverge before the timeout storm begins.
+
+Latest sync (2026-03-30 focused consensus root-cause regressions green):
+the exact-slot recovery/reschedule patch is now green on the targeted
+`iroha_core` coverage, including proposal-evidence, same-slot recovery,
+stale-owner reschedule, post-rotation missing-QC, and pacemaker fresh-proposal
+regressions.
+
+- the older idle missing-QC test was updated to account for the current
+  contiguous-frontier proposal-grace window instead of a stale timeout
+  assumption.
+- next work for this slice is no longer inside `iroha_core` consensus logic;
+  it is restoring a green release build on the branch so the patched tree can
+  be re-soaked honestly.
+
+Latest sync (2026-03-30 root-cause patch pass for cross-view frontier recovery leakage):
+the current consensus patch tightens two remaining cross-view leakage points
+that were still visible in the permissioned `287` and NPoS `107/109` soak
+stalls:
+
+- same-slot frontier recovery predicates now require an exact `(height, view)`
+  match instead of treating old-view slot activity as live same-slot activity
+  for later views; and
+- contiguous-frontier commit-quorum reschedule now uses exact-slot
+  vote/owner evidence for the pending block’s `(height, view)` instead of
+  generic same-height frontier ownership when deciding whether to keep,
+  hand off, or rotate a stalled candidate.
+
+- focused regressions now cover:
+  - old-view frontier recovery activity not counting as same-slot activity for
+    later views; and
+  - stale old-view frontier ownership no longer suppressing later-view
+    contiguous-frontier reschedule rotation.
+
+- open work for this slice now remains:
+  - clear the unrelated dirty-worktree compile failures outside the consensus
+    patch surface (`iroha_data_model` alias-domain changes and downstream
+    `iroha_core/src/state.rs` fallout) so `iroha_core` tests can build again;
+  - once the crate is green, rerun the focused `iroha_core` tests for the new
+    recovery/reschedule regressions; and
+  - only after that verification chain is green, rerun the full preserved-peer
+    permissioned and NPoS stable envelopes to see whether the shared liveness
+    stop is actually resolved.
+
 Latest sync (2026-03-30 JS SDK UTF-8 canonical-auth transport fallback):
 the JS Torii client now has a built-in raw Node HTTP/TLS path for UTF-8
 `X-Iroha-Account` headers, and the focused canonical-auth/VPN regression suite

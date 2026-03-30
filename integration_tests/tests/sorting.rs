@@ -218,8 +218,7 @@ fn correct_sorting_of_entities() {
         let account_id = AccountId::new(public_keys[i as usize].clone());
         let mut account_metadata = Metadata::default();
         account_metadata.insert(sort_by_metadata_key.clone(), n - i - 1);
-        let account = Account::new(account_id.clone())
-            .with_metadata(account_metadata.clone());
+        let account = Account::new(account_id.clone()).with_metadata(account_metadata.clone());
 
         accounts.push(account_id);
         metadata_of_accounts.push(account_metadata);
@@ -423,8 +422,7 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
         } else {
             let mut account_metadata = Metadata::default();
             account_metadata.insert(sort_by_metadata_key.clone(), n - i - 1);
-            let account = Account::new(account_id.clone())
-                .with_metadata(account_metadata);
+            let account = Account::new(account_id.clone()).with_metadata(account_metadata);
             accounts_a.push(account_id);
             account
         };

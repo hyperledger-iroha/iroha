@@ -399,7 +399,8 @@ fn with_offline_allowance_genesis(
     required_accounts.insert(certificate.operator.clone());
     for account in required_accounts {
         if account != *SAMPLE_GENESIS_ACCOUNT_ID && account != *ALICE_ID && account != *BOB_ID {
-            builder = builder.with_genesis_instruction(Register::account(Account::new(account.clone())));
+            builder =
+                builder.with_genesis_instruction(Register::account(Account::new(account.clone())));
         }
     }
 
@@ -2104,11 +2105,16 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
 #[tokio::test]
 async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Result<()> {
     let domain_id: DomainId = "aliases".parse()?;
-    let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
+    let label = AccountAlias::new(
+        "primary".parse()?,
+        Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+            domain_id.name().clone(),
+        )),
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    );
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
-    let account = Account::new(account_id.clone())
-        .with_label(Some(label.clone()));
+    let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))

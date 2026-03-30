@@ -412,9 +412,9 @@ private enum ClaimIdentifierSwiftNoritoEncoder {
     }
 }
 
-private enum SetAccountLabelSwiftNoritoEncoder {
-    private static let instructionWireName = "identity::SetAccountLabel"
-    private static let instructionTypeName = "iroha_data_model::isi::domain_link::SetAccountLabel"
+private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
+    private static let instructionWireName = "identity::SetPrimaryAccountAlias"
+    private static let instructionTypeName = "iroha_data_model::isi::domain_link::SetPrimaryAccountAlias"
     private static let signedTransactionTypeName = "iroha_data_model::transaction::signed::model::SignedTransaction"
 
     static func encode(chainId: String,
@@ -422,13 +422,13 @@ private enum SetAccountLabelSwiftNoritoEncoder {
                        creationTimeMs: UInt64,
                        ttlMs: UInt64?,
                        accountId: String,
-                       domainId: String,
-                       label: String,
+                       aliasDomain: String?,
+                       alias: String,
                        signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         let instructionPayload = try encodeInstruction(
             accountId: accountId,
-            domainId: domainId,
-            label: label
+            aliasDomain: aliasDomain,
+            alias: alias
         )
         let transactionPayload = try encodeTransactionPayload(
             chainId: chainId,
@@ -452,13 +452,14 @@ private enum SetAccountLabelSwiftNoritoEncoder {
         )
     }
 
-    private static func encodeInstruction(accountId: String, domainId: String, label: String) throws -> Data {
+    private static func encodeInstruction(accountId: String, aliasDomain: String?, alias: String) throws -> Data {
         let accountPayload = try OfflineNorito.encodeAccountId(accountId)
-        let accountLabelPayload = try encodeAccountLabel(domainId: domainId, label: label)
+        let accountAliasPayload = try encodeAccountAlias(aliasDomain: aliasDomain, alias: alias)
 
         var instructionPayload = OfflineNoritoWriter()
         instructionPayload.writeField(accountPayload)
-        instructionPayload.writeField(accountLabelPayload)
+        instructionPayload.writeField(try OfflineNorito.encodeOption(accountAliasPayload, encode: { $0 }))
+        instructionPayload.writeField(encodeNoneOption())
 
         let framedInstruction = noritoEncode(typeName: instructionTypeName, payload: instructionPayload.data, flags: 0)
         var wireInstruction = OfflineNoritoWriter()
@@ -467,10 +468,11 @@ private enum SetAccountLabelSwiftNoritoEncoder {
         return wireInstruction.data
     }
 
-    private static func encodeAccountLabel(domainId: String, label: String) throws -> Data {
+    private static func encodeAccountAlias(aliasDomain: String?, alias: String) throws -> Data {
         var payload = OfflineNoritoWriter()
-        payload.writeField(try OfflineNorito.encodeDomainId(domainId))
-        payload.writeField(OfflineNorito.encodeString(label))
+        payload.writeField(OfflineNorito.encodeString(alias))
+        payload.writeField(try OfflineNorito.encodeOption(aliasDomain, encode: OfflineNorito.encodeString))
+        payload.writeField(OfflineNorito.encodeUInt64(0))
         return payload.data
     }
 
@@ -903,16 +905,16 @@ struct SwiftTransactionEncoder {
         )
     }
 
-    static func encodeSetAccountLabel(request: SetAccountLabelRequest,
-                                      keypair: Keypair,
-                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+    static func encodeSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
+                                             keypair: Keypair,
+                                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
-        return try encodeSetAccountLabel(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
+        return try encodeSetPrimaryAccountAlias(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
     }
 
-    static func encodeSetAccountLabel(request: SetAccountLabelRequest,
-                                      signingKey: SigningKey,
-                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+    static func encodeSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
+                                             signingKey: SigningKey,
+                                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
         let ids = try TransactionInputValidator.validate(
             chainId: request.chainId,
             authorityId: request.authority,
@@ -921,16 +923,18 @@ struct SwiftTransactionEncoder {
             ]
         )
         let accountId = ids.accountIds["account"] ?? request.accountId
-        let domainId = try TransactionInputValidator.sanitizeDomainId(request.domainId, field: "label_domain")
-        let label = try TransactionInputValidator.sanitizeLabel(request.label, field: "label")
-        return try SetAccountLabelSwiftNoritoEncoder.encode(
+        let alias = try TransactionInputValidator.sanitizeLabel(request.alias, field: "alias")
+        let aliasDomain = try request.aliasDomain.map {
+            try TransactionInputValidator.sanitizeLabel($0, field: "alias_domain")
+        }
+        return try SetPrimaryAccountAliasSwiftNoritoEncoder.encode(
             chainId: ids.chainId,
             authority: ids.authorityId,
             creationTimeMs: creationTimeMs,
             ttlMs: request.ttlMs,
             accountId: accountId,
-            domainId: domainId,
-            label: label,
+            aliasDomain: aliasDomain,
+            alias: alias,
             signingKey: signingKey
         )
     }

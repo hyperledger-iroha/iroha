@@ -40,18 +40,16 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 
 ### Account
 - `AccountId` is the canonical domainless account identity keyed by the controller and encoded as canonical I105.
-- `ScopedAccountId { account: AccountId, domain: DomainId }` carries explicit domain context only where a scoped view is required.
-- `Account { id, metadata, label?, uaid?, linked_domains? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md), and `linked_domains` is derived index state rather than part of the canonical identity.
+- `Account { id, metadata, label?, uaid?, opaque_ids[] }` — `label` is an optional primary `AccountAlias` used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md), and `opaque_ids` tracks hidden identifiers bound to that UAID. Stored account state no longer carries any linked-domain field.
 - Builders:
-  - `NewAccount` via `Account::new_in_domain(id, domain)` materializes an explicit domain-linked registration when a test or operation still needs that scoped context.
-  - `NewAccount` via `Account::new(id)` registers only the universal account subject with no linked domain.
+  - `NewAccount` via `Account::new(id)` registers the canonical domainless account subject.
 - Alias model:
   - Canonical account identity never includes a domain or dataspace segment.
-  - Account aliases are separate SNS/account-label bindings layered on top of `AccountId`.
+  - `AccountAlias` values are separate SNS bindings layered on top of `AccountId`.
   - Domain-qualified aliases such as `merchant@hbl.sbp` carry both a domain and dataspace in the alias binding.
   - Dataspace-root aliases such as `merchant@sbp` carry only the dataspace and therefore pair naturally with `Account::new(...)`.
-  - Tests and fixtures should seed the universal `AccountId` first, then add domain links, alias leases, and alias permissions separately instead of encoding domain assumptions into the account identity itself.
-  - Public singular account lookup now focuses on aliases (`FindAliasesByAccountId`); subject-domain membership stays an internal index/detail instead of a dedicated account lookup API.
+  - Tests and fixtures should seed the universal `AccountId` first, then add alias leases, alias permissions, and any domain-owned state separately instead of encoding domain assumptions into the account identity itself.
+  - Public singular account lookup now focuses on aliases (`FindAliasesByAccountId`); account identity itself stays domainless.
 
 ### Asset Definitions and Assets
 - `AssetDefinitionId { aid_bytes: [u8; 16] }` exposed textually as an unprefixed Base58 address with versioning and checksum.
@@ -210,7 +208,7 @@ let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default(
 // Account
 let kp = KeyPair::random();
 let account_id = AccountId::new(kp.public_key().clone());
-let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
+let new_account = Account::new(account_id.clone())
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account

@@ -102,10 +102,7 @@ fn stake_genesis_post_topology_transactions(
         let validator_id = AccountId::new(peer.public_key().clone());
         let (stake, _) = profile_for_index(index, profile);
         if validator_id != genesis_account_id {
-            bootstrap_tx.push(
-                Register::account(Account::new(validator_id.clone()))
-                .into(),
-            );
+            bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         }
         bootstrap_tx.push(
             Mint::asset_numeric(stake, AssetId::new(stake_asset_id.clone(), validator_id)).into(),

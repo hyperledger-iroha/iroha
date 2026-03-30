@@ -115,16 +115,14 @@ Numeric helpers (Norito)
 - Kotodama numeric aliases (`fixed_u128`, `Amount`, `Balance`) lower to these syscalls for deterministic unsigned, scale‑0 arithmetic.
 
 Domains / Peers
-- 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
-- 0x11 UNREGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_unreg_domain
-- 0x12 TRANSFER_DOMAIN — Args: `r10=&DomainId, r11=&AccountId` → 0 — Gas: G_xfer_domain
+- 0x10..0x12 are unused in ABI v1 after removing domain ownership/registration syscalls.
 - 0x15 REGISTER_PEER — Args: `r10=&Json` (RegisterPeerWithPop) → 0 — Gas: G_reg_peer
   - JSON object: `{ "peer": "<public_key or public_key@addr>", "pop": [..], "activation_at": <u64?>, "expiry_at": <u64?>, "hsm": <HsmBinding?> }`
   - `peer` may be a string or an object with `public_key`/`publicKey`/`peer_id`/`peerId`/`key`; those keys are also accepted at top level.
 - 0x16 UNREGISTER_PEER — Args: `r10=&Json` (peer id string or object with `peer`/`peer_id`/`peerId`/`public_key`/`publicKey`/`key`) → 0 — Gas: G_unreg_peer
 
 Accounts
-- 0x13 REGISTER_ACCOUNT — Args: `r10=&ScopedAccountId` → 0 — Gas: G_reg_acct
+- 0x13 REGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_reg_acct
 - 0x14 UNREGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_unreg_acct
 - 0x17 ADD_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_add_sig
 - 0x18 REMOVE_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_rm_sig
@@ -322,10 +320,10 @@ but they must not change the host ABI.
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
-| 0x10 | REGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_reg_domain@ivm.core/v2 |
-| 0x11 | UNREGISTER_DOMAIN | r10=&DomainId | u64=0 | asset:gas/G_unreg_domain@ivm.core/v2 |
-| 0x12 | TRANSFER_DOMAIN | r10=&DomainId, r11=&AccountId | u64=0 | asset:gas/G_xfer_domain@ivm.core/v2 |
-| 0x13 | REGISTER_ACCOUNT | r10=&ScopedAccountId | u64=0 | asset:gas/G_reg_acct@ivm.core/v2 |
+| 0x10 | UNUSED | - | - | - |
+| 0x11 | UNUSED | - | - | - |
+| 0x12 | UNUSED | - | - | - |
+| 0x13 | REGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_reg_acct@ivm.core/v2 |
 | 0x14 | UNREGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_unreg_acct@ivm.core/v2 |
 | 0x15 | REGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_reg_peer@ivm.core/v2 |
 | 0x16 | UNREGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_unreg_peer@ivm.core/v2 |

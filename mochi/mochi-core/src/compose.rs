@@ -18,8 +18,7 @@ use iroha_data_model::{
     ChainId,
     account::{
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAdmissionMode,
-        AccountAdmissionPolicy, AccountId, ScopedAccountId,
-        admission::ImplicitAccountFeeDestination,
+        AccountAdmissionPolicy, AccountId, admission::ImplicitAccountFeeDestination,
     },
     asset::{
         definition::{AssetDefinition, Mintable, NewAssetDefinition},
@@ -645,7 +644,7 @@ pub enum InstructionDraft {
     /// Register a new account.
     RegisterAccount {
         /// Identifier of the account to register.
-        account: ScopedAccountId,
+        account: AccountId,
     },
     /// Register a numeric asset definition.
     RegisterAssetDefinition {
@@ -755,7 +754,7 @@ impl InstructionDraft {
     ///
     /// Returns a [`ComposeError`] if the account identifier fails to parse.
     pub fn register_account_from_input(account: &str) -> Result<Self, ComposeError> {
-        let account = parse_scoped_account_id(account)?;
+        let account = parse_account_id(account)?;
         Ok(Self::RegisterAccount { account })
     }
 
@@ -983,11 +982,9 @@ impl InstructionDraft {
             InstructionDraft::RegisterDomain { domain } => {
                 Register::domain(Domain::new(domain.clone())).into()
             }
-            InstructionDraft::RegisterAccount { account } => Register::account(
-                Account::new(account.account().clone())
-                    ,
-            )
-            .into(),
+            InstructionDraft::RegisterAccount { account } => {
+                Register::account(Account::new(account.clone())).into()
+            }
             InstructionDraft::RegisterAssetDefinition {
                 definition,
                 mintable,
@@ -1360,13 +1357,6 @@ fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
             account: value.to_owned(),
             reason: err.to_string(),
         })
-}
-
-fn parse_scoped_account_id(value: &str) -> Result<ScopedAccountId, ComposeError> {
-    ScopedAccountId::from_str(value).map_err(|err| ComposeError::InvalidAccountId {
-        account: value.to_owned(),
-        reason: err.to_string(),
-    })
 }
 
 fn parse_quantity(value: &str) -> Result<Numeric, ComposeError> {
@@ -1786,12 +1776,9 @@ mod tests {
     }
 
     #[test]
-    fn register_account_instruction_preserves_scoped_domain() {
+    fn register_account_instruction_uses_canonical_account_id() {
         let account = account_literal(&ALICE_ID);
-        let scoped_account = format!("{account}@wonderland");
-        let expected: ScopedAccountId = scoped_account.parse().expect("scoped account");
-        let draft =
-            InstructionDraft::register_account_from_input(&scoped_account).expect("account draft");
+        let draft = InstructionDraft::register_account_from_input(&account).expect("account draft");
 
         let instruction = draft.instruction();
         let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction;
@@ -1806,8 +1793,14 @@ mod tests {
         };
 
         assert_eq!(register.object.id, ALICE_ID.clone());
-        assert_eq!(register.object.linked_domains().len(), 1);
-        assert!(register.object.linked_domains().contains(expected.domain()));
+    }
+
+    #[test]
+    fn register_account_instruction_rejects_domain_suffix_literal() {
+        let domain_suffixed_account = format!("{}@wonderland", account_literal(&ALICE_ID));
+        let err = InstructionDraft::register_account_from_input(&domain_suffixed_account)
+            .expect_err("domain-suffixed account literal must be rejected");
+        assert!(matches!(err, ComposeError::InvalidAccountId { .. }));
     }
 
     #[test]

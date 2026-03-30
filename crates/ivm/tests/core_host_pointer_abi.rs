@@ -9,9 +9,8 @@ const SAMPLE_NFT_ID: &[u8] = b"rose$wonderland";
 const ALT_NFT_ID: &[u8] = b"lily$wonderland";
 
 fn account_id_literal(public_key: &str) -> Vec<u8> {
-    let domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("valid domain");
     let public_key: PublicKey = public_key.parse().expect("valid public key");
-    ivm::mock_wsv::ScopedAccountId::new(domain, public_key)
+    ivm::mock_wsv::AccountId::new(public_key)
         .to_string()
         .into_bytes()
 }

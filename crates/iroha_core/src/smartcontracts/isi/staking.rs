@@ -2860,8 +2860,8 @@ mod tests {
         let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _kp) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
         register_peer_for_account(&mut stx, &replacement);
         stx.commit_topology.get_mut().push(crate::PeerId::from(
             replacement
@@ -2978,8 +2978,8 @@ mod tests {
         let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _kp) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
         let replacement_peer = register_peer_for_account(&mut stx, &replacement);
         stx.commit_topology.get_mut().push(replacement_peer);
         stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
@@ -3175,8 +3175,8 @@ mod tests {
             let domain_id: DomainId = "nexus".parse().expect("domain id");
             let (replacement, _kp) = gen_account_in("nexus");
             Register::account(Account::new(replacement.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
             let replacement_peer = register_peer_for_account(&mut stx, &replacement);
             stx.commit_topology.get_mut().push(replacement_peer.clone());
             stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
@@ -3871,8 +3871,8 @@ mod tests {
         let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _replacement_kp) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
-        .execute(&ALICE_ID, &mut setup_tx)
-        .unwrap();
+            .execute(&ALICE_ID, &mut setup_tx)
+            .unwrap();
         let replacement_peer = register_peer_for_account(&mut setup_tx, &replacement);
         setup_tx
             .commit_topology

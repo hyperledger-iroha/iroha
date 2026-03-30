@@ -8551,8 +8551,7 @@ mod tests {
         let (genesis_id, genesis_key_pair) = gen_account_in("genesis");
         let genesis_domain_id = DomainId::from_str("genesis").expect("Valid");
         let genesis_domain = Domain::new(genesis_domain_id.clone()).build(&genesis_id);
-        let genesis_account =
-            Account::new(genesis_id.clone()).build(&genesis_id);
+        let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
         let (account_id, account_keypair) = gen_account_in("wonderland");
         let domain_id = DomainId::from_str("wonderland").expect("Valid");
         let domain = Domain::new(domain_id.clone()).build(&genesis_id);

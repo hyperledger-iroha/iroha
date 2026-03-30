@@ -3151,6 +3151,7 @@ enum FrontierBodyFetchStage {
 enum FrontierSlotMode {
     Normal,
     DeepCatchup,
+    PassiveCatchup,
     Finalized,
 }
 
@@ -3443,6 +3444,15 @@ impl FrontierSlot {
         self.timers.last_updated_at = now;
     }
 
+    fn mark_passive_catchup(&mut self, now: Instant, reason: &'static str) {
+        self.mode = FrontierSlotMode::PassiveCatchup;
+        self.repair_state.deep_catchup_reason = Some(reason);
+        self.repair_state.last_reason = Some(reason);
+        self.repair_state.quorum_timeout_rebroadcasted = false;
+        self.timers.deep_catchup_entered_at = Some(now);
+        self.timers.last_updated_at = now;
+    }
+
     fn sync_compat_fields(&mut self) {
         self.view = self.candidate.view;
         self.block_hash = self.candidate.block_hash;
@@ -3561,6 +3571,9 @@ impl FrontierSlot {
                 ) {
                     self.candidate.validation_state = FrontierValidationState::Pending;
                 }
+                if matches!(self.mode, FrontierSlotMode::PassiveCatchup) {
+                    self.mode = FrontierSlotMode::Normal;
+                }
                 self.phase = FrontierSlotPhase::ValidateBody;
                 self.record_progress(now);
             }
@@ -3654,7 +3667,7 @@ impl FrontierSlot {
                 if let Some(requester) = requester {
                     self.repair_state.pending_requesters.insert(requester);
                 }
-                if !matches!(self.mode, FrontierSlotMode::DeepCatchup) {
+                if matches!(self.mode, FrontierSlotMode::Normal) {
                     actions.fetch_block_body = self.candidate.exact_fetch_armed;
                 }
             }
@@ -3683,6 +3696,8 @@ impl FrontierSlot {
                     } else {
                         actions.fetch_block_body = true;
                     }
+                } else if matches!(self.mode, FrontierSlotMode::PassiveCatchup) {
+                    self.repair_state.last_reason = Some("frontier_stall_reset");
                 } else if matches!(self.mode, FrontierSlotMode::DeepCatchup) {
                     actions.enter_deep_catchup = self.repair_state.deep_catchup_reason;
                 } else {
@@ -3713,6 +3728,8 @@ impl FrontierSlot {
                 {
                     self.mark_deep_catchup(now, reason);
                     actions.enter_deep_catchup = Some(reason);
+                } else if matches!(self.mode, FrontierSlotMode::PassiveCatchup) {
+                    self.repair_state.last_reason = Some(reason);
                 } else if matches!(self.mode, FrontierSlotMode::DeepCatchup) {
                     actions.enter_deep_catchup = self.repair_state.deep_catchup_reason;
                 }
@@ -5832,7 +5849,10 @@ impl Actor {
         if self.frontier_slot_is_exact_height(frontier_height)
             && let Some(slot) = self.frontier_slot.as_ref()
             && slot.height == frontier_height
-            && !matches!(slot.mode, FrontierSlotMode::Finalized)
+            && !matches!(
+                slot.mode,
+                FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+            )
             && slot.repair_state.last_reason != Some("missing_qc")
         {
             return slot.repair_state.last_reason;
@@ -5861,7 +5881,10 @@ impl Actor {
         if self.frontier_slot_is_exact_height(frontier_height)
             && let Some(slot) = self.frontier_slot.as_ref()
             && slot.height == frontier_height
-            && !matches!(slot.mode, FrontierSlotMode::Finalized)
+            && !matches!(
+                slot.mode,
+                FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+            )
         {
             let window = window.max(Duration::from_millis(1));
             let slot_last_action_at = [
@@ -5940,7 +5963,10 @@ impl Actor {
         if self.frontier_slot_is_exact_height(frontier_height) {
             return self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == frontier_height
-                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+                    )
                     && self.same_height_dependency_backlog_active_in_frontier_window(
                         frontier_height,
                         now,
@@ -5974,8 +6000,11 @@ impl Actor {
                     .last_updated_at
                     .max(slot.timers.last_progress_at);
                 slot.height == frontier_height
-                    && slot.view <= frontier_view
-                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
+                    && slot.view == frontier_view
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+                    )
                     && recent(slot_progress_at)
                     && (slot.exact_fetch_armed || (slot.block_created_seen && !slot.body_present))
             });
@@ -6224,8 +6253,11 @@ impl Actor {
                             .max(slot.timers.last_updated_at),
                     );
                 slot.height == frontier_height
-                    && slot.view <= frontier_view
-                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
+                    && slot.view == frontier_view
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+                    )
                     && recent_vote_progress
                     && (slot.quorum_progress.votes_observed
                         || slot.quorum_progress.commit_qc_observed
@@ -6260,7 +6292,7 @@ impl Actor {
                             .max(slot.timers.last_updated_at),
                     );
                 slot.height == frontier_height
-                    && slot.view <= frontier_view
+                    && slot.view == frontier_view
                     && matches!(slot.mode, FrontierSlotMode::Normal)
                     && recent_missing_payload_progress
                     && slot.exact_fetch_armed
@@ -6388,6 +6420,24 @@ impl Actor {
             )
     }
 
+    fn frontier_quorum_timeout_owner_still_actionable(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        self.frontier_slot_has_active_owner_state_for_view(frontier_height, frontier_view)
+            || self.slot_has_authoritative_payload(frontier_height, frontier_view)
+            || self.slot_has_vote_backed_consensus_evidence(frontier_height, frontier_view)
+            || self.frontier_recovery_quorum_timeout_same_height_recovery_active(
+                frontier_height,
+                frontier_view,
+                now,
+                queue_depths,
+            )
+    }
+
     fn should_preserve_live_contiguous_frontier_cleanup(
         &self,
         frontier_height: u64,
@@ -6418,6 +6468,16 @@ impl Actor {
         let frontier_height = self.committed_height_snapshot().saturating_add(1);
         if height != frontier_height {
             return false;
+        }
+
+        if self.frontier_slot_passive_catchup_owns_height(height) {
+            debug!(
+                height,
+                view,
+                cause = cause.as_str(),
+                "suppressing quorum view change while committed-anchor catch-up owns the contiguous frontier"
+            );
+            return true;
         }
 
         if self.slot_has_authoritative_payload(height, view) {
@@ -6471,7 +6531,10 @@ impl Actor {
         if self.frontier_slot_is_exact_height(frontier_height)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
                 slot.height == frontier_height
-                    && !matches!(slot.mode, FrontierSlotMode::Finalized)
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+                    )
                     && (slot.quorum_progress.votes_observed
                         || slot.quorum_progress.commit_qc_observed
                         || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
@@ -6535,20 +6598,22 @@ impl Actor {
     }
 
     fn frontier_slot_has_active_owner_state_in_slot(slot: &FrontierSlot) -> bool {
-        !matches!(slot.mode, FrontierSlotMode::Finalized)
-            && (matches!(slot.mode, FrontierSlotMode::DeepCatchup)
-                || matches!(
-                    slot.phase,
-                    FrontierSlotPhase::AwaitBody
-                        | FrontierSlotPhase::ValidateBody
-                        | FrontierSlotPhase::AwaitCommitQc
-                )
-                || slot.block_created_seen
-                || slot.body_present
-                || slot.frontier_info.is_some()
-                || slot.candidate.exact_fetch_armed
-                || slot.quorum_progress.votes_observed
-                || slot.quorum_progress.commit_qc_observed)
+        !matches!(
+            slot.mode,
+            FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+        ) && (matches!(slot.mode, FrontierSlotMode::DeepCatchup)
+            || matches!(
+                slot.phase,
+                FrontierSlotPhase::AwaitBody
+                    | FrontierSlotPhase::ValidateBody
+                    | FrontierSlotPhase::AwaitCommitQc
+            )
+            || slot.block_created_seen
+            || slot.body_present
+            || slot.frontier_info.is_some()
+            || slot.candidate.exact_fetch_armed
+            || slot.quorum_progress.votes_observed
+            || slot.quorum_progress.commit_qc_observed)
     }
 
     fn seed_frontier_slot_from_same_height_evidence(
@@ -6564,7 +6629,10 @@ impl Actor {
 
         if let Some(slot) = self.frontier_slot.as_mut()
             && slot.height == frontier_height
-            && !matches!(slot.mode, FrontierSlotMode::Finalized)
+            && !matches!(
+                slot.mode,
+                FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
+            )
         {
             slot.active_view = slot.active_view.max(requested_view);
             slot.repair_state.last_reason = Some(reason);
@@ -6741,6 +6809,9 @@ impl Actor {
         view: u64,
         now: Instant,
     ) -> bool {
+        if self.frontier_slot_passive_catchup_owns_height(frontier_height) {
+            return false;
+        }
         if self
             .frontier_slot
             .as_ref()
@@ -13522,12 +13593,13 @@ impl Actor {
 
     fn local_signed_block_for_hash(&self, hash: HashOf<BlockHeader>) -> Option<Arc<SignedBlock>> {
         if let Some(pending) = self.pending.pending_blocks.get(&hash) {
-            if !matches!(pending.validation_status, ValidationStatus::Invalid) {
+            if !pending.aborted && !matches!(pending.validation_status, ValidationStatus::Invalid) {
                 return Some(Arc::new(pending.block.clone()));
             }
         }
         if let Some(inflight) = self.subsystems.commit.inflight.as_ref()
             && inflight.block_hash == hash
+            && !inflight.pending.aborted
             && !matches!(
                 inflight.pending.validation_status,
                 ValidationStatus::Invalid
@@ -13646,9 +13718,44 @@ impl Actor {
         })
     }
 
+    fn frontier_slot_passive_catchup_active_at_height(&self, height: u64) -> bool {
+        self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height && matches!(slot.mode, FrontierSlotMode::PassiveCatchup)
+        })
+    }
+
+    fn frontier_slot_passive_catchup_owns_height(&self, height: u64) -> bool {
+        self.frontier_slot_passive_catchup_active_at_height(height)
+            && self.frontier_catchup_has_unresolved_dependency(height)
+    }
+
     fn frontier_slot_allows_deep_catchup(&self, height: u64, _reason: &'static str) -> bool {
         height == self.committed_height_snapshot().saturating_add(1)
-            && self.frontier_slot_deep_catchup_active_at_height(height)
+            && (self.frontier_slot_deep_catchup_active_at_height(height)
+                || self.frontier_slot_passive_catchup_active_at_height(height))
+    }
+
+    fn handoff_contiguous_frontier_to_passive_catchup(
+        &mut self,
+        frontier_height: u64,
+        now: Instant,
+        reason: &'static str,
+    ) -> bool {
+        let Some(slot) = self.frontier_slot.as_mut() else {
+            return false;
+        };
+        if slot.height != frontier_height || !slot.body_missing() {
+            return false;
+        }
+        slot.mark_passive_catchup(now, reason);
+        slot.sync_compat_fields();
+        if self
+            .frontier_recovery
+            .is_some_and(|state| state.frontier_height == frontier_height)
+        {
+            self.frontier_recovery = None;
+        }
+        true
     }
 
     fn apply_frontier_slot_event(
@@ -14031,7 +14138,10 @@ impl Actor {
     fn exact_frontier_body_repair_active_at_height(&self, height: u64) -> bool {
         height == self.committed_height_snapshot().saturating_add(1)
             && self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == height && slot.exact_fetch_armed && !slot.body_present
+                slot.height == height
+                    && matches!(slot.mode, FrontierSlotMode::Normal)
+                    && slot.exact_fetch_armed
+                    && !slot.body_present
             })
     }
 
@@ -14457,7 +14567,7 @@ impl Actor {
 
     fn highest_qc_extends_locked(&self, highest: crate::sumeragi::consensus::QcHeaderRef) -> bool {
         if !self.block_known_for_lock(highest.subject_block_hash) {
-            return true;
+            return false;
         }
         qc_extends_locked_if_present(
             self.locked_qc,
@@ -23797,6 +23907,14 @@ impl Actor {
         if sent == 0 {
             return false;
         }
+        if height == local_height.saturating_add(1)
+            && matches!(
+                reason,
+                "frontier_stall_reset" | "frontier_stall_reset_fallback"
+            )
+        {
+            let _ = self.handoff_contiguous_frontier_to_passive_catchup(height, now, reason);
+        }
         if let Some(stalled_height) = missing_qc_stall_height.filter(|_| missing_qc_stall_mode) {
             self.mark_missing_qc_height_stall_range_pull_window(
                 stalled_height,
@@ -27777,6 +27895,15 @@ impl Actor {
             );
             return FrontierRecoveryAdvance::None;
         }
+        if self.frontier_slot_passive_catchup_owns_height(height) {
+            debug!(
+                height,
+                view,
+                reason,
+                "suppressing lower-priority frontier recovery while committed-anchor catch-up owns the contiguous frontier"
+            );
+            return FrontierRecoveryAdvance::None;
+        }
         if !self.frontier_slot_is_exact_height(height) {
             let _ = self.seed_frontier_slot_from_same_height_evidence(height, view, now, reason);
         }
@@ -28712,6 +28839,20 @@ impl Actor {
                     .phase_tracker
                     .current_view(frontier_height)
                     .unwrap_or(0);
+                if !self.frontier_quorum_timeout_owner_still_actionable(
+                    frontier_height,
+                    view,
+                    now,
+                    queue_depths,
+                ) {
+                    if self.frontier_recovery.as_ref().is_some_and(|state| {
+                        state.frontier_height == frontier_height
+                            && state.last_cause == "quorum_timeout"
+                    }) {
+                        self.frontier_recovery = None;
+                    }
+                    return false;
+                }
                 return matches!(
                     self.advance_frontier_recovery(
                         "quorum_timeout",
@@ -29091,6 +29232,18 @@ impl Actor {
             );
         }
         if !timed_out {
+            return false;
+        }
+        let contiguous_frontier_height = committed_height.saturating_add(1);
+        if height == contiguous_frontier_height
+            && self.frontier_slot_passive_catchup_owns_height(height)
+        {
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                "deferring idle rotation while committed-anchor catch-up passively owns the contiguous frontier"
+            );
             return false;
         }
         let contiguous_frontier_height_for_reset = committed_height.saturating_add(1);

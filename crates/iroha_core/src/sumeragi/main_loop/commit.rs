@@ -6446,9 +6446,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account =
-            Account::new(genesis_account_id.clone())
-                .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let temp_dir = TempDir::new().expect("create temp dir");
         let kura_cfg = KuraConfig {
@@ -6553,9 +6551,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account =
-            Account::new(genesis_account_id.clone())
-                .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
@@ -6656,9 +6652,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account =
-            Account::new(genesis_account_id.clone())
-                .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let temp_dir = TempDir::new().expect("create temp dir");
         let kura_cfg = KuraConfig {
@@ -6727,9 +6721,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account =
-            Account::new(genesis_account_id.clone())
-                .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
@@ -6787,9 +6779,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account =
-            Account::new(genesis_account_id.clone())
-                .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
@@ -6867,9 +6857,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account =
-            Account::new(genesis_account_id.clone())
-                .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
@@ -6969,9 +6957,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account =
-            Account::new(genesis_account_id.clone())
-                .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();

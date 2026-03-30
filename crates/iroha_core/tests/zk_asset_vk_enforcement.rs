@@ -84,10 +84,7 @@ fn prepare_state() -> (
                 .execute_instruction(
                     &mut stx,
                     &owner,
-                    Register::account(
-                        NewAccount::new(owner.clone()),
-                    )
-                    .into(),
+                    Register::account(NewAccount::new(owner.clone())).into(),
                 )
                 .expect("register account");
             executor

@@ -514,10 +514,8 @@ mod tests {
         let register_domain: InstructionBox =
             dm_isi::register::Register::domain(Domain::new(bench_domain.clone())).into();
 
-        let register_account: InstructionBox = dm_isi::register::Register::account(
-            Account::new(authority.clone()),
-        )
-        .into();
+        let register_account: InstructionBox =
+            dm_isi::register::Register::account(Account::new(authority.clone())).into();
 
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(

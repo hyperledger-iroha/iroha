@@ -4,7 +4,7 @@ use iroha_crypto::{Hash, PublicKey};
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AssetDefinitionId, DomainId, MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, AssetDefinitionId, DomainId, MockWorldStateView, WsvHost},
     syscalls,
 };
 mod common;
@@ -28,14 +28,14 @@ fn make_raw_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
-    let domain: DomainId = domain.parse().unwrap();
+fn account(domain: &str, public_key: &str) -> AccountId {
+    let _domain: DomainId = domain.parse().unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
-fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let account = ivm::mock_wsv::AccountId::from(account).to_string();
+fn make_account_tlv(account: &AccountId) -> Vec<u8> {
+    let account = account.to_string();
     make_tlv(PointerType::AccountId as u16, account.as_bytes())
 }
 
@@ -46,7 +46,7 @@ fn grant_revoke_permission_with_tlv() {
         "wonderland",
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
     );
-    let alice_literal = ivm::mock_wsv::AccountId::from(&alice_input).to_string();
+    let alice_literal = alice_input.clone().to_string();
     let alice = alice_input;
     let bob = account(
         "wonderland",
@@ -61,11 +61,7 @@ fn grant_revoke_permission_with_tlv() {
         (alice.clone(), asset.clone()),
         Numeric::from(50_u64),
     )]);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&bob.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, bob.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 

@@ -61,10 +61,7 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
     let instructions: [InstructionBox; 5] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .into(),
+        Register::account(NewAccount::new(account_id.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone()).with_name("zcoin".to_owned()),
         )

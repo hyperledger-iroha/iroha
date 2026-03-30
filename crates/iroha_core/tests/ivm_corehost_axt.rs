@@ -645,8 +645,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     );
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone());
     let genesis_domain = genesis_domain.build(&genesis_account);
-    let genesis_account_value = Account::new(genesis_account.clone())
-    .build(&genesis_account);
+    let genesis_account_value = Account::new(genesis_account.clone()).build(&genesis_account);
 
     let world = World::with([genesis_domain], [genesis_account_value], []);
 
@@ -793,8 +792,7 @@ fn axt_replay_ledger_persists_through_kura_replay() {
     let replay_world = {
         let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone());
         let genesis_domain = genesis_domain.build(&genesis_account);
-        let genesis_account_value = Account::new(genesis_account.clone())
-        .build(&genesis_account);
+        let genesis_account_value = Account::new(genesis_account.clone()).build(&genesis_account);
         World::with([genesis_domain], [genesis_account_value], [])
     };
     let replay_query = LiveQueryStore::start_test();

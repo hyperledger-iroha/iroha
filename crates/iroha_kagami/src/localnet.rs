@@ -94,7 +94,7 @@ pub struct AssetSpec {
     /// Human-readable display name for the asset definition.
     pub name: String,
     /// Account that should receive the minted supply.
-    pub mint_to: ScopedAccountId,
+    pub mint_to: AccountId,
     /// Quantity to mint for this asset definition.
     pub quantity: u64,
 }
@@ -591,9 +591,7 @@ impl<T: Write> RunArgs<T> for Args {
                 vec![AssetSpec {
                     id: localnet_sample_asset_literal(),
                     name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
-                    mint_to: ALICE_ID
-                        .clone()
-                        .to_account_id("wonderland".parse().expect("valid domain")),
+                    mint_to: ALICE_ID.clone(),
                     quantity: 100,
                 }]
             } else {
@@ -1856,12 +1854,8 @@ fn extend_genesis(
 
     for idx in 0..extra_accounts {
         let (pk, _) = generate_account_key_pair(seed_bytes, &format!("acct{idx}").into_bytes());
-        let domain_id: DomainId = "wonderland"
-            .parse()
-            .expect("default genesis must include wonderland domain");
-        builder = builder.append_instruction(Register::account(
-            Account::new(AccountId::new(pk.clone())),
-        ));
+        builder =
+            builder.append_instruction(Register::account(Account::new(AccountId::new(pk.clone()))));
     }
 
     for asset in assets {
@@ -2163,9 +2157,8 @@ fn append_localnet_npos_bootstrap(
         registrations.domains.insert(universal_domain.clone());
     }
     if !registrations.accounts.contains(gas_account_id) {
-        builder = builder.append_instruction(Register::account(
-            Account::new(gas_account_id.clone()),
-        ));
+        builder =
+            builder.append_instruction(Register::account(Account::new(gas_account_id.clone())));
         registrations.accounts.insert(gas_account_id.clone());
     }
 
@@ -2187,9 +2180,8 @@ fn append_localnet_npos_bootstrap(
     for peer in peers {
         let validator_id = AccountId::new(peer.public_key.clone());
         if !registrations.accounts.contains(&validator_id) {
-            builder = builder.append_instruction(Register::account(
-                Account::new(validator_id.clone()),
-            ));
+            builder =
+                builder.append_instruction(Register::account(Account::new(validator_id.clone())));
             registrations.accounts.insert(validator_id.clone());
         }
         builder = builder.append_instruction(Mint::asset_numeric(
@@ -2738,9 +2730,7 @@ mod tests {
             assets: vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
-                mint_to: ALICE_ID
-                    .clone()
-                    .to_account_id(CLIENT_ACCOUNT_DOMAIN.parse().expect("client domain")),
+                mint_to: ALICE_ID.clone(),
                 quantity: 100,
             }],
             block_time_ms: None,
@@ -3579,9 +3569,7 @@ mod tests {
             assets: vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
-                mint_to: ALICE_ID
-                    .clone()
-                    .to_account_id(CLIENT_ACCOUNT_DOMAIN.parse().expect("client domain")),
+                mint_to: ALICE_ID.clone(),
                 quantity: 100,
             }],
             block_time_ms: None,
@@ -5043,15 +5031,10 @@ mod tests {
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let genesis_account_id = AccountId::new(genesis_public_key.clone());
-        let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse().expect("ivm domain");
         let ivm_genesis_registrations = manifest
             .instructions()
             .filter_map(|instruction| instruction.as_any().downcast_ref::<Register<Account>>())
-            .filter(|register| {
-                register.object.id == genesis_account_id
-                    && register.object.linked_domains().len() == 1
-                    && register.object.linked_domains().contains(&ivm_domain)
-            })
+            .filter(|register| register.object.id == genesis_account_id)
             .count();
 
         assert_eq!(

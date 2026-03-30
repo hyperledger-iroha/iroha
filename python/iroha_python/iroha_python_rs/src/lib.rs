@@ -3856,7 +3856,7 @@ mod tests {
     }
 
     #[test]
-    fn register_account_instruction_classmethod_uses_default_linked_domain() {
+    fn register_account_instruction_classmethod_is_domainless() {
         ensure_python();
         Python::attach(|py| {
             let instruction_type = py.get_type::<Instruction>();
@@ -3876,18 +3876,12 @@ mod tests {
             let iroha_data_model::isi::RegisterBox::Account(register) = register_box else {
                 panic!("expected Register<Account> instruction");
             };
-            let default_domain: DomainId =
-                iroha_data_model::account::address::default_domain_name()
-                    .as_ref()
-                    .parse()
-                    .expect("default domain parses");
 
             assert_eq!(
                 register.object.id,
                 parse_account_id(&account_id).expect("account parses")
             );
-            assert_eq!(register.object.linked_domains().len(), 1);
-            assert!(register.object.linked_domains().contains(&default_domain));
+            assert_eq!(register.object.metadata, Metadata::default());
         });
     }
 
@@ -5993,14 +5987,8 @@ impl Instruction {
     ) -> PyResult<Self> {
         let account_id: AccountId = parse_account_id(account_id)?;
         ensure_ed25519_account(&account_id)?;
-        let home_domain: DomainId = iroha_data_model::account::address::default_domain_name()
-            .as_ref()
-            .parse()
-            .map_err(|err| {
-                PyValueError::new_err(format!("invalid default account domain label: {err}"))
-            })?;
         let metadata = py_to_metadata(py, metadata)?;
-        let mut new_account = Account::new(account_id).with_linked_domain(home_domain);
+        let mut new_account = Account::new(account_id);
         new_account.metadata = metadata;
         let instruction = Register::<Account>::account(new_account);
         Ok(Instruction::new(instruction.into()))

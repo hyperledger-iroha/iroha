@@ -468,9 +468,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             .iter()
             .skip(1)
             .cloned()
-            .map(|account_id| {
-                Register::account(Account::new(account_id.clone()))
-            })
+            .map(|account_id| Register::account(Account::new(account_id.clone())))
             .collect::<Vec<_>>();
         let mut target_height = network
             .peers()

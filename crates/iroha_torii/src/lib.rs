@@ -687,9 +687,9 @@ fn resolve_alias_via_service(
 fn parse_account_alias_label_with_catalog(
     alias_input: &str,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
-) -> Result<(String, iroha_data_model::account::rekey::AccountLabel), Error> {
+) -> Result<(String, iroha_data_model::account::rekey::AccountAlias), Error> {
     let alias_label =
-        iroha_data_model::account::rekey::AccountLabel::from_literal(alias_input, catalog)
+        iroha_data_model::account::rekey::AccountAlias::from_literal(alias_input, catalog)
             .map_err(|err| {
                 Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
@@ -26608,7 +26608,7 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
         ChainId, Registrable, ValidationFail,
-        account::{Account, AccountId, AccountLabel, OpaqueAccountId},
+        account::{Account, AccountAlias, AccountId, OpaqueAccountId},
         block::{BlockSignature, SignedBlock},
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         domain::{Domain, DomainId},
@@ -26898,7 +26898,7 @@ pub(crate) mod tests_runtime_handlers {
         account_id: &AccountId,
         alias: &str,
     ) {
-        let label = iroha_data_model::account::rekey::AccountLabel::from_literal(
+        let label = iroha_data_model::account::rekey::AccountAlias::from_literal(
             alias,
             &app.state.nexus_snapshot().dataspace_catalog,
         )
@@ -34382,7 +34382,7 @@ mod tests {
     };
     use iroha_data_model::{
         ChainId, Identifiable, Registrable, ValidationFail,
-        account::rekey::AccountLabel,
+        account::rekey::AccountAlias,
         account::{Account, AccountId, OpaqueAccountId},
         block::{BlockHeader, BlockSignature, SignedBlock},
         domain::{Domain, DomainId},
@@ -35106,7 +35106,7 @@ mod tests {
     fn grant_alias_resolve_permissions(
         app: &SharedAppState,
         account_id: &AccountId,
-        alias: &AccountLabel,
+        alias: &AccountAlias,
     ) {
         let height = next_block_height(app);
         let header = BlockHeader::new(
@@ -35147,9 +35147,12 @@ mod tests {
     async fn alias_resolve_accepts_unsigned_request() {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
-        let alias_label = AccountLabel::new(
-            "sbp".parse().expect("domain id"),
+        let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "sbp".parse::<Name>().expect("domain id"),
+            )),
+            DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
@@ -35363,7 +35366,7 @@ mod tests {
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::AliasResolveRequestDto {
-            alias: AccountLabel::domainless("missing".parse().expect("label"), DataSpaceId::GLOBAL)
+            alias: AccountAlias::domainless("missing".parse().expect("label"), DataSpaceId::GLOBAL)
                 .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
                 .expect("alias literal"),
         };
@@ -35384,9 +35387,12 @@ mod tests {
         let domain_id: DomainId = "sbp".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone())
-            .with_label(Some(AccountLabel::new(
-                "sbp".parse().expect("domain"),
+            .with_label(Some(AccountAlias::new(
                 "banking".parse().expect("label"),
+                Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                    "sbp".parse::<Name>().expect("domain"),
+                )),
+                DataSpaceId::GLOBAL,
             )))
             .build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with(
@@ -35409,9 +35415,12 @@ mod tests {
     #[tokio::test]
     async fn alias_lookup_by_account_lists_primary_and_secondary_aliases() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let primary_label = AccountLabel::new(
-            "sbp".parse().expect("domain id"),
+        let primary_label = AccountAlias::new(
             "banking".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "sbp".parse::<Name>().expect("domain id"),
+            )),
+            DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
@@ -35428,7 +35437,7 @@ mod tests {
             let mut block = app.state.block(header);
             let mut tx = block.transaction();
             let world = tx.world_mut_for_testing();
-            let secondary = AccountLabel::domainless(
+            let secondary = AccountAlias::domainless(
                 "public".parse().expect("label"),
                 iroha_data_model::nexus::DataSpaceId::GLOBAL,
             );
@@ -35488,9 +35497,12 @@ mod tests {
     #[tokio::test]
     async fn alias_lookup_by_account_filters_by_dataspace_and_domain() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let primary_label = AccountLabel::new(
-            "sbp".parse().expect("domain id"),
+        let primary_label = AccountAlias::new(
             "banking".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "sbp".parse::<Name>().expect("domain id"),
+            )),
+            DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
@@ -35548,19 +35560,21 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_scans_account_labels_when_alias_index_is_missing() {
         let alias = "banking@sbp.universal";
-        let alias_label = iroha_data_model::account::rekey::AccountLabel::new(
-            "sbp".parse::<DomainId>().expect("domain id"),
+        let alias_label = iroha_data_model::account::rekey::AccountAlias::new(
             "banking".parse::<Name>().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "sbp".parse::<Name>().expect("domain id"),
+            )),
+            iroha_data_model::nexus::DataSpaceId::GLOBAL,
         );
         let domain_id: DomainId = "sbp".parse().expect("domain id");
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let account_id = authority.clone().to_account_id(domain_id);
-        let account =
-            Account::new(account_id.account().clone())
-                .with_label(Some(alias_label))
-                .build(&authority);
+        let account_id = authority.clone();
+        let account = Account::new(account_id.account().clone())
+            .with_label(Some(alias_label))
+            .build(&authority);
         let world = World::with([domain], [authority_account, account], []);
         let app = mk_app_state_for_tests_with_world(world);
         let request = routing::AliasResolveRequestDto {
@@ -36545,8 +36559,7 @@ mod tests {
             .with_name("usd".to_owned())
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            Account::new(authority.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
@@ -36598,8 +36611,7 @@ mod tests {
             .with_name("usd".to_owned())
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            Account::new(authority.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
@@ -36650,8 +36662,7 @@ mod tests {
             .with_description(Some("Treasury settlement token".to_owned()))
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            Account::new(authority.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], [definition.clone()]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
@@ -36706,8 +36717,7 @@ mod tests {
             .with_name("usd".to_owned())
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            Account::new(authority.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(
@@ -36749,8 +36759,7 @@ mod tests {
             .with_name("usd".to_owned())
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            Account::new(authority.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(
@@ -36802,8 +36811,7 @@ mod tests {
             .with_name("usd".to_owned())
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            Account::new(authority.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(
@@ -36848,8 +36856,7 @@ mod tests {
             .with_name("usd".to_owned())
             .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            Account::new(authority.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], [long_definition, short_definition]);
         let app = mk_app_state_for_tests_with_world(world);
         bind_asset_alias_for_test(
@@ -38382,9 +38389,12 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_index_accepts_unsigned_request() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let alias_label = AccountLabel::new(
-            "sbp".parse().expect("domain id"),
+        let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "sbp".parse::<Name>().expect("domain id"),
+            )),
+            DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
@@ -38480,9 +38490,12 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_index_returns_on_chain_alias_record() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let alias_label = AccountLabel::new(
-            "sbp".parse().expect("domain id"),
+        let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "sbp".parse::<Name>().expect("domain id"),
+            )),
+            DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);

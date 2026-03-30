@@ -52,9 +52,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
         .execute_instruction(
             &mut stx,
             &owner,
-            InstructionBox::from(Register::account(
-                NewAccount::new(owner.clone()),
-            )),
+            InstructionBox::from(Register::account(NewAccount::new(owner.clone()))),
         )
         .expect("register owner account");
     let bundle = zk_testkit::add2inst_public_bundle(7, 2);

@@ -81,8 +81,7 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
     let wonderland: DomainId = "wonderland".parse()?;
 
     // Registering Mouse
-    let register_mouse =
-        Register::account(Account::new(mouse_id.clone()));
+    let register_mouse = Register::account(Account::new(mouse_id.clone()));
     test_client.submit_blocking(register_mouse)?;
 
     // Registering role
@@ -150,8 +149,7 @@ fn unregistered_role_removed_from_account() -> Result<()> {
     let wonderland: DomainId = "wonderland".parse()?;
 
     // Registering Mouse
-    let register_mouse =
-        Register::account(Account::new(mouse_id.clone()));
+    let register_mouse = Register::account(Account::new(mouse_id.clone()));
     test_client.submit_blocking(register_mouse)?;
 
     // Register root role
@@ -292,8 +290,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     let wonderland: DomainId = "wonderland".parse()?;
 
     // Registering Mouse
-    let register_mouse =
-        Register::account(Account::new(mouse_id.clone()));
+    let register_mouse = Register::account(Account::new(mouse_id.clone()));
     test_client.submit_blocking(register_mouse)?;
 
     // Registering role

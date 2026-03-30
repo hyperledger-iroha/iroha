@@ -1027,18 +1027,14 @@ mod prefetch_tests {
         let account_id = (*ALICE_ID).clone();
         let alias = AccountAlias::new(
             Name::from_str("gas").expect("alias name"),
-            Some(AccountAliasDomain::new(
-                domain_id.name().clone(),
-            )),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
             DataSpaceId::GLOBAL,
         );
         let world = World::with(
             [Domain::new(domain_id.clone()).build(&account_id)],
-            [
-                Account::new(account_id.clone())
-                    .with_label(Some(alias))
-                    .build(&account_id),
-            ],
+            [Account::new(account_id.clone())
+                .with_label(Some(alias))
+                .build(&account_id)],
             [],
         );
         let world_view = world.view();
@@ -1091,7 +1087,7 @@ mod prefetch_tests {
                 &state_view.nexus.dataspace_catalog,
                 "treasury@retail",
             ),
-            Some(account_id.account().clone()),
+            Some(account_id.clone()),
             "account selectors must resolve aliases in non-default dataspaces"
         );
     }
@@ -11212,8 +11208,7 @@ pub(crate) mod valid {
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let (alice_id, alice_keypair) = gen_account_in("wonderland");
             let domain_id: DomainId = "wonderland".parse().expect("valid domain");
-            let account =
-                Account::new(alice_id.clone()).build(&alice_id);
+            let account = Account::new(alice_id.clone()).build(&alice_id);
             let domain = Domain::new(domain_id).build(&alice_id);
             let world = World::with([domain], [account], []);
             let kura = Kura::blank_kura_for_testing();
@@ -15902,8 +15897,7 @@ mod tests {
         let genesis_domain =
             Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_correct_account_id);
         let genesis_wrong_account =
-            Account::new(genesis_wrong_account_id.clone())
-                .build(&genesis_wrong_account_id);
+            Account::new(genesis_wrong_account_id.clone()).build(&genesis_wrong_account_id);
         let world = World::with([genesis_domain], [genesis_wrong_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -15973,11 +15967,8 @@ mod tests {
 
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let wonderland_domain = Domain::new(wonderland_domain_id.clone()).build(&alice_account_id);
-        let genesis_account =
-            Account::new(genesis_account_id.clone())
-                .build(&genesis_account_id);
-        let alice_account = Account::new(alice_account_id.clone())
-            .build(&alice_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let alice_account = Account::new(alice_account_id.clone()).build(&alice_account_id);
 
         let world = World::with(
             [genesis_domain, wonderland_domain],
@@ -16028,9 +16019,7 @@ mod tests {
         let wonderland_domain_id: DomainId = "wonderland".parse().expect("valid domain id");
 
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account =
-            Account::new(genesis_account_id.clone())
-                .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
 
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Kura::blank_kura_for_testing();

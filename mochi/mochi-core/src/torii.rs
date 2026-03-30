@@ -3442,11 +3442,7 @@ fn account_event_summary(event: &AccountEvent) -> (String, String) {
     match event {
         AccountEvent::Created(account) => (
             "Account created".to_owned(),
-            account
-                .account
-                .id()
-                .to_account_id(account.domain.clone())
-                .to_string(),
+            account.account.id().to_string(),
         ),
         AccountEvent::Deleted(id) => ("Account deleted".to_owned(), id.to_string()),
         AccountEvent::Asset(asset_event) => asset_event_summary(asset_event),

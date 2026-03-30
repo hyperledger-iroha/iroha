@@ -6,7 +6,7 @@ use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, IVMHost, Memory, PointerType,
     mock_wsv::{
-        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
     },
     syscalls,
 };
@@ -36,16 +36,18 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
-    let domain: DomainId = domain.parse().unwrap();
+fn account(domain: &str, public_key: &str) -> AccountId {
+    let _domain: DomainId = domain.parse().unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
-fn canonical_account(account: ScopedAccountId) -> ScopedAccountId {
+fn canonical_account(account: AccountId) -> AccountId {
     let value = norito::json::to_value(&account).expect("serialize account");
     let literal = value.as_str().expect("account literal");
-    ScopedAccountId::parse_encoded(literal).expect("canonical I105 account id must parse")
+    AccountId::parse_encoded(literal)
+        .expect("canonical I105 account id must parse")
+        .into_account_id()
 }
 
 fn execute_json_instruction(vm: &mut IVM, env: norito::json::Value, offset: u64, label: &str) {
@@ -111,11 +113,7 @@ fn zk_register_shield_permissions_and_events() {
     wsv.grant_permission(&alice, PermissionToken::Shield(ad.clone()));
     wsv.grant_permission(&alice, PermissionToken::Unshield(ad.clone()));
 
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -196,11 +194,7 @@ fn unshield_requires_verify_even_with_permission() {
     assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
     // Grant permissions including Unshield
     wsv.grant_permission(&alice, PermissionToken::Unshield(ad.clone()));
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -285,11 +279,7 @@ fn zk_transfer_requires_matching_vk_reference() {
         }
     ));
 
-    let mut host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let mut host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
 
     let proof_ref = iroha_data_model::proof::ProofAttachment::new_ref(

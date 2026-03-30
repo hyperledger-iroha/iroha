@@ -2,12 +2,12 @@
 use std::collections::HashMap;
 
 use ivm::{
-    AccountId, IVM, MockWorldStateView, PermissionToken, ScopedAccountId,
+    AccountId, AccountId, IVM, MockWorldStateView, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
 
-fn fixture_account(domain: &str, hex_public_key: &str) -> ScopedAccountId {
-    ScopedAccountId::new(
+fn fixture_account(domain: &str, hex_public_key: &str) -> AccountId {
+    AccountId::new(
         domain.parse().expect("domain id"),
         hex_public_key.parse().expect("public key"),
     )

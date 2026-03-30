@@ -102,7 +102,7 @@ KeyExportBundle bundle =
 manager.importDeterministicKey(bundle, "passphrase".toCharArray());
 ```
 
-Hardware-backed Keystore aliases are **non-exportable**. For user-scoped accounts
+Hardware-backed Keystore aliases are **non-exportable**. For user-managed accounts
 that must recover on new devices, prefer software keys and explicitly require an
 exportable Ed25519 provider (Bouncy Castle) so the deterministic bundle contains
 the private key material:

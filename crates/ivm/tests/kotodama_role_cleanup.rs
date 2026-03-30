@@ -11,9 +11,9 @@ fn compile(src: &str) -> Vec<u8> {
     c.compile_source(src).expect("compile")
 }
 
-fn caller_account() -> ivm::mock_wsv::ScopedAccountId {
-    ivm::mock_wsv::ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+fn caller_account() -> ivm::mock_wsv::AccountId {
+    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
@@ -22,7 +22,7 @@ fn caller_account() -> ivm::mock_wsv::ScopedAccountId {
 
 #[test]
 fn kotodama_revoke_role_denies_mint() {
-    let caller: ivm::mock_wsv::ScopedAccountId = caller_account();
+    let caller: ivm::mock_wsv::AccountId = caller_account();
 
     // VM + host with bootstrap permissions
     let mut wsv = MockWorldStateView::new();
@@ -30,11 +30,7 @@ fn kotodama_revoke_role_denies_mint() {
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&caller.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -71,17 +67,13 @@ fn kotodama_revoke_role_denies_mint() {
 
 #[test]
 fn kotodama_delete_role_prevents_grant() {
-    let caller: ivm::mock_wsv::ScopedAccountId = caller_account();
+    let caller: ivm::mock_wsv::AccountId = caller_account();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&caller.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -115,17 +107,13 @@ fn kotodama_delete_role_prevents_grant() {
 
 #[test]
 fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
-    let caller: ivm::mock_wsv::ScopedAccountId = caller_account();
+    let caller: ivm::mock_wsv::AccountId = caller_account();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&caller.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -169,17 +157,13 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
 
 #[test]
 fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
-    let caller: ivm::mock_wsv::ScopedAccountId = caller_account();
+    let caller: ivm::mock_wsv::AccountId = caller_account();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&caller.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 

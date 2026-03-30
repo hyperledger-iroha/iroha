@@ -85,7 +85,7 @@ impl ExplorerAggregates {
             let account_id = account.id().clone();
             agg.account_counters.entry(account_id.clone()).or_default();
             let account_domains = agg.account_domains.entry(account_id).or_default();
-            for domain_id in world.domains_for_subject(account.id()) {
+            for domain_id in world.alias_domains_for_account(account.id()) {
                 account_domains.insert(domain_id.clone());
                 let entry = agg.domain_counters.entry(domain_id).or_default();
                 entry.accounts = entry.accounts.saturating_add(1);

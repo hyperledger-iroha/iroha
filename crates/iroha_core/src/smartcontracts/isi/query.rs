@@ -4091,8 +4091,7 @@ mod tests {
     fn world_with_test_domains() -> World {
         let domain_id = "wonderland".parse().expect("Valid");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
-        let account = Account::new(ALICE_ID.clone())
-            .build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -4411,8 +4410,8 @@ mod tests {
         fn make_world() -> (World, AssetDefinitionId, AssetId) {
             let domain =
                 iroha_data_model::domain::Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-            let account = iroha_data_model::account::Account::new(ALICE_ID.clone())
-            .build(&ALICE_ID);
+            let account =
+                iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&ALICE_ID);
             let ad_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
                 "w".parse().unwrap(),
                 "rose".parse().unwrap(),
@@ -4526,8 +4525,7 @@ mod tests {
 
         fn make_world() -> World {
             let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-            let account =
-                Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
             let n1 = Nft::new("n1$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
             let n2 = Nft::new("n2$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
             World::with_assets([domain], [account], [], [], [n1, n2])
@@ -4631,8 +4629,7 @@ mod tests {
 
         fn make_world() -> World {
             let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-            let alice =
-                Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+            let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
             let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
             World::with([domain], [alice, bob], [])
         }
@@ -4911,8 +4908,7 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let n1 = Nft::new("n1$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let n2 = Nft::new("n2$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let world = World::with_assets([domain], [account], [], [], [n1.clone(), n2.clone()]);
@@ -4978,8 +4974,7 @@ mod tests {
 
         // Minimal world with ALICE
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -5525,8 +5520,7 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -5614,8 +5608,7 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
 
         let kura = Kura::blank_kura_for_testing();
@@ -6355,8 +6348,7 @@ mod tests {
         };
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -6416,8 +6408,7 @@ mod tests {
         };
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let nft1 = Nft::new("n1$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let nft2 = Nft::new("n2$w".parse().unwrap(), Metadata::default()).build(&ALICE_ID);
         let world = World::with_assets([domain], [account], [], [], [nft1.clone(), nft2.clone()]);
@@ -6546,8 +6537,7 @@ mod tests {
         };
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut world = World::with([domain], [account], []);
         // Add 2 time triggers
         {
@@ -6623,8 +6613,7 @@ mod tests {
         use iroha_futures::supervisor::ShutdownSignal;
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -6889,8 +6878,7 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut ad1 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "rose".parse().unwrap(),
@@ -6990,8 +6978,7 @@ mod tests {
 
         // Build three asset definitions with rank metadata: 0,1,2
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut ad0 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "a0".parse().unwrap(),
@@ -7093,8 +7080,7 @@ mod tests {
 
         // Build three asset definitions with rank metadata: 0,1,2
         let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
-        let account =
-            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let mut ad0 = AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
             "w".parse().unwrap(),
             "a0".parse().unwrap(),

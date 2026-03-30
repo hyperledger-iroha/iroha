@@ -16,7 +16,7 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,
-    account::{AccountAddress, AccountId, rekey::AccountLabel},
+    account::{AccountAddress, AccountId, rekey::AccountAlias},
     block::BlockHeader,
     domain::DomainId,
     metadata::Metadata,
@@ -39,7 +39,7 @@ mod fixtures;
 
 fn seed_account_alias_lease(world: &mut World, owner: &AccountId, literal: &str) {
     let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
-    let alias = AccountLabel::from_literal(literal, &catalog).expect("valid canonical alias");
+    let alias = AccountAlias::from_literal(literal, &catalog).expect("valid canonical alias");
     let selector = iroha_core::sns::selector_for_account_alias(&alias, &catalog).expect("selector");
     let address = AccountAddress::from_account_id(owner).expect("account address");
     let record = NameRecordV1::new(
@@ -71,8 +71,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let authority_account =
-        Account::new(authority_id.clone()).build(&authority_id);
+    let authority_account = Account::new(authority_id.clone()).build(&authority_id);
     let mut world = World::with([domain], [authority_account], []);
     seed_account_alias_lease(&mut world, &authority_id, "p2p-user@universal");
     fixtures::seed_peer(&mut world, local_peer_id.clone());
@@ -250,8 +249,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let authority_account =
-        Account::new(authority_id.clone()).build(&authority_id);
+    let authority_account = Account::new(authority_id.clone()).build(&authority_id);
     let mut world = World::with([domain], [authority_account], []);
     seed_account_alias_lease(&mut world, &authority_id, "multisig-company@universal");
     fixtures::seed_peer(&mut world, local_peer_id.clone());

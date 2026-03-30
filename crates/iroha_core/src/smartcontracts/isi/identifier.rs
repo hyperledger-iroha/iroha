@@ -693,8 +693,6 @@ pub mod isi {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use iroha_crypto::{
         BfvParameters, Hash, KeyPair, RamLfeBackend, RamLfeVerificationMode, Signature,
         SignatureOf, bfv_programmed_policy_commitment_with_program,
@@ -756,23 +754,14 @@ mod tests {
             label: None,
             uaid: Some(uaid),
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::from([domain_id.clone()]),
         };
         let (account_id, account_value) = account.into_key_value();
-        let subject = account_id.subject_id();
+        let _ = domain_id;
         state
             .world
             .accounts
             .insert(account_id.clone(), account_value);
         state.world.uaid_accounts.insert(uaid, account_id.clone());
-        state
-            .world
-            .account_subject_domains
-            .insert(subject.clone(), BTreeSet::from([domain_id.clone()]));
-        state
-            .world
-            .domain_account_subjects
-            .insert(domain_id.clone(), BTreeSet::from([subject]));
     }
 
     fn claim_receipt(
@@ -1007,22 +996,12 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::from([domain_id.clone()]),
         };
         let (account_id, account_value) = account.into_key_value();
-        let subject = account_id.subject_id();
         state
             .world
             .accounts
             .insert(account_id.clone(), account_value);
-        state
-            .world
-            .account_subject_domains
-            .insert(subject.clone(), BTreeSet::from([domain_id.clone()]));
-        state
-            .world
-            .domain_account_subjects
-            .insert(domain_id, BTreeSet::from([subject]));
 
         let resolver = KeyPair::random();
         let policy_id: IdentifierPolicyId = "email#retail".parse().expect("policy id");

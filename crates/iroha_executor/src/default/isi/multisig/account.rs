@@ -46,10 +46,7 @@ impl VisitExecute for MultisigRegister {
         metadata.insert(home_domain_key(), Json::new(home_domain.clone()));
 
         let register_account = if let Some(home_domain) = home_domain.clone() {
-            Register::account(
-                Account::new(multisig_account_id.clone())
-                    .with_metadata(metadata),
-            )
+            Register::account(Account::new(multisig_account_id.clone()).with_metadata(metadata))
         } else {
             Register::account(Account::new(multisig_account_id.clone()).with_metadata(metadata))
         };
@@ -165,9 +162,7 @@ fn ensure_signatory_account_exists<V: Execute + Visit + ?Sized>(
     let mut metadata = Metadata::default();
     metadata.insert(multisig_created_via_key(), Json::new("multisig"));
     let register_account = if let Some(home_domain) = home_domain.cloned() {
-        Register::account(
-            Account::new(signatory.clone()).with_metadata(metadata),
-        )
+        Register::account(Account::new(signatory.clone()).with_metadata(metadata))
     } else {
         Register::account(Account::new(signatory.clone()).with_metadata(metadata))
     };

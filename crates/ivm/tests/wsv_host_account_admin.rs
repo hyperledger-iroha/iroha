@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -29,13 +29,13 @@ fn make_domain_tlv(name: &str) -> Vec<u8> {
     make_tlv(PointerType::DomainId, name.as_bytes())
 }
 
-fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let account = ivm::mock_wsv::AccountId::from(account).to_string();
+fn make_account_tlv(account: &AccountId) -> Vec<u8> {
+    let account = account.to_string();
     make_tlv(PointerType::AccountId, account.as_bytes())
 }
 
-fn make_scoped_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let payload = to_bytes(account).expect("encode scoped account into Norito");
+fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
+    let payload = to_bytes(account).expect("encode account into Norito");
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
     out.push(1);
@@ -46,10 +46,9 @@ fn make_scoped_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
     out
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
-    let domain: DomainId = domain.parse().unwrap();
+fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().unwrap();
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn load_and_run(vm: &mut IVM, program: &[u8]) -> Result<(), ivm::VMError> {
@@ -67,11 +66,7 @@ fn add_signatory_syscall_updates_account() {
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(256);
     vm.set_host(host);
 
@@ -103,11 +98,7 @@ fn remove_signatory_syscall_updates_account() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     assert!(wsv.add_signatory(&alice, &alice, signatory_key.to_string()));
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(256);
     vm.set_host(host);
 
@@ -137,11 +128,7 @@ fn set_account_quorum_syscall_updates_account() {
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(256);
     vm.set_host(host);
 
@@ -172,11 +159,7 @@ fn set_account_detail_with_permissions() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
 
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(256);
     vm.set_host(host);
 
@@ -187,7 +170,7 @@ fn set_account_detail_with_permissions() {
     let reg_domain = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
     load_and_run(&mut vm, &reg_domain).expect("register domain");
 
-    let reg_acct = make_scoped_account_tlv(&bob);
+    let reg_acct = make_account_norito_tlv(&bob);
     vm.memory
         .preload_input(0, &reg_acct)
         .expect("preload input");
@@ -199,10 +182,8 @@ fn set_account_detail_with_permissions() {
     {
         let host_any = vm.host_mut_any().unwrap();
         let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
-        host.wsv.grant_permission(
-            &alice,
-            PermissionToken::SetAccountDetail(ivm::mock_wsv::AccountId::from(&bob)),
-        );
+        host.wsv
+            .grant_permission(&alice, PermissionToken::SetAccountDetail(bob.clone()));
     }
 
     // Set account detail with JSON value (whitespace should be stripped)

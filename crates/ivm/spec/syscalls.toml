@@ -17,26 +17,8 @@ ret = "u64=0"
 gas = "G_debug"
 
 [[syscall]]
-number = "0x10"
-args = "r10=&DomainId"
-ret = "u64=0"
-gas = "G_reg_domain"
-
-[[syscall]]
-number = "0x11"
-args = "r10=&DomainId"
-ret = "u64=0"
-gas = "G_unreg_domain"
-
-[[syscall]]
-number = "0x12"
-args = "r10=&DomainId, r11=&AccountId"
-ret = "u64=0"
-gas = "G_xfer_domain"
-
-[[syscall]]
 number = "0x13"
-args = "r10=&ScopedAccountId"
+args = "r10=&AccountId"
 ret = "u64=0"
 gas = "G_reg_acct"
 

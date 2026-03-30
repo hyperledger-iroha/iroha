@@ -76,12 +76,9 @@ fn build_faucet_test_context_with_selector(
     let other_user_id = AccountId::new(other_user_kp.public_key().clone());
 
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let authority_account =
-        Account::new(authority_id.clone()).build(&authority_id);
-    let user_account =
-        Account::new(user_id.clone()).build(&authority_id);
-    let other_user_account =
-        Account::new(other_user_id.clone()).build(&authority_id);
+    let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+    let user_account = Account::new(user_id.clone()).build(&authority_id);
+    let other_user_account = Account::new(other_user_id.clone()).build(&authority_id);
     let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
         .with_name("XOR".to_owned())
         .build(&authority_id);

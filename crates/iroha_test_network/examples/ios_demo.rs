@@ -308,8 +308,7 @@ fn main() -> Result<()> {
         let account_id = account_id_from_parts(&public_key)?;
 
         if known_accounts.insert(account_id.clone()) {
-            let mut account_builder =
-                Account::new(account_id.clone());
+            let mut account_builder = Account::new(account_id.clone());
             if let Some(alias) = &name {
                 let mut metadata = Metadata::default();
                 let alias_key = Name::from_str("alias").expect("static alias key");

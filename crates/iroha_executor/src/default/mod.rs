@@ -932,48 +932,17 @@ pub mod domain {
 /// Permission-checked visitors for account management instructions.
 pub mod account {
     use iroha_executor_data_model::permission::account::{
-        CanModifyAccountMetadata, CanRegisterAccount, CanUnregisterAccount,
+        CanModifyAccountMetadata, CanUnregisterAccount,
     };
 
     use super::*;
     use crate::permission::{account::is_account_owner, revoke_permissions};
 
-    /// Registers an account when the caller governs every linked domain or holds the
-    /// corresponding registration permissions.
+    /// Registers a canonical account.
     pub fn visit_register_account<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<Account>,
     ) {
-        if isi.object().linked_domains().is_empty() {
-            // TODO: Replace this temporary self/unrestricted bridge with explicit domainless
-            // account registration permissions once dataspace-aware alias permissions land.
-            execute!(executor, isi);
-        }
-
-        for domain_id in isi.object().linked_domains() {
-            match crate::permission::domain::is_domain_owner(
-                domain_id,
-                &executor.context().authority,
-                executor.host(),
-            ) {
-                Err(err) => deny!(executor, err),
-                Ok(true) => continue,
-                Ok(false) => {}
-            }
-
-            let can_register_account_in_domain = CanRegisterAccount {
-                domain: domain_id.clone(),
-            };
-            if !can_register_account_in_domain
-                .is_owned_by(&executor.context().authority, executor.host())
-            {
-                deny!(
-                    executor,
-                    "Can't register account in a domain owned by another account"
-                );
-            }
-        }
-
         execute!(executor, isi);
     }
 

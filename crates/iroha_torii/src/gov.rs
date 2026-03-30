@@ -2835,7 +2835,7 @@ mod tests {
     }
 
     fn bind_account_alias_for_test(state: &Arc<State>, account_id: &AccountId, alias: &str) {
-        let label = iroha_data_model::account::rekey::AccountLabel::from_literal(
+        let label = iroha_data_model::account::rekey::AccountAlias::from_literal(
             alias,
             &state.nexus_snapshot().dataspace_catalog,
         )
@@ -2881,10 +2881,8 @@ mod tests {
         let escrow: AccountId =
             iroha_config::parameters::defaults::governance::bond_escrow_account_id();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let authority_account =
-            Account::new(authority.clone()).build(&authority);
-        let escrow_account =
-            Account::new(escrow.clone()).build(&escrow);
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let escrow_account = Account::new(escrow.clone()).build(&escrow);
         let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("vote").expect("asset definition name"),

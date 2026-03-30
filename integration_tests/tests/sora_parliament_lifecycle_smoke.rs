@@ -1023,9 +1023,7 @@ async fn setup_hostile_fixture(
             attackers
                 .iter()
                 .chain(honest.iter())
-                .map(|(account_id, _)| {
-                    Register::account(Account::new(account_id.clone()))
-                }),
+                .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
         )
         .wrap_err("register hostile-fixture accounts")?;
     for (account_id, _) in attackers.iter().chain(honest.iter()) {
@@ -1251,9 +1249,11 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .wrap_err("grant governance proposal/enact permissions to alice")?;
 
     alice
-        .submit_all(citizens.iter().map(|(account_id, _)| {
-            Register::account(Account::new(account_id.clone()))
-        }))
+        .submit_all(
+            citizens
+                .iter()
+                .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
+        )
         .wrap_err("register citizen accounts")?;
     for (account_id, _) in &citizens {
         wait_for_account_registration(&alice, account_id, Duration::from_secs(180))

@@ -3117,7 +3117,7 @@ fn runtime_durable_get_or_insert_default_state_map() {
     use ivm::{
         IVM, PointerType,
         kotodama::compiler::Compiler,
-        mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
+        mock_wsv::{AccountId, MockWorldStateView, WsvHost},
         validate_tlv_bytes,
     };
     let src = r#"
@@ -3137,14 +3137,13 @@ fn runtime_durable_get_or_insert_default_state_map() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&code).expect("load");
     let wsv = MockWorldStateView::new();
-    let alice: ScopedAccountId = ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    let alice: AccountId = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
     );
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     vm.set_host(host);
     // Run hajimari
     vm.run().expect("exec");

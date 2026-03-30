@@ -225,8 +225,7 @@ fn append_bootstrap_authority_overlay(
         dataspace: DataSpaceId::GLOBAL,
     }
     .into();
-    let authority_account = Account::new(authority.account_id.clone())
-        ;
+    let authority_account = Account::new(authority.account_id.clone());
     let authority_fee_asset =
         AssetId::new(authority.fee_asset_id.clone(), authority.account_id.clone());
 

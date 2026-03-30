@@ -1,10 +1,7 @@
 //! This module contains [`Domain`] structure and related implementations and trait implementations.
 
 use eyre::Result;
-use iroha_data_model::{
-    account::rekey::AccountRekeyRecord, events::data::prelude::AccountCreated, prelude::*,
-    query::error::FindError,
-};
+use iroha_data_model::{account::rekey::AccountRekeyRecord, prelude::*, query::error::FindError};
 use iroha_telemetry::metrics;
 
 use super::super::isi::prelude::*;
@@ -320,7 +317,7 @@ pub mod isi {
 
     pub(crate) fn ensure_offline_escrow_account(
         asset_definition: &AssetDefinition,
-        authority: &AccountId,
+        _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         if !asset_definition_offline_enabled(asset_definition.metadata())? {
@@ -370,116 +367,69 @@ pub mod isi {
         let (account_id, account_value) = account.clone().into_key_value();
         state_transaction
             .world
-            .insert_account_with_links(account_id.clone(), account_value);
-        if let Some(linked_domain) = state_transaction
-            .world
-            .account_subject_domains
-            .get(authority)
-            .and_then(|domains| domains.iter().next().cloned())
-        {
-            state_transaction
-                .world
-                .link_account_subject_domain(&account_id, &linked_domain);
-            state_transaction
-                .world
-                .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                    AccountCreated::new(account, linked_domain),
-                ))));
-        }
+            .accounts
+            .insert(account_id.clone(), account_value);
 
         Ok(())
     }
 
-    fn account_subject_matches(
-        left: &AccountId,
-        right: &AccountId,
-        subject_domains: &BTreeSet<DomainId>,
-    ) -> bool {
-        if left == right {
-            return true;
-        }
-        if left.subject_id() != right.subject_id() {
-            return false;
-        }
-
-        // Fallback for historical/normalized literals is only safe when the subject
-        // is scoped to a single domain.
-        subject_domains.len() == 1
+    fn account_subject_matches(left: &AccountId, right: &AccountId) -> bool {
+        left.subject_id() == right.subject_id()
     }
 
-    fn is_permission_account_associated(
-        permission: &Permission,
-        account_id: &AccountId,
-        subject_domains: &BTreeSet<DomainId>,
-    ) -> bool {
+    fn is_permission_account_associated(permission: &Permission, account_id: &AccountId) -> bool {
         if let Ok(permission) =
             iroha_executor_data_model::permission::nexus::CanUseFeeSponsor::try_from(permission)
         {
-            return account_subject_matches(&permission.sponsor, account_id, subject_domains);
+            return account_subject_matches(&permission.sponsor, account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanMintAsset::try_from(permission)
         {
-            return account_subject_matches(
-                permission.asset.account(),
-                account_id,
-                subject_domains,
-            );
+            return account_subject_matches(permission.asset.account(), account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanBurnAsset::try_from(permission)
         {
-            return account_subject_matches(
-                permission.asset.account(),
-                account_id,
-                subject_domains,
-            );
+            return account_subject_matches(permission.asset.account(), account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanTransferAsset::try_from(permission)
         {
-            return account_subject_matches(
-                permission.asset.account(),
-                account_id,
-                subject_domains,
-            );
+            return account_subject_matches(permission.asset.account(), account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::asset::CanModifyAssetMetadata::try_from(
                 permission,
             )
         {
-            return account_subject_matches(
-                permission.asset.account(),
-                account_id,
-                subject_domains,
-            );
+            return account_subject_matches(permission.asset.account(), account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::account::CanUnregisterAccount::try_from(
                 permission,
             )
         {
-            return account_subject_matches(&permission.account, account_id, subject_domains);
+            return account_subject_matches(&permission.account, account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::account::CanModifyAccountMetadata::try_from(
                 permission,
             )
         {
-            return account_subject_matches(&permission.account, account_id, subject_domains);
+            return account_subject_matches(&permission.account, account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::trigger::CanRegisterTrigger::try_from(permission)
         {
-            return account_subject_matches(&permission.authority, account_id, subject_domains);
+            return account_subject_matches(&permission.authority, account_id);
         }
         if let Ok(permission) =
             iroha_executor_data_model::permission::governance::CanRecordCitizenService::try_from(
                 permission,
             )
         {
-            return account_subject_matches(&permission.owner, account_id, subject_domains);
+            return account_subject_matches(&permission.owner, account_id);
         }
 
         false
@@ -489,14 +439,6 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         account_id: &AccountId,
     ) {
-        let subject_domains = state_transaction
-            .world
-            .account_subject_domains
-            .view()
-            .get(&account_id.subject_id())
-            .cloned()
-            .unwrap_or_default();
-
         let account_ids: Vec<AccountId> = state_transaction
             .world
             .account_permissions
@@ -510,9 +452,9 @@ pub mod isi {
                 .account_permissions
                 .get(&holder)
                 .is_some_and(|permissions| {
-                    permissions.iter().any(|permission| {
-                        is_permission_account_associated(permission, account_id, &subject_domains)
-                    })
+                    permissions
+                        .iter()
+                        .any(|permission| is_permission_account_associated(permission, account_id))
                 });
             if !should_remove {
                 continue;
@@ -521,9 +463,8 @@ pub mod isi {
             let remove_entry = if let Some(permissions) =
                 state_transaction.world.account_permissions.get_mut(&holder)
             {
-                permissions.retain(|permission| {
-                    !is_permission_account_associated(permission, account_id, &subject_domains)
-                });
+                permissions
+                    .retain(|permission| !is_permission_account_associated(permission, account_id));
                 permissions.is_empty()
             } else {
                 false
@@ -552,9 +493,8 @@ pub mod isi {
                 .roles
                 .get(&role_id)
                 .is_some_and(|role| {
-                    role.permissions().any(|permission| {
-                        is_permission_account_associated(permission, account_id, &subject_domains)
-                    })
+                    role.permissions()
+                        .any(|permission| is_permission_account_associated(permission, account_id))
                 });
             if !should_remove {
                 continue;
@@ -563,9 +503,8 @@ pub mod isi {
             let impacted_accounts = state_transaction.accounts_with_role(&role_id);
 
             if let Some(role) = state_transaction.world.roles.get_mut(&role_id) {
-                role.permissions.retain(|permission| {
-                    !is_permission_account_associated(permission, account_id, &subject_domains)
-                });
+                role.permissions
+                    .retain(|permission| !is_permission_account_associated(permission, account_id));
                 role.permission_epochs
                     .retain(|permission, _| role.permissions.contains(permission));
             }
@@ -847,7 +786,8 @@ pub mod isi {
             }
             state_transaction
                 .world
-                .insert_account_with_links(account_id.clone(), account_value);
+                .accounts
+                .insert(account_id.clone(), account_value);
 
             if let Some(uaid) = account.uaid() {
                 state_transaction
@@ -863,9 +803,7 @@ pub mod isi {
                     .insert_account_alias_binding(label.clone(), account_id.clone())
                     .is_some()
                 {
-                    state_transaction
-                        .world
-                        .remove_account_with_links(&account_id);
+                    state_transaction.world.accounts.remove(account_id.clone());
                     if let Some(uaid) = account.uaid() {
                         state_transaction.world.uaid_accounts.remove(*uaid);
                         state_transaction.rebuild_space_directory_bindings(*uaid);
@@ -884,9 +822,7 @@ pub mod isi {
                         .insert(*opaque, *uaid)
                         .is_some()
                     {
-                        state_transaction
-                            .world
-                            .remove_account_with_links(&account_id);
+                        state_transaction.world.accounts.remove(account_id.clone());
                         state_transaction.world.uaid_accounts.remove(*uaid);
                         if let Some(label) = account.label() {
                             state_transaction.world.remove_account_alias_binding(label);
@@ -909,9 +845,7 @@ pub mod isi {
                     .insert(record.label.clone(), record)
                     .is_some()
             {
-                state_transaction
-                    .world
-                    .remove_account_with_links(&account_id);
+                state_transaction.world.accounts.remove(account_id.clone());
                 if let Some(uaid) = account.uaid() {
                     state_transaction.world.uaid_accounts.remove(*uaid);
                     state_transaction.rebuild_space_directory_bindings(*uaid);
@@ -1817,9 +1751,7 @@ pub mod isi {
                     .emit_events(Some(DomainEvent::Nft(NftEvent::Deleted(nft_id))));
             }
 
-            let removed = state_transaction
-                .world
-                .remove_account_with_links(&account_id);
+            let removed = state_transaction.world.accounts.remove(account_id.clone());
             let Some(account_value) = removed else {
                 return Err(FindError::Account(account_id).into());
             };
@@ -2976,7 +2908,7 @@ pub mod query {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, sync::Arc};
+    use std::sync::Arc;
 
     use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
     use iroha_data_model::{
@@ -3050,34 +2982,18 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: std::collections::BTreeSet::from([domain_id.clone()]),
         };
+        let _ = domain_id;
         let (account_id, account_value) = account.into_key_value();
-        let subject = account_id.subject_id();
-        let domain = domain_id.clone();
         state.world.accounts.insert(account_id, account_value);
-        let mut domains = state
-            .world
-            .account_subject_domains
-            .view()
-            .get(&subject)
-            .cloned()
-            .unwrap_or_default();
-        domains.insert(domain.clone());
-        state
-            .world
-            .account_subject_domains
-            .insert(subject.clone(), domains);
+    }
 
-        let mut subjects = state
-            .world
-            .domain_account_subjects
-            .view()
-            .get(&domain)
-            .cloned()
-            .unwrap_or_default();
-        subjects.insert(subject);
-        state.world.domain_account_subjects.insert(domain, subjects);
+    fn alias_domain(domain: &DomainId) -> AccountAliasDomain {
+        AccountAliasDomain::new(domain.name().clone())
+    }
+
+    fn alias_in_domain(domain: &DomainId, label: Name) -> AccountAlias {
+        AccountAlias::new(label, Some(alias_domain(domain)), DataSpaceId::GLOBAL)
     }
 
     fn seed_account_alias_lease(
@@ -3113,7 +3029,7 @@ mod tests {
         tx.world.add_account_permission(
             authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(domain.clone().into()),
+                scope: AccountAliasPermissionScope::Domain(alias_domain(domain)),
             }),
         );
         tx.world.add_account_permission(
@@ -3158,12 +3074,10 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let account_label =
-            AccountAlias::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
+        let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = Account::new(account_id.clone())
-            .with_label(Some(account_label.clone()));
+        let new_account = Account::new(account_id.clone()).with_label(Some(account_label.clone()));
 
         // Execute register with label.
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -3186,8 +3100,7 @@ mod tests {
         // Duplicate label should be rejected.
         let second_keypair = KeyPair::random();
         let second_id = AccountId::new(second_keypair.public_key().clone());
-        let dup_account = Account::new(second_id.clone())
-            .with_label(Some(account_label.clone()));
+        let dup_account = Account::new(second_id.clone()).with_label(Some(account_label.clone()));
         let err = Register::account(dup_account).execute(&authority, &mut tx);
         assert!(err.is_err(), "duplicate label must raise error");
 
@@ -3210,7 +3123,7 @@ mod tests {
     }
 
     #[test]
-    fn register_domainless_account_keeps_empty_domain_links_and_indexes_alias() {
+    fn register_domainless_account_indexes_alias() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
@@ -3228,20 +3141,10 @@ mod tests {
             .expect("register domainless account");
 
         let account = tx.world.account(&account_id).expect("account should exist");
-        assert!(account.linked_domains.is_empty());
         assert_eq!(account.label(), Some(&account_label));
         assert_eq!(
             tx.world.account_aliases.get(&account_label),
             Some(&account_id)
-        );
-        assert_eq!(
-            tx.world
-                .account_subject_domains
-                .view()
-                .get(&account_id)
-                .cloned()
-                .unwrap_or_default(),
-            BTreeSet::new()
         );
     }
 
@@ -3253,18 +3156,16 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
 
-        let label = AccountAlias::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
+        let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
-        let err = Register::account(
-            Account::new(account_id.clone()).with_label(Some(label)),
-        )
-        .execute(&authority, &mut tx)
-        .expect_err("alias lease should be required");
+        let err = Register::account(Account::new(account_id.clone()).with_label(Some(label)))
+            .execute(&authority, &mut tx)
+            .expect_err("alias lease should be required");
 
         assert!(
             err.to_string().contains("active SNS lease"),
@@ -3272,48 +3173,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn register_account_with_multiple_linked_domains_materializes_all_links() {
-        let mut state = test_state();
-        let first_domain: DomainId = "first.world".parse().expect("domain id");
-        let second_domain: DomainId = "second.world".parse().expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &first_domain, &authority);
-        seed_domain(&mut state, &second_domain, &authority);
-
-        let account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let linked_domains = BTreeSet::from([first_domain.clone(), second_domain.clone()]);
-        let new_account =
-            NewAccount::new(account_id.clone());
-
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(new_account)
-            .execute(&authority, &mut tx)
-            .expect("register account with multiple linked domains");
-
-        let account = tx.world.account(&account_id).expect("account should exist");
-        assert_eq!(&account.linked_domains, &linked_domains);
-        assert_eq!(
-            tx.world.account_subject_domains.view().get(&account_id),
-            Some(&account.linked_domains)
-        );
-    }
-
-    #[test]
     fn set_account_label_relabels_existing_single_key_account() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let old_label = AccountAlias::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
-        let new_label = AccountAlias::new(domain_id.clone(), "treasury".parse::<Name>().unwrap());
+        let old_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
+        let new_label = alias_in_domain(&domain_id, "treasury".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = Account::new(account_id.clone())
-            .with_label(Some(old_label.clone()));
+        let new_account = Account::new(account_id.clone()).with_label(Some(old_label.clone()));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -3367,7 +3237,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
 
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let label = AccountAlias::new(domain_id.clone(), "treasury".parse::<Name>().unwrap());
+        let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -3401,7 +3271,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let label = AccountAlias::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
+        let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let stale_owner = AccountId::new(KeyPair::random().public_key().clone());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
@@ -3417,8 +3287,8 @@ mod tests {
             AccountRekeyRecord::new(label.clone(), stale_owner),
         );
         Register::account(Account::new(account_id.clone()))
-        .execute(&authority, &mut tx)
-        .expect("register account");
+            .execute(&authority, &mut tx)
+            .expect("register account");
         seed_account_alias_lease(&mut tx, &authority, &label);
 
         SetPrimaryAccountAlias {
@@ -3453,7 +3323,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
 
-        let alias = AccountAlias::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
+        let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -3491,14 +3361,14 @@ mod tests {
             .expect("multisig member");
         let policy = MultisigPolicy::new(2, vec![member_a, member_b]).expect("multisig policy");
         let account_id = AccountId::new_multisig(policy);
-        let account_label = AccountAlias::new(domain_id.clone(), "cbdc".parse::<Name>().unwrap());
+        let account_label = alias_in_domain(&domain_id, "cbdc".parse::<Name>().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(Account::new(account_id.clone()))
-        .execute(&authority, &mut tx)
-        .expect("register unlabeled multisig account");
+            .execute(&authority, &mut tx)
+            .expect("register unlabeled multisig account");
         seed_account_alias_lease(&mut tx, &authority, &account_label);
 
         SetPrimaryAccountAlias {
@@ -3546,7 +3416,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
 
-        let alias = AccountAlias::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
+        let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let first_keypair = KeyPair::random();
         let first_id = AccountId::new(first_keypair.public_key().clone());
         let second_keypair = KeyPair::random();
@@ -3637,7 +3507,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
 
-        let alias = AccountAlias::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
+        let alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let first_keypair = KeyPair::random();
         let first_id = AccountId::new(first_keypair.public_key().clone());
         let second_keypair = KeyPair::random();
@@ -3713,17 +3583,15 @@ mod tests {
             .expect("multisig member");
         let policy = MultisigPolicy::new(2, vec![member_a, member_b]).expect("multisig policy");
         let account_id = AccountId::new_multisig(policy);
-        let banking_label =
-            AccountAlias::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
-        let issuance_label =
-            AccountAlias::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
+        let banking_label = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
+        let issuance_label = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
         Register::account(Account::new(account_id.clone()))
-        .execute(&authority, &mut tx)
-        .expect("register unlabeled multisig account");
+            .execute(&authority, &mut tx)
+            .expect("register unlabeled multisig account");
         seed_account_alias_lease(&mut tx, &authority, &banking_label);
         seed_account_alias_lease(&mut tx, &authority, &issuance_label);
 
@@ -3796,8 +3664,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
 
-        let primary_label =
-            AccountAlias::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
+        let primary_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let bound_label =
             AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::GLOBAL);
         let keypair = KeyPair::random();
@@ -3809,12 +3676,9 @@ mod tests {
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         seed_account_alias_lease(&mut tx, &authority, &primary_label);
         seed_account_alias_lease(&mut tx, &authority, &bound_label);
-        Register::account(
-            Account::new(account_id.clone())
-                .with_label(Some(primary_label.clone())),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account with primary label");
+        Register::account(Account::new(account_id.clone()).with_label(Some(primary_label.clone())))
+            .execute(&authority, &mut tx)
+            .expect("register account with primary label");
         SetAccountAliasBinding {
             account: account_id.clone(),
             alias: Some(bound_label.clone()),
@@ -3848,12 +3712,10 @@ mod tests {
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
 
-        let primary_label =
-            AccountAlias::new(domain_id.clone(), "primary".parse::<Name>().unwrap());
+        let primary_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let root_alias =
             AccountAlias::domainless("public".parse::<Name>().unwrap(), DataSpaceId::GLOBAL);
-        let domain_alias =
-            AccountAlias::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
+        let domain_alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
 
@@ -3864,12 +3726,9 @@ mod tests {
         seed_account_alias_lease(&mut tx, &authority, &primary_label);
         seed_account_alias_lease(&mut tx, &authority, &root_alias);
         seed_account_alias_lease(&mut tx, &authority, &domain_alias);
-        Register::account(
-            Account::new(account_id.clone())
-                .with_label(Some(primary_label.clone())),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account with primary label");
+        Register::account(Account::new(account_id.clone()).with_label(Some(primary_label.clone())))
+            .execute(&authority, &mut tx)
+            .expect("register account with primary label");
         SetAccountAliasBinding {
             account: account_id.clone(),
             alias: Some(root_alias.clone()),
@@ -3928,7 +3787,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let alias = AccountAlias::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
+        let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let stale_owner = AccountId::new(KeyPair::random().public_key().clone());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
@@ -3944,8 +3803,8 @@ mod tests {
             AccountRekeyRecord::new(alias.clone(), stale_owner),
         );
         Register::account(Account::new(account_id.clone()))
-        .execute(&authority, &mut tx)
-        .expect("register account");
+            .execute(&authority, &mut tx)
+            .expect("register account");
         seed_account_alias_lease(&mut tx, &authority, &alias);
 
         SetAccountAliasBinding {
@@ -3981,7 +3840,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
 
-        let alias = AccountAlias::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
+        let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let permission: Permission = CanRegisterAccount {
@@ -3996,8 +3855,8 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("grant registrar permission");
         Register::account(Account::new(account_id.clone()))
-        .execute(&domain_owner, &mut tx)
-        .expect("register account");
+            .execute(&domain_owner, &mut tx)
+            .expect("register account");
         seed_account_alias_lease(&mut tx, &domain_owner, &alias);
 
         SetAccountAliasBinding {
@@ -4024,7 +3883,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
 
-        let alias = AccountAlias::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
+        let alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let permission = Permission::new(
@@ -4039,8 +3898,8 @@ mod tests {
             .execute(&domain_owner, &mut tx)
             .expect("grant global registrar permission");
         Register::account(Account::new(account_id.clone()))
-        .execute(&domain_owner, &mut tx)
-        .expect("register account");
+            .execute(&domain_owner, &mut tx)
+            .expect("register account");
         seed_account_alias_lease(&mut tx, &domain_owner, &alias);
 
         SetAccountAliasBinding {
@@ -4067,7 +3926,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &unauthorized, &domain_id);
 
-        let alias = AccountAlias::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
+        let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let first_keypair = KeyPair::random();
         let first_id = AccountId::new(first_keypair.public_key().clone());
         let second_keypair = KeyPair::random();
@@ -4120,7 +3979,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
 
-        let alias = AccountAlias::new(domain_id.clone(), "banking".parse::<Name>().unwrap());
+        let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let first_keypair = KeyPair::random();
         let first_id = AccountId::new(first_keypair.public_key().clone());
         let second_keypair = KeyPair::random();
@@ -4184,7 +4043,7 @@ mod tests {
         seed_domain(&mut state, &domain_id, &domain_owner);
         seed_account(&mut state, &registrar, &domain_id);
 
-        let alias = AccountAlias::new(domain_id.clone(), "issuance".parse::<Name>().unwrap());
+        let alias = alias_in_domain(&domain_id, "issuance".parse::<Name>().unwrap());
         let first_keypair = KeyPair::random();
         let first_id = AccountId::new(first_keypair.public_key().clone());
         let second_keypair = KeyPair::random();
@@ -4246,12 +4105,10 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let account_label =
-            AccountAlias::new(domain_id.clone(), "+819398553445".parse::<Name>().unwrap());
+        let account_label = alias_in_domain(&domain_id, "+819398553445".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = Account::new(account_id.clone())
-            .with_label(Some(account_label));
+        let new_account = Account::new(account_id.clone()).with_label(Some(account_label));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4314,7 +4171,6 @@ mod tests {
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::missing-uaid"));
         let new_account = NewAccount {
             id: account_id,
-            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: None,
@@ -4346,7 +4202,6 @@ mod tests {
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque::dupe"));
         let new_account = NewAccount {
             id: account_id,
-            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(uaid),
@@ -4380,7 +4235,6 @@ mod tests {
 
         let first_account = NewAccount {
             id: first_id.clone(),
-            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(first_uaid),
@@ -4388,7 +4242,6 @@ mod tests {
         };
         let second_account = NewAccount {
             id: second_id.clone(),
-            linked_domains: BTreeSet::from([domain_id.clone()]),
             metadata: Metadata::default(),
             label: None,
             uaid: Some(second_uaid),
@@ -4531,9 +4384,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = NewAccount::new(account_id.clone())
-            
-            .with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4570,15 +4421,11 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::duplicate"));
         let first_keypair = KeyPair::random();
         let first_id = AccountId::new(first_keypair.public_key().clone());
-        let first_account = NewAccount::new(first_id.clone())
-            
-            .with_uaid(Some(uaid));
+        let first_account = NewAccount::new(first_id.clone()).with_uaid(Some(uaid));
 
         let second_keypair = KeyPair::random();
         let second_id = AccountId::new(second_keypair.public_key().clone());
-        let second_account = NewAccount::new(second_id.clone())
-            
-            .with_uaid(Some(uaid));
+        let second_account = NewAccount::new(second_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4627,9 +4474,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = NewAccount::new(account_id.clone())
-            
-            .with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4669,11 +4514,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let asset_def_id: AssetDefinitionId =
             AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
@@ -4747,16 +4590,12 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register target account");
-        Register::account(
-            NewAccount::new(holder_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register holder account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register target account");
+        Register::account(NewAccount::new(holder_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register holder account");
 
         let nft_id = NftId::new(foreign_domain_id, "dragon".parse().unwrap());
         let nft = Nft {
@@ -4836,11 +4675,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
@@ -4873,16 +4710,12 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register target account");
-        Register::account(
-            NewAccount::new(holder_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register holder account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register target account");
+        Register::account(NewAccount::new(holder_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register holder account");
 
         let permission: Permission =
             iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
@@ -4960,16 +4793,12 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register target account");
-        Register::account(
-            NewAccount::new(holder_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register holder account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register target account");
+        Register::account(NewAccount::new(holder_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register holder account");
 
         let permission: Permission =
             iroha_executor_data_model::permission::governance::CanRecordCitizenService {
@@ -5024,7 +4853,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_account_removes_permissions_for_linked_domain_subject() {
+    fn unregister_account_removes_permissions_for_deleted_account() {
         let mut state = test_state();
         let domain_id: DomainId = "cleanup.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -5046,13 +4875,9 @@ mod tests {
         Register::account(NewAccount::new(target_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register target account");
-        tx.world
-            .link_account_subject_domain(&target_id, &retained_domain);
-        Register::account(
-            NewAccount::new(holder_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register holder account");
+        Register::account(NewAccount::new(holder_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register holder account");
 
         let permission: Permission =
             iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
@@ -5107,11 +4932,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         Register::asset_definition({
             let __asset_definition_id = asset_def_id.clone();
             AssetDefinition::numeric(__asset_definition_id.clone())
@@ -5150,11 +4973,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.gov.bond_escrow_account = account_id.clone();
 
         let err = Unregister::account(account_id.clone())
@@ -5183,11 +5004,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.gov.viral_incentives.incentive_pool_account = account_id.clone();
 
         let err = Unregister::account(account_id.clone())
@@ -5216,11 +5035,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.oracle.economics.reward_pool = account_id.clone();
 
         let err = Unregister::account(account_id.clone())
@@ -5249,17 +5066,13 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         let helper_account_id = AccountId::new(KeyPair::random().public_key().clone());
-        Register::account(
-            NewAccount::new(helper_account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register helper account");
+        Register::account(NewAccount::new(helper_account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register helper account");
         tx.nexus.fees.fee_sink_account_id = account_id.to_string();
         tx.nexus.staking.stake_escrow_account_id = helper_account_id.to_string();
         tx.nexus.staking.slash_sink_account_id = helper_account_id.to_string();
@@ -5279,7 +5092,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_account_rejects_when_nexus_fee_sink_account_has_additional_domain_link() {
+    fn unregister_account_rejects_when_nexus_fee_sink_account_is_configured() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let sink_domain: DomainId = "sink.world".parse().expect("domain id");
@@ -5292,20 +5105,16 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register configured account");
-        tx.world
-            .link_account_subject_domain(&account_id, &sink_domain);
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register configured account");
         tx.nexus.fees.fee_sink_account_id = account_id.to_string();
         tx.nexus.staking.stake_escrow_account_id = account_id.to_string();
         tx.nexus.staking.slash_sink_account_id = account_id.to_string();
 
         let err = Unregister::account(account_id.clone())
             .execute(&authority, &mut tx)
-            .expect_err("configured subject must remain protected even with extra domain links");
+            .expect_err("configured account must remain protected");
         let err_string = err.to_string();
         assert!(
             err_string.contains("nexus fee sink account"),
@@ -5329,11 +5138,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.nexus.fees.fee_sink_account_id = "not-an-account-literal".to_owned();
 
         let err = Unregister::account(account_id.clone())
@@ -5351,8 +5158,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_account_allows_unrelated_account_when_nexus_fee_sink_subject_has_multiple_domain_links()
-     {
+    fn unregister_account_allows_unrelated_account_when_fee_sink_is_different_account() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
         let remove_domain: DomainId = "remove.world".parse().expect("domain id");
@@ -5366,23 +5172,17 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(sink_account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register sink account");
-        tx.world
-            .link_account_subject_domain(&sink_account_id, &remove_domain);
-        Register::account(
-            NewAccount::new(remove_account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register removal candidate account");
+        Register::account(NewAccount::new(sink_account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register sink account");
+        Register::account(NewAccount::new(remove_account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register removal candidate account");
         tx.nexus.fees.fee_sink_account_id = sink_account_id.to_string();
 
         Unregister::account(remove_account_id.clone())
             .execute(&authority, &mut tx)
-            .expect("unrelated account should not be blocked by linked sink subject");
+            .expect("unrelated account should not be blocked by the configured sink account");
         assert!(
             tx.world.accounts.get(&remove_account_id).is_none(),
             "removal candidate should be deleted"
@@ -5405,17 +5205,13 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         let helper_account_id = AccountId::new(KeyPair::random().public_key().clone());
-        Register::account(
-            NewAccount::new(helper_account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register helper account");
+        Register::account(NewAccount::new(helper_account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register helper account");
         tx.nexus.fees.fee_sink_account_id = helper_account_id.to_string();
         tx.nexus.staking.stake_escrow_account_id = account_id.to_string();
         tx.nexus.staking.slash_sink_account_id = helper_account_id.to_string();
@@ -5446,17 +5242,13 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         let helper_account_id = AccountId::new(KeyPair::random().public_key().clone());
-        Register::account(
-            NewAccount::new(helper_account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register helper account");
+        Register::account(NewAccount::new(helper_account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register helper account");
         tx.nexus.fees.fee_sink_account_id = helper_account_id.to_string();
         tx.nexus.staking.stake_escrow_account_id = helper_account_id.to_string();
         tx.nexus.staking.slash_sink_account_id = account_id.to_string();
@@ -5488,11 +5280,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(__asset_definition_id.clone())
@@ -5531,11 +5321,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.content.publish_allow_accounts = vec![account_id.clone()];
 
         let err = Unregister::account(account_id.clone())
@@ -5564,11 +5352,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.gov.sorafs_telemetry.submitters = vec![account_id.clone()];
 
         let err = Unregister::account(account_id.clone())
@@ -5597,11 +5383,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xD4; 32]);
         tx.gov
@@ -5635,11 +5419,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.world
             .provider_owners
             .insert(provider_id, account_id.clone());
@@ -5670,11 +5452,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.world.citizens.insert(
             account_id.clone(),
             crate::state::CitizenshipRecord::new(account_id.clone(), 100, 1),
@@ -5706,11 +5486,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.world.public_lane_validators.insert(
             (LaneId::SINGLE, account_id.clone()),
             iroha_data_model::nexus::PublicLaneValidatorRecord {
@@ -5753,11 +5531,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.world.public_lane_rewards.insert(
             (LaneId::SINGLE, 1),
             iroha_data_model::nexus::PublicLaneRewardRecord {
@@ -5803,11 +5579,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
         tx.world.public_lane_reward_claims.insert(
             (
                 LaneId::SINGLE,
@@ -5846,11 +5620,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let repo_id: iroha_data_model::repo::RepoAgreementId =
             "repoguard".parse().expect("repo agreement id");
@@ -5903,11 +5675,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let settlement_id: iroha_data_model::isi::SettlementId =
             "settleguard".parse().expect("settlement id");
@@ -5969,11 +5739,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let mut feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
         feed.providers = vec![account_id.clone()];
@@ -6005,11 +5773,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let feed = iroha_data_model::oracle::kits::price_xor_usd().feed_config;
         let feed_id = feed.feed_id.clone();
@@ -6064,11 +5830,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let definition_id = AssetDefinitionId::new(domain_id.clone(), "coin".parse().unwrap());
         let allowance = OfflineAllowanceCommitment::new(
@@ -6131,11 +5895,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let verdict_id = Hash::new(b"offline-verdict-account-guard");
         tx.world.offline_verdict_revocations.insert(
@@ -6176,11 +5938,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let proposal_id = [0xA5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
@@ -6233,11 +5993,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let bundle_id = Hash::new(b"content-bundle-account-guard");
         let stripe_layout = iroha_data_model::da::prelude::DaStripeLayout::default();
@@ -6300,11 +6058,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let manifest = iroha_data_model::runtime::RuntimeUpgradeManifest {
             name: "runtime-guard".to_string(),
@@ -6356,11 +6112,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let binding_digest = Hash::new(b"viral-escrow-account-guard");
         tx.world.viral_escrows.insert(
@@ -6402,11 +6156,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let digest = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xAB; 32]);
         tx.world.pin_manifests.insert(
@@ -6456,11 +6208,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let ticket_id = iroha_data_model::da::types::StorageTicketId::new([0xD1; 32]);
         tx.world.da_pin_intents_by_ticket.insert(
@@ -6510,11 +6260,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         tx.world.lane_relay_emergency_validators.insert(
             DataSpaceId::GLOBAL,
@@ -6551,11 +6299,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        Register::account(
-            NewAccount::new(account_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register account");
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
 
         let proposal_id = [0xC5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
@@ -6629,9 +6375,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account = NewAccount::new(account_id.clone())
-            
-            .with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -7073,7 +6817,6 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
         };
         let (account_id, account_value) = account.into_key_value();
         state.world.accounts.insert(account_id, account_value);
@@ -7658,16 +7401,12 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        Register::account(
-            NewAccount::new(asset_account.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register asset account");
-        Register::account(
-            NewAccount::new(holder_id.clone()),
-        )
-        .execute(&authority, &mut tx)
-        .expect("register holder account");
+        Register::account(NewAccount::new(asset_account.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register asset account");
+        Register::account(NewAccount::new(holder_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register holder account");
         Register::asset_definition({
             let __asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(__asset_definition_id.clone())

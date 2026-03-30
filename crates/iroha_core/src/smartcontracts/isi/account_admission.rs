@@ -4,7 +4,7 @@
 //! when global policy allows receipt-like operations (asset mint/transfer, NFT transfer), the
 //! destination `Account` object may be created automatically if it does not exist yet.
 
-use std::{collections::BTreeSet, sync::LazyLock};
+use std::sync::LazyLock;
 
 use iroha_data_model::query::error::FindError;
 use iroha_data_model::{
@@ -24,7 +24,6 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
-use mv::storage::StorageReadOnly;
 
 use crate::{
     role::RoleIdWithOwner,
@@ -199,7 +198,7 @@ fn resolve_existing_account_for_subject(
 }
 
 fn create_implicit_account(
-    authority: &AccountId,
+    _authority: &AccountId,
     destination: &AccountId,
     default_role_on_create: Option<&RoleId>,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -216,22 +215,8 @@ fn create_implicit_account(
     let (account_id, account_value) = account.clone().into_key_value();
     state_transaction
         .world
-        .insert_account_with_links(account_id, account_value);
-    if let Some(linked_domain) = state_transaction
-        .world
-        .account_subject_domains
-        .get(authority)
-        .and_then(|domains| domains.iter().next().cloned())
-    {
-        state_transaction
-            .world
-            .link_account_subject_domain(&destination, &linked_domain);
-        state_transaction
-            .world
-            .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                AccountCreated::new(account.clone(), linked_domain),
-            ))));
-    }
+        .accounts
+        .insert(account_id, account_value);
 
     let mut default_role_granted = None;
     if let Some(role) = default_role_on_create {
@@ -243,9 +228,7 @@ fn create_implicit_account(
             .is_some()
         {
             state_transaction.world.account_roles.remove(role_key);
-            state_transaction
-                .world
-                .remove_account_with_links(destination);
+            state_transaction.world.accounts.remove(destination.clone());
             return Err(AccountAdmissionError::DefaultRoleError(
                 AccountAdmissionDefaultRoleError {
                     role: role.clone(),
@@ -411,9 +394,7 @@ mod tests {
         domain_id: DomainId,
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
-        iroha_data_model::account::NewAccount::new(account_id.clone())
-            
-            .build(authority)
+        iroha_data_model::account::NewAccount::new(account_id.clone()).build(authority)
     }
 
     fn test_state(mut world: World) -> State {

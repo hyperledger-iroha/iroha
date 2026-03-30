@@ -6,23 +6,19 @@ use std::collections::HashMap;
 use ivm::{
     AssetDefinitionId, IVM, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler,
-    mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
 
-fn make_vm_with_wsv() -> (IVM, ScopedAccountId) {
-    let alice: ScopedAccountId = ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+fn make_vm_with_wsv() -> (IVM, AccountId) {
+    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    let alice: AccountId = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
     );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(1_000_000);
     vm.set_host(host);
     (vm, alice)

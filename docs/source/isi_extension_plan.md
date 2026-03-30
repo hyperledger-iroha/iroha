@@ -28,11 +28,11 @@ security and operability risk first, UX throughput second.
 - Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
   resources (assets, triggers, roles, permissions, pending events).
 - Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
+- Reject if the new public key already backs another canonical account.
 - Update all canonical keys that embed the account ID and invalidate caches before commit.
 - Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+- Migration scaffold: rely on `AccountAlias` + `AccountRekeyRecord` (see `account::rekey`) so
+  existing accounts can keep stable alias bindings during a rolling upgrade without hash breaks.
 
 ### DeactivateContractInstance
 - Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
@@ -69,7 +69,7 @@ security and operability risk first, UX throughput second.
 - Executor visitors expose placeholders that will gate permissions once host wiring lands
   (`default/mod.rs`).
 - Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
+- World state includes `account_rekey_records` keyed by `AccountAlias` so we can stage alias →
   signatory migrations without touching the historical `AccountId` encoding.
 
 ## IVM Syscall Drafting

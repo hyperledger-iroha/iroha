@@ -2,6 +2,190 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Account de-scoping compile sweep landed across data model, runtime, ABI, Torii, bridge, Mochi, and SDK bindings
+- Completed the live-code sweep for the domainless-account transition across
+  the remaining Rust/UI/SDK surfaces:
+  - removed the last live `ScopedAccountId`, `linked_domains`,
+    `AccountLabel`, `Account::new_in_domain(...)`,
+    `NewAccount::new_in_domain(...)`, and account-subject-domain helper
+    references from checked-in code under `crates/`, `integration_tests/`,
+    `mochi/`, `IrohaSwift/`, and `java/`;
+  - deleted the last no-op account-link helper surface in
+    `crates/iroha_core/src/state.rs` and rewired callers to canonical account
+    storage or alias-domain reads instead of subject-domain materialization;
+  - collapsed the IVM syscall surface so
+    `crates/ivm/spec/syscalls.toml` now removes the domain registration /
+    transfer syscalls and treats `REGISTER_ACCOUNT` as `&AccountId`;
+  - updated the remaining IVM/Torii/mock-host naming to canonical account
+    terminology (`alias_domains_for_account`, `wsv.list_domains_for_account`,
+    canonical account registration, no scoped-account parsing path); and
+  - renamed the remaining Swift/Java account-label instruction builders to the
+    current primary-account-alias surface.
+- Completed the active-documentation sweep for the same transition:
+  - updated the authoritative English account-model docs to describe
+    domainless `AccountId`, alias-only account naming, domainless account
+    registration, and the collapsed domain-unregister behavior; and
+  - replaced stale localized copies with explicit `needs-translation` stubs so
+    the repo no longer teaches the removed scoped-account / linked-domain
+    account model in active docs.
+- Focused compile validation now passes for the touched repo-facing crates:
+  - `cargo check -p ivm --tests --message-format short`
+  - `cargo check -p iroha_core --tests --message-format short`
+  - `cargo check -p iroha_torii --tests --message-format short`
+  - `cargo check -p iroha_kagami --tests --message-format short`
+  - `cargo check -p mochi-core --message-format short`
+  - `cargo check -p iroha_test_network --message-format short`
+  - `cargo check -p integration_tests --message-format short`
+  - `cargo check -p connect_norito_bridge --message-format short`
+- Acceptance grep for the live-code cleanup is now green:
+  - no remaining live-code hits for `ScopedAccountId`;
+  - no remaining live-code hits for `linked_domains`;
+  - no remaining live-code hits for `Account::new_in_domain(...)` /
+    `NewAccount::new_in_domain(...)`; and
+  - no remaining live-code hits for the deleted account-subject-domain helper
+    names or the old SDK `AccountLabel` surface.
+- Acceptance grep for repo-facing active content is now green as well:
+  - no remaining code hits under `crates/`, `integration_tests/`, `mochi/`,
+    `python/`, `IrohaSwift/`, `java/`, `kotlin/`, `examples/`, `pytests/`, or
+    `scripts/` for the removed scoped-account / linked-domain account model;
+    and
+  - active docs now route readers either to the updated English source text or
+    to explicit translation-refresh stubs instead of stale scoped-account
+    guidance.
+- Remaining verification debt after this sweep:
+  - `cargo fmt --all`, `cargo test --workspace`, and
+    `cargo clippy --workspace --all-targets -- -D warnings` were not rerun in
+    this pass; and
+  - the broader branch still has a non-trivial warning surface from earlier
+    domain-removal fallout outside the focused compile gates above.
+
+## 2026-03-30 Fresh release rebuild succeeded; full permissioned and NPoS soaks still fail with two different consensus liveness signatures
+- Restored the release-build path needed for honest reruns by updating
+  `crates/izanami/src/instructions.rs` to the current account-alias surface,
+  then rebuilt the soak binaries successfully with:
+  `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`.
+- Full preserved-peer stable permissioned rerun:
+  - controller log:
+    `/tmp/izanami_permissioned_current_20260330T155518Z.log`;
+  - peer artifacts:
+    `/tmp/iroha-soak-permissioned-current_20260330T155518Z/irohad_test_network_WUTnTq`;
+  - advanced cleanly past the prior `260/266` and `286/287` freeze bands and
+    reached `strict_min_height=367` / `quorum_min_height=367`, then failed the
+    600s strict-progress watchdog;
+  - peer logs now show a different failure mode from the earlier
+    cross-view-proposal-evidence leak: repeated contiguous-frontier unified
+    recovery churn at height `368`, with
+    `active pending block stalled past quorum timeout; routing contiguous frontier through unified recovery`
+    and committed-anchor re-pulls such as
+    `requested block-sync range pull from committed anchor` with
+    `canonical_height=368`, `local_height=367`, reason `frontier_stall_reset`;
+    and
+  - representative anchors:
+    `/tmp/izanami_permissioned_current_20260330T155518Z.log`,
+    `/tmp/iroha-soak-permissioned-current_20260330T155518Z/irohad_test_network_WUTnTq/concrete_kingbird/run-1-stdout.log`.
+- Full preserved-peer stable NPoS rerun:
+  - controller log:
+    `/tmp/izanami_npos_current_20260330T161026Z.log`;
+  - peer artifacts:
+    `/tmp/iroha-soak-npos-current_20260330T161026Z/irohad_test_network_odXm5Z`;
+  - regressed badly and stalled at `strict_min_height=83` /
+    `quorum_min_height=83`, then failed the same 600s strict-progress
+    watchdog;
+  - the failure shape is not the permissioned one. Before the final timeout
+    storm, peers repeatedly log
+    `highest QC block missing locally; accepting BlockCreated on locked chain`
+    at height `84` with locked-vs-highest QC hash mismatch on the same
+    committed height, after which the round degrades into
+    `no proposal observed for view before changing view` for height `84`
+    under `trigger: "missing_qc"` and local query timeouts; and
+  - representative anchors:
+    `/tmp/izanami_npos_current_20260330T161026Z.log`,
+    `/tmp/iroha-soak-npos-current_20260330T161026Z/irohad_test_network_odXm5Z/paternal_flea/run-1-stdout.log`,
+    `/tmp/iroha-soak-npos-current_20260330T161026Z/irohad_test_network_odXm5Z/fortifying_kakapo/run-1-stdout.log`,
+    and
+    `/tmp/iroha-soak-npos-current_20260330T161026Z/irohad_test_network_odXm5Z/surprising_chipmunk/run-1-stdout.log`.
+- Critique of the fresh reruns:
+  - the exact-slot proposal/recovery fix helped permissioned but did not
+    restore liveness; the new permissioned stop is a same-height
+    contiguous-frontier/unified-recovery trap rather than the old
+    `missing_qc no proposal observed` band at `286/287`;
+  - NPoS is still worse, and not merely “permissioned but later”;
+    payload/QC convergence is already broken at height `84`, then the round
+    collapses into missing-QC timeout churn; and
+  - neither rerun showed the old transport regression signatures:
+    no `LengthMismatch`, no peer decode failure surface, and no
+    `deferring proposal: insufficient online peers for commit quorum`.
+
+## 2026-03-30 Focused consensus root-cause regressions now pass on the patched iroha_core slice
+- Revalidated the surgical cross-view recovery fix inside
+  `crates/iroha_core/src/sumeragi/main_loop.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`, and
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- Updated the older idle missing-QC test
+  `force_view_change_if_idle_records_missing_qc_and_advances_view` so it uses
+  the current empty-frontier proposal grace instead of the stale pre-grace
+  timeout assumption.
+- Focused verification now passes against the rebuilt `iroha_core` lib test
+  binary:
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_records_missing_qc_and_advances_view -- --nocapture`
+  - `target/debug/deps/iroha_core-911bc10dc8c3dd81 --exact --nocapture sumeragi::main_loop::tests::slot_has_proposal_evidence_keeps_frontier_candidate_across_view_change_without_leaking_into_next_view`
+  - `target/debug/deps/iroha_core-911bc10dc8c3dd81 --exact --nocapture sumeragi::main_loop::tests::slot_has_proposal_evidence_limits_await_body_and_deep_catchup_slot_ownership_to_exact_view`
+  - `target/debug/deps/iroha_core-911bc10dc8c3dd81 --exact --nocapture sumeragi::main_loop::tests::frontier_recovery_same_slot_activity_is_exact_slot_scoped`
+  - `target/debug/deps/iroha_core-911bc10dc8c3dd81 --exact --nocapture sumeragi::main_loop::tests::reschedule_contiguous_frontier_ignores_stale_old_view_frontier_owner`
+  - `target/debug/deps/iroha_core-911bc10dc8c3dd81 --exact --nocapture sumeragi::main_loop::tests::force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum_timeout_owner`
+  - `target/debug/deps/iroha_core-911bc10dc8c3dd81 --exact --nocapture sumeragi::main_loop::tests::pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_stale_frontier_owner`
+- The verification boundary is now narrower: the consensus slice is green
+  locally, but fresh full permissioned/NPoS reruns are still blocked by the
+  unrelated `iroha_torii` release-build failures recorded below.
+
+## 2026-03-30 Fresh soak reruns blocked by unrelated current-worktree Torii compile failures
+- Attempted to rebuild the required release binaries before rerunning the full
+  preserved-peer stable permissioned and NPoS soaks with:
+  `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`.
+- The current worktree still does not produce trustworthy fresh binaries for
+  soak reruns because `iroha_torii` fails to compile on unrelated account/Torii
+  surface changes before the rebuild completes. Representative failures now
+  include:
+  - unresolved `iroha_data_model::account::ScopedAccountId` imports in
+    `crates/iroha_torii/src/routing.rs`;
+  - missing `account::rekey::AccountLabel` references in
+    `crates/iroha_torii/src/routing.rs` and `crates/iroha_torii/src/lib.rs`;
+  - stale `linked_domains` field usage against `iroha_data_model::Account` /
+    `AccountDetails` in `crates/iroha_torii/src/routing.rs`; and
+  - follow-on type-inference errors caused by the same API drift.
+- Because that rebuild exited with `error: could not compile iroha_torii (lib)`,
+  no fresh current-worktree permissioned or NPoS soak results are available
+  yet. Existing `target/release/iroha3d` and `target/release/izanami` binaries
+  were left in place, but they cannot be treated as validated outputs for this
+  exact source tree after the failed rebuild.
+
+## 2026-03-30 Root-cause patch pass for cross-view frontier recovery leakage
+- Applied a follow-up consensus patch aimed at the remaining same-height
+  liveness traps after the exact-slot proposal-evidence fix:
+  - same-slot frontier recovery predicates now treat frontier slot activity as
+    exact-slot scoped instead of `slot.view <= later_view`, covering
+    payload-progress, vote-backed recovery, and missing-payload recovery checks
+    in `crates/iroha_core/src/sumeragi/main_loop.rs`; and
+  - contiguous-frontier commit-quorum reschedule now derives its
+    keep-or-rotate decision from exact-slot vote/owner evidence for the pending
+    block’s `(height, view)` rather than generic same-height frontier ownership
+    in `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`.
+- Added focused regressions in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs` covering:
+  - old-view frontier recovery activity no longer counting as same-slot
+    activity for later views; and
+  - stale old-view frontier ownership no longer suppressing later-view
+    contiguous-frontier reschedule rotation.
+- Verification boundary on the current dirty branch:
+  - `cargo fmt --all` passed;
+  - focused `cargo test -p iroha_core ...` runs are currently blocked before the
+    new tests execute because unrelated worktree changes elsewhere in the branch
+    already break `iroha_core` compilation, including errors in
+    `crates/iroha_core/src/state.rs` and type mismatches caused by the dirty
+    `iroha_data_model` alias-domain changes; and
+  - no clean post-patch soak rerun has been possible yet until that unrelated
+    compile surface is green again.
+
 ## 2026-03-30 JS SDK canonical auth now falls back to raw Node HTTP/TLS for UTF-8 account headers
 - Fixed the JS Torii client canonical-auth transport in
   `javascript/iroha_js/src/toriiClient.js` so requests that need a UTF-8

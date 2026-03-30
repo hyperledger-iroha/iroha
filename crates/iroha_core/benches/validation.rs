@@ -60,8 +60,7 @@ fn build_test_and_transient_state() -> State {
     let state = State::new(
         {
             let domain = Domain::new(STARTER_DOMAIN.clone()).build(&account_id);
-            let account = Account::new(account_id.clone())
-                .build(&account_id);
+            let account = Account::new(account_id.clone()).build(&account_id);
             World::with([domain], [account], [])
         },
         Arc::clone(&kura),

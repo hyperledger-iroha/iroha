@@ -468,17 +468,17 @@ pub mod isi {
             return Ok(());
         }
 
-        let linked_domains: BTreeSet<_> = state_transaction
+        let alias_domains: BTreeSet<_> = state_transaction
             .world
-            .domains_for_subject(subject)
+            .alias_domains_for_account(subject)
             .into_iter()
             .collect();
 
         for domain_id in &binding.allowed_domains {
-            if !linked_domains.contains(domain_id) {
+            if !alias_domains.contains(domain_id) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
-                        "asset subject binding requires account {subject} to be linked to domain {domain_id}"
+                        "asset subject binding requires account {subject} to hold an alias in domain {domain_id}"
                     )
                     .into(),
                 ));
@@ -3097,11 +3097,9 @@ pub mod query {
 
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = NewAccount::new(ALICE_ID.clone())
-                
                 .with_uaid(Some(uaid_alice))
                 .build(&ALICE_ID);
             let bob_account = NewAccount::new(BOB_ID.clone())
-                
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
@@ -3405,10 +3403,6 @@ pub mod query {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            stx.world
-                .link_account_subject_domain(&ALICE_ID, &domain_id.clone());
-            stx.world.link_account_subject_domain(&BOB_ID, &domain_id);
-
             let err = Transfer::asset_numeric(source_asset_id, 1_u32, BOB_ID.clone())
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("domain deny policy must reject transfer");
@@ -3430,11 +3424,9 @@ pub mod query {
             );
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = NewAccount::new(ALICE_ID.clone())
-                
                 .with_uaid(Some(uaid_alice))
                 .build(&ALICE_ID);
             let bob_account = NewAccount::new(BOB_ID.clone())
-                
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 

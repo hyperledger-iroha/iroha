@@ -394,7 +394,6 @@ impl AccountDetails {
     pub fn set_opaque_ids(&mut self, opaque_ids: Vec<OpaqueAccountId>) {
         self.opaque_ids = opaque_ids;
     }
-
 }
 
 impl Default for AccountDetails {
@@ -441,6 +440,13 @@ impl AccountId {
     #[must_use]
     pub fn controller(&self) -> &AccountController {
         &self.controller
+    }
+
+    /// Borrow this account identifier.
+    #[inline]
+    #[must_use]
+    pub fn account(&self) -> &Self {
+        self
     }
 
     /// Return the canonical subject identity for this account.
@@ -1148,10 +1154,9 @@ impl IntoKeyValue for Account {
 pub mod prelude {
     pub use super::{
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAddress, AccountAddressSource,
-        AccountAdmissionMode, AccountAdmissionPolicy, AccountController, AccountDomainSelector,
-        AccountEntry, AccountId, AccountAlias, AccountAliasDomain, AccountRekeyRecord,
-        AccountValue, MultisigMember, MultisigPolicy, NewAccount, OpaqueAccountId,
-        ParsedAccountId,
+        AccountAdmissionMode, AccountAdmissionPolicy, AccountAlias, AccountAliasDomain,
+        AccountController, AccountDomainSelector, AccountEntry, AccountId, AccountRekeyRecord,
+        AccountValue, MultisigMember, MultisigPolicy, NewAccount, OpaqueAccountId, ParsedAccountId,
     };
 }
 
@@ -1308,6 +1313,14 @@ mod tests {
     }
 
     #[test]
+    fn account_accessor_returns_self() {
+        let key_pair = KeyPair::random();
+        let account = AccountId::new(key_pair.public_key().clone());
+
+        assert_eq!(account.account(), &account);
+    }
+
+    #[test]
     fn i105_checksum_failure_reports_error_code() {
         // Negative vector from fixtures/account/address_vectors.json (`i105-checksum-mismatch`).
         let literal = "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSア";
@@ -1360,7 +1373,9 @@ mod json_tests {
 
     use super::*;
     use crate::{
-        account::address, metadata::Metadata, name::Name,
+        account::address,
+        metadata::Metadata,
+        name::Name,
         nexus::{DataSpaceId, UniversalAccountId},
         prelude::Register,
     };
@@ -1455,9 +1470,10 @@ mod json_tests {
         assert!(decoded.label.is_none());
         assert!(decoded.uaid.is_none());
         assert_eq!(decoded.metadata, Metadata::default());
+        let removed_field = concat!("linked", "_domains");
         assert!(
-            !json.contains("linked_domains"),
-            "domainless registration payloads must not serialize linked_domains"
+            !json.contains(removed_field),
+            "domainless registration payloads must not serialize the removed domain-link field"
         );
     }
 

@@ -217,25 +217,25 @@ public struct ClaimIdentifierRequest {
     }
 }
 
-public struct SetAccountLabelRequest {
+public struct SetPrimaryAccountAliasRequest {
     public let chainId: String
     public let authority: String
     public let accountId: String
-    public let domainId: String
-    public let label: String
+    public let aliasDomain: String?
+    public let alias: String
     public let ttlMs: UInt64?
 
     public init(chainId: String,
                 authority: String,
                 accountId: String,
-                domainId: String,
-                label: String,
+                aliasDomain: String? = nil,
+                alias: String,
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
         self.accountId = accountId
-        self.domainId = domainId
-        self.label = label
+        self.aliasDomain = aliasDomain
+        self.alias = alias
         self.ttlMs = ttlMs
     }
 }
@@ -1056,20 +1056,20 @@ public final class IrohaSDK: @unchecked Sendable {
                                                                  creationTimeMs: creationTimeMs)
     }
 
-    public func buildSetAccountLabel(request: SetAccountLabelRequest,
-                                     keypair: Keypair) throws -> SignedTransactionEnvelope {
+    public func buildSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
+                                            keypair: Keypair) throws -> SignedTransactionEnvelope {
         let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeSetAccountLabel(
+        return try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
             request: request,
             keypair: keypair,
             creationTimeMs: creationTimeMs
         )
     }
 
-    public func buildSetAccountLabel(request: SetAccountLabelRequest,
-                                     signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+    public func buildSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
+                                            signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         let creationTimeMs = makeCreationTimeMs()
-        return try SwiftTransactionEncoder.encodeSetAccountLabel(
+        return try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
             request: request,
             signingKey: signingKey,
             creationTimeMs: creationTimeMs

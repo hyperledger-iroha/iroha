@@ -352,8 +352,6 @@ macro_rules! build_world_block {
             domains: $state.domains.$method(),
             domain_selectors: $state.domain_selectors.$method(),
             accounts: $state.accounts.$method(),
-            account_subject_domains: $state.account_subject_domains.$method(),
-            domain_account_subjects: $state.domain_account_subjects.$method(),
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
             account_aliases_by_account: $state.account_aliases_by_account.$method(),
@@ -536,8 +534,6 @@ macro_rules! build_world_transaction {
             domains: $state.domains.transaction(),
             domain_selectors: $state.domain_selectors.transaction(),
             accounts: $state.accounts.transaction(),
-            account_subject_domains: $state.account_subject_domains.transaction(),
-            domain_account_subjects: $state.domain_account_subjects.transaction(),
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
             account_aliases_by_account: $state.account_aliases_by_account.transaction(),
@@ -1410,10 +1406,6 @@ pub struct World {
     pub(crate) domain_selectors: Storage<AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: Storage<AccountId, AccountValue>,
-    /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains: Storage<AccountId, BTreeSet<DomainId>>,
-    /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects: Storage<DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     #[norito(skip)]
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
@@ -1828,10 +1820,6 @@ pub struct WorldBlock<'world> {
     pub(crate) domain_selectors: StorageBlock<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
-    /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains: StorageBlock<'world, AccountId, BTreeSet<DomainId>>,
-    /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects: StorageBlock<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
@@ -2376,12 +2364,6 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
-    /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<DomainId>>,
-    /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects:
-        StorageTransaction<'block, 'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
@@ -3153,10 +3135,6 @@ pub struct WorldView<'world> {
     pub(crate) domain_selectors: StorageView<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
-    /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains: StorageView<'world, AccountId, BTreeSet<DomainId>>,
-    /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects: StorageView<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
@@ -8080,13 +8058,22 @@ mod storage_migration_tests {
 
     use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
-        account::{AccountDetails, AccountId},
+        account::{AccountAlias, AccountAliasDomain, AccountDetails, AccountId},
         domain::DomainId,
         metadata::Metadata,
+        name::Name,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
     };
 
     use super::*;
+
+    fn alias_in_domain(domain_id: &DomainId, label: Name) -> AccountAlias {
+        AccountAlias::new(
+            label,
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            DataSpaceId::GLOBAL,
+        )
+    }
 
     #[test]
     fn uaid_bindings_rebuilt_from_manifests_on_startup() {
@@ -8310,19 +8297,14 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountAlias::new(
-            domain_id.clone(),
-            "primary".parse::<Name>().expect("label name"),
-        );
+        let label = alias_in_domain(&domain_id, "primary".parse::<Name>().expect("label name"));
         let first = AccountId::new(KeyPair::random().public_key().clone());
         let second = AccountId::new(KeyPair::random().public_key().clone());
 
         let mut first_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
-        first_details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         let mut second_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
-        second_details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         world
             .accounts
             .insert(first.clone(), AccountValue::new(first_details));
@@ -8344,14 +8326,13 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountAlias::new(
-            domain_id.clone(),
+        let label = alias_in_domain(
+            &domain_id,
             "+819398553445".parse::<Name>().expect("label name"),
         );
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
 
-        let mut details = AccountDetails::new(Metadata::default(), Some(label), None, Vec::new());
-        details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
+        let details = AccountDetails::new(Metadata::default(), Some(label), None, Vec::new());
         world
             .accounts
             .insert(account_id, AccountValue::new(details));
@@ -8370,23 +8351,22 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let primary_label = AccountAlias::new(
-            domain_id.clone(),
+        let primary_label = alias_in_domain(
+            &domain_id,
             "banking".parse::<Name>().expect("primary label name"),
         );
-        let bound_label = AccountAlias::new(
-            domain_id.clone(),
+        let bound_label = alias_in_domain(
+            &domain_id,
             "issuance".parse::<Name>().expect("bound label name"),
         );
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
 
-        let mut details = AccountDetails::new(
+        let details = AccountDetails::new(
             Metadata::default(),
             Some(primary_label.clone()),
             None,
             Vec::new(),
         );
-        details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         world
             .accounts
             .insert(account_id.clone(), AccountValue::new(details));
@@ -8426,10 +8406,7 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountAlias::new(
-            domain_id.clone(),
-            "cbdc".parse::<Name>().expect("label name"),
-        );
+        let label = alias_in_domain(&domain_id, "cbdc".parse::<Name>().expect("label name"));
         let member_a = iroha_data_model::account::MultisigMember::new(
             KeyPair::random().public_key().clone(),
             1,
@@ -8443,9 +8420,8 @@ mod storage_migration_tests {
         let policy = iroha_data_model::account::MultisigPolicy::new(2, vec![member_a, member_b])
             .expect("multisig policy");
         let account_id = AccountId::new_multisig(policy);
-        let mut details =
+        let details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
-        details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         world
             .accounts
             .insert(account_id.clone(), AccountValue::new(details));
@@ -8472,18 +8448,14 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountAlias::new(
-            domain_id.clone(),
-            "treasury".parse::<Name>().expect("label name"),
-        );
+        let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().expect("label name"));
         let first_id = AccountId::new(KeyPair::random().public_key().clone());
         let second_key = KeyPair::random();
         let second_id = AccountId::new(second_key.public_key().clone());
 
         let first_details = AccountDetails::new(Metadata::default(), None, None, Vec::new());
-        let mut second_details =
+        let second_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
-        second_details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         world
             .accounts
             .insert(first_id.clone(), AccountValue::new(first_details));
@@ -9461,7 +9433,7 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        for domain_id in world.domains_for_subject(account_id) {
+        for domain_id in world.alias_domains_for_account(account_id) {
             let domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -9548,7 +9520,7 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        for domain_id in world.domains_for_subject(transfer.source()) {
+        for domain_id in world.alias_domains_for_account(transfer.source()) {
             let source_domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -10751,16 +10723,7 @@ impl World {
                 rekey_pairs.push((record.label.clone(), record));
             }
             let (account_id, account_value) = account.into_key_value();
-            if let Some(previous) = account_pairs.remove(&account_id) {
-                // Preserve the most recent account payload while keeping all linked-domain hints.
-                let mut details = account_value.into_inner();
-                details
-                    .linked_domains
-                    .extend(previous.as_ref().linked_domains().iter().cloned());
-                account_pairs.insert(account_id, AccountValue::new(details));
-            } else {
-                account_pairs.insert(account_id, account_value);
-            }
+            account_pairs.insert(account_id, account_value);
         }
         let accounts = account_pairs.into_iter().collect();
         let account_rekey_records = rekey_pairs.into_iter().collect();
@@ -10826,7 +10789,6 @@ impl World {
         world
             .rebuild_domain_selector_index()
             .expect("duplicate domain selector in world constructor");
-        world.rebuild_account_subject_domain_indexes();
         world
             .rebuild_uaid_account_index()
             .expect("duplicate UAID in world constructor");
@@ -10905,79 +10867,6 @@ impl World {
         Ok(())
     }
 
-    fn rebuild_account_subject_domain_indexes(&mut self) {
-        let mut subject_domains = BTreeMap::<AccountId, BTreeSet<DomainId>>::new();
-        let accounts = self.accounts.view();
-        let domains = self.domains.view();
-
-        for (subject, linked_domains) in self.account_subject_domains.view().iter() {
-            let filtered: BTreeSet<_> = linked_domains
-                .iter()
-                .filter(|domain| domains.get(*domain).is_some())
-                .cloned()
-                .collect();
-            subject_domains.insert(subject.clone(), filtered);
-        }
-
-        for (subject, account_value) in accounts.iter() {
-            let entry = subject_domains.entry(subject.clone()).or_default();
-            entry.extend(
-                account_value
-                    .as_ref()
-                    .linked_domains()
-                    .iter()
-                    .filter(|domain| domains.get(*domain).is_some())
-                    .cloned(),
-            );
-            if entry.is_empty() {
-                entry.extend(domains.iter().filter_map(|(domain_id, domain)| {
-                    (domain.owned_by() == subject).then_some(domain_id.clone())
-                }));
-            }
-        }
-
-        self.account_subject_domains = subject_domains.into_iter().collect();
-        let updated_accounts = {
-            let accounts = self.accounts.view();
-            let domains = self.domains.view();
-            let subject_domains = self.account_subject_domains.view();
-            accounts
-                .iter()
-                .map(|(account_id, account_value)| {
-                    let mut details = account_value.as_ref().clone();
-                    let linked_domains = subject_domains
-                        .get(account_id)
-                        .cloned()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .filter(|domain| domains.get(domain).is_some())
-                        .collect();
-                    details.set_linked_domains(linked_domains);
-                    (account_id.clone(), AccountValue::new(details))
-                })
-                .collect::<BTreeMap<_, _>>()
-        };
-        self.accounts = updated_accounts.into_iter().collect();
-        self.rebuild_domain_account_subject_index();
-    }
-
-    fn rebuild_domain_account_subject_index(&mut self) {
-        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountId>>::new();
-        let domains = self.domains.view();
-        for (subject, linked_domains) in self.account_subject_domains.view().iter() {
-            for domain in linked_domains
-                .iter()
-                .filter(|domain| domains.get(*domain).is_some())
-            {
-                domain_subjects
-                    .entry(domain.clone())
-                    .or_default()
-                    .insert(subject.clone());
-            }
-        }
-        self.domain_account_subjects = domain_subjects.into_iter().collect();
-    }
-
     fn rebuild_domain_selector_index(&mut self) -> Result<(), String> {
         let mut index = BTreeMap::new();
         let view = self.domains.view();
@@ -11014,22 +10903,11 @@ impl World {
                     "Account alias {label:?} looks like raw PII; use UAID/opaque identifiers"
                 ));
             }
-            let Some(account_value) = view.get(&account_id) else {
+            let Some(_account_value) = view.get(&account_id) else {
                 return Err(format!(
                     "Account alias {label:?} references missing account {account_id}"
                 ));
             };
-            if let Some(domain) = &label.domain
-                && !account_value
-                    .as_ref()
-                    .linked_domains()
-                    .iter()
-                    .any(|linked_domain| domain == linked_domain)
-            {
-                return Err(format!(
-                    "Account alias {label:?} requires linked domain {domain}"
-                ));
-            }
             if let Some(existing) = index.get(&label) {
                 if existing != &account_id {
                     return Err(format!(
@@ -11051,17 +10929,6 @@ impl World {
             if account_label_is_pii(label) {
                 return Err(format!(
                     "Account alias {label:?} looks like raw PII; use UAID/opaque identifiers"
-                ));
-            }
-            if let Some(domain) = &label.domain
-                && !value
-                    .as_ref()
-                    .linked_domains()
-                    .iter()
-                    .any(|linked_domain| domain == linked_domain)
-            {
-                return Err(format!(
-                    "Account alias {label:?} requires linked domain {domain}"
                 ));
             }
             if let Some(existing) = index.get(label) {
@@ -11137,23 +11004,12 @@ impl World {
         }
 
         for (label, record) in &records {
-            let Some(account_value) = view.get(&record.active_account_id) else {
+            let Some(_account_value) = view.get(&record.active_account_id) else {
                 return Err(format!(
                     "Account rekey record {label:?} references missing account {}",
                     record.active_account_id
                 ));
             };
-            if let Some(domain) = &label.domain
-                && !account_value
-                    .as_ref()
-                    .linked_domains()
-                    .iter()
-                    .any(|linked_domain| domain == linked_domain)
-            {
-                return Err(format!(
-                    "Account rekey record {label:?} requires linked domain {domain}"
-                ));
-            }
         }
 
         self.account_rekey_records = records.into_iter().collect();
@@ -11433,8 +11289,6 @@ impl World {
             domains: self.domains.view(),
             domain_selectors: self.domain_selectors.view(),
             accounts: self.accounts.view(),
-            account_subject_domains: self.account_subject_domains.view(),
-            domain_account_subjects: self.domain_account_subjects.view(),
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
             account_aliases_by_account: self.account_aliases_by_account.view(),
@@ -11625,10 +11479,6 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<DomainId, Vec<HashOf<DomainEndorsement>>>;
     /// Account storage (read-only).
     fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue>;
-    /// Domain memberships keyed by account subject (read-only).
-    fn account_subject_domains(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>>;
-    /// Account-subject memberships keyed by domain (read-only).
-    fn domain_account_subjects(&self) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountId>>;
     /// UAID to account index (read-only).
     fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId>;
     /// Account alias index (read-only).
@@ -12149,15 +11999,25 @@ pub trait WorldReadOnly {
         self.domains().iter().map(|(_, domain)| domain)
     }
 
-    /// Iterate subjects linked to the specified domain.
-    fn account_subjects_in_domain_iter<'a>(
-        &'a self,
-        id: &'a DomainId,
-    ) -> impl Iterator<Item = &'a AccountId> {
-        self.domain_account_subjects()
-            .get(id)
+    /// Return `true` when the account has any alias whose alias-domain matches `id`.
+    fn account_has_alias_domain(&self, account_id: &AccountId, id: &DomainId) -> bool {
+        let matches_alias = |alias: &AccountAlias| {
+            alias
+                .domain
+                .as_ref()
+                .is_some_and(|alias_domain| alias_domain.name() == id.name())
+        };
+
+        self.account_aliases_by_account()
+            .get(account_id)
             .into_iter()
             .flat_map(BTreeSet::iter)
+            .any(matches_alias)
+            || self
+                .accounts()
+                .get(account_id)
+                .and_then(|value| value.as_ref().label())
+                .is_some_and(matches_alias)
     }
 
     /// Iterate accounts in domain.
@@ -12166,12 +12026,8 @@ pub trait WorldReadOnly {
         &'a self,
         id: &'a DomainId,
     ) -> impl Iterator<Item = AccountEntry<'a>> {
-        self.account_subjects_in_domain_iter(id)
-            .filter_map(move |subject| {
-                self.accounts()
-                    .get_key_value(subject)
-                    .map(|(account_id, value)| AccountEntry::new(account_id, value))
-            })
+        self.accounts_iter()
+            .filter(move |account| self.account_has_alias_domain(account.id(), id))
     }
 
     /// Returns reference for accounts map
@@ -12182,7 +12038,7 @@ pub trait WorldReadOnly {
             .map(|(id, value)| AccountEntry::new(id, value))
     }
 
-    /// Iterate scoped accounts that belong to a domainless account subject.
+    /// Iterate stored account entries for a canonical domainless account subject.
     fn accounts_for_subject_iter<'a>(
         &'a self,
         subject: &'a AccountId,
@@ -12193,17 +12049,39 @@ pub trait WorldReadOnly {
             .map(move |value| AccountEntry::new(subject, value))
     }
 
-    /// List linked domains for a domainless account subject.
-    fn domains_for_subject(&self, subject: &AccountId) -> Vec<DomainId> {
-        self.account_subject_domains()
-            .get(subject)
-            .map(|linked_domains| linked_domains.iter().cloned().collect())
-            .unwrap_or_default()
+    /// List domain entities referenced by the account's bound aliases.
+    fn alias_domains_for_account(&self, account_id: &AccountId) -> Vec<DomainId> {
+        let mut domains = BTreeSet::new();
+        let mut maybe_collect = |alias: &AccountAlias| {
+            let Some(alias_domain) = alias.domain.as_ref() else {
+                return;
+            };
+            domains.extend(self.domains().iter().filter_map(|(domain_id, _)| {
+                (domain_id.name() == alias_domain.name()).then_some(domain_id.clone())
+            }));
+        };
+
+        if let Some(aliases) = self.account_aliases_by_account().get(account_id) {
+            for alias in aliases {
+                maybe_collect(alias);
+            }
+        }
+        if let Some(alias) = self
+            .accounts()
+            .get(account_id)
+            .and_then(|value| value.as_ref().label())
+        {
+            maybe_collect(alias);
+        }
+
+        domains.into_iter().collect()
     }
 
     /// List account subjects linked to a specific domain.
     fn account_subjects_in_domain(&self, id: &DomainId) -> Vec<AccountId> {
-        self.account_subjects_in_domain_iter(id).cloned().collect()
+        self.accounts_in_domain_iter(id)
+            .map(|account| account.id().clone())
+            .collect()
     }
 
     /// Iterate asset definitions in domain
@@ -12332,9 +12210,11 @@ pub trait WorldReadOnly {
         &'a self,
         id: &'a DomainId,
     ) -> impl Iterator<Item = AssetEntry<'a>> {
-        self.account_subjects_in_domain_iter(id)
-            .filter(move |subject| self.accounts().get(*subject).is_some())
-            .flat_map(move |subject| self.assets_in_account_iter(subject))
+        let mut assets = Vec::new();
+        for account in self.accounts_in_domain_iter(id) {
+            assets.extend(self.assets_in_account_iter(account.id()));
+        }
+        assets.into_iter()
     }
 
     /// Iterate assets matching a specific definition.
@@ -12604,16 +12484,6 @@ macro_rules! impl_world_ro {
             }
             fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue> {
                 &self.accounts
-            }
-            fn account_subject_domains(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>> {
-                &self.account_subject_domains
-            }
-            fn domain_account_subjects(
-                &self,
-            ) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountId>> {
-                &self.domain_account_subjects
             }
             fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId> {
                 &self.uaid_accounts
@@ -13372,8 +13242,6 @@ impl<'world> WorldBlock<'world> {
             domains,
             domain_selectors,
             accounts,
-            account_subject_domains,
-            domain_account_subjects,
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
@@ -13668,8 +13536,6 @@ impl<'world> WorldBlock<'world> {
         domain_asset_definitions.commit();
         asset_definitions.commit();
         accounts.commit();
-        account_subject_domains.commit();
-        domain_account_subjects.commit();
         uaid_accounts.commit();
         account_aliases.commit();
         account_aliases_by_account.commit();
@@ -14281,6 +14147,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Insert or replace an account directly for deterministic test setup.
+    pub fn insert_account_for_testing(
+        &mut self,
+        account_id: AccountId,
+        account_value: AccountValue,
+    ) -> Option<AccountValue> {
+        self.accounts.insert(account_id, account_value)
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the pin-manifest registry for test scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
@@ -14495,8 +14371,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domains,
             domain_selectors,
             accounts,
-            account_subject_domains,
-            domain_account_subjects,
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
@@ -14767,8 +14641,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         domain_asset_definitions.apply();
         asset_definitions.apply();
         accounts.apply();
-        account_subject_domains.apply();
-        domain_account_subjects.apply();
         uaid_accounts.apply();
         account_aliases.apply();
         account_aliases_by_account.apply();
@@ -14799,135 +14671,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.accounts
             .get_mut(id)
             .ok_or_else(|| FindError::Account(id.clone()))
-    }
-
-    fn rebuild_domain_account_subject_index(&mut self) {
-        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountId>>::new();
-        let domains = self.domains.view();
-        for (subject, linked_domains) in self.account_subject_domains.view().iter() {
-            for domain in linked_domains
-                .iter()
-                .filter(|domain| domains.get(*domain).is_some())
-            {
-                domain_subjects
-                    .entry(domain.clone())
-                    .or_default()
-                    .insert(subject.clone());
-            }
-        }
-        let existing_domains: Vec<_> = self
-            .domain_account_subjects
-            .view()
-            .iter()
-            .map(|(domain, _)| domain.clone())
-            .collect();
-        for domain in existing_domains {
-            self.domain_account_subjects.remove(domain);
-        }
-        for (domain, subjects) in domain_subjects {
-            self.domain_account_subjects.insert(domain, subjects);
-        }
-    }
-
-    fn sync_account_value_linked_domains(&mut self, subject: &AccountId) {
-        let linked_domains = self
-            .account_subject_domains
-            .get(subject)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|domain| self.domains.get(domain).is_some())
-            .collect();
-        if let Some(details) = self.accounts.get_mut(subject) {
-            details.set_linked_domains(linked_domains);
-        }
-    }
-
-    /// Insert or replace an account and synchronize subject/domain membership indexes.
-    pub fn insert_account_with_links(
-        &mut self,
-        account_id: AccountId,
-        account_value: AccountValue,
-    ) -> Option<AccountValue> {
-        let subject = account_id.subject_id();
-        let replaced = self.accounts.insert(account_id, account_value);
-        let mut linked_domains = self
-            .account_subject_domains
-            .get(&subject)
-            .cloned()
-            .unwrap_or_default();
-        if let Some(details) = self.accounts.get(&subject) {
-            linked_domains.extend(
-                details
-                    .linked_domains()
-                    .iter()
-                    .filter(|domain| self.domains.get(*domain).is_some())
-                    .cloned(),
-            );
-        }
-        self.account_subject_domains
-            .insert(subject.clone(), linked_domains.clone());
-        self.sync_account_value_linked_domains(&subject);
-        self.rebuild_domain_account_subject_index();
-
-        replaced
-    }
-
-    /// Remove an account and synchronize subject/domain membership indexes.
-    pub fn remove_account_with_links(&mut self, account_id: &AccountId) -> Option<AccountValue> {
-        let removed = self.accounts.remove(account_id.clone());
-        if removed.is_some() {
-            let subject = account_id.subject_id();
-            let mut linked_domains = self
-                .account_subject_domains
-                .get(&subject)
-                .cloned()
-                .unwrap_or_default();
-            if let Some(removed_value) = &removed {
-                for domain in removed_value
-                    .linked_domains()
-                    .iter()
-                    .filter(|domain| self.domains.get(*domain).is_some())
-                {
-                    linked_domains.remove(domain);
-                }
-            }
-            self.account_subject_domains
-                .insert(subject.clone(), linked_domains);
-            self.sync_account_value_linked_domains(&subject);
-            self.rebuild_domain_account_subject_index();
-        }
-        removed
-    }
-
-    /// Link an account subject to a domain in the subject/domain membership indexes.
-    pub fn link_account_subject_domain(&mut self, account_id: &AccountId, domain: &DomainId) {
-        let subject = account_id.subject_id();
-        let mut domains = self
-            .account_subject_domains
-            .get(&subject)
-            .cloned()
-            .unwrap_or_default();
-        domains.insert(domain.clone());
-        self.account_subject_domains
-            .insert(subject.clone(), domains);
-        self.sync_account_value_linked_domains(&subject);
-        self.rebuild_domain_account_subject_index();
-    }
-
-    /// Unlink an account subject from a domain in the subject/domain membership indexes.
-    pub fn unlink_account_subject_domain(&mut self, account_id: &AccountId, domain: &DomainId) {
-        let subject = account_id.subject_id();
-        let mut domains = self
-            .account_subject_domains
-            .get(&subject)
-            .cloned()
-            .unwrap_or_default();
-        domains.remove(domain);
-        self.account_subject_domains
-            .insert(subject.clone(), domains);
-        self.sync_account_value_linked_domains(&subject);
-        self.rebuild_domain_account_subject_index();
     }
 
     /// Add [`permission`](Permission) to the [`Account`] if the account does not have this permission yet.
@@ -16633,7 +16376,6 @@ impl State {
         query_handle: LiveQueryStoreHandle,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
-        world.rebuild_account_subject_domain_indexes();
         crate::sns::seed_default_namespace_policies(&mut world);
         Self::seed_reserved_universal_dataspace_name_record(&mut world);
         Self::seed_existing_domain_name_records(&mut world);
@@ -26151,7 +25893,7 @@ impl StateTransaction<'_, '_> {
             let asset_id = changed.asset();
             let amount_str = changed.amount().to_string();
             let asset_definition_id = asset_id.definition().to_string();
-            let linked_domains = self.world.domains_for_subject(asset_id.account());
+            let alias_domains = self.world.alias_domains_for_account(asset_id.account());
             let account_domain = self
                 .world
                 .accounts
@@ -26163,12 +25905,12 @@ impl StateTransaction<'_, '_> {
                         .and_then(|label| label.domain.as_ref().map(ToString::to_string))
                 })
                 .or_else(|| {
-                    linked_domains
+                    alias_domains
                         .iter()
                         .map(ToString::to_string)
                         .find(|domain| matches!(domain.as_str(), "hbl" | "ubl" | "sbp"))
                 })
-                .or_else(|| linked_domains.first().map(ToString::to_string))
+                .or_else(|| alias_domains.first().map(ToString::to_string))
                 .unwrap_or_else(|| account_event.origin_domain().to_string());
             let asset_definition_name = (!asset_id.definition().is_opaque_canonical())
                 .then(|| asset_id.definition().name().as_ref().to_owned());
@@ -27000,8 +26742,6 @@ pub(crate) mod deserialize {
         let peers: Cell<Peers> = take_required(&mut map, "peers")?;
         let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
         let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
-        let account_subject_domains = take_optional_default(&mut map, "account_subject_domains")?;
-        let domain_account_subjects = take_optional_default(&mut map, "domain_account_subjects")?;
         let account_aliases = take_optional_default(&mut map, "account_aliases")?;
         let account_aliases_by_account =
             take_optional_default(&mut map, "account_aliases_by_account")?;
@@ -27157,8 +26897,6 @@ pub(crate) mod deserialize {
             domains,
             domain_selectors: Storage::default(),
             accounts,
-            account_subject_domains,
-            domain_account_subjects,
             uaid_accounts: Storage::default(),
             account_aliases,
             account_aliases_by_account,
@@ -27316,7 +27054,6 @@ pub(crate) mod deserialize {
                 field: "domain_selectors".into(),
                 message,
             })?;
-        world.rebuild_account_subject_domain_indexes();
         world
             .rebuild_uaid_account_index()
             .map_err(|message| json::Error::InvalidField {
@@ -27789,8 +27526,6 @@ pub(crate) mod deserialize {
 
     #[cfg(test)]
     mod decode_tests {
-        use iroha_crypto::KeyPair;
-
         use super::*;
 
         #[test]
@@ -27808,44 +27543,6 @@ pub(crate) mod deserialize {
             let parsed = take_parameters_cell(&mut map, "parameters")
                 .expect("historical envelope should decode into parameters cell");
             assert_eq!(parsed.view().get(), &expected);
-        }
-
-        #[test]
-        fn take_optional_default_decodes_subject_domain_index_storages() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
-            let account = AccountId::new(KeyPair::random().public_key().clone());
-            let subject = account.subject_id();
-
-            let mut subject_domains: Storage<AccountId, BTreeSet<DomainId>> = Storage::default();
-            subject_domains.insert(subject.clone(), BTreeSet::new());
-            let mut domain_subjects: Storage<DomainId, BTreeSet<AccountId>> = Storage::default();
-            domain_subjects.insert(domain_id.clone(), BTreeSet::from([subject.clone()]));
-
-            let mut map = json::native::Map::new();
-            map.insert(
-                "account_subject_domains".to_owned(),
-                norito::json::to_value(&subject_domains).expect("serialize subject domains"),
-            );
-            map.insert(
-                "domain_account_subjects".to_owned(),
-                norito::json::to_value(&domain_subjects).expect("serialize domain subjects"),
-            );
-
-            let decoded_subject_domains: Storage<AccountId, BTreeSet<DomainId>> =
-                take_optional_default(&mut map, "account_subject_domains")
-                    .expect("decode subject domains");
-            let decoded_domain_subjects: Storage<DomainId, BTreeSet<AccountId>> =
-                take_optional_default(&mut map, "domain_account_subjects")
-                    .expect("decode domain subjects");
-
-            assert_eq!(
-                decoded_subject_domains.view().get(&subject),
-                Some(&BTreeSet::new())
-            );
-            assert_eq!(
-                decoded_domain_subjects.view().get(&domain_id),
-                Some(&BTreeSet::from([subject]))
-            );
         }
     }
 }
@@ -28056,14 +27753,20 @@ mod tests {
         )
     }
 
+    fn alias_in_domain(domain_id: &DomainId, label: Name) -> AccountAlias {
+        AccountAlias::new(
+            label,
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            DataSpaceId::GLOBAL,
+        )
+    }
+
     #[test]
     fn new_for_testing_seeds_reserved_universal_dataspace_name_record() {
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let genesis_domain =
             Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-        let genesis_account =
-            Account::new(genesis_id.clone())
-                .build(&genesis_id);
+        let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
         let state = State::new_for_testing(
             World::with([genesis_domain], [genesis_account], []),
             crate::kura::Kura::blank_kura_for_testing(),
@@ -28381,7 +28084,7 @@ mod tests {
         let recipient_domain: DomainId = "sbp".parse().unwrap();
         let asset_domain: DomainId = "cbuae".parse().unwrap();
         let (subject, _) = gen_account_in("sbp");
-        let recipient = subject.to_account_id(recipient_domain.clone());
+        let recipient = subject.clone();
         let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
         let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
         let kura = Kura::blank_kura_for_testing();
@@ -28394,9 +28097,9 @@ mod tests {
         Register::domain(Domain::new(recipient_domain.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(recipient.account().clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+        Register::account(Account::new(recipient.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
@@ -28425,10 +28128,8 @@ mod tests {
         let recipient_domain: DomainId = "sbp".parse().unwrap();
         let asset_domain: DomainId = "cbuae".parse().unwrap();
         let (subject, _) = gen_account_in("ghost");
-        let account_label = AccountAlias::new(
-            recipient_domain.clone(),
-            "admin1".parse().expect("valid label"),
-        );
+        let account_label =
+            alias_in_domain(&recipient_domain, "admin1".parse().expect("valid label"));
         let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
         let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
         let kura = Kura::blank_kura_for_testing();
@@ -28448,11 +28149,9 @@ mod tests {
             label: Some(account_label),
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
         };
         let (account_id, account_value) = account.into_key_value();
-        stx.world
-            .insert_account_with_links(account_id, account_value);
+        stx.world.accounts.insert(account_id, account_value);
 
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
@@ -28787,193 +28486,6 @@ mod tests {
         assert!(summary.fee_sponsors.contains(&account_id));
     }
 
-    #[test]
-    fn world_view_exposes_subject_domain_links() {
-        let keypair = KeyPair::random();
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let acme: DomainId = "acme".parse().expect("domain id");
-
-        let wonderland_account = AccountId::new(keypair.public_key().clone());
-        let second_subject_account = AccountId::new(KeyPair::random().public_key().clone());
-        let shared_subject = wonderland_account.subject_id();
-        let acme_account = shared_subject.to_account_id(acme.clone());
-
-        let world = World::with(
-            [
-                Domain::new(wonderland.clone()).build(&wonderland_account),
-                Domain::new(acme.clone()).build(acme_account.account()),
-            ],
-            [
-                new_account_in_domain(&wonderland_account, &wonderland).build(&wonderland_account),
-                new_account_in_domain(&second_subject_account, &wonderland)
-                    .build(&second_subject_account),
-            ],
-            [],
-        );
-        let mut block = world.block();
-        #[cfg(feature = "telemetry")]
-        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
-        #[cfg(not(feature = "telemetry"))]
-        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        tx.link_account_subject_domain(acme_account.account(), acme_account.domain());
-        tx.apply();
-        block.commit();
-
-        let world_view = world.view();
-
-        let linked_domains = world_view.domains_for_subject(&shared_subject);
-        assert_eq!(linked_domains, vec![acme.clone(), wonderland.clone()]);
-
-        let subjects_in_wonderland = world_view.account_subjects_in_domain(&wonderland);
-        assert!(subjects_in_wonderland.contains(&shared_subject));
-        assert!(subjects_in_wonderland.contains(&second_subject_account.subject_id()));
-        assert_eq!(subjects_in_wonderland.len(), 2);
-
-        let subjects_in_acme = world_view.account_subjects_in_domain(&acme);
-        assert_eq!(subjects_in_acme, vec![shared_subject]);
-    }
-
-    #[test]
-    fn link_account_subject_domain_updates_stored_account_details() {
-        let keypair = KeyPair::random();
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let acme: DomainId = "acme".parse().expect("domain id");
-
-        let wonderland_account = AccountId::new(keypair.public_key().clone());
-        let shared_subject = wonderland_account.subject_id();
-        let acme_account = shared_subject.to_account_id(acme.clone());
-
-        let world = World::with(
-            [
-                Domain::new(wonderland.clone()).build(&wonderland_account),
-                Domain::new(acme.clone()).build(acme_account.account()),
-            ],
-            [new_account_in_domain(&wonderland_account, &wonderland).build(&wonderland_account)],
-            [],
-        );
-
-        let mut block = world.block();
-        #[cfg(feature = "telemetry")]
-        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
-        #[cfg(not(feature = "telemetry"))]
-        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        tx.link_account_subject_domain(acme_account.account(), acme_account.domain());
-
-        let stored = tx
-            .account(&shared_subject)
-            .expect("subject account should remain available after link");
-        assert_eq!(
-            stored.linked_domains(),
-            &BTreeSet::from([acme.clone(), wonderland.clone()])
-        );
-
-        tx.apply();
-        block.commit();
-
-        let world_view = world.view();
-        let stored = world_view
-            .account(&shared_subject)
-            .expect("linked subject should stay materialized after commit");
-        assert_eq!(stored.linked_domains(), &BTreeSet::from([acme, wonderland]));
-    }
-
-    #[test]
-    fn unlink_last_domain_keeps_subject_record_materialized() {
-        let keypair = KeyPair::random();
-        let solo: DomainId = "solo".parse().expect("domain id");
-        let scoped = AccountId::new(keypair.public_key().clone());
-        let subject = scoped.subject_id();
-
-        let world = World::with(
-            [Domain::new(solo.clone()).build(&scoped)],
-            [new_account_in_domain(&scoped, &solo).build(&scoped)],
-            [],
-        );
-
-        let mut block = world.block();
-        #[cfg(feature = "telemetry")]
-        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
-        #[cfg(not(feature = "telemetry"))]
-        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        let removed = tx.remove_account_with_links(&scoped);
-        assert!(removed.is_some(), "scoped account must be removed");
-        let linked_domains = tx
-            .account_subject_domains
-            .get(&subject)
-            .expect("subject record should remain materialized");
-        assert!(
-            linked_domains.is_empty(),
-            "subject should remain with no linked domains after last unlink"
-        );
-        assert!(
-            tx.domain_account_subjects.get(&solo).is_none(),
-            "domain subject index should be empty after unlink"
-        );
-        tx.apply();
-        block.commit();
-
-        let view = world.view();
-        assert!(view.accounts.get(&scoped).is_none());
-        let linked_domains = view
-            .account_subject_domains
-            .get(&subject)
-            .expect("subject record should persist post-commit");
-        assert!(
-            linked_domains.is_empty(),
-            "subject should persist with an empty domain set"
-        );
-    }
-
-    #[test]
-    fn unlink_one_domain_preserves_other_subject_links() {
-        let keypair = KeyPair::random();
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let acme: DomainId = "acme".parse().expect("domain id");
-
-        let wonderland_account = AccountId::new(keypair.public_key().clone());
-        let subject = wonderland_account.subject_id();
-        let acme_account = subject.to_account_id(acme.clone());
-
-        let world = World::with(
-            [
-                Domain::new(wonderland.clone()).build(&wonderland_account),
-                Domain::new(acme.clone()).build(acme_account.account()),
-            ],
-            [new_account_in_domain(&wonderland_account, &wonderland).build(&wonderland_account)],
-            [],
-        );
-
-        let mut block = world.block();
-        #[cfg(feature = "telemetry")]
-        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
-        #[cfg(not(feature = "telemetry"))]
-        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        tx.link_account_subject_domain(acme_account.account(), acme_account.domain());
-        let removed = tx.remove_account_with_links(&wonderland_account);
-        assert!(removed.is_some(), "linked scoped account must be removed");
-        let linked_domains = tx
-            .account_subject_domains
-            .get(&subject)
-            .expect("subject record should remain materialized");
-        assert_eq!(linked_domains, &BTreeSet::from([acme.clone()]));
-        let subjects_in_acme = tx
-            .domain_account_subjects
-            .get(&acme)
-            .expect("remaining domain should still reference subject");
-        assert!(subjects_in_acme.contains(&subject));
-        assert!(
-            tx.domain_account_subjects.get(&wonderland).is_none(),
-            "unlinked domain should have no subject references"
-        );
-        tx.apply();
-        block.commit();
-
-        let view = world.view();
-        assert!(view.accounts.get(&wonderland_account).is_none());
-        assert!(view.accounts.get(acme_account.account()).is_none());
-        assert_eq!(view.domains_for_subject(&subject), vec![acme]);
-    }
-
     fn dataspace_catalog_for_lane_catalog(catalog: &LaneCatalog) -> DataSpaceCatalog {
         let mut ids: BTreeSet<DataSpaceId> = catalog
             .lanes()
@@ -29130,7 +28642,7 @@ mod tests {
         };
         world.domains.insert(domain_id.clone(), domain);
 
-        let label = AccountAlias::new(domain_id.clone(), "alice".parse().expect("label"));
+        let label = alias_in_domain(&domain_id, "alice".parse().expect("label"));
         let uaid = UniversalAccountId::from_hash(Hash::new("uaid-index"));
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque-index"));
         let details = iroha_data_model::account::AccountDetails::new(
@@ -29146,7 +28658,6 @@ mod tests {
         world
             .rebuild_domain_selector_index()
             .expect("domain selector rebuild");
-        world.rebuild_account_subject_domain_indexes();
         world
             .rebuild_uaid_account_index()
             .expect("UAID index rebuild");
@@ -29162,49 +28673,9 @@ mod tests {
             world.domain_selectors.view().get(&selector),
             Some(&domain_id)
         );
-        let subject = owner_id.subject_id();
-        assert_eq!(
-            world.account_subject_domains.view().get(&subject),
-            Some(&BTreeSet::from([domain_id.clone()]))
-        );
-        assert_eq!(
-            world.domain_account_subjects.view().get(&domain_id),
-            Some(&BTreeSet::from([subject]))
-        );
         assert_eq!(world.uaid_accounts.view().get(&uaid), Some(&owner_id));
         assert_eq!(world.account_aliases.view().get(&label), Some(&owner_id));
         assert_eq!(world.opaque_uaids.view().get(&opaque), Some(&uaid));
-    }
-
-    #[test]
-    fn world_rebuild_account_indexes_preserves_materialized_empty_subject_records() {
-        let mut world = World::default();
-        let keypair = KeyPair::random();
-        let scoped = AccountId::new(keypair.public_key().clone());
-        let subject = scoped.subject_id();
-
-        world
-            .account_subject_domains
-            .insert(subject.clone(), BTreeSet::new());
-
-        world.rebuild_account_subject_domain_indexes();
-
-        assert_eq!(
-            world.account_subject_domains.view().get(&subject),
-            Some(&BTreeSet::new())
-        );
-        assert!(
-            world.domain_account_subjects.view().iter().next().is_none(),
-            "empty-subject materialization must not emit phantom domain entries"
-        );
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        assert_eq!(
-            state.world.account_subject_domains.view().get(&subject),
-            Some(&BTreeSet::new())
-        );
     }
 
     #[test]
@@ -39271,8 +38742,11 @@ mod tests {
         let rose_source = AssetId::new(rose_def_id.clone(), ALICE_ID.clone());
         let rose_target = AssetId::new(rose_def_id.clone(), BOB_ID.clone());
         let trigger_id: TriggerId = "alias_json_transfer".parse().unwrap();
-        let banking_label =
-            AccountAlias::new(domain_id.clone(), "banking".parse().expect("banking label"));
+        let banking_label = AccountAlias::new(
+            "banking".parse().expect("banking label"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            DataSpaceId::GLOBAL,
+        );
 
         let src = r#"
             seiyaku AliasTransfer {
@@ -39364,7 +38838,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanManageAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            domain_id.clone().into(),
+                            AccountAliasDomain::new(domain_id.name().clone()),
                         ),
                     },
                 ),
@@ -39388,7 +38862,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanResolveAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            domain_id.clone().into(),
+                            AccountAliasDomain::new(domain_id.name().clone()),
                         ),
                     },
                 ),

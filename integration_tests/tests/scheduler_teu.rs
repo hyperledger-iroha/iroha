@@ -207,10 +207,8 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     // Assemble world with both authorities registered.
     let domain0: Domain = Domain::new(lane0_domain_id.clone()).build(&lane0_account);
     let domain1: Domain = Domain::new(lane1_domain_id.clone()).build(&lane1_account);
-    let account0 = Account::new(lane0_account.clone())
-        .build(&lane0_account);
-    let account1 = Account::new(lane1_account.clone())
-        .build(&lane1_account);
+    let account0 = Account::new(lane0_account.clone()).build(&lane0_account);
+    let account1 = Account::new(lane1_account.clone()).build(&lane1_account);
     let world = World::with(
         [domain0, domain1],
         [account0, account1],
@@ -445,11 +443,8 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
 
     let domain_fallback: Domain = Domain::new(fallback_domain_id.clone()).build(&fallback_account);
     let domain_routed: Domain = Domain::new(routed_domain_id.clone()).build(&routed_account);
-    let account_fallback =
-        Account::new(fallback_account.clone())
-            .build(&fallback_account);
-    let account_routed = Account::new(routed_account.clone())
-        .build(&routed_account);
+    let account_fallback = Account::new(fallback_account.clone()).build(&fallback_account);
+    let account_routed = Account::new(routed_account.clone()).build(&routed_account);
     let world = World::with(
         [domain_fallback, domain_routed],
         [account_fallback, account_routed],
