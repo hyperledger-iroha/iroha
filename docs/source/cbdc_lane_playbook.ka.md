@@ -104,10 +104,10 @@ Lane მანიფესტი პირდაპირ ეთერში `ne
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>"
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" }
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,18 @@ Lane მანიფესტი პირდაპირ ეთერში `ne
 }
 ```
 
-ძირითადი მოთხოვნები:- ვალიდატორები **უნდა** იყოს i105 ანგარიშის კანონიკური ID (არა `@domain`; დაურთოს `@domain` მხოლოდ როგორც აშკარა მარშრუტიზაციის მინიშნება), რომელიც არსებობს კატალოგში. დააყენეთ `quorum` მრავალგზის ზღურბლზე (≥2).
+ძირითადი მოთხოვნები:-
+
+- Validators **must** be declared as explicit bindings with a canonical I105
+  authority account plus a concrete `peer_id`. Legacy string-only validator
+  arrays are rejected.
+- Each manifest `peer_id` must resolve to a registered runtime peer with a live
+  consensus key that is present in the current commit topology; Torii routes
+  only to those authoritative peer bindings and fails closed when the runtime
+  truth disagrees with the manifest.
+- Validator accounts should remain stable governance identities even if the
+  underlying host or peer keys rotate; update the manifest `peer_id` binding
+  when the serving peer changes. Set `quorum` to the multisig threshold (≥2).
 - დაცული სახელების სივრცეები ახორციელებს `Queue::push`-ს (იხ. `crates/iroha_core/src/queue.rs`), ამიტომ ყველა CBDC კონტრაქტში უნდა იყოს მითითებული `gov_namespace` + `gov_contract_id`.
 - `composability_group` ველები მიჰყვება `docs/source/nexus.md` §8.6-ში აღწერილ სქემას; მფლობელი (CBDC ხაზი) ​​აწვდის თეთრ სიას და კვოტებს. თეთრ სიაში შეყვანილი DS მანიფესტები მიუთითებს მხოლოდ `group_id_hex` + `activation_epoch`.
 - მანიფესტის კოპირების შემდეგ, გაუშვით `cargo test -p integration_tests nexus::lane_registry -- --nocapture`, რათა დაადასტუროთ `LaneManifestRegistry::from_config` ჩატვირთვა.

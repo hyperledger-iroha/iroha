@@ -296,8 +296,11 @@ export function normalizeAccountId(value, name) {
   }
 
   try {
-    const { address } = AccountAddress.parseEncoded(raw);
-    return address.toI105();
+    const { address, chainDiscriminant } = AccountAddress.parseEncoded(raw);
+    if (typeof chainDiscriminant === "number") {
+      return address.toI105(chainDiscriminant);
+    }
+    return looksLikeCanonicalI105Literal(raw) ? raw : address.toI105();
   } catch (error) {
     if (error instanceof AccountAddressError) {
       if (looksLikeCanonicalI105Literal(raw)) {

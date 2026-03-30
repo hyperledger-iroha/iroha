@@ -46,9 +46,119 @@ Last updated: 2026-03-30
   - `cargo test -p integration_tests --test mod trigger_must_be_removed_on_action_authority_account_removal -- --nocapture`
   - `cargo test -p integration_tests --test mod two_non_intersecting_execution_paths -- --nocapture`
   - `cargo test -p integration_tests --test mod multiple_genesis_4_peers_2_genesis -- --nocapture`
-  - `cargo test -p iroha_core committed_rbc_cleanup_preserves_persisted_session_snapshot -- --nocapture`
+- `cargo test -p iroha_core committed_rbc_cleanup_preserves_persisted_session_snapshot -- --nocapture`
 - `cargo test -p integration_tests --test mod multiple_blocks_created -- --nocapture`
   was still running at handoff and had not surfaced an error yet.
+
+## 2026-03-30 Remaining public-lane routing gaps are now closed across rebinding and admin-managed manifests
+- Added `RebindPublicLaneValidatorPeer` to the staking data model, instruction
+  registry, visitor surface, runtime executor, and CLI so stake-elected
+  validators can repair a stale authoritative `peer_id` binding in place
+  without exit/re-register churn (`crates/iroha_data_model/src/isi/staking.rs`,
+  `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`,
+  `crates/iroha_data_model/src/visit/{mod.rs,visit_instruction.rs}`,
+  `crates/iroha_core/src/smartcontracts/isi/staking.rs`,
+  `crates/iroha_cli/src/staking.rs`).
+- Changed admin-managed lane manifests from string validator arrays to explicit
+  `{ validator, peer_id }` bindings and switched authoritative peer resolution
+  for those lanes to the stored manifest `peer_id`, gated against current
+  runtime peer presence, live consensus keys, and commit-topology membership
+  instead of validator account signatories
+  (`crates/iroha_core/src/{governance/manifest.rs,state.rs}`,
+  `crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}`).
+- Torii validator snapshots now expose a non-null `peer_id` for both
+  stake-elected and admin-managed lanes, and the Nexus cross-dataspace
+  integration harnesses now use intentionally divergent validator accounts vs
+  peer ids so the routing model is exercised directly in test setup
+  (`integration_tests/tests/nexus/{cross_dataspace_localnet,cross_dataspace_zk_stark_localnet}.rs`).
+- Updated operator docs and playbooks so manifest examples, public-lane
+  lifecycle notes, and lane governance docs all describe explicit peer
+  bindings and the new rebind path
+  (`docs/source/{nexus_public_lanes,cbdc_lane_playbook,nexus_lanes}.md`).
+- Verification:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core -p iroha_torii -p iroha_data_model -p iroha_cli --all-targets`
+  - `cargo check -p integration_tests --test mod`
+  - `cargo test -p iroha_data_model rebind_public_lane_validator_peer_json_roundtrip --lib`
+  - `cargo test -p iroha_core rebind_updates_active_validator_peer_and_preserves_record_fields --lib`
+  - `cargo test -p iroha_core manifest_parses_validators_and_namespaces --lib`
+  - `cargo test -p iroha_torii authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane --lib`
+  - `cargo test -p iroha_torii lane_validators_endpoint_uses_manifest_roster_for_admin_managed_lane --lib`
+  - `cargo test -p iroha_torii torii_proxy_candidate_peers_only_use_authoritative_peers --lib`
+  - `cargo test -p iroha_torii --test nexus_public_lanes`
+
+## 2026-03-30 Genesis JSON now preserves public-lane validator peer_id for Kagami/deploy output
+- Fixed the JSON genesis serializer in `crates/iroha_genesis/src/lib.rs` so
+  `RegisterPublicLaneValidator` now emits its authoritative `peer_id` instead
+  of dropping it during structured instruction export.
+- Added a regression assertion to
+  `deserialize_structured_instructions_supports_npos_bootstrap` so the NPoS
+  bootstrap round-trip now explicitly requires `peer_id` to survive
+  serialize/deserialize.
+- This closes the deployment gap where Kagami already constructed
+  `RegisterPublicLaneValidator` with `peer_id` in memory, but rendered
+  `genesis.json` omitted the field and downstream deploy tooling rejected the
+  bootstrap material.
+- Verification:
+  - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/.cache/cargo-target-genesis cargo test -p iroha_genesis deserialize_structured_instructions_supports_npos_bootstrap -- --nocapture`
+  - `cargo build -p iroha_kagami --bin kagami`
+  - downstream render-only validation via
+    `/Users/takemiyamakoto/dev/pk-deploy/scripts/pkdeploy/internal/deploy-12node-topology.sh --run-id hybrid-peerid-fixed-20260330T213800Z --render-only --reuse-remote-binary`
+    now passes the explicit validator `peer_id` guard and emits non-empty
+    `peer_id` bindings in all rendered genesis variants
+
+## 2026-03-30 Nexus public-lane routing now uses explicit authoritative peer bindings
+- Split public-lane validator authority into two first-release roles:
+  `validator` remains the staking/governance `AccountId`, while stake-elected
+  validator records and registration ISIs now carry an explicit `peer_id` for
+  consensus and Torii routing (`crates/iroha_data_model/src/isi/staking.rs`,
+  `crates/iroha_data_model/src/nexus/staking.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/staking.rs`).
+- Updated staking admission, state helpers, stake snapshot / roster derivation,
+  and related bootstrap tooling to resolve authoritative peers from stored
+  validator `peer_id` bindings instead of inferring them from validator account
+  signatories (`crates/iroha_core/src/{state.rs,sumeragi/**}`,
+  `crates/iroha_genesis/src/lib.rs`, `crates/iroha_kagami/src/{genesis/sign.rs,localnet.rs}`,
+  `crates/iroha_test_network/src/{config.rs,lib.rs}`, `crates/izanami/src/{instructions.rs,chaos.rs}`,
+  `crates/irohad/src/main.rs`).
+- Tightened Torii routed public-lane proxying so candidate selection uses only
+  authoritative peers and fails closed with deterministic
+  `503 route_unavailable` when bindings are missing, stale, or all
+  authoritative peers are offline; the old generic online-peer spray and
+  routed public-lane fallback probing are removed
+  (`crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}`).
+- Surfaced the new `peer_id` through operator tooling and public docs:
+  public-lane validator registration now requires `--peer-id`, validator
+  snapshots expose `peer_id`, and
+  `docs/source/nexus_public_lanes.md` now documents authoritative-only routing.
+- Verification:
+  - `cargo check -p iroha_core --all-targets`
+  - `cargo check -p iroha_torii --all-targets`
+  - `cargo check -p iroha_data_model -p iroha_cli -p iroha_genesis -p iroha_executor -p iroha_kagami -p iroha_test_network -p izanami -p irohad --all-targets`
+
+## 2026-03-30 JS SDK canonical auth now falls back to raw Node HTTP/TLS for UTF-8 account headers
+- Fixed the JS Torii client canonical-auth transport in
+  `javascript/iroha_js/src/toriiClient.js` so requests that need a UTF-8
+  `X-Iroha-Account` header no longer hard-fail when the supplied fetch
+  implementation cannot emit raw UTF-8 header bytes.
+- Added a built-in Node socket fallback for `http:` and `https:` requests that
+  writes the HTTP/1.1 request directly over `node:net` / `node:tls`, preserves
+  the UTF-8 account literal on the wire, and parses fixed-length or chunked
+  responses back into a fetch-compatible response object.
+- Kept the previous validation error for unsupported transports such as
+  `wss:` so browser-like environments still fail fast instead of silently
+  downgrading behavior.
+- Added focused regression coverage in:
+  - `javascript/iroha_js/test/toriiCanonicalAuth.test.js` for the new raw
+    transport path and the unsupported-transport rejection; and
+  - `javascript/iroha_js/test/toriiClient.test.js` to keep the VPN canonical
+    auth unit tests on the explicit raw-header-capable mock path.
+- Verification:
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiCanonicalAuth.test.js test/toriiClient.test.js`
+  - `npm run build:dist`
+- `npx eslint src/toriiClient.js test/toriiCanonicalAuth.test.js test/toriiClient.test.js`
+  could not run in this checkout because the local `eslint` install is missing
+  the transitive `debug` module.
 
 ## 2026-03-30 Fresh full preserved-peer stable reruns on the current worktree still fail on synchronized no-lagging-peers stalls
 - Rebuilt the current-tree release binaries and reran the canonical 4-peer
@@ -1223,6 +1333,96 @@ Last updated: 2026-03-30
     preserved-peer soak; and
   - NPoS still fails on authoritative-route visibility / proxying rather than
     nomination cost.
+
+## 2026-03-29 Follow-up: C# SDK now tracks the new Torii VPN/SoraFS routes, adds managed query coverage, typed explorer inventory REST/SSE plus proof SSE, broadens contract runtime coverage, and expands transfer/metadata/trigger transactions
+- Extended the preview `.NET 8` SDK under `csharp/` so the typed Torii client
+  covers the public API additions that landed after the last C# sync:
+  - added `ToriiVpnProfile`, `ToriiVpnSessionCreateRequest`,
+    `ToriiVpnSession`, and `ToriiVpnSessionDeleteResponse`, plus
+    `ToriiClient.GetVpnProfileAsync(...)`,
+    `CreateVpnSessionAsync(...)`, and `DeleteVpnSessionAsync(...)` for
+    `/v1/vpn/profile` and `/v1/vpn/sessions`;
+  - added typed SoraFS discovery models and `ToriiClient` helpers for
+    `/v1/sorafs/cid/{cid}`, `/v1/sorafs/denylist/catalog`, and
+    `/v1/sorafs/denylist/packs/{pack_id}`;
+  - added `OpenSoraFsCidContentAsync(...)` and
+    `GetSoraFsCidContentAsync(...)` so the preview SDK can also fetch bytes and
+    gateway headers from `/sorafs/cid/{cid}/...`; and
+  - added `SubmitSignedQueryAsync(...)` for raw versioned Norito `/query`
+    submission, `SignedQueryBuilder` for managed singular
+    `FindExecutorDataModel` / `FindParameters` /
+    `FindAliasesByAccountId` / `FindProofRecordById` /
+    `FindContractManifestByCodeHash` / `FindAbiVersion` /
+    `FindAssetById` / `FindAssetDefinitionById` /
+    `FindTwitterBindingByHash` / `FindDomainEndorsements` /
+    `FindDomainEndorsementPolicy` / `FindDomainCommittee` /
+    `FindDaPinIntentByTicket` / `FindDaPinIntentByManifest` /
+    `FindDaPinIntentByAlias` / `FindDaPinIntentByLaneEpochSequence` /
+    `FindSorafsProviderOwner` / `FindDataspaceNameOwnerById`
+    construction and signing, `SignedIterableQueryBuilder` for the current
+    fast_dsl iterable subset (`FindDomains`, `FindAccounts`, `FindAssets`,
+    `FindAssetDefinitions`, `FindRepoAgreements`, `FindNfts`, `FindRwas`,
+    `FindTransactions`, `FindRoles`, `FindRoleIds`, `FindPeers`,
+    `FindActiveTriggerIds`, `FindTriggers`, `FindAccountsWithAsset`,
+    `FindPermissionsByAccountId`, `FindRolesByAccountId`, `FindBlocks`,
+    `FindBlockHeaders`, `FindProofRecords`, `FindOfflineAllowances`,
+    `FindOfflineAllowanceByCertificateId`, `FindOfflineToOnlineTransfers`,
+    `FindOfflineToOnlineTransferById`, `FindOfflineCounterSummaries`,
+    `FindOfflineVerdictRevocations`, and cursor `Continue(...)`),
+    `OpenEventSseAsync(...)` plus parsed `StreamEventsAsync(...)`, typed
+    `StreamPipelineEventsAsync(...)` / `StreamProofEventsAsync(...)` for
+    `/v1/events/sse`, typed explorer block/transaction/instruction stream
+    helpers for `/v1/explorer/*/stream`, typed explorer account/domain/asset/
+    NFT/RWA inventory page/detail reads plus asset-definition detail,
+    econometrics, holder-snapshot, block/transaction/instruction page/detail,
+    latest/health/metrics snapshot reads, and instruction contract-view reads
+    for the core `/v1/explorer/*` JSON endpoints, typed
+    `/v1/contracts/code/{code_hash}` metadata reads,
+    `/v1/contracts/code-bytes/{code_hash}` base64-byte reads,
+    `/v1/contracts/instances/{ns}` namespace inventory reads,
+    `/v1/contracts/state` state reads, typed
+    `/v1/contracts/code/{code_hash}/contract-view` reads,
+    `ExecuteContractViewAsync(...)` for read-only `/v1/contracts/view`
+    execution with typed `422` diagnostics, verified-source job submit/status
+    helpers for `/v1/contracts/code/{code_hash}/verified-source/jobs` plus
+    `/v1/contracts/code/{code_hash}/verified-source-jobs/{job_id}`, typed
+    `DeployContractAsync(...)`,
+    `DeployAndActivateContractInstanceAsync(...)`,
+    `ActivateContractInstanceAsync(...)`,
+    `CallContractAsync(...)`,
+    `ProposeMultisigContractCallAsync(...)`, and
+    `ApproveMultisigContractCallAsync(...)` for the write-side contract
+    deploy/instance/call/multisig routes, and managed
+    `TransferDomain(...)`, `TransferAssetDefinition(...)`,
+    `TransferNft(...)`, `SetAssetKeyValue(...)` /
+    `RemoveAssetKeyValue(...)`,
+    `SetDomainKeyValue(...)` / `RemoveDomainKeyValue(...)`,
+    `SetAccountKeyValue(...)` / `RemoveAccountKeyValue(...)`,
+    `SetAssetDefinitionKeyValue(...)` /
+    `RemoveAssetDefinitionKeyValue(...)`,
+    `SetNftKeyValue(...)` / `RemoveNftKeyValue(...)`,
+    `SetTriggerKeyValue(...)` / `RemoveTriggerKeyValue(...)`,
+    `MintTriggerRepetitions(...)` / `BurnTriggerRepetitions(...)`, and
+    `ExecuteTrigger(...)` transaction-builder helpers for
+    domain/asset/asset-definition/NFT transfers, domain/asset/account/
+    asset-definition/NFT/trigger metadata edits, and trigger
+    execution-window instructions; and
+  - updated the C# README, unit suite, and live smoke so the preview SDK
+    documents the new signed VPN requirement, new live-smoke knobs, probes the
+    safer explorer inventory reads by default, and pins the latest JSON
+    contracts plus transaction-encoding expectations for the new surfaces.
+- Validation:
+  - `cd csharp && PATH="$HOME/.dotnet:$PATH" dotnet build Hyperledger.Iroha.Sdk.sln -c Release -nodeReuse:false -maxcpucount:1`
+  - `cd csharp && PATH="$HOME/.dotnet:$PATH" dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build -nodeReuse:false -maxcpucount:1`
+- Residual note:
+  - the C# preview still lacks broader iterable/query families beyond the new
+    fast_dsl subset, broader typed SSE/event coverage beyond the new
+    pipeline/proof/explorer projections, broader contract admin/lifecycle
+    helpers beyond the new deploy/activate/call/multisig plus verified-source
+    job surface, broader instruction families beyond the current asset/
+    domain/asset-definition/NFT transfer plus asset quantity, metadata,
+    and trigger repetition/execution slice, and the larger
+    Connect/offline/Nexus/SoraFS parity families.
 
 ## 2026-03-29 Follow-up: Taira deploy bundle now renders validator configs from a shared roster
 - Added `scripts/render_taira_validator_bundle.py` plus focused tests in

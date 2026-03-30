@@ -70,8 +70,9 @@ pub mod isi {
         },
         name::{self, Name},
         nexus::{
-            DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementRecord,
-            LaneRelayEmergencyValidatorSet,
+            AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
+            DomainEndorsementRecord, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
+            ProofBlob, VerifiedLaneRelayRecord, proof_matches_manifest,
         },
         parameter::{Parameter, SumeragiParameter},
         prelude::*,
@@ -207,6 +208,64 @@ pub mod isi {
             .account_permissions
             .get(who)
             .is_some_and(|perms| perms.iter().any(|p| p.name() == name))
+    }
+
+    const VERIFIED_LANE_RELAY_STATE_ROOT: &str = "pkdeploy/verified-lane-relays";
+
+    fn build_state_path_key(base: &Name, key: i64) -> Result<Name, Error> {
+        Name::from_str(&format!("{base}/{key}")).map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "invalid smart-contract state path".into(),
+            ))
+            .into()
+        })
+    }
+
+    fn build_state_path_key_norito(base: &Name, key_bytes: &[u8]) -> Result<Name, Error> {
+        let digest: [u8; 32] = CryptoHash::new(key_bytes).into();
+        let suffix = hex::encode(digest);
+        Name::from_str(&format!("{base}/{suffix}")).map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "invalid smart-contract state path".into(),
+            ))
+            .into()
+        })
+    }
+
+    fn verified_lane_relay_state_key(relay_ref: &LaneRelayEnvelopeRef) -> Result<Name, Error> {
+        let root = Name::from_str(VERIFIED_LANE_RELAY_STATE_ROOT).expect("static state root");
+        let ds_path = build_state_path_key(
+            &root,
+            i64::try_from(relay_ref.dataspace_id.as_u64()).map_err(|_| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "dataspace id does not fit contract-state path".into(),
+                ))
+            })?,
+        )?;
+        let lane_path = build_state_path_key(&ds_path, i64::from(relay_ref.lane_id.as_u32()))?;
+        let block_path = build_state_path_key(
+            &lane_path,
+            i64::try_from(relay_ref.block_height).map_err(|_| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "block height does not fit contract-state path".into(),
+                ))
+            })?,
+        )?;
+        build_state_path_key_norito(&block_path, relay_ref.settlement_hash.as_ref())
+    }
+
+    fn load_verified_lane_relay_record(
+        state_ro: &impl StateReadOnly,
+        relay_ref: &LaneRelayEnvelopeRef,
+    ) -> Result<VerifiedLaneRelayRecord, Error> {
+        let key = verified_lane_relay_state_key(relay_ref)?;
+        let payload = state_ro
+            .world()
+            .smart_contract_state()
+            .get(&key)
+            .ok_or_else(|| Error::Conversion("verified lane relay not found".to_string()))?;
+        norito::decode_from_bytes::<VerifiedLaneRelayRecord>(payload)
+            .map_err(|err| Error::Conversion(format!("verified lane relay decode failed: {err}")))
     }
 
     fn protected_contract_namespaces(
@@ -10166,6 +10225,211 @@ pub mod isi {
         }
     }
 
+    impl Execute for nexus::RegisterVerifiedLaneRelay {
+        #[metrics(+"register_verified_lane_relay")]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !state_transaction.nexus.enabled {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verified lane relay registration requires nexus.enabled=true".into(),
+                ));
+            }
+
+            let envelope = self.envelope().clone();
+            envelope.verify().map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("lane relay envelope failed verification: {err}"),
+                ))
+            })?;
+            envelope.verify_fastpq_proof_material().map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("lane relay envelope FASTPQ binding failed verification: {err}"),
+                ))
+            })?;
+
+            let Some(lane) = state_transaction
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .find(|entry| entry.id == envelope.lane_id)
+            else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "unknown lane id {}",
+                        envelope.lane_id.as_u32()
+                    )),
+                )
+                .into());
+            };
+            if lane.dataspace_id != envelope.dataspace_id {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "lane {} belongs to dataspace {}, not {}",
+                        envelope.lane_id.as_u32(),
+                        lane.dataspace_id.as_u64(),
+                        envelope.dataspace_id.as_u64()
+                    )),
+                )
+                .into());
+            }
+            if !state_transaction
+                .nexus
+                .dataspace_catalog
+                .entries()
+                .iter()
+                .any(|entry| entry.id == envelope.dataspace_id)
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "unknown dataspace id {}",
+                        envelope.dataspace_id.as_u64()
+                    )),
+                )
+                .into());
+            }
+
+            let manifest_root = envelope.manifest_root.ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "lane relay envelope is missing manifest_root".into(),
+                ))
+            })?;
+            if manifest_root.iter().all(|byte| *byte == 0) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "lane relay manifest_root cannot be zeroed".into(),
+                    ),
+                )
+                .into());
+            }
+
+            let proof_blob = self.proof_blob().clone();
+            if proof_blob.payload.is_empty() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof payload is empty".into(),
+                    ),
+                )
+                .into());
+            }
+
+            let verified_at_height = state_transaction.block_height();
+            if proof_blob
+                .expiry_slot
+                .is_some_and(|expiry_slot| verified_at_height > expiry_slot)
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "verified lane relay proof expired at slot {expiry_slot}"
+                    )),
+                )
+                .into());
+            }
+            if !proof_matches_manifest(&proof_blob, envelope.dataspace_id, manifest_root) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof does not match the declared manifest_root"
+                            .into(),
+                    ),
+                )
+                .into());
+            }
+
+            let proof_envelope =
+                norito::decode_from_bytes::<AxtProofEnvelope>(&proof_blob.payload).map_err(
+                    |err| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(format!(
+                                "verified lane relay proof envelope decode failed: {err}"
+                            )),
+                        )
+                    },
+                )?;
+            if proof_envelope.manifest_root != manifest_root {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof manifest_root mismatch".into(),
+                    ),
+                )
+                .into());
+            }
+            let Some(binding) = proof_envelope.fastpq_binding.clone() else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof is missing fastpq_binding".into(),
+                    ),
+                )
+                .into());
+            };
+            if binding.source_dsid != envelope.dataspace_id.as_u64() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof source_dsid mismatch".into(),
+                    ),
+                )
+                .into());
+            }
+            let batch = fastpq_prover::build_batch_from_binding(&binding).map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("verified lane relay binding is invalid: {err}"),
+                ))
+            })?;
+            let proof = norito::decode_from_bytes::<fastpq_prover::Proof>(&proof_envelope.proof)
+                .map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "verified lane relay FASTPQ proof decode failed: {err}"
+                        )),
+                    )
+                })?;
+            fastpq_prover::verify(&batch, &proof).map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("verified lane relay FASTPQ verification failed: {err}").into(),
+                )
+            })?;
+
+            let record = VerifiedLaneRelayRecord::new(
+                envelope,
+                CryptoHash::new(&proof_blob.payload),
+                verified_at_height,
+                manifest_root,
+                binding,
+            );
+            let key = verified_lane_relay_state_key(&record.relay_ref)?;
+            let encoded = norito::to_bytes(&record).map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("verified lane relay encode failed: {err}"),
+                ))
+            })?;
+            if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
+                let decoded = norito::decode_from_bytes::<VerifiedLaneRelayRecord>(existing)
+                    .map_err(|err| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(format!(
+                                "stored verified lane relay decode failed: {err}"
+                            )),
+                        )
+                    })?;
+                if decoded != record {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "conflicting verified lane relay already exists".into(),
+                    )
+                    .into());
+                }
+                return Ok(());
+            }
+
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(key, encoded);
+            Ok(())
+        }
+    }
+
     fn parse_config_asset_definition_id(
         world: &impl crate::state::WorldReadOnly,
         raw: &str,
@@ -13119,6 +13383,7 @@ pub mod isi {
                 iroha_data_model::nexus::PublicLaneValidatorRecord {
                     lane_id: LaneId::SINGLE,
                     validator: account_id.clone(),
+                    peer_id: PeerId::from(account_id.signatory().clone()),
                     stake_account: account_id.clone(),
                     total_stake: Numeric::new(1, 0),
                     self_stake: Numeric::new(1, 0),

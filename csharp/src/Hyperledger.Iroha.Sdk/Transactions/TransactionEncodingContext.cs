@@ -75,6 +75,32 @@ internal sealed class TransactionEncodingContext
         return writer.ToArray();
     }
 
+    public byte[] EncodeName(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return EncodeString(value.Trim());
+    }
+
+    public byte[] EncodeOptionalString(string? value)
+    {
+        var normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        var writer = new OfflineNoritoWriter();
+        if (normalized is null)
+        {
+            writer.WriteByte(0);
+            return writer.ToArray();
+        }
+
+        writer.WriteByte(1);
+        writer.WriteField(EncodeString(normalized));
+        return writer.ToArray();
+    }
+
+    public byte[] EncodeJson(JsonNode? value)
+    {
+        return EncodeString(WriteJsonNode(value));
+    }
+
     public byte[] EncodeUInt32(uint value)
     {
         var writer = new OfflineNoritoWriter();
@@ -87,6 +113,22 @@ internal sealed class TransactionEncodingContext
         var writer = new OfflineNoritoWriter();
         writer.WriteUInt64LittleEndian(value);
         return writer.ToArray();
+    }
+
+    public byte[] EncodeHashLiteral(string literal)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(literal);
+
+        var bytes = DecodeFixedBytesLiteral(literal, expectedLength: 32);
+
+        // Match Rust's `Hash::prehashed(...)` behaviour, which guarantees an odd LSB.
+        bytes[^1] |= 0x01;
+        return bytes;
+    }
+
+    public byte[] EncodeFixedBytesLiteral(string literal, int expectedLength)
+    {
+        return DecodeFixedBytesLiteral(literal, expectedLength);
     }
 
     public byte[] EncodeOption<T>(T? value, Func<T, byte[]> encoder)
@@ -221,13 +263,40 @@ internal sealed class TransactionEncodingContext
         return executable.ToArray();
     }
 
-    public byte[] EncodeAssetId(string assetDefinitionId, string accountId)
+    public byte[] EncodeAssetId(string assetDefinitionId, string accountId, ulong? dataspaceId = null)
     {
         var writer = new OfflineNoritoWriter();
         writer.WriteField(EncodeAccountId(accountId));
         writer.WriteField(EncodeAssetDefinitionAddress(assetDefinitionId));
-        writer.WriteField(EncodeAssetBalanceScope(dataspaceId: null));
+        writer.WriteField(EncodeAssetBalanceScope(dataspaceId));
         return writer.ToArray();
+    }
+
+    public byte[] EncodeAssetDefinitionId(string literal)
+    {
+        return EncodeAssetDefinitionAddress(literal);
+    }
+
+    public byte[] EncodeNftId(string nftId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(nftId);
+
+        var trimmed = nftId.Trim();
+        var separatorIndex = trimmed.IndexOf('$');
+        if (separatorIndex <= 0 || separatorIndex != trimmed.LastIndexOf('$') || separatorIndex == trimmed.Length - 1)
+        {
+            throw new ArgumentException($"Invalid NFT id `{nftId}`.", nameof(nftId));
+        }
+
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(EncodeName(trimmed[(separatorIndex + 1)..]));
+        writer.WriteField(EncodeName(trimmed[..separatorIndex]));
+        return writer.ToArray();
+    }
+
+    public byte[] EncodeTriggerId(string triggerId)
+    {
+        return EncodeName(triggerId);
     }
 
     public void EnsureAuthorityMatchesPrivateKey(ReadOnlySpan<byte> privateKeySeed)
@@ -253,7 +322,7 @@ internal sealed class TransactionEncodingContext
     {
         var writer = new OfflineNoritoWriter();
         writer.WriteField(EncodeString(key));
-        var jsonString = EncodeString(WriteJsonNode(value));
+        var jsonString = EncodeJson(value);
         var jsonField = new OfflineNoritoWriter();
         jsonField.WriteField(jsonString);
         writer.WriteField(jsonField.ToArray());
@@ -448,5 +517,33 @@ internal sealed class TransactionEncodingContext
         }
 
         return decoded;
+    }
+
+    private static byte[] DecodeFixedBytesLiteral(string literal, int expectedLength)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(literal);
+
+        var normalized = literal.Trim();
+        if (normalized.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            normalized = normalized[2..];
+        }
+
+        byte[] bytes;
+        try
+        {
+            bytes = Convert.FromHexString(normalized);
+        }
+        catch (FormatException exception)
+        {
+            throw new ArgumentException($"Invalid fixed-byte literal `{literal}`.", nameof(literal), exception);
+        }
+
+        if (bytes.Length != expectedLength)
+        {
+            throw new ArgumentException($"Invalid fixed-byte literal `{literal}`.", nameof(literal));
+        }
+
+        return bytes;
     }
 }

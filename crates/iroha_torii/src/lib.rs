@@ -10310,69 +10310,84 @@ fn torii_proxy_error_response(
 const TORII_PROXY_DEFAULT_MAX_HOPS: u8 = 3;
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision) -> Vec<PeerId> {
+#[derive(Debug)]
+struct AuthoritativeLanePeers {
+    authoritative: Vec<PeerId>,
+    online: Vec<PeerId>,
+    offline: Vec<PeerId>,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn authoritative_lane_peers(
+    app: &AppState,
+    routing_decision: RoutingDecision,
+) -> AuthoritativeLanePeers {
     let online_peer_ids: HashSet<PeerId> = app
         .online_peers
         .get()
         .into_iter()
         .map(|peer| peer.id().clone())
         .collect();
-    let state_view = app.state.view();
-    let mut authoritative_peer_ids = std::collections::BTreeSet::new();
-    for validator in app
+    let authoritative = app
         .state
-        .authoritative_lane_validator_accounts(routing_decision.lane_id)
-    {
-        let Some(signatory) = validator.try_signatory() else {
-            continue;
-        };
-        authoritative_peer_ids.insert(PeerId::from(signatory.clone()));
-    }
-
-    // Permissioned deployments do not necessarily materialize public-lane validator records.
-    // Fresh NPoS bootstrap flows can also momentarily miss those records for the default
-    // universal lane even though the committed validator roster is already available. Keep
-    // ingress on the core lane alive in that case instead of hard-failing public writes.
-    if authoritative_peer_ids.is_empty() {
-        let fallback_mode = if state_view.world().sumeragi_npos_parameters().is_some() {
-            iroha_config::parameters::actual::ConsensusMode::Npos
-        } else {
-            iroha_config::parameters::actual::ConsensusMode::Permissioned
-        };
-        let consensus_mode =
-            iroha_core::sumeragi::effective_consensus_mode(&state_view, fallback_mode);
-        let allow_commit_topology_fallback = matches!(
-            consensus_mode,
-            iroha_config::parameters::actual::ConsensusMode::Permissioned
-        ) || (routing_decision.lane_id
-            == iroha_data_model::nexus::LaneId::SINGLE
-            && routing_decision.dataspace_id == iroha_data_model::nexus::DataSpaceId::GLOBAL);
-        if allow_commit_topology_fallback {
-            let commit_topology: Vec<_> = state_view.commit_topology().iter().cloned().collect();
-            if commit_topology.is_empty() {
-                authoritative_peer_ids.extend(state_view.world().peers().iter().cloned());
-                if authoritative_peer_ids.is_empty() {
-                    if let Some(local_peer_id) = app.local_peer_id.as_ref() {
-                        authoritative_peer_ids.insert(local_peer_id.clone());
-                    }
-                    authoritative_peer_ids.extend(online_peer_ids.iter().cloned());
-                }
-            } else {
-                authoritative_peer_ids.extend(commit_topology);
-            }
-        }
-    }
-
-    let mut online = std::collections::BTreeSet::new();
-    let mut offline = std::collections::BTreeSet::new();
-    for peer_id in authoritative_peer_ids {
+        .authoritative_lane_peer_ids(routing_decision.lane_id);
+    let mut online = Vec::new();
+    let mut offline = Vec::new();
+    for peer_id in authoritative.iter().cloned() {
         if online_peer_ids.contains(&peer_id) {
-            online.insert(peer_id);
+            online.push(peer_id);
         } else {
-            offline.insert(peer_id);
+            offline.push(peer_id);
         }
     }
-    online.into_iter().chain(offline).collect()
+    AuthoritativeLanePeers {
+        authoritative,
+        online,
+        offline,
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToriiProxyUnavailableReason {
+    MissingAuthoritativeBinding,
+    AuthoritativePeersOffline,
+    LoopPreventionExhausted,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+impl ToriiProxyUnavailableReason {
+    fn ingress_message(self, routing_decision: RoutingDecision) -> String {
+        match self {
+            Self::MissingAuthoritativeBinding => format!(
+                "no authoritative peer binding is registered for lane {} dataspace {}",
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64()
+            ),
+            Self::AuthoritativePeersOffline => format!(
+                "all authoritative peers are currently unavailable for lane {} dataspace {}",
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64()
+            ),
+            Self::LoopPreventionExhausted => format!(
+                "no authoritative peers remain after loop prevention for lane {} dataspace {}",
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64()
+            ),
+        }
+    }
+
+    fn forwarded_message(self, routing_decision: RoutingDecision, hop_count: u8) -> String {
+        match self {
+            Self::LoopPreventionExhausted => format!(
+                "no authoritative proxy candidates remain for lane {} dataspace {} after {} hops",
+                routing_decision.lane_id.as_u32(),
+                routing_decision.dataspace_id.as_u64(),
+                hop_count
+            ),
+            _ => self.ingress_message(routing_decision),
+        }
+    }
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -10380,8 +10395,10 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
 struct ToriiProxyCandidatePeers {
     peers: Vec<PeerId>,
     authoritative_count: usize,
-    fallback_used: bool,
+    authoritative_total_count: usize,
+    offline_authoritative_count: usize,
     loop_prevention_drops: usize,
+    unavailable_reason: Option<ToriiProxyUnavailableReason>,
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -10399,8 +10416,9 @@ fn torii_proxy_candidate_peer_ids(
         .cloned()
         .chain(visited_peer_ids.iter().cloned())
         .collect();
+    let authoritative_peers = authoritative_lane_peers(app, routing_decision);
     let mut authoritative = Vec::new();
-    for peer_id in authoritative_lane_peer_ids(app, routing_decision) {
+    for peer_id in authoritative_peers.online {
         if &peer_id == local_peer_id {
             continue;
         }
@@ -10413,28 +10431,24 @@ fn torii_proxy_candidate_peer_ids(
         authoritative.push(peer_id);
     }
     let authoritative_count = authoritative.len();
-    let mut seen: std::collections::BTreeSet<_> = authoritative.iter().cloned().collect();
-    let mut peers = authoritative;
-    let mut fallback_peers = std::collections::BTreeSet::new();
-    for peer in app.online_peers.get() {
-        let peer_id = peer.id().clone();
-        if &peer_id == local_peer_id || !seen.insert(peer_id.clone()) {
-            continue;
-        }
-        if exclusion_set.contains(&peer_id) {
-            if loop_prevention_seen.insert(peer_id.clone()) {
-                loop_prevention_drops = loop_prevention_drops.saturating_add(1);
-            }
-            continue;
-        }
-        fallback_peers.insert(peer_id);
-    }
-    peers.extend(fallback_peers);
+    let authoritative_total_count = authoritative_peers.authoritative.len();
+    let offline_authoritative_count = authoritative_peers.offline.len();
+    let unavailable_reason = if authoritative_count > 0 {
+        None
+    } else if authoritative_total_count == 0 {
+        Some(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
+    } else if offline_authoritative_count == authoritative_total_count {
+        Some(ToriiProxyUnavailableReason::AuthoritativePeersOffline)
+    } else {
+        Some(ToriiProxyUnavailableReason::LoopPreventionExhausted)
+    };
     ToriiProxyCandidatePeers {
-        fallback_used: peers.len() > authoritative_count,
-        peers,
+        peers: authoritative,
         authoritative_count,
+        authoritative_total_count,
+        offline_authoritative_count,
         loop_prevention_drops,
+        unavailable_reason,
     }
 }
 
@@ -10443,7 +10457,8 @@ fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDec
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
         return true;
     };
-    authoritative_lane_peer_ids(app, routing_decision)
+    app.state
+        .authoritative_lane_peer_ids(routing_decision.lane_id)
         .iter()
         .any(|peer_id| peer_id == local_peer_id)
 }
@@ -12184,19 +12199,20 @@ async fn execute_torii_proxy_request_with_fallback(
         dataspace = routing_decision.dataspace_id.as_u64(),
         proxy_candidate_count = candidates.peers.len(),
         authoritative_candidate_count = candidates.authoritative_count,
-        fallback_used = candidates.fallback_used,
+        authoritative_total_count = candidates.authoritative_total_count,
+        offline_authoritative_count = candidates.offline_authoritative_count,
         loop_prevention_drops = candidates.loop_prevention_drops,
         "Torii ingress proxy prepared candidate peers"
     );
     if candidates.peers.is_empty() {
+        let message = candidates
+            .unavailable_reason
+            .unwrap_or(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
+            .ingress_message(routing_decision);
         return torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
-            format!(
-                "no reachable authoritative peers are available for lane {} dataspace {}",
-                routing_decision.lane_id.as_u32(),
-                routing_decision.dataspace_id.as_u64()
-            ),
+            message,
         );
     }
 
@@ -12267,29 +12283,31 @@ async fn forward_incoming_torii_proxy_request(
         dataspace = routing_decision.dataspace_id.as_u64(),
         proxy_candidate_count = candidates.peers.len(),
         authoritative_candidate_count = candidates.authoritative_count,
-        fallback_used = candidates.fallback_used,
+        authoritative_total_count = candidates.authoritative_total_count,
+        offline_authoritative_count = candidates.offline_authoritative_count,
         loop_prevention_drops = candidates.loop_prevention_drops,
         "Torii proxy receiver prepared re-forward candidates"
     );
     if candidates.peers.is_empty() {
+        let message = candidates
+            .unavailable_reason
+            .unwrap_or(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
+            .forwarded_message(routing_decision, forwarded_request.hop_count);
         iroha_logger::warn!(
             request_id = %forwarded_request.request_id,
             hop_count = forwarded_request.hop_count,
             max_hops = forwarded_request.max_hops,
             lane = routing_decision.lane_id.as_u32(),
             dataspace = routing_decision.dataspace_id.as_u64(),
+            authoritative_total_count = candidates.authoritative_total_count,
+            offline_authoritative_count = candidates.offline_authoritative_count,
             loop_prevention_drops = candidates.loop_prevention_drops,
             "Torii proxy receiver ran out of re-forward candidates"
         );
         return torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
             "route_unavailable",
-            format!(
-                "no reachable proxy candidates remain for lane {} dataspace {} after {} hops",
-                routing_decision.lane_id.as_u32(),
-                routing_decision.dataspace_id.as_u64(),
-                forwarded_request.hop_count
-            ),
+            message,
         );
     }
 
@@ -22841,6 +22859,14 @@ impl Torii {
                     get(handler_space_directory_manifests),
                 )
                 .route(
+                    "/v1/space-directory/manifests",
+                    post(handler_space_directory_manifest_publish),
+                )
+                .route(
+                    "/v1/space-directory/manifests/revoke",
+                    post(handler_space_directory_manifest_revoke),
+                )
+                .route(
                     "/v1/ram-lfe/program-policies",
                     get(handler_ram_lfe_program_policies),
                 )
@@ -26598,6 +26624,7 @@ pub(crate) mod tests_runtime_handlers {
         kura::Kura,
         query::store::LiveQueryStore,
         queue::Queue,
+        smartcontracts::Execute,
         state::{State as IrohaState, World},
         sumeragi::{
             consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
@@ -26609,11 +26636,14 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_data_model::{
         ChainId, Registrable, ValidationFail,
         account::{Account, AccountId, AccountLabel, OpaqueAccountId},
-        block::{BlockSignature, SignedBlock},
-        consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
+        block::{BlockHeader, BlockSignature, SignedBlock},
+        consensus::{
+            ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
+            QcAggregate, VALIDATOR_SET_HASH_VERSION_V1,
+        },
         domain::{Domain, DomainId},
         events::pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus},
-        isi::Log,
+        isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey},
         level::Level,
         name::Name,
         nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId, UniversalAccountId},
@@ -26633,6 +26663,8 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
+    use iroha_primitives::{json::Json, numeric::Numeric};
+    use iroha_test_samples::ALICE_ID;
     use norito::codec::Encode;
 
     use super::*;
@@ -26744,8 +26776,9 @@ pub(crate) mod tests_runtime_handlers {
 
     fn install_lane_manifest_registry_for_test(
         state: &IrohaState,
-        lanes: &[(LaneId, Vec<AccountId>)],
+        lanes: &[(LaneId, Vec<(AccountId, PeerId)>)],
     ) {
+        let nexus = state.nexus_snapshot();
         let manifest_root = std::env::temp_dir().join(format!(
             "iroha-torii-manifests-{}-{}",
             std::process::id(),
@@ -26755,11 +26788,19 @@ pub(crate) mod tests_runtime_handlers {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&manifest_root).expect("create manifest directory");
-        for (lane_id, validators) in lanes {
-            let alias = format!("lane-{}", lane_id.as_u32());
-            let validators_json = validators
+        for (lane_id, validator_bindings) in lanes {
+            let alias = nexus
+                .lane_catalog
+                .lanes()
                 .iter()
-                .map(|validator| format!("\"{validator}\""))
+                .find(|lane| lane.id == *lane_id)
+                .map(|lane| lane.alias.clone())
+                .unwrap_or_else(|| format!("lane-{}", lane_id.as_u32()));
+            let validators_json = validator_bindings
+                .iter()
+                .map(|(validator, peer_id)| {
+                    format!(r#"{{"validator":"{validator}","peer_id":"{peer_id}"}}"#)
+                })
                 .collect::<Vec<_>>()
                 .join(", ");
             let manifest = format!(
@@ -26785,7 +26826,6 @@ pub(crate) mod tests_runtime_handlers {
             manifest_directory: Some(manifest_root),
             ..iroha_config::parameters::actual::LaneRegistry::default()
         };
-        let nexus = state.nexus_snapshot();
         let registry = std::sync::Arc::new(
             iroha_core::governance::manifest::LaneManifestRegistry::from_config(
                 &nexus.lane_catalog,
@@ -26794,6 +26834,72 @@ pub(crate) mod tests_runtime_handlers {
             ),
         );
         state.install_lane_manifests(&registry);
+    }
+
+    fn ensure_runtime_peer_binding_for_test(
+        state: &IrohaState,
+        validator: &AccountId,
+        peer_keypair: &KeyPair,
+        consensus_label: &str,
+    ) {
+        let next_height = state
+            .latest_block_header_fast()
+            .map_or(1, |header| header.height().get().saturating_add(1));
+        let header = BlockHeader::new(
+            NonZeroU64::new(next_height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        if state.view().world().account(validator).is_err() {
+            Register::account(Account::new(validator.clone()))
+                .execute(&ALICE_ID, &mut tx)
+                .expect("register validator authority account");
+        }
+
+        let manage_consensus_keys = Permission::new(
+            "CanManageConsensusKeys"
+                .parse()
+                .expect("CanManageConsensusKeys permission token"),
+            Json::new(()),
+        );
+        Grant::account_permission(manage_consensus_keys, validator.clone())
+            .execute(validator, &mut tx)
+            .expect("grant manage consensus keys");
+
+        let peer_id = PeerId::from(peer_keypair.public_key().clone());
+        let pop = iroha_crypto::bls_normal_pop_prove(peer_keypair.private_key())
+            .expect("PoP prove for peer keypair");
+        let consensus_pop = pop.clone();
+        RegisterPeerWithPop::new(peer_id.clone(), pop)
+            .execute(validator, &mut tx)
+            .expect("peer registration");
+
+        let consensus_id = ConsensusKeyId::new(ConsensusKeyRole::Validator, consensus_label);
+        let consensus_record = ConsensusKeyRecord {
+            id: consensus_id.clone(),
+            public_key: peer_keypair.public_key().clone(),
+            pop: Some(consensus_pop),
+            activation_height: next_height,
+            expiry_height: None,
+            hsm: None,
+            replaces: None,
+            status: ConsensusKeyStatus::Active,
+        };
+        RegisterConsensusKey {
+            id: consensus_id,
+            record: consensus_record,
+        }
+        .execute(validator, &mut tx)
+        .expect("consensus key registration");
+
+        tx.apply();
+        block.commit().expect("commit runtime peer binding");
     }
 
     #[derive(Default)]
@@ -30868,7 +30974,7 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
-    async fn authoritative_lane_peer_ids_fall_back_to_permissioned_commit_topology() {
+    async fn authoritative_lane_peers_require_explicit_bindings_for_permissioned_routes() {
         let local_keypair = KeyPair::random();
         let remote_keypair = KeyPair::random();
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
@@ -30919,25 +31025,21 @@ pub(crate) mod tests_runtime_handlers {
         block.commit().expect("commit permissioned peer roster");
 
         let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
-        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+        let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
 
         assert!(
-            authoritative.contains(&local_peer_id),
-            "local permissioned validator should remain authoritative without public validator records"
+            authoritative.is_empty(),
+            "permissioned public routes should fail closed without explicit authoritative bindings"
         );
         assert!(
-            authoritative.contains(&remote_peer_id),
-            "remote permissioned validator should remain authoritative without public validator records"
-        );
-        assert!(
-            super::is_local_authoritative_for_route(app.as_ref(), route),
-            "permissioned local ingress should treat committed topology peers as authoritative"
+            !super::is_local_authoritative_for_route(app.as_ref(), route),
+            "permissioned public ingress should not infer authority from commit topology"
         );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
-    async fn authoritative_lane_peer_ids_fall_back_to_commit_topology_for_npos_core_lane() {
+    async fn authoritative_lane_peers_do_not_fall_back_to_commit_topology_for_npos_core_lane() {
         let local_keypair = KeyPair::random();
         let remote_keypair = KeyPair::random();
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
@@ -30995,30 +31097,24 @@ pub(crate) mod tests_runtime_handlers {
         block.commit().expect("commit npos peer roster");
 
         let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
-        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+        let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
 
         assert!(
-            authoritative.contains(&local_peer_id),
-            "local NPoS core-lane validator should remain authoritative without public validator records"
+            authoritative.is_empty(),
+            "NPoS core-lane routing should fail closed when no authoritative bindings are present"
         );
         assert!(
-            authoritative.contains(&remote_peer_id),
-            "remote NPoS core-lane validator should remain authoritative without public validator records"
-        );
-        assert!(
-            super::is_local_authoritative_for_route(app.as_ref(), route),
-            "NPoS core-lane ingress should treat committed topology peers as authoritative during bootstrap"
+            !super::is_local_authoritative_for_route(app.as_ref(), route),
+            "NPoS core-lane ingress should no longer infer authority from commit topology"
         );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
-    async fn authoritative_lane_peer_ids_fall_back_to_online_peers_for_npos_core_lane_when_state_is_empty()
-     {
+    async fn authoritative_lane_peers_do_not_fall_back_to_online_peers_when_state_is_empty() {
         let local_keypair = KeyPair::random();
-        let remote_keypair = KeyPair::random();
+        let _remote_keypair = KeyPair::random();
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
-        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
 
         let mut app = mk_app_state_for_tests();
         {
@@ -31031,7 +31127,7 @@ pub(crate) mod tests_runtime_handlers {
             );
             let remote_peer = Peer::new(
                 "127.0.0.1:10002".parse().expect("valid remote address"),
-                remote_keypair.public_key().clone(),
+                _remote_keypair.public_key().clone(),
             );
             online_tx
                 .send(HashSet::from([local_peer, remote_peer]))
@@ -31070,25 +31166,21 @@ pub(crate) mod tests_runtime_handlers {
         }
 
         let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
-        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+        let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
 
         assert!(
-            authoritative.contains(&local_peer_id),
-            "local NPoS core-lane ingress should fall back to the local connected peer when state snapshots are empty"
+            authoritative.is_empty(),
+            "empty state snapshots should leave authoritative routing unresolved"
         );
         assert!(
-            authoritative.contains(&remote_peer_id),
-            "remote connected peers should keep NPoS core-lane ingress routable when state snapshots are empty"
-        );
-        assert!(
-            super::is_local_authoritative_for_route(app.as_ref(), route),
-            "NPoS core-lane ingress should remain locally authoritative under the connected-peer fallback"
+            !super::is_local_authoritative_for_route(app.as_ref(), route),
+            "empty state snapshots should not infer local authority from connected peers"
         );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
-    async fn authoritative_lane_peer_ids_do_not_fall_back_for_npos_non_core_lane() {
+    async fn authoritative_lane_peers_do_not_fall_back_for_npos_non_core_lane() {
         let local_keypair = KeyPair::random();
         let remote_keypair = KeyPair::random();
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
@@ -31146,7 +31238,7 @@ pub(crate) mod tests_runtime_handlers {
         block.commit().expect("commit npos peer roster");
 
         let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
-        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+        let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
 
         assert!(
             authoritative.is_empty(),
@@ -31160,11 +31252,15 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
-    async fn authoritative_lane_peer_ids_use_manifest_validators_for_admin_managed_lane() {
-        let local_keypair = KeyPair::random();
-        let remote_keypair = KeyPair::random();
-        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
-        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+    async fn authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane() {
+        let local_validator_keypair = KeyPair::random();
+        let remote_validator_keypair = KeyPair::random();
+        let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let remote_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
+        let remote_validator = AccountId::new(remote_validator_keypair.public_key().clone());
+        let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_peer_keypair.public_key().clone());
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(1);
 
@@ -31177,11 +31273,11 @@ pub(crate) mod tests_runtime_handlers {
                 .send(std::collections::HashSet::from([
                     Peer::new(
                         "127.0.0.1:10001".parse().expect("valid local address"),
-                        local_keypair.public_key().clone(),
+                        local_peer_keypair.public_key().clone(),
                     ),
                     Peer::new(
                         "127.0.0.1:10002".parse().expect("valid remote address"),
-                        remote_keypair.public_key().clone(),
+                        remote_peer_keypair.public_key().clone(),
                     ),
                 ]))
                 .expect("online peers update should succeed");
@@ -31221,13 +31317,32 @@ pub(crate) mod tests_runtime_handlers {
 
             let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
             state.set_nexus(nexus.clone()).expect("apply nexus config");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &local_validator,
+                &local_peer_keypair,
+                "local",
+            );
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &remote_validator,
+                &remote_peer_keypair,
+                "remote",
+            );
+            {
+                let mut topology = state.commit_topology.block();
+                topology.clear();
+                topology.push(local_peer_id.clone());
+                topology.push(remote_peer_id.clone());
+                topology.commit();
+            }
             install_lane_manifest_registry_for_test(
                 state,
                 &[(
                     lane_id,
                     vec![
-                        AccountId::new(local_keypair.public_key().clone()),
-                        AccountId::new(remote_keypair.public_key().clone()),
+                        (local_validator.clone(), local_peer_id.clone()),
+                        (remote_validator.clone(), remote_peer_id.clone()),
                     ],
                 )],
             );
@@ -31236,7 +31351,7 @@ pub(crate) mod tests_runtime_handlers {
         }
 
         let route = RoutingDecision::new(lane_id, dataspace_id);
-        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+        let authoritative = super::authoritative_lane_peers(app.as_ref(), route).authoritative;
 
         assert!(
             authoritative.contains(&local_peer_id),
@@ -31254,11 +31369,14 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
-    async fn torii_proxy_candidate_peers_prioritize_authoritative_before_fallback() {
+    async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
         let local_keypair = KeyPair::random();
-        let authoritative_keypair = KeyPair::random();
+        let authoritative_validator_keypair = KeyPair::random();
+        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let fallback_keypair = KeyPair::random();
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_validator =
+            AccountId::new(authoritative_validator_keypair.public_key().clone());
         let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
         let fallback_peer_id = PeerId::from(fallback_keypair.public_key().clone());
 
@@ -31299,10 +31417,28 @@ pub(crate) mod tests_runtime_handlers {
             topology.push(authoritative_peer_id.clone());
             topology.commit();
         }
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authoritative_validator,
+                &authoritative_keypair,
+                "authoritative",
+            );
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    LaneId::SINGLE,
+                    vec![(authoritative_validator, authoritative_peer_id.clone())],
+                )],
+            );
+        }
 
         let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
         let authoritative_without_local: Vec<_> =
-            super::authoritative_lane_peer_ids(app.as_ref(), route)
+            super::authoritative_lane_peers(app.as_ref(), route)
+                .authoritative
                 .into_iter()
                 .filter(|peer_id| peer_id != &local_peer_id)
                 .collect();
@@ -31313,17 +31449,167 @@ pub(crate) mod tests_runtime_handlers {
             candidates.authoritative_count,
             authoritative_without_local.len()
         );
-        assert_eq!(
-            &candidates.peers[..candidates.authoritative_count],
-            authoritative_without_local.as_slice()
-        );
-        assert!(candidates.fallback_used);
-        assert_eq!(candidates.peers.last(), Some(&fallback_peer_id));
+        assert_eq!(candidates.peers, authoritative_without_local);
+        assert_eq!(candidates.authoritative_total_count, 1);
+        assert_eq!(candidates.offline_authoritative_count, 0);
+        assert!(candidates.unavailable_reason.is_none());
+        assert!(!candidates.peers.contains(&fallback_peer_id));
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
-    async fn torii_proxy_candidate_peers_include_online_fallback_for_npos_non_core_routes() {
+    async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_peers_are_offline()
+    {
+        let local_keypair = KeyPair::random();
+        let authoritative_validator_keypair = KeyPair::random();
+        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_validator =
+            AccountId::new(authoritative_validator_keypair.public_key().clone());
+        let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([Peer::new(
+                    "127.0.0.1:10001".parse().expect("valid local address"),
+                    local_keypair.public_key().clone(),
+                )]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.push(authoritative_peer_id.clone());
+            topology.commit();
+        }
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authoritative_validator,
+                &authoritative_keypair,
+                "authoritative",
+            );
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    LaneId::SINGLE,
+                    vec![(authoritative_validator, authoritative_peer_id.clone())],
+                )],
+            );
+        }
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let candidates =
+            super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
+
+        assert_eq!(candidates.authoritative_count, 0);
+        assert_eq!(candidates.authoritative_total_count, 1);
+        assert_eq!(candidates.offline_authoritative_count, 1);
+        assert!(candidates.peers.is_empty());
+        assert_eq!(
+            candidates.unavailable_reason,
+            Some(ToriiProxyUnavailableReason::AuthoritativePeersOffline)
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_when_manifest_authoritative_peers_are_offline()
+     {
+        let local_keypair = KeyPair::random();
+        let authoritative_validator_keypair = KeyPair::random();
+        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_validator =
+            AccountId::new(authoritative_validator_keypair.public_key().clone());
+        let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([Peer::new(
+                    "127.0.0.1:10001".parse().expect("valid local address"),
+                    local_keypair.public_key().clone(),
+                )]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+        }
+
+        {
+            let mut topology = app.state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.push(authoritative_peer_id.clone());
+            topology.commit();
+        }
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authoritative_validator,
+                &authoritative_keypair,
+                "authoritative",
+            );
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    LaneId::SINGLE,
+                    vec![(authoritative_validator, authoritative_peer_id.clone())],
+                )],
+            );
+        }
+
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let response = super::execute_torii_proxy_request_with_fallback(
+            &app,
+            route,
+            ToriiProxyRequestKindV1::VerifiedQuery {
+                request_bytes: Vec::new(),
+                expected_route: ToriiRouteHintV1::from(route),
+                response_format: ToriiProxyResponseFormatV1::Norito,
+            },
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect error body");
+        let envelope = norito::decode_from_bytes::<super::ErrorEnvelope>(&body)
+            .expect("decode error envelope");
+        assert_eq!(envelope.code(), "route_unavailable");
+        assert_eq!(
+            envelope.message(),
+            ToriiProxyUnavailableReason::AuthoritativePeersOffline.ingress_message(route)
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn torii_proxy_candidate_peers_fail_closed_when_bindings_are_missing() {
         let local_keypair = KeyPair::random();
         let fallback_keypair = KeyPair::random();
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
@@ -31377,27 +31663,39 @@ pub(crate) mod tests_runtime_handlers {
             super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
 
         assert!(
-            super::authoritative_lane_peer_ids(app.as_ref(), route).is_empty(),
+            super::authoritative_lane_peers(app.as_ref(), route)
+                .authoritative
+                .is_empty(),
             "non-core route should still have no local authoritative view"
         );
         assert_eq!(candidates.authoritative_count, 0);
-        assert!(candidates.fallback_used);
-        assert_eq!(candidates.peers, vec![fallback_peer_id]);
+        assert_eq!(candidates.authoritative_total_count, 0);
+        assert_eq!(candidates.offline_authoritative_count, 0);
+        assert!(candidates.peers.is_empty());
+        assert_eq!(
+            candidates.unavailable_reason,
+            Some(ToriiProxyUnavailableReason::MissingAuthoritativeBinding)
+        );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn torii_proxy_candidate_peers_exclude_sender_and_visited_peers() {
         let local_keypair = KeyPair::random();
-        let authoritative_keypair = KeyPair::random();
-        let sender_keypair = KeyPair::random();
-        let visited_keypair = KeyPair::random();
-        let fallback_keypair = KeyPair::random();
+        let authoritative_validator_keypair = KeyPair::random();
+        let sender_validator_keypair = KeyPair::random();
+        let visited_validator_keypair = KeyPair::random();
+        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let sender_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let visited_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let authoritative_validator =
+            AccountId::new(authoritative_validator_keypair.public_key().clone());
+        let sender_validator = AccountId::new(sender_validator_keypair.public_key().clone());
+        let visited_validator = AccountId::new(visited_validator_keypair.public_key().clone());
         let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
         let sender_peer_id = PeerId::from(sender_keypair.public_key().clone());
         let visited_peer_id = PeerId::from(visited_keypair.public_key().clone());
-        let fallback_peer_id = PeerId::from(fallback_keypair.public_key().clone());
 
         let mut app = mk_app_state_for_tests();
         {
@@ -31424,10 +31722,6 @@ pub(crate) mod tests_runtime_handlers {
                         "127.0.0.1:10004".parse().expect("valid visited address"),
                         visited_keypair.public_key().clone(),
                     ),
-                    Peer::new(
-                        "127.0.0.1:10005".parse().expect("valid fallback address"),
-                        fallback_keypair.public_key().clone(),
-                    ),
                 ]))
                 .expect("online peers update should succeed");
             app_mut.online_peers = OnlinePeersProvider::new(online_rx);
@@ -31440,6 +31734,39 @@ pub(crate) mod tests_runtime_handlers {
             topology.push(authoritative_peer_id.clone());
             topology.commit();
         }
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authoritative_validator,
+                &authoritative_keypair,
+                "authoritative",
+            );
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &sender_validator,
+                &sender_keypair,
+                "sender",
+            );
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &visited_validator,
+                &visited_keypair,
+                "visited",
+            );
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    LaneId::SINGLE,
+                    vec![
+                        (authoritative_validator, authoritative_peer_id.clone()),
+                        (sender_validator, sender_peer_id.clone()),
+                        (visited_validator, visited_peer_id.clone()),
+                    ],
+                )],
+            );
+        }
 
         let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
         let candidates = super::torii_proxy_candidate_peer_ids(
@@ -31451,8 +31778,7 @@ pub(crate) mod tests_runtime_handlers {
         );
 
         assert_eq!(candidates.authoritative_count, 1);
-        assert_eq!(candidates.peers.first(), Some(&authoritative_peer_id));
-        assert_eq!(candidates.peers.last(), Some(&fallback_peer_id));
+        assert_eq!(candidates.peers, vec![authoritative_peer_id]);
         assert!(!candidates.peers.contains(&sender_peer_id));
         assert!(!candidates.peers.contains(&visited_peer_id));
         assert_eq!(candidates.loop_prevention_drops, 2);

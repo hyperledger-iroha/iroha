@@ -93,10 +93,12 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<offline::LoadOfflineEscrowBalance>,
     InstructionRegistry::register::<offline::RedeemOfflineEscrowBalance>,
     InstructionRegistry::register::<crate::isi::staking::RegisterPublicLaneValidator>,
+    InstructionRegistry::register::<crate::isi::staking::RebindPublicLaneValidatorPeer>,
     InstructionRegistry::register::<crate::isi::staking::ActivatePublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::ExitPublicLaneValidator>,
     InstructionRegistry::register::<crate::isi::staking::CancelConsensusEvidencePenalty>,
     InstructionRegistry::register::<nexus::SetLaneRelayEmergencyValidators>,
+    InstructionRegistry::register::<nexus::RegisterVerifiedLaneRelay>,
     InstructionRegistry::register::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register::<oracle::SubmitOracleObservation>,
     InstructionRegistry::register::<oracle::AggregateOracleFeed>,
@@ -306,6 +308,9 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id::<crate::isi::staking::ActivatePublicLaneValidator>(
         "iroha.staking.activate_public_lane_validator",
     );
+    registry = registry.register_with_id::<crate::isi::staking::RebindPublicLaneValidatorPeer>(
+        "iroha.staking.rebind_public_lane_validator_peer",
+    );
     registry = registry.register_with_id::<crate::isi::staking::ExitPublicLaneValidator>(
         "iroha.staking.exit_public_lane_validator",
     );
@@ -502,6 +507,9 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
     registry = registry.register_with_id::<nexus::SetLaneRelayEmergencyValidators>(
         "nexus::SetLaneRelayEmergencyValidators",
     );
+    registry = registry.register_with_id::<nexus::RegisterVerifiedLaneRelay>(
+        "nexus::RegisterVerifiedLaneRelay",
+    );
     registry
 }
 
@@ -527,6 +535,14 @@ mod tests {
         let registry = default();
         assert!(registry.contains(std::any::type_name::<
             crate::isi::staking::RegisterPublicLaneValidator,
+        >()));
+    }
+
+    #[test]
+    fn default_registry_registers_public_lane_validator_rebind() {
+        let registry = default();
+        assert!(registry.contains(std::any::type_name::<
+            crate::isi::staking::RebindPublicLaneValidatorPeer,
         >()));
     }
 

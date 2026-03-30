@@ -14,7 +14,7 @@ use crate::{
     block::{BlockHeader, consensus::LaneBlockCommitment},
     consensus::Qc,
     da::commitment::DaCommitmentBundle,
-    nexus::{DataSpaceId, LaneId},
+    nexus::{AxtFastpqBinding, DataSpaceId, LaneId},
     prelude::Metadata,
 };
 
@@ -56,6 +56,44 @@ pub struct LaneRelayEnvelope {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
+}
+
+/// Stable business-facing reference for a previously verified lane relay envelope.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneRelayEnvelopeRef {
+    /// Numeric dataspace identifier.
+    pub dataspace_id: DataSpaceId,
+    /// Numeric lane identifier.
+    pub lane_id: LaneId,
+    /// Block height associated with the settlement commitment.
+    pub block_height: u64,
+    /// Norito hash of the settlement payload.
+    pub settlement_hash: HashOf<LaneBlockCommitment>,
+}
+
+/// Verified relay record persisted for restricted-source business effects.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VerifiedLaneRelayRecord {
+    /// Canonical relay reference used by business flows.
+    pub relay_ref: LaneRelayEnvelopeRef,
+    /// Original relay envelope that passed verification.
+    pub relay_envelope: LaneRelayEnvelope,
+    /// Deterministic hash of the proof payload used during registration.
+    pub proof_payload_hash: Hash,
+    /// Block height where the relay proof was verified and persisted.
+    pub verified_at_height: u64,
+    /// Manifest root enforced during registration.
+    pub manifest_root: [u8; 32],
+    /// FASTPQ binding that contracts consume on-ledger.
+    pub fastpq_binding: AxtFastpqBinding,
 }
 
 /// `FastPQ` proof metadata attached to a lane relay envelope.
@@ -205,6 +243,17 @@ impl LaneRelayEnvelope {
             manifest_root: None,
             fastpq_proof: None,
         })
+    }
+
+    /// Stable business-facing reference for this relay envelope.
+    #[must_use]
+    pub fn relay_ref(&self) -> LaneRelayEnvelopeRef {
+        LaneRelayEnvelopeRef {
+            dataspace_id: self.dataspace_id,
+            lane_id: self.lane_id,
+            block_height: self.block_height,
+            settlement_hash: self.settlement_hash,
+        }
     }
 
     /// Validate QC subject, DA commitment hash, and settlement hash.
@@ -395,6 +444,27 @@ impl LaneRelayEnvelope {
             Ok(())
         } else {
             Err(LaneRelayError::SettlementHashMismatch)
+        }
+    }
+}
+
+impl VerifiedLaneRelayRecord {
+    /// Construct a verified relay record from the canonical verified inputs.
+    #[must_use]
+    pub fn new(
+        relay_envelope: LaneRelayEnvelope,
+        proof_payload_hash: Hash,
+        verified_at_height: u64,
+        manifest_root: [u8; 32],
+        fastpq_binding: AxtFastpqBinding,
+    ) -> Self {
+        Self {
+            relay_ref: relay_envelope.relay_ref(),
+            relay_envelope,
+            proof_payload_hash,
+            verified_at_height,
+            manifest_root,
+            fastpq_binding,
         }
     }
 }

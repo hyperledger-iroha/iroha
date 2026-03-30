@@ -6019,12 +6019,10 @@ impl Actor {
         };
 
         let mut record_map: BTreeMap<PeerId, PublicLaneValidatorRecord> = BTreeMap::new();
-        for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
-            if let Some(pk) = validator_id.try_signatory() {
-                record_map
-                    .entry(PeerId::from(pk.clone()))
-                    .or_insert_with(|| record.clone());
-            }
+        for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+            record_map
+                .entry(record.peer_id.clone())
+                .or_insert_with(|| record.clone());
         }
 
         let mut share_map: BTreeMap<(LaneId, AccountId), Vec<PublicLaneStakeShare>> =

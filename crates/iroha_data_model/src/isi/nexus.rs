@@ -1,5 +1,9 @@
 use super::*;
-use crate::{account::AccountId, metadata::Metadata, nexus::DataSpaceId};
+use crate::{
+    account::AccountId,
+    metadata::Metadata,
+    nexus::{DataSpaceId, LaneRelayEnvelope, ProofBlob},
+};
 
 isi! {
     /// Set or clear emergency validators used for lane relay quorum recovery.
@@ -21,6 +25,15 @@ isi! {
         #[norito(default)]
         pub metadata: Metadata,
     }
+
+    /// Persist a verified private-source lane relay so contracts can consume it by reference.
+    pub struct RegisterVerifiedLaneRelay {
+        /// Canonical lane relay envelope being registered.
+        pub envelope: LaneRelayEnvelope,
+        /// FASTPQ/AXT proof blob used to verify the relay payload.
+        pub proof_blob: ProofBlob,
+    }
 }
 
 impl crate::seal::Instruction for SetLaneRelayEmergencyValidators {}
+impl crate::seal::Instruction for RegisterVerifiedLaneRelay {}

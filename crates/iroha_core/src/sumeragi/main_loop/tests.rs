@@ -19899,6 +19899,7 @@ async fn npos_qc_uses_active_validator_roster_for_stake_quorum() {
             let record = PublicLaneValidatorRecord {
                 lane_id,
                 validator: account_id.clone(),
+                peer_id: peer.clone(),
                 stake_account: account_id.clone(),
                 total_stake: Numeric::new(1, 0),
                 self_stake: Numeric::new(1, 0),
@@ -41935,6 +41936,7 @@ fn stake_quorum_reached_for_peers_requires_two_thirds() {
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
                 lane_id,
                 validator: account_id.clone(),
+                peer_id: PeerId::from(keypair.public_key().clone()),
                 stake_account: account_id.clone(),
                 total_stake: iroha_primitives::numeric::Numeric::new(stake, 0),
                 self_stake: iroha_primitives::numeric::Numeric::new(stake, 0),
@@ -42049,6 +42051,7 @@ fn validate_commit_qc_roster_requires_stake_quorum() {
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
                 lane_id,
                 validator: account_id.clone(),
+                peer_id: PeerId::from(keypair.public_key().clone()),
                 stake_account: account_id.clone(),
                 total_stake: iroha_primitives::numeric::Numeric::new(stake, 0),
                 self_stake: iroha_primitives::numeric::Numeric::new(stake, 0),
@@ -48944,6 +48947,7 @@ async fn roster_unavailability_candidate_source_matches_consensus_mode() {
             let record = PublicLaneValidatorRecord {
                 lane_id,
                 validator: account_id.clone(),
+                peer_id: peer.clone(),
                 stake_account: account_id.clone(),
                 total_stake: Numeric::new(1, 0),
                 self_stake: Numeric::new(1, 0),
@@ -92396,6 +92400,7 @@ async fn stake_quorum_timeout_skips_noop_reschedule_with_full_signer_set() {
             let record = iroha_data_model::nexus::staking::PublicLaneValidatorRecord {
                 lane_id,
                 validator: account_id.clone(),
+                peer_id: PeerId::from(keypair.public_key().clone()),
                 stake_account: account_id.clone(),
                 total_stake: iroha_primitives::numeric::Numeric::new(stake, 0),
                 self_stake: iroha_primitives::numeric::Numeric::new(stake, 0),

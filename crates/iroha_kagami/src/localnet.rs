@@ -2214,6 +2214,7 @@ fn append_localnet_npos_bootstrap(
         builder = builder.append_instruction(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: validator_id.clone(),
+            peer_id: PeerId::from(peer.public_key.clone()),
             stake_account: validator_id.clone(),
             initial_stake: Numeric::from(stake_amount),
             metadata: Metadata::default(),

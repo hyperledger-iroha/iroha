@@ -30,7 +30,8 @@ use crate::{
             WithdrawSoracloudModelHost,
         },
         staking::{
-            ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
+            ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
+            RegisterPublicLaneValidator,
         },
     },
     prelude::*,

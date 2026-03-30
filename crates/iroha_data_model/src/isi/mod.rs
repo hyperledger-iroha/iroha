@@ -220,6 +220,12 @@ impl From<crate::isi::staking::ExitPublicLaneValidator> for InstructionBox {
     }
 }
 
+impl From<crate::isi::staking::RebindPublicLaneValidatorPeer> for InstructionBox {
+    fn from(i: crate::isi::staking::RebindPublicLaneValidatorPeer) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::kaigi::CreateKaigi> for InstructionBox {
     fn from(i: crate::isi::kaigi::CreateKaigi) -> Self {
         InstructionBox(Box::new(i))
@@ -270,6 +276,12 @@ impl From<crate::isi::kaigi::ReportKaigiRelayHealth> for InstructionBox {
 
 impl From<crate::isi::nexus::SetLaneRelayEmergencyValidators> for InstructionBox {
     fn from(i: crate::isi::nexus::SetLaneRelayEmergencyValidators) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::nexus::RegisterVerifiedLaneRelay> for InstructionBox {
+    fn from(i: crate::isi::nexus::RegisterVerifiedLaneRelay) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2746,7 +2758,7 @@ pub mod prelude {
         identifier::{
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,
         },
-        nexus::SetLaneRelayEmergencyValidators,
+        nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },

@@ -196,14 +196,11 @@ pub fn stake_quorum_reached_for_snapshot(
 #[must_use]
 pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Numeric> {
     let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
-    for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
+    for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
         if !matches!(record.status, PublicLaneValidatorStatus::Active) {
             continue;
         }
-        let Some(pk) = validator_id.try_signatory() else {
-            continue;
-        };
-        let peer_id = PeerId::from(pk.clone());
+        let peer_id = record.peer_id.clone();
         let entry = stake_map
             .entry(peer_id)
             .or_insert_with(|| record.total_stake.clone());
@@ -309,6 +306,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_a.clone(),
+                    peer_id: peer_a.clone(),
                     stake_account: account_a.clone(),
                     total_stake: Numeric::new(10, 0),
                     self_stake: Numeric::new(10, 0),
@@ -324,6 +322,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(2),
                     validator: account_a.clone(),
+                    peer_id: peer_a.clone(),
                     stake_account: account_a.clone(),
                     total_stake: Numeric::new(25, 0),
                     self_stake: Numeric::new(25, 0),
@@ -339,6 +338,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(3),
                     validator: account_b.clone(),
+                    peer_id: peer_b.clone(),
                     stake_account: account_b.clone(),
                     total_stake: Numeric::new(15, 0),
                     self_stake: Numeric::new(15, 0),
@@ -386,6 +386,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_active.clone(),
+                    peer_id: peer_active.clone(),
                     stake_account: account_active,
                     total_stake: Numeric::new(5, 0),
                     self_stake: Numeric::new(5, 0),
@@ -401,6 +402,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(2),
                     validator: account_pending.clone(),
+                    peer_id: peer_pending.clone(),
                     stake_account: account_pending,
                     total_stake: Numeric::new(9, 0),
                     self_stake: Numeric::new(9, 0),
@@ -458,6 +460,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account.clone(),
+                    peer_id: peer.clone(),
                     stake_account: account,
                     total_stake: Numeric::new(10, 0),
                     self_stake: Numeric::new(10, 0),
@@ -595,6 +598,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_id.clone(),
+                    peer_id: peer_a.clone(),
                     stake_account: account_id,
                     total_stake: Numeric::new(10, 0),
                     self_stake: Numeric::new(10, 0),

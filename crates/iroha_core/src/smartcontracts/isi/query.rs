@@ -462,6 +462,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindDaPinIntentByLaneEpochSequence(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindLaneRelayEnvelopeByRef(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsProviderOwner(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }

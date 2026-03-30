@@ -417,6 +417,7 @@ mod tests {
         PublicLaneValidatorRecord {
             lane_id: LaneId::SINGLE,
             validator: stake_account.clone(),
+            peer_id: peer.clone(),
             stake_account: stake_account.clone(),
             total_stake: Numeric::new(total, 0),
             self_stake: Numeric::new(self_stake, 0),
@@ -555,6 +556,7 @@ mod tests {
         let record = |acct: &AccountId| PublicLaneValidatorRecord {
             lane_id: LaneId::SINGLE,
             validator: acct.clone(),
+            peer_id: PeerId::from(acct.signatory().clone()),
             stake_account: acct.clone(),
             total_stake: Numeric::new(10_000, 0),
             self_stake: Numeric::new(10_000, 0),
@@ -641,6 +643,7 @@ mod tests {
         let record = |acct: &AccountId| PublicLaneValidatorRecord {
             lane_id: LaneId::SINGLE,
             validator: acct.clone(),
+            peer_id: PeerId::from(acct.signatory().clone()),
             stake_account: acct.clone(),
             total_stake: Numeric::new(10_000, 0),
             self_stake: Numeric::new(10_000, 0),
@@ -737,6 +740,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: account.clone(),
+                peer_id: peer.clone(),
                 stake_account: account,
                 total_stake: Numeric::new(10_000, 0),
                 self_stake: Numeric::new(10_000, 0),
@@ -820,6 +824,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: account.clone(),
+                peer_id: PeerId::from(account.signatory().clone()),
                 stake_account: account.clone(),
                 total_stake: Numeric::new(5_000, 0),
                 self_stake: Numeric::new(5_000, 0),
@@ -901,6 +906,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: account.clone(),
+                peer_id: peer.clone(),
                 stake_account: account,
                 total_stake: Numeric::new(10_000, 0),
                 self_stake: Numeric::new(10_000, 0),
@@ -958,6 +964,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: account.clone(),
+                peer_id: peer.clone(),
                 stake_account: account,
                 total_stake: Numeric::new(5_000, 0),
                 self_stake: Numeric::new(5_000, 0),
@@ -1039,6 +1046,7 @@ mod tests {
         let record_with_entity = |acct: &AccountId| PublicLaneValidatorRecord {
             lane_id: LaneId::SINGLE,
             validator: acct.clone(),
+            peer_id: PeerId::from(acct.signatory().clone()),
             stake_account: acct.clone(),
             total_stake: Numeric::new(10_000, 0),
             self_stake: Numeric::new(10_000, 0),

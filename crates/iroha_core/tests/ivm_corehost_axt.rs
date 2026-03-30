@@ -132,6 +132,7 @@ fn proof_blob_for(
         manifest_root,
         da_commitment: None,
         proof: proof_bytes,
+        fastpq_binding: None,
         committed_amount: None,
         amount_commitment: None,
     };
