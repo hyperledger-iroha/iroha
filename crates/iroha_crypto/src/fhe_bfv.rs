@@ -143,6 +143,9 @@ impl BfvParameters {
     /// Report the polynomial-convolution backend used for BFV ring products.
     #[must_use]
     pub fn convolution_backend(&self) -> BfvConvolutionBackend {
+        #[cfg(not(feature = "bfv-accel"))]
+        let _ = self;
+
         #[cfg(feature = "bfv-accel")]
         {
             let required_log = self

@@ -28,7 +28,6 @@ public final class OfflineWalletTest {
     circulationsModesFlipAndNotify();
     verdictFreshnessGuards();
     safetyDetectSnapshotsPersistAndExpire();
-    topUpRecordsVerdictMetadata();
     exportsVerdictJournalJson();
     System.out.println("[IrohaAndroid] OfflineWalletTest passed.");
   }
@@ -271,76 +270,6 @@ public final class OfflineWalletTest {
       staleWallet.fetchSafetyDetectAttestation("deadbeef").join();
       final var expired = staleWallet.buildSafetyDetectPlatformTokenSnapshot("deadbeef");
       assert expired.isEmpty() : "expected expired Safety Detect token to be rejected";
-    } finally {
-      Files.deleteIfExists(logFile);
-      Files.deleteIfExists(verdictFile);
-      Files.deleteIfExists(counterFile);
-    }
-  }
-
-  private static void topUpRecordsVerdictMetadata() throws Exception {
-    final Path logFile = Files.createTempFile("offline_wallet_topup_test", ".json");
-    final Path verdictFile = verdictJournalPath(logFile);
-    final Path counterFile = counterJournalPath(logFile);
-    try {
-      final SequencedExecutor executor =
-          new SequencedExecutor(
-              List.of(
-                  new StubResponse(
-                      200,
-                      """
-                      {
-                        "certificate_id_hex": "deadbeef",
-                        "certificate": {
-                          "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-                          "operator": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-                          "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
-                          "spend_public_key": "ed0120deadbeef",
-                          "attestation_report": [3, 4],
-                          "issued_at_ms": 100,
-                          "expires_at_ms": 200,
-                          "policy": { "max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200 },
-                          "operator_signature": "AA",
-                          "metadata": {},
-                          "verdict_id": null,
-                          "attestation_nonce": null,
-                          "refresh_at_ms": null
-                        }
-                      }
-                      """),
-                  new StubResponse(
-                      200,
-                      """
-                      {
-                        "certificate_id_hex": "deadbeef"
-                      }
-                      """)));
-      final OfflineToriiClient client =
-          OfflineToriiClient.builder()
-              .executor(executor)
-              .baseUri(URI.create("https://example.com"))
-              .build();
-      final OfflineWallet wallet = new OfflineWallet(client, logFile, false);
-      final OfflineAllowanceCommitment allowance =
-          new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
-      final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
-      final OfflineWalletCertificateDraft draft =
-          new OfflineWalletCertificateDraft(
-              "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-              allowance,
-              "ed0120deadbeef",
-              new byte[] {3, 4},
-              100L,
-              200L,
-              policy,
-              null,
-              null,
-              null,
-              null);
-      wallet.topUpAllowance(draft, "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", "deadbeef").join();
-      final Optional<OfflineVerdictMetadata> verdict = wallet.verdictMetadata("deadbeef");
-      assert verdict.isPresent() : "expected cached verdict metadata";
-      assert "10".equals(verdict.get().remainingAmount()) : "remaining amount mismatch";
     } finally {
       Files.deleteIfExists(logFile);
       Files.deleteIfExists(verdictFile);

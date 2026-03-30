@@ -6911,6 +6911,41 @@ pub(crate) fn consensus_key_pop_for_public_key(
     })
 }
 
+/// Resolve every lane id currently associated with the provided validator peers.
+pub(crate) fn validator_lane_ids_for_peers<I, P>(
+    snapshot: &impl WorldReadOnly,
+    peers: I,
+) -> BTreeSet<LaneId>
+where
+    I: IntoIterator<Item = P>,
+    P: std::borrow::Borrow<PeerId>,
+{
+    let peer_keys: BTreeSet<PublicKey> = peers
+        .into_iter()
+        .map(|peer| peer.borrow().public_key().clone())
+        .collect();
+    if peer_keys.is_empty() {
+        return BTreeSet::new();
+    }
+
+    snapshot
+        .public_lane_validators()
+        .iter()
+        .filter_map(|((_lane_id, _validator_id), record)| {
+            let signatory = record.validator.try_signatory()?;
+            peer_keys.contains(signatory).then_some(record.lane_id)
+        })
+        .collect()
+}
+
+/// Resolve every lane id currently associated with a single validator peer.
+pub(crate) fn validator_lane_ids_for_peer(
+    snapshot: &impl WorldReadOnly,
+    peer: &PeerId,
+) -> BTreeSet<LaneId> {
+    validator_lane_ids_for_peers(snapshot, core::iter::once(peer))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConsensusKeyGate {
     Live,
@@ -7011,10 +7046,18 @@ where
     let mut topology_peers: std::collections::BTreeSet<PeerId> =
         commit_topology.into_iter().collect();
     let enforce_topology_membership = !topology_peers.is_empty();
+    let topology_lane_ids = if enforce_topology_membership {
+        validator_lane_ids_for_peers(world, topology_peers.iter())
+    } else {
+        BTreeSet::new()
+    };
     if enforce_topology_membership {
         let mut active_candidates: std::collections::BTreeSet<PeerId> =
             std::collections::BTreeSet::new();
         for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+            if !topology_lane_ids.is_empty() && !topology_lane_ids.contains(&record.lane_id) {
+                continue;
+            }
             if !matches!(record.status, PublicLaneValidatorStatus::Active) {
                 continue;
             }
@@ -7085,6 +7128,9 @@ where
     let mut candidates: Vec<(PeerId, Numeric, AccountId)> = world
         .public_lane_validators()
         .iter()
+        .filter(|(_, record)| {
+            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
+        })
         .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
         .filter(|(_, record)| {
             matches!(
@@ -7498,6 +7544,116 @@ mod stake_snapshot_tests {
         for peer in peers {
             assert!(roster.contains(&peer));
         }
+    }
+
+    #[test]
+    fn public_lane_snapshot_keeps_widening_scoped_to_commit_topology_lanes() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 100;
+        }
+
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "restricted".to_string(),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
+        }
+
+        let public_keypairs: Vec<KeyPair> = (0..2).map(|_| KeyPair::random()).collect();
+        let restricted_keypairs: Vec<KeyPair> = (0..2).map(|_| KeyPair::random()).collect();
+
+        let mut wb = state.world.block();
+        {
+            let peers = wb.peers.get_mut();
+            for kp in public_keypairs.iter().chain(restricted_keypairs.iter()) {
+                let _ = peers.push(PeerId::from(kp.public_key().clone()));
+            }
+        }
+        let peers: Vec<_> = wb.peers.clone().into_iter().collect();
+        for peer in &peers {
+            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
+        }
+        for kp in &public_keypairs {
+            let validator = DMAccountId::of(kp.public_key().clone());
+            wb.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    stake_account: validator,
+                    total_stake: Numeric::new(1_000, 0),
+                    self_stake: Numeric::new(1_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        for kp in &restricted_keypairs {
+            let validator = DMAccountId::of(kp.public_key().clone());
+            wb.public_lane_validators.insert(
+                (LaneId::new(1), validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: validator.clone(),
+                    stake_account: validator,
+                    total_stake: Numeric::new(2_000, 0),
+                    self_stake: Numeric::new(2_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        wb.commit();
+
+        {
+            let mut topo_block = state.commit_topology.block();
+            topo_block.mutate_vec(|vec| {
+                *vec = public_keypairs
+                    .iter()
+                    .take(1)
+                    .map(|kp| PeerId::from(kp.public_key().clone()))
+                    .collect();
+            });
+            topo_block.commit();
+        }
+
+        let sv = state.view();
+        let roster =
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        let expected: Vec<_> = public_keypairs
+            .iter()
+            .map(|kp| PeerId::from(kp.public_key().clone()))
+            .collect();
+        let mut expected = expected;
+        expected.sort();
+        assert_eq!(
+            roster, expected,
+            "epoch roster widening must stay inside the commit topology lane"
+        );
     }
 
     #[test]
@@ -18167,6 +18323,20 @@ impl State {
         self.lane_compliance.read().clone()
     }
 
+    /// Resolve the authoritative validator accounts for a lane from manifests or staking state.
+    pub fn authoritative_lane_validator_accounts(&self, lane_id: LaneId) -> Vec<AccountId> {
+        let manifest_registry = self.lane_manifests.read().clone();
+        let nexus = self.nexus_snapshot();
+        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
+        Self::authoritative_lane_validator_accounts_from_sources(
+            &self.world.view(),
+            lane_id,
+            validator_mode,
+            manifest_registry.as_ref(),
+            &nexus,
+        )
+    }
+
     fn lane_relay_committee_seed(
         &self,
         dataspace_id: DataSpaceId,
@@ -18217,6 +18387,22 @@ impl State {
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
     ) -> Vec<AccountId> {
+        Self::authoritative_lane_validator_accounts_from_sources(
+            &self.world.view(),
+            lane_id,
+            validator_mode,
+            manifest_registry,
+            nexus,
+        )
+    }
+
+    fn authoritative_lane_validator_accounts_from_sources(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
+        manifest_registry: &LaneManifestRegistry,
+        nexus: &iroha_config::parameters::actual::Nexus,
+    ) -> Vec<AccountId> {
         if let Some(mut validators) = manifest_registry.lane_validators(lane_id) {
             validators.sort();
             validators.dedup();
@@ -18230,10 +18416,8 @@ impl State {
             return Vec::new();
         }
 
-        let mut candidates: Vec<(AccountId, Numeric)> = self
-            .world
-            .public_lane_validators
-            .view()
+        let mut candidates: Vec<(AccountId, Numeric)> = world
+            .public_lane_validators()
             .iter()
             .filter(|((lane, _), record)| {
                 *lane == lane_id && matches!(record.status, PublicLaneValidatorStatus::Active)
@@ -27781,7 +27965,11 @@ fn default_fraud_monitoring_cfg() -> iroha_config::parameters::actual::FraudMoni
 
 #[cfg(test)]
 mod tests {
-    use core::{mem, num::NonZeroU64, time::Duration};
+    use core::{
+        mem,
+        num::{NonZeroU32, NonZeroU64},
+        time::Duration,
+    };
     use std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
@@ -28206,9 +28394,12 @@ mod tests {
         Register::domain(Domain::new(recipient_domain.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::from_scoped_id(recipient.clone()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::account(Account::new_in_domain(
+            recipient.account().clone(),
+            recipient.domain().clone(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
 
         let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
             data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
@@ -31902,6 +32093,66 @@ mod tests {
             &nexus,
         );
         assert_eq!(pool, vec![validator]);
+        assert_eq!(
+            state.authoritative_lane_validator_accounts(LaneId::SINGLE),
+            vec![ALICE_ID.clone()]
+        );
+    }
+
+    #[test]
+    fn authoritative_lane_validator_accounts_use_manifest_for_admin_managed_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(1);
+
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: LaneCatalog::new(
+                    NonZeroU32::new(2).expect("non-zero lane count"),
+                    vec![
+                        LaneConfig::default(),
+                        LaneConfig {
+                            id: lane_id,
+                            dataspace_id,
+                            alias: format!("lane-{}", lane_id.as_u32()),
+                            visibility: LaneVisibility::Restricted,
+                            ..LaneConfig::default()
+                        },
+                    ],
+                )
+                .expect("lane catalog"),
+                dataspace_catalog: DataSpaceCatalog::new(vec![
+                    DataSpaceMetadata::default(),
+                    DataSpaceMetadata {
+                        id: dataspace_id,
+                        alias: "restricted".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("dataspace catalog"),
+                ..iroha_config::parameters::actual::Nexus::default()
+            })
+            .expect("apply nexus config");
+
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                lane_id,
+                dataspace_id,
+                vec![ALICE_ID.clone(), BOB_ID.clone()],
+            )],
+        );
+
+        let mut expected = vec![ALICE_ID.clone(), BOB_ID.clone()];
+        expected.sort();
+        assert_eq!(
+            state.authoritative_lane_validator_accounts(lane_id),
+            expected
+        );
     }
 
     #[test]

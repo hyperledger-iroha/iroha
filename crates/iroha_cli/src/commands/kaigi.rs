@@ -4,13 +4,15 @@
 
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr};
 use iroha::data_model::{
     metadata::Metadata,
     prelude::{
         DomainId, KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
-        KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRoomPolicy, NewKaigi,
+        KaigiRelayHealthStatus, KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy,
+        NewKaigi,
     },
 };
 use iroha_crypto::Hash;
@@ -28,6 +30,10 @@ pub enum Command {
     Create(CreateArgs),
     /// Bootstrap a Kaigi session for demos and shareable testing metadata.
     Quickstart(QuickstartArgs),
+    /// Register or update a Kaigi relay descriptor.
+    RegisterRelay(RegisterRelayArgs),
+    /// Replace or clear the relay manifest for an existing Kaigi session.
+    SetRelayManifest(SetRelayManifestArgs),
     /// Join a Kaigi session.
     Join(JoinArgs),
     /// Leave a Kaigi session.
@@ -45,6 +51,8 @@ impl Run for Command {
         match self {
             Command::Create(args) => args.run(context),
             Command::Quickstart(args) => args.run(context),
+            Command::RegisterRelay(args) => args.run(context),
+            Command::SetRelayManifest(args) => args.run(context),
             Command::Join(args) => args.run(context),
             Command::Leave(args) => args.run(context),
             Command::End(args) => args.run(context),
@@ -95,6 +103,24 @@ pub struct CreateArgs {
     /// Path to a JSON file providing additional metadata (object with string keys).
     #[arg(long, value_name = "PATH")]
     pub metadata_json: Option<String>,
+    /// Commitment hash (hex) for privacy mode creation.
+    #[arg(long, value_name = "HEX")]
+    pub commitment_hex: Option<String>,
+    /// Alias tag describing the host commitment (privacy mode).
+    #[arg(long)]
+    pub commitment_alias: Option<String>,
+    /// Nullifier hash (hex) preventing proof replay (privacy mode).
+    #[arg(long, value_name = "HEX")]
+    pub nullifier_hex: Option<String>,
+    /// Nullifier issuance timestamp (milliseconds since epoch).
+    #[arg(long, value_name = "U64")]
+    pub nullifier_issued_at_ms: Option<u64>,
+    /// Roster Merkle root bound into the proof transcript (privacy mode).
+    #[arg(long, value_name = "HEX")]
+    pub roster_root_hex: Option<String>,
+    /// Proof bytes attesting ownership (hex encoding of raw bytes).
+    #[arg(long, value_name = "HEX")]
+    pub proof_hex: Option<String>,
 }
 
 impl Run for CreateArgs {
@@ -124,9 +150,23 @@ impl Run for CreateArgs {
         if let Some(path) = self.metadata_json {
             template.metadata = read_metadata(&path)?;
         }
+        let privacy = parse_optional_privacy_artifacts(
+            self.commitment_hex.as_deref(),
+            self.commitment_alias.as_deref(),
+            self.nullifier_hex.as_deref(),
+            self.nullifier_issued_at_ms,
+            self.roster_root_hex.as_deref(),
+            self.proof_hex.as_deref(),
+        )?;
 
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
-            Box::new(iroha::data_model::isi::kaigi::CreateKaigi { call: template }),
+            Box::new(iroha::data_model::isi::kaigi::CreateKaigi {
+                call: template,
+                commitment: privacy.commitment,
+                nullifier: privacy.nullifier,
+                roster_root: privacy.roster_root,
+                proof: privacy.proof,
+            }),
         )])
     }
 }
@@ -191,6 +231,10 @@ impl Run for QuickstartArgs {
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::CreateKaigi {
                 call: template.clone(),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
             }),
         )])?;
 
@@ -332,6 +376,80 @@ fn resolve_call_label(value: Option<String>) -> Result<String> {
 }
 
 #[derive(Args, Debug)]
+pub struct RegisterRelayArgs {
+    /// Relay account identifier advertising relay capabilities (canonical I105 account literal).
+    #[arg(long, value_name = "ACCOUNT-ID")]
+    pub relay: String,
+    /// HPKE public key bytes advertised by the relay (base64-encoded raw bytes).
+    #[arg(long, value_name = "BASE64")]
+    pub hpke_public_key_b64: String,
+    /// Relative bandwidth class advertised by the relay.
+    #[arg(long, value_name = "U8")]
+    pub bandwidth_class: u8,
+}
+
+impl Run for RegisterRelayArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        if self.bandwidth_class == 0 {
+            eyre::bail!("relay bandwidth class must be non-zero");
+        }
+        let relay_id = crate::resolve_account_id(context, &self.relay)
+            .wrap_err("failed to resolve relay account")?;
+        let hpke_public_key = BASE64_STANDARD
+            .decode(self.hpke_public_key_b64.trim())
+            .wrap_err("invalid relay HPKE public key base64")?;
+        let relay = KaigiRelayRegistration {
+            relay_id,
+            hpke_public_key,
+            bandwidth_class: self.bandwidth_class,
+        };
+
+        context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
+            Box::new(iroha::data_model::isi::kaigi::RegisterKaigiRelay { relay }),
+        )])
+    }
+}
+
+#[derive(Args, Debug)]
+pub struct SetRelayManifestArgs {
+    /// Domain identifier hosting the call.
+    #[arg(long, value_name = "DOMAIN-ID")]
+    pub domain: String,
+    /// Call name within the domain.
+    #[arg(long, value_name = "NAME")]
+    pub call_name: String,
+    /// Path to a JSON file describing the relay manifest.
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "clear",
+        required_unless_present = "clear"
+    )]
+    pub relay_manifest: Option<String>,
+    /// Clear the stored relay manifest entirely.
+    #[arg(long, conflicts_with = "relay_manifest")]
+    pub clear: bool,
+}
+
+impl Run for SetRelayManifestArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let call_id = parse_call_id(&self.domain, &self.call_name)?;
+        let relay_manifest = match (self.clear, self.relay_manifest) {
+            (true, None) => None,
+            (false, Some(path)) => Some(read_manifest(&path)?),
+            _ => eyre::bail!("provide either --relay-manifest <PATH> or --clear"),
+        };
+
+        context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
+            Box::new(iroha::data_model::isi::kaigi::SetKaigiRelayManifest {
+                call_id,
+                relay_manifest,
+            }),
+        )])
+    }
+}
+
+#[derive(Args, Debug)]
 pub struct JoinArgs {
     /// Domain identifier hosting the call.
     #[arg(long, value_name = "DOMAIN-ID")]
@@ -367,39 +485,23 @@ impl Run for JoinArgs {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
         let participant = crate::resolve_account_id(context, &self.participant)
             .wrap_err("failed to resolve participant account")?;
-        let nullifier_issued_at_ms = self.nullifier_issued_at_ms;
-
-        let commitment = match self.commitment_hex {
-            Some(hex) => {
-                let builder = KaigiCommitmentBuilder::new(&hex)?;
-                Some(builder.with_alias(self.commitment_alias.clone()))
-            }
-            None => None,
-        };
-
-        let nullifier = self
-            .nullifier_hex
-            .as_ref()
-            .map(|hex| build_nullifier(hex, nullifier_issued_at_ms))
-            .transpose()?;
-
-        let proof = self
-            .proof_hex
-            .map(|hex| decode_hex_vec(&hex).wrap_err("invalid proof hex"))
-            .transpose()?;
-        let roster_root = self
-            .roster_root_hex
-            .map(|hex| parse_hash(&hex).wrap_err("invalid roster root hex"))
-            .transpose()?;
+        let privacy = parse_optional_privacy_artifacts(
+            self.commitment_hex.as_deref(),
+            self.commitment_alias.as_deref(),
+            self.nullifier_hex.as_deref(),
+            self.nullifier_issued_at_ms,
+            self.roster_root_hex.as_deref(),
+            self.proof_hex.as_deref(),
+        )?;
 
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::JoinKaigi {
                 call_id,
                 participant,
-                commitment,
-                nullifier,
-                roster_root,
-                proof,
+                commitment: privacy.commitment,
+                nullifier: privacy.nullifier,
+                roster_root: privacy.roster_root,
+                proof: privacy.proof,
             }),
         )])
     }
@@ -424,6 +526,42 @@ impl KaigiCommitmentBuilder {
         self.commitment.alias_tag = alias;
         self.commitment
     }
+}
+
+struct ParsedKaigiPrivacyArtifacts {
+    commitment: Option<KaigiParticipantCommitment>,
+    nullifier: Option<KaigiParticipantNullifier>,
+    roster_root: Option<Hash>,
+    proof: Option<Vec<u8>>,
+}
+
+fn parse_optional_privacy_artifacts(
+    commitment_hex: Option<&str>,
+    commitment_alias: Option<&str>,
+    nullifier_hex: Option<&str>,
+    nullifier_issued_at_ms: Option<u64>,
+    roster_root_hex: Option<&str>,
+    proof_hex: Option<&str>,
+) -> Result<ParsedKaigiPrivacyArtifacts> {
+    let commitment = commitment_hex
+        .map(KaigiCommitmentBuilder::new)
+        .transpose()?
+        .map(|builder| builder.with_alias(commitment_alias.map(str::to_owned)));
+    let nullifier = nullifier_hex
+        .map(|hex| build_nullifier(hex, nullifier_issued_at_ms))
+        .transpose()?;
+    let roster_root = roster_root_hex
+        .map(|hex| parse_hash(hex).wrap_err("invalid roster root hex"))
+        .transpose()?;
+    let proof = proof_hex
+        .map(|hex| decode_hex_vec(hex).wrap_err("invalid proof hex"))
+        .transpose()?;
+    Ok(ParsedKaigiPrivacyArtifacts {
+        commitment,
+        nullifier,
+        roster_root,
+        proof,
+    })
 }
 
 fn build_nullifier(hex: &str, issued_at_ms: Option<u64>) -> Result<KaigiParticipantNullifier> {
@@ -468,41 +606,23 @@ impl Run for LeaveArgs {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
         let participant = crate::resolve_account_id(context, &self.participant)
             .wrap_err("failed to resolve participant account")?;
-        let nullifier_issued_at_ms = self.nullifier_issued_at_ms;
-
-        let commitment = self
-            .commitment_hex
-            .map(|hex| {
-                parse_hash(&hex).map(|hash| KaigiParticipantCommitment {
-                    commitment: hash,
-                    alias_tag: None,
-                })
-            })
-            .transpose()?;
-
-        let nullifier = self
-            .nullifier_hex
-            .as_ref()
-            .map(|hex| build_nullifier(hex, nullifier_issued_at_ms))
-            .transpose()?;
-
-        let proof = self
-            .proof_hex
-            .map(|hex| decode_hex_vec(&hex).wrap_err("invalid proof hex"))
-            .transpose()?;
-        let roster_root = self
-            .roster_root_hex
-            .map(|hex| parse_hash(&hex).wrap_err("invalid roster root hex"))
-            .transpose()?;
+        let privacy = parse_optional_privacy_artifacts(
+            self.commitment_hex.as_deref(),
+            None,
+            self.nullifier_hex.as_deref(),
+            self.nullifier_issued_at_ms,
+            self.roster_root_hex.as_deref(),
+            self.proof_hex.as_deref(),
+        )?;
 
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::LeaveKaigi {
                 call_id,
                 participant,
-                commitment,
-                nullifier,
-                roster_root,
-                proof,
+                commitment: privacy.commitment,
+                nullifier: privacy.nullifier,
+                roster_root: privacy.roster_root,
+                proof: privacy.proof,
             }),
         )])
     }
@@ -519,15 +639,45 @@ pub struct EndArgs {
     /// Optional timestamp in milliseconds when the call ended.
     #[arg(long, value_name = "U64")]
     pub ended_at_ms: Option<u64>,
+    /// Commitment hash (hex) for privacy mode end requests.
+    #[arg(long, value_name = "HEX")]
+    pub commitment_hex: Option<String>,
+    /// Alias tag describing the host commitment (privacy mode).
+    #[arg(long)]
+    pub commitment_alias: Option<String>,
+    /// Nullifier hash (hex) preventing proof replay (privacy mode).
+    #[arg(long, value_name = "HEX")]
+    pub nullifier_hex: Option<String>,
+    /// Nullifier issuance timestamp (milliseconds since epoch).
+    #[arg(long, value_name = "U64")]
+    pub nullifier_issued_at_ms: Option<u64>,
+    /// Roster Merkle root bound into the proof transcript (privacy mode).
+    #[arg(long, value_name = "HEX")]
+    pub roster_root_hex: Option<String>,
+    /// Proof bytes attesting ownership (hex encoding of raw bytes).
+    #[arg(long, value_name = "HEX")]
+    pub proof_hex: Option<String>,
 }
 
 impl Run for EndArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let call_id = parse_call_id(&self.domain, &self.call_name)?;
+        let privacy = parse_optional_privacy_artifacts(
+            self.commitment_hex.as_deref(),
+            self.commitment_alias.as_deref(),
+            self.nullifier_hex.as_deref(),
+            self.nullifier_issued_at_ms,
+            self.roster_root_hex.as_deref(),
+            self.proof_hex.as_deref(),
+        )?;
         context.finish([iroha::data_model::isi::Instruction::into_instruction_box(
             Box::new(iroha::data_model::isi::kaigi::EndKaigi {
                 call_id,
                 ended_at_ms: self.ended_at_ms,
+                commitment: privacy.commitment,
+                nullifier: privacy.nullifier,
+                roster_root: privacy.roster_root,
+                proof: privacy.proof,
             }),
         )])
     }
@@ -722,6 +872,41 @@ mod tests {
     }
 
     #[test]
+    fn clap_parses_create_with_optional_privacy_fields() {
+        match parse_command(&[
+            "create",
+            "--domain",
+            "kaigi",
+            "--call-name",
+            "daily",
+            "--host",
+            HOST_ACCOUNT,
+            "--commitment-hex",
+            "0xdeadbeef",
+            "--commitment-alias",
+            "host",
+            "--nullifier-hex",
+            "cafebabe",
+            "--nullifier-issued-at-ms",
+            "123",
+            "--roster-root-hex",
+            "feedface",
+            "--proof-hex",
+            "aa55",
+        ]) {
+            Command::Create(args) => {
+                assert_eq!(args.commitment_hex.as_deref(), Some("0xdeadbeef"));
+                assert_eq!(args.commitment_alias.as_deref(), Some("host"));
+                assert_eq!(args.nullifier_hex.as_deref(), Some("cafebabe"));
+                assert_eq!(args.nullifier_issued_at_ms, Some(123));
+                assert_eq!(args.roster_root_hex.as_deref(), Some("feedface"));
+                assert_eq!(args.proof_hex.as_deref(), Some("aa55"));
+            }
+            other => panic!("expected create command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn clap_parses_join_with_optional_fields() {
         match parse_command(&[
             "join",
@@ -756,6 +941,49 @@ mod tests {
                 assert_eq!(args.proof_hex.as_deref(), Some("aa55"));
             }
             other => panic!("expected create command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_register_relay() {
+        match parse_command(&[
+            "register-relay",
+            "--relay",
+            PARTICIPANT_ACCOUNT,
+            "--hpke-public-key-b64",
+            "qrvM3e7/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBk=",
+            "--bandwidth-class",
+            "7",
+        ]) {
+            Command::RegisterRelay(args) => {
+                assert_eq!(args.relay, PARTICIPANT_ACCOUNT);
+                assert_eq!(
+                    args.hpke_public_key_b64,
+                    "qrvM3e7/AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBk="
+                );
+                assert_eq!(args.bandwidth_class, 7);
+            }
+            other => panic!("expected register-relay command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_set_relay_manifest_with_clear() {
+        match parse_command(&[
+            "set-relay-manifest",
+            "--domain",
+            "kaigi",
+            "--call-name",
+            "daily",
+            "--clear",
+        ]) {
+            Command::SetRelayManifest(args) => {
+                assert_eq!(args.domain, "kaigi");
+                assert_eq!(args.call_name, "daily");
+                assert!(args.clear);
+                assert!(args.relay_manifest.is_none());
+            }
+            other => panic!("expected set-relay-manifest command, got {other:?}"),
         }
     }
 
@@ -796,6 +1024,39 @@ mod tests {
         ]) {
             Command::End(args) => {
                 assert_eq!(args.ended_at_ms, Some(456));
+            }
+            other => panic!("expected end command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clap_parses_end_with_optional_privacy_fields() {
+        match parse_command(&[
+            "end",
+            "--domain",
+            "kaigi",
+            "--call-name",
+            "daily",
+            "--commitment-hex",
+            "0xdeadbeef",
+            "--commitment-alias",
+            "host",
+            "--nullifier-hex",
+            "cafebabe",
+            "--nullifier-issued-at-ms",
+            "456",
+            "--roster-root-hex",
+            "feedface",
+            "--proof-hex",
+            "aa55",
+        ]) {
+            Command::End(args) => {
+                assert_eq!(args.commitment_hex.as_deref(), Some("0xdeadbeef"));
+                assert_eq!(args.commitment_alias.as_deref(), Some("host"));
+                assert_eq!(args.nullifier_hex.as_deref(), Some("cafebabe"));
+                assert_eq!(args.nullifier_issued_at_ms, Some(456));
+                assert_eq!(args.roster_root_hex.as_deref(), Some("feedface"));
+                assert_eq!(args.proof_hex.as_deref(), Some("aa55"));
             }
             other => panic!("expected end command, got {other:?}"),
         }
@@ -866,6 +1127,39 @@ mod tests {
         let payload = format!("0x{hex}");
         let nullifier = build_nullifier(&payload, None).expect("valid nullifier");
         assert_eq!(nullifier.issued_at_ms, 0);
+    }
+
+    #[test]
+    fn parse_optional_privacy_artifacts_builds_all_fields() {
+        let commitment_hex = format!("0x{}", "ab".repeat(32));
+        let nullifier_hex = format!("0x{}", "cd".repeat(32));
+        let roster_root_hex = format!("0x{}", "ef".repeat(32));
+        let artifacts = parse_optional_privacy_artifacts(
+            Some(&commitment_hex),
+            Some("host"),
+            Some(&nullifier_hex),
+            Some(321),
+            Some(&roster_root_hex),
+            Some("aa55"),
+        )
+        .expect("valid privacy artifacts");
+
+        assert_eq!(
+            artifacts
+                .commitment
+                .as_ref()
+                .and_then(|commitment| commitment.alias_tag.as_deref()),
+            Some("host")
+        );
+        assert_eq!(
+            artifacts
+                .nullifier
+                .as_ref()
+                .map(|nullifier| nullifier.issued_at_ms),
+            Some(321)
+        );
+        assert_eq!(artifacts.proof, Some(vec![0xaa, 0x55]));
+        assert_eq!(artifacts.roster_root, Some(parse_hash(&roster_root_hex).unwrap()));
     }
 
     #[test]

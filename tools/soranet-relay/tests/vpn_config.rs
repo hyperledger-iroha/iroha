@@ -13,6 +13,8 @@ fn vpn_defaults_apply_and_validate() {
         dns_push_interval_secs: 0,
         route_push: vec!["10.0.0.0/24 ".to_string()],
         dns_overrides: vec![" 1.1.1.1 ".to_string()],
+        helper_ticket_secret_hex: None,
+        backend_addr: None,
         cover: VpnCoverTrafficConfig {
             enabled: false,
             cover_to_data_per_mille: 0,
@@ -65,6 +67,8 @@ fn vpn_cover_jitter_guardrails() {
         dns_push_interval_secs: 60,
         route_push: vec![],
         dns_overrides: vec![],
+        helper_ticket_secret_hex: None,
+        backend_addr: None,
         cover: VpnCoverTrafficConfig {
             enabled: true,
             cover_to_data_per_mille: 500,
@@ -109,6 +113,8 @@ fn vpn_config_json_roundtrip_preserves_fields() {
         dns_push_interval_secs: 120,
         route_push: vec!["10.0.0.0/24".into()],
         dns_overrides: vec!["8.8.8.8".into()],
+        helper_ticket_secret_hex: None,
+        backend_addr: None,
         cover: VpnCoverTrafficConfig::default(),
         billing: Default::default(),
     };

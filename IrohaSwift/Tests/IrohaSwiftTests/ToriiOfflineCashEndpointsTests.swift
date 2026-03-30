@@ -39,7 +39,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
         super.tearDown()
     }
 
-    func testOfflineCashEndpointsRejectRemovedServerSideSigningFlowsAndKeepRevocationReads() async throws {
+    func testOfflineCashEndpointsPostRequestsAndKeepRevocationReads() async throws {
         let client = makeClient()
         let aliceId = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
         let bobId = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
@@ -74,7 +74,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             deviceBinding: deviceBinding,
             issuerSignatureBase64: "authorization-signature"
         )
-        _ = ToriiOfflineCashState(
+        let cashState = ToriiOfflineCashState(
             lineageId: "lineage-1",
             accountId: aliceId,
             deviceId: "device-1",
@@ -88,6 +88,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             authorization: authorization,
             issuerSignatureBase64: "cash-signature"
         )
+        let cashEnvelope = ToriiOfflineCashEnvelope(lineageState: cashState)
+        let cashEnvelopeData = try JSONEncoder().encode(cashEnvelope)
         let revocationListData = Data(
             """
             {
@@ -140,8 +142,104 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             senderSignatureBase64: "sender-signature",
             createdAtMs: 1_700_000_123_456
         )
+        let setupRequest = ToriiOfflineCashSetupRequest(
+            accountId: aliceId,
+            assetDefinitionId: assetDefinitionId,
+            deviceBinding: deviceBinding,
+            deviceProof: deviceProof
+        )
+        let loadRequest = ToriiOfflineCashLoadRequest(
+            operationId: "load-1",
+            lineageId: "lineage-1",
+            accountId: aliceId,
+            assetDefinitionId: assetDefinitionId,
+            amount: "100.00",
+            deviceBinding: deviceBinding,
+            deviceProof: deviceProof
+        )
+        let refreshRequest = ToriiOfflineCashRefreshRequest(
+            operationId: "refresh-1",
+            lineageId: "lineage-1",
+            accountId: aliceId,
+            deviceBinding: deviceBinding,
+            deviceProof: deviceProof
+        )
+        let syncRequest = ToriiOfflineCashSyncRequest(
+            operationId: "sync-1",
+            lineageId: "lineage-1",
+            accountId: aliceId,
+            deviceBinding: deviceBinding,
+            deviceProof: deviceProof,
+            receipts: [receipt]
+        )
+        let redeemProof = try ToriiOfflineSettlementProofs.buildRedeemRequestProof(
+            operationId: "redeem-1",
+            accountId: aliceId,
+            lineageId: "lineage-1",
+            assetDefinitionId: assetDefinitionId,
+            amount: "30.00",
+            offlinePublicKey: deviceBinding.offlinePublicKey,
+            authorizationId: authorization.authorizationId,
+            preStateHash: String(repeating: "a", count: 64),
+            receipts: [receipt]
+        )
+        let redeemRequest = ToriiOfflineCashRedeemRequest(
+            operationId: "redeem-1",
+            lineageId: "lineage-1",
+            accountId: aliceId,
+            deviceBinding: deviceBinding,
+            deviceProof: deviceProof,
+            amount: "30.00",
+            receipts: [receipt],
+            redeemProof: redeemProof
+        )
 
         var queue: [ExpectedRequest] = [
+            ExpectedRequest(
+                method: "POST",
+                path: "/v1/offline/cash/setup",
+                responseBody: cashEnvelopeData,
+                assertBody: { body in
+                    let payload = try XCTUnwrap(body).decoded(ToriiOfflineCashSetupRequest.self)
+                    XCTAssertEqual(payload, setupRequest)
+                }
+            ),
+            ExpectedRequest(
+                method: "POST",
+                path: "/v1/offline/cash/load",
+                responseBody: cashEnvelopeData,
+                assertBody: { body in
+                    let payload = try XCTUnwrap(body).decoded(ToriiOfflineCashLoadRequest.self)
+                    XCTAssertEqual(payload, loadRequest)
+                }
+            ),
+            ExpectedRequest(
+                method: "POST",
+                path: "/v1/offline/cash/refresh",
+                responseBody: cashEnvelopeData,
+                assertBody: { body in
+                    let payload = try XCTUnwrap(body).decoded(ToriiOfflineCashRefreshRequest.self)
+                    XCTAssertEqual(payload, refreshRequest)
+                }
+            ),
+            ExpectedRequest(
+                method: "POST",
+                path: "/v1/offline/cash/sync",
+                responseBody: cashEnvelopeData,
+                assertBody: { body in
+                    let payload = try XCTUnwrap(body).decoded(ToriiOfflineCashSyncRequest.self)
+                    XCTAssertEqual(payload, syncRequest)
+                }
+            ),
+            ExpectedRequest(
+                method: "POST",
+                path: "/v1/offline/cash/redeem",
+                responseBody: cashEnvelopeData,
+                assertBody: { body in
+                    let payload = try XCTUnwrap(body).decoded(ToriiOfflineCashRedeemRequest.self)
+                    XCTAssertEqual(payload, redeemRequest)
+                }
+            ),
             ExpectedRequest(
                 method: "GET",
                 path: "/v1/offline/revocations",
@@ -165,7 +263,10 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, expected.method)
             XCTAssertEqual(request.url?.path, expected.path)
             if expected.method != "GET" {
-                XCTAssertFalse((request.value(forHTTPHeaderField: "Idempotency-Key") ?? "").isEmpty)
+                XCTAssertEqual(
+                    request.value(forHTTPHeaderField: "Content-Type"),
+                    "application/json"
+                )
             }
             try expected.assertBody(try self.requestBody(from: request))
             let response = try XCTUnwrap(
@@ -179,94 +280,17 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             return (response, expected.responseBody)
         }
 
-        let removedCases: [(String, @Sendable () async throws -> Void)] = [
-            ("/v1/offline/cash/setup", {
-                _ = try await client.setupOfflineCash(
-                    ToriiOfflineCashSetupRequest(
-                        accountId: aliceId,
-                        assetDefinitionId: assetDefinitionId,
-                        deviceBinding: deviceBinding,
-                        deviceProof: deviceProof
-                    )
-                )
-            }),
-            ("/v1/offline/cash/load", {
-                _ = try await client.loadOfflineCash(
-                    ToriiOfflineCashLoadRequest(
-                        operationId: "load-1",
-                        lineageId: "lineage-1",
-                        accountId: aliceId,
-                        assetDefinitionId: assetDefinitionId,
-                        amount: "100.00",
-                        deviceBinding: deviceBinding,
-                        deviceProof: deviceProof
-                    )
-                )
-            }),
-            ("/v1/offline/cash/refresh", {
-                _ = try await client.refreshOfflineCash(
-                    ToriiOfflineCashRefreshRequest(
-                        operationId: "refresh-1",
-                        lineageId: "lineage-1",
-                        accountId: aliceId,
-                        deviceBinding: deviceBinding,
-                        deviceProof: deviceProof
-                    )
-                )
-            }),
-            ("/v1/offline/cash/sync", {
-                _ = try await client.syncOfflineCash(
-                    ToriiOfflineCashSyncRequest(
-                        operationId: "sync-1",
-                        lineageId: "lineage-1",
-                        accountId: aliceId,
-                        deviceBinding: deviceBinding,
-                        deviceProof: deviceProof,
-                        receipts: [receipt]
-                    )
-                )
-            })
-        ]
+        let setupEnvelope = try await client.setupOfflineCash(setupRequest)
+        let loadEnvelope = try await client.loadOfflineCash(loadRequest)
+        let refreshEnvelope = try await client.refreshOfflineCash(refreshRequest)
+        let syncEnvelope = try await client.syncOfflineCash(syncRequest)
+        let redeemEnvelope = try await client.redeemOfflineCash(redeemRequest)
 
-        for (endpoint, operation) in removedCases {
-            await XCTAssertThrowsErrorAsync(try await operation()) { error in
-                guard case let ToriiClientError.invalidPayload(reason) = error else {
-                    return XCTFail("Expected invalidPayload, got \(error)")
-                }
-                XCTAssertTrue(reason.contains(endpoint))
-                XCTAssertTrue(reason.contains("locally signed transaction"))
-            }
-        }
-
-        let redeemProof = try ToriiOfflineSettlementProofs.buildRedeemRequestProof(
-            operationId: "redeem-1",
-            accountId: aliceId,
-            lineageId: "lineage-1",
-            assetDefinitionId: assetDefinitionId,
-            amount: "30.00",
-            offlinePublicKey: deviceBinding.offlinePublicKey,
-            authorizationId: authorization.authorizationId,
-            preStateHash: String(repeating: "a", count: 64),
-            receipts: [receipt]
-        )
-        await XCTAssertThrowsErrorAsync(try await client.redeemOfflineCash(
-            ToriiOfflineCashRedeemRequest(
-                operationId: "redeem-1",
-                lineageId: "lineage-1",
-                accountId: aliceId,
-                deviceBinding: deviceBinding,
-                deviceProof: deviceProof,
-                amount: "30.00",
-                receipts: [receipt],
-                redeemProof: redeemProof
-            )
-        )) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(reason.contains("/v1/offline/cash/redeem"))
-            XCTAssertTrue(reason.contains("locally signed transaction"))
-        }
+        XCTAssertEqual(setupEnvelope, cashEnvelope)
+        XCTAssertEqual(loadEnvelope, cashEnvelope)
+        XCTAssertEqual(refreshEnvelope, cashEnvelope)
+        XCTAssertEqual(syncEnvelope, cashEnvelope)
+        XCTAssertEqual(redeemEnvelope, cashEnvelope)
 
         let revocations = try await client.listOfflineRevocations()
         XCTAssertEqual(revocations.total, 1)

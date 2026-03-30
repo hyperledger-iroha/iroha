@@ -837,14 +837,7 @@ impl Account {
     #[inline]
     #[must_use]
     pub fn new_in_domain(id: AccountId, domain: DomainId) -> <Self as Registered>::With {
-        <Self as Registered>::With::new_in_domain(id, domain)
-    }
-
-    /// Construct a registration builder for an account from an explicit scoped identifier.
-    #[inline]
-    #[must_use]
-    pub fn from_scoped_id(id: ScopedAccountId) -> <Self as Registered>::With {
-        <Self as Registered>::With::from_scoped_id(id)
+        <Self as Registered>::With::new(id).with_linked_domain(domain)
     }
 
     /// Return a reference to the account signatory, panicking if the controller is not single-key.
@@ -919,12 +912,6 @@ impl NewAccount {
         }
     }
 
-    /// Create a registration builder from an explicit scoped identifier.
-    #[must_use]
-    pub fn from_scoped_id(id: ScopedAccountId) -> Self {
-        Self::new_in_domain(id.account, id.domain)
-    }
-
     /// Create a registration builder from an explicit account/domain pair.
     #[must_use]
     pub fn new_in_domain(id: AccountId, domain: DomainId) -> Self {
@@ -935,6 +922,14 @@ impl NewAccount {
     #[must_use]
     pub fn linked_domains(&self) -> &BTreeSet<DomainId> {
         &self.linked_domains
+    }
+
+    /// Borrow the targeted domain when exactly one linked domain exists.
+    #[must_use]
+    pub fn domain(&self) -> Option<&DomainId> {
+        (self.linked_domains.len() == 1)
+            .then(|| self.linked_domains.iter().next())
+            .flatten()
     }
 
     /// Replace the linked domain set on this builder.
@@ -949,22 +944,6 @@ impl NewAccount {
     pub fn with_linked_domain(mut self, linked_domain: DomainId) -> Self {
         self.linked_domains.insert(linked_domain);
         self
-    }
-
-    /// Borrow the optional domain targeted by this registration when exactly one link exists.
-    #[must_use]
-    pub fn domain(&self) -> Option<&DomainId> {
-        (self.linked_domains.len() == 1)
-            .then(|| self.linked_domains.iter().next())
-            .flatten()
-    }
-
-    /// Return the scoped identifier associated with this registration when exactly one link exists.
-    #[must_use]
-    pub fn scoped_id(&self) -> Option<ScopedAccountId> {
-        self.domain()
-            .cloned()
-            .map(|domain| self.id.to_account_id(domain))
     }
 
     /// Replace metadata on this builder.
@@ -1060,9 +1039,12 @@ impl fmt::Display for Account {
 
 impl fmt::Display for NewAccount {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.domain() {
-            Some(domain) => write!(f, "{}@{}", self.id, domain),
-            None => write!(f, "{}", self.id),
+        if self.linked_domains.len() == 1
+            && let Some(domain) = self.linked_domains.iter().next()
+        {
+            write!(f, "{}@{}", self.id, domain)
+        } else {
+            write!(f, "{}", self.id)
         }
     }
 }
@@ -1607,13 +1589,11 @@ mod tests {
 
         let new_account = NewAccount::new(account_id.clone());
         assert!(new_account.linked_domains().is_empty());
-        assert_eq!(new_account.domain(), None);
-        assert_eq!(new_account.scoped_id(), None);
         assert_eq!(new_account.to_string(), account_id.to_string());
     }
 
     #[test]
-    fn multi_linked_account_builder_has_no_compat_scoped_id() {
+    fn multi_linked_account_builder_has_no_singular_domain_view() {
         let key_pair = KeyPair::random();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let wonderland: DomainId = "wonderland".parse().expect("domain id");
@@ -1627,8 +1607,6 @@ mod tests {
             new_account.linked_domains(),
             &BTreeSet::from([acme, wonderland])
         );
-        assert_eq!(new_account.domain(), None);
-        assert_eq!(new_account.scoped_id(), None);
         assert_eq!(&account.linked_domains, new_account.linked_domains());
         assert_eq!(new_account.to_string(), account_id.to_string());
     }
@@ -1637,9 +1615,13 @@ mod tests {
 #[cfg(all(test, feature = "json"))]
 mod json_tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use norito::codec::{decode_adaptive, encode_adaptive};
 
     use super::*;
-    use crate::{account::address, metadata::Metadata, name::Name, nexus::UniversalAccountId};
+    use crate::{
+        account::address, metadata::Metadata, name::Name, nexus::UniversalAccountId,
+        prelude::Register,
+    };
 
     fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
         address::ChainDiscriminantGuard::enter(address::chain_discriminant())
@@ -1724,7 +1706,7 @@ mod json_tests {
         let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
         let id = AccountId::new(keypair.public_key().clone());
-        let new_account = NewAccount::new_in_domain(id.clone(), domain.clone());
+        let new_account = NewAccount::new(id.clone()).with_linked_domain(domain.clone());
 
         let json = norito::json::to_json(&new_account).expect("serialize new account");
         let decoded: NewAccount = norito::json::from_json(&json).expect("deserialize new account");
@@ -1748,7 +1730,6 @@ mod json_tests {
 
         assert_eq!(decoded, new_account);
         assert!(decoded.linked_domains().is_empty());
-        assert_eq!(decoded.domain(), None);
         assert!(decoded.label.is_none());
         assert!(decoded.uaid.is_none());
         assert_eq!(decoded.metadata, Metadata::default());
@@ -1796,10 +1777,48 @@ mod json_tests {
             norito::json::from_json::<NewAccount>(&payload).expect("domainless account payload");
         assert_eq!(decoded.id, id);
         assert!(decoded.linked_domains().is_empty());
-        assert_eq!(decoded.domain(), None);
         assert!(decoded.label.is_none());
         assert!(decoded.uaid.is_none());
         assert_eq!(decoded.metadata, Metadata::default());
+    }
+
+    #[test]
+    fn new_account_norito_roundtrip_preserves_packed_self_delimiting_fields() {
+        let _guard = guard_chain_discriminant();
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let id = AccountId::new(keypair.public_key().clone());
+        let mut metadata = Metadata::default();
+        metadata.insert("title".parse().expect("metadata key"), "queen");
+        let label =
+            rekey::AccountLabel::new(domain.clone(), "alice".parse::<Name>().expect("label"));
+        let uaid = UniversalAccountId::from_hash(Hash::prehashed([0xAB; 32]));
+        let opaque_id = OpaqueAccountId::from_hash(Hash::prehashed([0xCD; 32]));
+
+        let new_account = NewAccount::new_in_domain(id, domain)
+            .with_metadata(metadata)
+            .with_label(Some(label))
+            .with_uaid(Some(uaid))
+            .with_opaque_ids(vec![opaque_id]);
+
+        let bytes = encode_adaptive(&new_account);
+        let decoded: NewAccount = decode_adaptive(&bytes).expect("decode new account");
+
+        assert_eq!(decoded, new_account);
+    }
+
+    #[test]
+    fn register_account_norito_roundtrip_matches_kagami_genesis_shape() {
+        let _guard = guard_chain_discriminant();
+        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let keypair = KeyPair::random();
+        let id = AccountId::new(keypair.public_key().clone());
+        let register = Register::account(NewAccount::new_in_domain(id, domain));
+
+        let bytes = encode_adaptive(&register);
+        let decoded: Register<Account> = decode_adaptive(&bytes).expect("decode register account");
+
+        assert_eq!(decoded, register);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
     io::{BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
 };
 
@@ -303,9 +303,7 @@ fn gather_answers(args: &Args) -> Result<Answers> {
 
     let relay_mode = resolve_relay_mode(args.relay_mode, args.non_interactive)?;
     let relay_hub_addresses = if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist) {
-        if !args.relay_hub_addresses.is_empty() {
-            args.relay_hub_addresses.clone()
-        } else {
+        if args.relay_hub_addresses.is_empty() {
             let raw = resolve_text(
                 "Relay hub addresses (comma separated host:port)",
                 None,
@@ -317,6 +315,8 @@ fn gather_answers(args: &Args) -> Result<Answers> {
                 .filter(|s| !s.is_empty())
                 .map(ToOwned::to_owned)
                 .collect::<Vec<_>>()
+        } else {
+            args.relay_hub_addresses.clone()
         }
     } else {
         Vec::new()
@@ -589,12 +589,12 @@ fn resolve_number(
 }
 
 fn write_wizard_readme(
-    path: &PathBuf,
+    path: &Path,
     profile: Profile,
     chain_id: &str,
     public_key: &PublicKey,
-    config_path: &PathBuf,
-    genesis_path: &PathBuf,
+    config_path: &Path,
+    genesis_path: &Path,
     next_command: &str,
 ) -> Result<()> {
     let rendered = format!(
@@ -1143,6 +1143,51 @@ mod tests {
             genesis.get("chain").and_then(JsonValue::as_str),
             Some(EXPECTED_TAIRA_CHAIN_ID),
             "public Taira genesis.json must match the shipped live chain id"
+        );
+        assert!(
+            config_text.contains("testu"),
+            "public Taira config.toml must render testnet i105 literals"
+        );
+        assert!(
+            !config_text.contains("sorau"),
+            "public Taira config.toml must not leak mainnet i105 literals"
+        );
+        assert!(
+            genesis_text.contains("testu"),
+            "public Taira genesis.json must render testnet i105 literals"
+        );
+        assert!(
+            !genesis_text.contains("sorau"),
+            "public Taira genesis.json must not leak mainnet i105 literals"
+        );
+        let first_tx_instructions = genesis
+            .get("transactions")
+            .and_then(JsonValue::as_array)
+            .and_then(|items| items.first())
+            .and_then(|tx| tx.get("instructions"))
+            .and_then(JsonValue::as_array)
+            .expect("public Taira genesis.json must include bootstrap instructions");
+        let xor_universal = first_tx_instructions
+            .iter()
+            .find(|instruction| {
+                instruction
+                    .get("Register")
+                    .and_then(|register| register.get("AssetDefinition"))
+                    .and_then(|asset| asset.get("id"))
+                    .and_then(JsonValue::as_str)
+                    == Some("xor#universal")
+            })
+            .expect("public Taira genesis.json must register xor#universal");
+        let confidential_mode = xor_universal
+            .get("Register")
+            .and_then(|register| register.get("AssetDefinition"))
+            .and_then(|asset| asset.get("confidential_policy"))
+            .and_then(|policy| policy.get("mode"))
+            .and_then(JsonValue::as_str);
+        assert_eq!(
+            confidential_mode,
+            Some("Convertible"),
+            "public Taira genesis.json must keep xor#universal shield-capable for wallet shielding"
         );
     }
 }

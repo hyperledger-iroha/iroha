@@ -270,6 +270,13 @@ fn tags_section() -> Value {
         Value::String("Iroha Connect session and relay endpoints.".to_owned()),
     );
 
+    let mut vpn = Map::new();
+    vpn.insert("name".into(), Value::String("VPN".to_owned()));
+    vpn.insert(
+        "description".into(),
+        Value::String("Sora VPN profile, session, and receipt endpoints.".to_owned()),
+    );
+
     let mut mcp = Map::new();
     mcp.insert("name".into(), Value::String("MCP".to_owned()));
     mcp.insert(
@@ -372,6 +379,7 @@ fn tags_section() -> Value {
         Value::Object(parameters),
         Value::Object(explorer),
         Value::Object(connect),
+        Value::Object(vpn),
         Value::Object(mcp),
         Value::Object(push),
         Value::Object(webhooks),
@@ -494,6 +502,17 @@ fn alias_paths() -> Map {
     paths.insert(
         "/v1/aliases/resolve_index".to_owned(),
         Value::Object(alias_resolve_index_operation()),
+    );
+    paths.insert(
+        "/v1/aliases/by_account".to_owned(),
+        Value::Object(json_post_operation(
+            "Aliases",
+            "List aliases bound to an account.",
+            "Resolve the aliases currently bound to a canonical account id.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
     );
     paths.insert(
         "/v1/assets/aliases/resolve".to_owned(),
@@ -633,6 +652,55 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/offline/cash/readiness".to_owned(),
+        Value::Object(json_get_operation(
+            "Offline",
+            "Report offline cash feature readiness.",
+            "Returns feature-flag style readiness signals for the device-bound offline cash flow.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    for (path, summary, description) in [
+        (
+            "/v1/offline/cash/setup",
+            "Initialize an offline cash lineage.",
+            "Create the initial device-bound offline cash lineage and return the signed server envelope.",
+        ),
+        (
+            "/v1/offline/cash/load",
+            "Load value into offline cash.",
+            "Top up an existing device-bound offline cash lineage and return the updated signed envelope.",
+        ),
+        (
+            "/v1/offline/cash/refresh",
+            "Refresh offline cash authorization.",
+            "Rotate or refresh device-bound offline cash authorization material and return the updated signed envelope.",
+        ),
+        (
+            "/v1/offline/cash/sync",
+            "Sync offline cash state.",
+            "Submit the current device-side lineage view so the server can reconcile and return the canonical signed envelope.",
+        ),
+        (
+            "/v1/offline/cash/redeem",
+            "Redeem offline cash on-ledger.",
+            "Redeem device-bound offline cash back on-ledger and return the post-redeem signed envelope.",
+        ),
+    ] {
+        paths.insert(
+            path.to_owned(),
+            Value::Object(json_post_operation(
+                "Offline",
+                summary,
+                description,
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            )),
+        );
+    }
+    paths.insert(
         "/v1/offline/revocations".to_owned(),
         Value::Object(offline_revocations_operation()),
     );
@@ -651,6 +719,17 @@ fn offline_paths() -> Map {
     paths.insert(
         "/v1/offline/transfers/query".to_owned(),
         Value::Object(offline_transfers_query_operation()),
+    );
+    paths.insert(
+        "/v1/offline/policy".to_owned(),
+        Value::Object(json_post_operation(
+            "Offline",
+            "Set the offline policy snapshot.",
+            "Replace the active offline policy snapshot used by the app-facing offline controls.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
     );
     paths
 }
@@ -1524,8 +1603,8 @@ fn transaction_paths() -> Map {
         "/transaction".to_owned(),
         Value::Object(binary_post_operation(
             "Transactions",
-            "Submit a signed transaction.",
-            "Submit a SignedTransaction encoded as Norito bytes.",
+            "Submit a versioned signed transaction.",
+            "Submit a versioned SignedTransaction encoded as Norito bytes. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
             "#/components/schemas/JsonValue",
         )),
     );
@@ -1556,6 +1635,16 @@ fn transaction_paths() -> Map {
     paths.insert(
         "/v1/pipeline/transactions/status".to_owned(),
         Value::Object(pipeline_status),
+    );
+    paths.insert(
+        "/v1/transactions/history".to_owned(),
+        Value::Object(json_get_operation(
+            "Transactions",
+            "List transaction history entries.",
+            "Return the app-facing transaction history view for the active query filters.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
     );
     paths.insert(
         "/v1/iso20022/pacs008".to_owned(),
@@ -1684,6 +1773,69 @@ fn connect_paths() -> Map {
             "Connect",
             "Fetch Connect status.",
             "Return Connect relay status information.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths
+}
+
+fn vpn_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/vpn/profile".to_owned(),
+        Value::Object(json_get_operation(
+            "VPN",
+            "Fetch the public VPN profile.",
+            "Return the wallet-facing Sora VPN profile advertised by this node.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/vpn/sessions".to_owned(),
+        Value::Object(json_post_operation(
+            "VPN",
+            "Create a VPN session.",
+            "Create a signed Sora VPN session for the active wallet account.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/vpn/sessions/{session_id}".to_owned(),
+        Value::Object({
+            let get_op = json_get_operation(
+                "VPN",
+                "Fetch a VPN session.",
+                "Return the current status of a signed Sora VPN session.",
+                "#/components/schemas/JsonValue",
+                vec![string_path_param("session_id", "VPN session identifier.")],
+            );
+            let delete_op = json_delete_operation(
+                "VPN",
+                "Delete a VPN session.",
+                "Tear down a signed Sora VPN session and return the canonical receipt.",
+                "#/components/schemas/JsonValue",
+                vec![string_path_param("session_id", "VPN session identifier.")],
+            );
+            let mut methods = Map::new();
+            if let Some(get_value) = get_op.get("get") {
+                methods.insert("get".to_owned(), get_value.clone());
+            }
+            if let Some(delete_value) = delete_op.get("delete") {
+                methods.insert("delete".to_owned(), delete_value.clone());
+            }
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/vpn/receipts".to_owned(),
+        Value::Object(json_get_operation(
+            "VPN",
+            "List VPN receipts.",
+            "List canonical Sora VPN receipts for the active wallet account.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -2027,6 +2179,42 @@ fn multisig_paths() -> Map {
             "#/components/schemas/MultisigProposalsGetRequest",
             "#/components/schemas/MultisigProposalGetResponse",
             "Multisig alias or proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/list".to_owned(),
+        Value::Object(multisig_post_operation(
+            "List multisig approvals.",
+            "Resolve a multisig selector and list approvals recorded for the active concrete multisig authority.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Multisig alias not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/get".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch a multisig approval.",
+            "Resolve a multisig selector and fetch a recorded approval by proposal selector.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Multisig alias or approval not found.",
+        )),
+    );
+    paths
+}
+
+fn controls_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/controls/asset-transfer/get".to_owned(),
+        Value::Object(json_post_operation(
+            "Controls",
+            "Fetch asset-transfer control state.",
+            "Resolve an asset-transfer control request and return the current control snapshot.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
         )),
     );
     paths
@@ -5645,10 +5833,12 @@ fn paths_section() -> Map {
     paths.extend(query_paths());
     paths.extend(stream_paths());
     paths.extend(connect_paths());
+    paths.extend(vpn_paths());
     paths.extend(mcp_paths());
     paths.extend(proof_paths());
     paths.extend(contracts_paths());
     paths.extend(multisig_paths());
+    paths.extend(controls_paths());
     paths.extend(zk_paths());
     paths.extend(governance_paths());
     paths.extend(runtime_paths());
@@ -9830,6 +10020,7 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/voprf/evaluate"));
         assert!(paths.contains_key("/v1/aliases/resolve"));
         assert!(paths.contains_key("/v1/aliases/resolve_index"));
+        assert!(paths.contains_key("/v1/aliases/by_account"));
         assert!(paths.contains_key("/v1/assets/aliases/resolve"));
         assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
         assert!(paths.contains_key("/v1/time/now"));
@@ -9861,6 +10052,10 @@ mod tests {
         assert!(paths.contains_key("/events"));
         assert!(paths.contains_key("/v1/da/ingest"));
         assert!(paths.contains_key("/v1/connect/session"));
+        assert!(paths.contains_key("/v1/vpn/profile"));
+        assert!(paths.contains_key("/v1/vpn/sessions"));
+        assert!(paths.contains_key("/v1/vpn/sessions/{session_id}"));
+        assert!(paths.contains_key("/v1/vpn/receipts"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
         assert!(paths.contains_key("/v1/multisig/propose"));
@@ -9871,11 +10066,22 @@ mod tests {
         assert!(paths.contains_key("/v1/multisig/spec"));
         assert!(paths.contains_key("/v1/multisig/proposals/list"));
         assert!(paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(paths.contains_key("/v1/multisig/approvals/list"));
+        assert!(paths.contains_key("/v1/multisig/approvals/get"));
+        assert!(paths.contains_key("/v1/controls/asset-transfer/get"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/gov/stream"));
         assert!(paths.contains_key("/v1/telemetry/live"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
+        assert!(paths.contains_key("/v1/transactions/history"));
+        assert!(paths.contains_key("/v1/offline/policy"));
+        assert!(paths.contains_key("/v1/offline/cash/readiness"));
+        assert!(paths.contains_key("/v1/offline/cash/setup"));
+        assert!(paths.contains_key("/v1/offline/cash/load"));
+        assert!(paths.contains_key("/v1/offline/cash/refresh"));
+        assert!(paths.contains_key("/v1/offline/cash/sync"));
+        assert!(paths.contains_key("/v1/offline/cash/redeem"));
         assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
         assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
         assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
@@ -9891,7 +10097,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_keeps_only_lineage_offline_paths() {
+    fn generated_spec_keeps_only_cash_offline_paths() {
         let doc = generate_spec();
         let paths = doc
             .get("paths")
@@ -9917,6 +10123,26 @@ mod tests {
             assert!(
                 !paths.contains_key(legacy_path),
                 "legacy offline path should be absent: {legacy_path}"
+            );
+        }
+
+        for supported_path in [
+            "/v1/offline/cash/readiness",
+            "/v1/offline/cash/setup",
+            "/v1/offline/cash/load",
+            "/v1/offline/cash/refresh",
+            "/v1/offline/cash/sync",
+            "/v1/offline/cash/redeem",
+            "/v1/offline/revocations",
+            "/v1/offline/revocations/bundle",
+            "/v1/offline/transfers",
+            "/v1/offline/transfers/{bundle_id_hex}",
+            "/v1/offline/transfers/query",
+            "/v1/offline/policy",
+        ] {
+            assert!(
+                paths.contains_key(supported_path),
+                "supported offline path should be present: {supported_path}"
             );
         }
     }
@@ -10717,13 +10943,17 @@ mod tests {
             _ => panic!("tags section should be an array"),
         };
         let mut has_push = false;
+        let mut has_vpn = false;
         for tag in tags {
             let Some(obj) = tag.as_object() else { continue };
             if obj.get("name").and_then(Value::as_str) == Some("Push") {
                 has_push = true;
-                break;
+            }
+            if obj.get("name").and_then(Value::as_str) == Some("VPN") {
+                has_vpn = true;
             }
         }
         assert!(has_push, "tags should include Push");
+        assert!(has_vpn, "tags should include VPN");
     }
 }

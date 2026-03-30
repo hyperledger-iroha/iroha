@@ -27,6 +27,7 @@ pub use self::model::*;
 use super::{
     error,
     executable::{Executable, IvmBytecode},
+    private_kaigi::PrivateKaigiTransaction,
 };
 use crate::{
     ChainId,
@@ -183,6 +184,8 @@ mod model {
     pub enum TransactionEntrypoint {
         /// User request that initiates a transaction.
         External(SignedTransaction),
+        /// Authority-free private Kaigi request.
+        PrivateKaigi(PrivateKaigiTransaction),
         /// Scheduled time trigger that initiates a transaction.
         Time(TimeTriggerEntrypoint),
     }
@@ -478,7 +481,7 @@ impl SignedTransaction {
     }
 
     #[cfg(feature = "fault_injection")]
-    fn fault_injection_overlay(metadata: &Metadata) -> Option<Vec<String>> {
+    pub(crate) fn fault_injection_overlay(metadata: &Metadata) -> Option<Vec<String>> {
         metadata
             .get(&*FAULT_INJECTION_METADATA_NAME)
             .cloned()
@@ -486,7 +489,10 @@ impl SignedTransaction {
     }
 
     #[cfg(feature = "fault_injection")]
-    fn apply_fault_injection_overlay(metadata: &mut Metadata, additions: Vec<InstructionBox>) {
+    pub(crate) fn apply_fault_injection_overlay(
+        metadata: &mut Metadata,
+        additions: Vec<InstructionBox>,
+    ) {
         let mut combined = Self::fault_injection_overlay(metadata).unwrap_or_default();
         combined.extend(additions.into_iter().map(|instruction| {
             let bytes =
@@ -607,6 +613,56 @@ impl iroha_version::codec::DecodeVersioned for SignedTransaction {
     }
 }
 
+impl iroha_version::Version for TransactionEntrypoint {
+    fn version(&self) -> u8 {
+        1
+    }
+
+    fn supported_versions() -> core::ops::Range<u8> {
+        1..2
+    }
+}
+
+impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {
+    fn encode_versioned(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(1);
+        bytes.push(self.version());
+        bytes.extend(norito::codec::encode_adaptive(self));
+        bytes
+    }
+}
+
+impl iroha_version::codec::DecodeVersioned for TransactionEntrypoint {
+    fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
+        use iroha_version::error::Error;
+
+        let Some((&version, payload)) = input.split_first() else {
+            return Err(Error::NotVersioned);
+        };
+
+        if !Self::supported_versions().contains(&version) {
+            return Err(Error::UnsupportedVersion(Box::new(
+                iroha_version::UnsupportedVersion::new(
+                    version,
+                    iroha_version::RawVersioned::NoritoBytes(input.to_vec()),
+                ),
+            )));
+        }
+
+        let payload_guard = norito::core::PayloadCtxGuard::enter(payload);
+        let mut cursor = payload;
+        let decoded = <Self as DecodeAll>::decode_all(&mut cursor).map_err(Error::from)?;
+        drop(payload_guard);
+        if cursor.is_empty() {
+            Ok(decoded)
+        } else {
+            Err(Error::NoritoCodec(
+                "TransactionEntrypoint payload contains trailing bytes".into(),
+            ))
+        }
+    }
+}
+
 impl<'a> norito::core::DecodeFromSlice<'a> for SignedTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let _guard = norito::core::PayloadCtxGuard::enter(bytes);
@@ -670,6 +726,11 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(tx, out);
             }
+            TransactionEntrypoint::PrivateKaigi(tx) => {
+                norito::json::write_json_string("PrivateKaigi", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(tx, out);
+            }
             TransactionEntrypoint::Time(trigger) => {
                 norito::json::write_json_string("Time", out);
                 out.push(':');
@@ -692,6 +753,10 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
             "External" => {
                 let tx = SignedTransaction::json_deserialize(parser)?;
                 TransactionEntrypoint::External(tx)
+            }
+            "PrivateKaigi" => {
+                let tx = PrivateKaigiTransaction::json_deserialize(parser)?;
+                TransactionEntrypoint::PrivateKaigi(tx)
             }
             "Time" => {
                 let trigger = TimeTriggerEntrypoint::json_deserialize(parser)?;
@@ -1741,12 +1806,52 @@ mod attachments_tests {
 }
 
 impl TransactionEntrypoint {
+    /// Account authorized to initiate this transaction when one exists.
+    #[inline]
+    pub fn authority_opt(&self) -> Option<&AccountId> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => Some(entrypoint.authority()),
+            TransactionEntrypoint::PrivateKaigi(_) => None,
+            TransactionEntrypoint::Time(entrypoint) => Some(&entrypoint.authority),
+        }
+    }
+
     /// Account authorized to initiate this transaction.
+    ///
+    /// # Panics
+    ///
+    /// Panics for authority-free private Kaigi entrypoints. Call
+    /// [`Self::authority_opt`] when the entrypoint kind is not known in advance.
     #[inline]
     pub fn authority(&self) -> &AccountId {
         match self {
             TransactionEntrypoint::External(entrypoint) => entrypoint.authority(),
+            TransactionEntrypoint::PrivateKaigi(_) => {
+                panic!("private kaigi entrypoints do not carry a public authority")
+            }
             TransactionEntrypoint::Time(entrypoint) => &entrypoint.authority,
+        }
+    }
+
+    /// Creation timestamp in milliseconds when the entrypoint carries one.
+    #[inline]
+    pub fn creation_time_ms(&self) -> Option<u64> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => {
+                u64::try_from(entrypoint.creation_time().as_millis()).ok()
+            }
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(entrypoint.creation_time_ms),
+            TransactionEntrypoint::Time(_) => None,
+        }
+    }
+
+    /// Metadata attached to the entrypoint when one exists.
+    #[inline]
+    pub fn metadata(&self) -> Option<&Metadata> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => Some(entrypoint.metadata()),
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(&entrypoint.metadata),
+            TransactionEntrypoint::Time(_) => None,
         }
     }
 

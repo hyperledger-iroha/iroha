@@ -7,15 +7,15 @@ use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
 
 /// Canonical BN254 scalars are represented as four little-endian `u64` limbs.
-pub(crate) const BN254_LIMBS: usize = 4;
+pub const BN254_LIMBS: usize = 4;
 
 /// Return the supported 2-adicity of the BN254 scalar field.
-pub(crate) fn two_adicity() -> u32 {
+pub fn two_adicity() -> u32 {
     Bn254Fr::S
 }
 
 /// Validate that a staged BN254 FFT/LDE log size is supported.
-pub(crate) fn validate_log(log_size: u32) -> Result<(), &'static str> {
+pub fn validate_log(log_size: u32) -> Result<(), &'static str> {
     if log_size == 0 {
         return Err("BN254 FFT requires log_size greater than zero");
     }
@@ -26,7 +26,7 @@ pub(crate) fn validate_log(log_size: u32) -> Result<(), &'static str> {
 }
 
 /// Convert a BN254 scalar into canonical little-endian limbs.
-pub(crate) fn scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
+pub fn scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMBS] {
     let bytes = (*value).to_bytes();
     let mut limbs = [0u64; BN254_LIMBS];
     for (index, limb) in limbs.iter_mut().enumerate() {
@@ -38,7 +38,7 @@ pub(crate) fn scalar_to_canonical_limbs(value: &Bn254Scalar) -> [u64; BN254_LIMB
 }
 
 /// Decode canonical little-endian limbs into a BN254 scalar.
-pub(crate) fn scalar_from_canonical_limbs(
+pub fn scalar_from_canonical_limbs(
     limbs: &[u64; BN254_LIMBS],
 ) -> Result<Bn254Scalar, &'static str> {
     let mut bytes = [0u8; 32];
@@ -51,7 +51,7 @@ pub(crate) fn scalar_from_canonical_limbs(
 
 /// Decode a four-limb slice into a BN254 scalar.
 #[cfg(test)]
-pub(crate) fn limbs_slice_to_scalar(slice: &[u64]) -> Result<Bn254Scalar, &'static str> {
+pub fn limbs_slice_to_scalar(slice: &[u64]) -> Result<Bn254Scalar, &'static str> {
     let limbs: [u64; BN254_LIMBS] = slice
         .try_into()
         .expect("slice length should equal BN254 limb count");
@@ -59,7 +59,7 @@ pub(crate) fn limbs_slice_to_scalar(slice: &[u64]) -> Result<Bn254Scalar, &'stat
 }
 
 /// Compute the staged BN254 twiddle factors in scalar form for a radix-2 FFT.
-pub(crate) fn stage_twiddles_scalars(log_size: u32) -> Result<Vec<Bn254Scalar>, &'static str> {
+pub fn stage_twiddles_scalars(log_size: u32) -> Result<Vec<Bn254Scalar>, &'static str> {
     validate_log(log_size)?;
     let n = 1usize << log_size;
     let stage_span = n / 2;
@@ -93,7 +93,7 @@ pub(crate) fn stage_twiddles_scalars(log_size: u32) -> Result<Vec<Bn254Scalar>, 
 }
 
 /// Compute the staged BN254 twiddle factors as canonical limbs.
-pub(crate) fn stage_twiddles_limbs(log_size: u32) -> Result<Vec<[u64; BN254_LIMBS]>, &'static str> {
+pub fn stage_twiddles_limbs(log_size: u32) -> Result<Vec<[u64; BN254_LIMBS]>, &'static str> {
     let scalars = stage_twiddles_scalars(log_size)?;
     let twiddles: Vec<[u64; BN254_LIMBS]> = scalars
         .into_iter()
@@ -104,7 +104,7 @@ pub(crate) fn stage_twiddles_limbs(log_size: u32) -> Result<Vec<[u64; BN254_LIMB
 }
 
 /// Flatten staged BN254 twiddles into a single limb buffer.
-pub(crate) fn flatten_twiddles(twiddles: &[[u64; BN254_LIMBS]]) -> Vec<u64> {
+pub fn flatten_twiddles(twiddles: &[[u64; BN254_LIMBS]]) -> Vec<u64> {
     let mut flat = Vec::with_capacity(twiddles.len() * BN254_LIMBS);
     for limbs in twiddles {
         flat.extend_from_slice(limbs);
@@ -113,7 +113,7 @@ pub(crate) fn flatten_twiddles(twiddles: &[[u64; BN254_LIMBS]]) -> Vec<u64> {
 }
 
 /// Validate that the staged twiddle table matches the requested FFT log size.
-pub(crate) fn validate_twiddles_shape(
+pub fn validate_twiddles_shape(
     log_size: u32,
     twiddles: &[[u64; BN254_LIMBS]],
 ) -> Result<(), &'static str> {
@@ -125,7 +125,7 @@ pub(crate) fn validate_twiddles_shape(
 }
 
 /// Return the number of staged BN254 twiddles required for an FFT of `2^log_size`.
-pub(crate) fn fft_twiddle_len(log_size: u32) -> Result<usize, &'static str> {
+pub fn fft_twiddle_len(log_size: u32) -> Result<usize, &'static str> {
     validate_log(log_size)?;
     let n = 1usize << log_size;
     Ok((log_size as usize) * (n / 2))
@@ -133,7 +133,7 @@ pub(crate) fn fft_twiddle_len(log_size: u32) -> Result<usize, &'static str> {
 
 /// Return the number of staged BN254 twiddles required for an LDE evaluation.
 #[cfg(test)]
-pub(crate) fn lde_twiddle_len(trace_log: u32, blowup_log: u32) -> Result<usize, &'static str> {
+pub fn lde_twiddle_len(trace_log: u32, blowup_log: u32) -> Result<usize, &'static str> {
     let eval_log = trace_log
         .checked_add(blowup_log)
         .ok_or("BN254 LDE log size exceeds 32-bit representation")?;
@@ -142,7 +142,7 @@ pub(crate) fn lde_twiddle_len(trace_log: u32, blowup_log: u32) -> Result<usize, 
 
 /// Validate a canonical BN254 column batch and return the element extent per column.
 #[cfg(test)]
-pub(crate) fn column_extent(columns: &[Vec<u64>]) -> Result<usize, &'static str> {
+pub fn column_extent(columns: &[Vec<u64>]) -> Result<usize, &'static str> {
     if columns.is_empty() {
         return Ok(0);
     }
@@ -158,7 +158,7 @@ pub(crate) fn column_extent(columns: &[Vec<u64>]) -> Result<usize, &'static str>
 
 /// Convert a canonical BN254 column into scalar values.
 #[cfg(test)]
-pub(crate) fn canonical_to_scalars(column: &[u64]) -> Vec<Bn254Scalar> {
+pub fn canonical_to_scalars(column: &[u64]) -> Vec<Bn254Scalar> {
     column
         .chunks_exact(BN254_LIMBS)
         .map(|chunk| limbs_slice_to_scalar(chunk).expect("valid scalar"))
@@ -167,7 +167,7 @@ pub(crate) fn canonical_to_scalars(column: &[u64]) -> Vec<Bn254Scalar> {
 
 /// Convert scalar BN254 columns back into canonical limbs.
 #[cfg(test)]
-pub(crate) fn scalars_to_canonical(columns: &[Vec<Bn254Scalar>]) -> Vec<Vec<u64>> {
+pub fn scalars_to_canonical(columns: &[Vec<Bn254Scalar>]) -> Vec<Vec<u64>> {
     columns
         .iter()
         .map(|column| {
@@ -182,7 +182,7 @@ pub(crate) fn scalars_to_canonical(columns: &[Vec<Bn254Scalar>]) -> Vec<Vec<u64>
 
 /// Execute the staged BN254 radix-2 FFT on the provided scalar columns.
 #[cfg(test)]
-pub(crate) fn cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn254Scalar]) {
+pub fn cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles: &[Bn254Scalar]) {
     let n = 1usize << log_size;
     for column in columns {
         for stage in 0..log_size {
@@ -205,7 +205,7 @@ pub(crate) fn cpu_fft(columns: &mut [Vec<Bn254Scalar>], log_size: u32, twiddles:
 
 /// Execute the staged BN254 coset LDE on the provided scalar columns.
 #[cfg(test)]
-pub(crate) fn cpu_lde(
+pub fn cpu_lde(
     coeffs: &[Vec<Bn254Scalar>],
     trace_log: u32,
     blowup_log: u32,
@@ -233,7 +233,7 @@ pub(crate) fn cpu_lde(
 
 /// Build deterministic BN254 sample columns for parity tests.
 #[cfg(test)]
-pub(crate) fn sample_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
+pub fn sample_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
     let len = 1usize << log_size;
     let mut columns = Vec::with_capacity(column_count);
     for column in 0..column_count {
@@ -249,7 +249,7 @@ pub(crate) fn sample_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>
 
 /// Build a deterministic BN254 test coset.
 #[cfg(test)]
-pub(crate) fn sample_coset() -> [u64; BN254_LIMBS] {
+pub fn sample_coset() -> [u64; BN254_LIMBS] {
     scalar_to_canonical_limbs(&Bn254Scalar::from(5u64))
 }
 

@@ -27,6 +27,7 @@ struct ProfileSpec {
     slug: &'static str,
     profile_flag: &'static str,
     chain_id: &'static str,
+    chain_discriminant: Option<u16>,
     min_peers: usize,
     requires_seed: bool,
     collectors_k: u16,
@@ -55,6 +56,38 @@ const STREAM_ID_PUBLIC: &str =
     "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
 const STREAM_ID_PRIVATE: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
+const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
+    iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
+const TAIRA_STORAGE_PIN_MAX_EVENTS: u32 = 64;
+const TAIRA_STORAGE_PIN_WINDOW_SECS: u64 = 3_600;
+
+fn format_toml_integer_u64(value: u64) -> String {
+    let digits = value.to_string();
+    let mut reversed = String::with_capacity(digits.len() + digits.len() / 3);
+    for (idx, ch) in digits.chars().rev().enumerate() {
+        if idx != 0 && idx % 3 == 0 {
+            reversed.push('_');
+        }
+        reversed.push(ch);
+    }
+    reversed.chars().rev().collect()
+}
+
+fn account_literal_for_chain_discriminant(
+    account_id: &iroha_data_model::account::AccountId,
+    chain_discriminant: u16,
+) -> String {
+    account_id
+        .to_i105_for_discriminant(chain_discriminant)
+        .expect("known governance account id must render for the requested chain discriminant")
+}
+
+fn account_literal_string_for_chain_discriminant(raw: &str, chain_discriminant: u16) -> String {
+    let account_id = iroha_data_model::account::AccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("known account literal must parse");
+    account_literal_for_chain_discriminant(&account_id, chain_discriminant)
+}
 
 pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
     let specs = resolve_requested_profiles(&options.profiles)?;
@@ -259,10 +292,65 @@ fn render_config(
         })
         .collect::<Vec<_>>()
         .join(",\n");
+    let chain_discriminant = spec
+        .chain_discriminant
+        .map_or_else(String::new, |discriminant| {
+            format!("chain_discriminant = {discriminant}\n")
+        });
+    let governance_overrides = spec
+        .chain_discriminant
+        .map_or_else(String::new, |discriminant| {
+            let citizenship_escrow_account = account_literal_for_chain_discriminant(
+                &iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
+                discriminant,
+            );
+            let bond_escrow_account = account_literal_for_chain_discriminant(
+                &iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
+                discriminant,
+            );
+            let slash_receiver_account = account_literal_for_chain_discriminant(
+                &iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
+                discriminant,
+            );
+            let telemetry_submitter = account_literal_string_for_chain_discriminant(
+                &iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
+                    .into_iter()
+                    .next()
+                    .expect("default submitter"),
+                discriminant,
+            );
+            format!(
+                r#"
+[gov]
+citizenship_escrow_account = "{citizenship_escrow_account}"
+bond_escrow_account = "{bond_escrow_account}"
+slash_receiver_account = "{slash_receiver_account}"
+viral_incentive_pool_account = "{slash_receiver_account}"
+viral_escrow_account = "{slash_receiver_account}"
+
+[gov.sorafs_telemetry]
+submitters = ["{telemetry_submitter}"]
+"#,
+            )
+        });
+    let torii_max_content_len = format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN);
+    let sorafs_quota_overrides = if spec.slug == "iroha3-taira" {
+        format!(
+            r#"
+[sorafs.quota]
+storage_pin_max_events = {storage_pin_max_events}
+storage_pin_window_secs = {storage_pin_window_secs}
+"#,
+            storage_pin_max_events = TAIRA_STORAGE_PIN_MAX_EVENTS,
+            storage_pin_window_secs = TAIRA_STORAGE_PIN_WINDOW_SECS,
+        )
+    } else {
+        String::new()
+    };
     format!(
         r#"# Sample config for {slug} (generated via cargo xtask kagami-profiles)
 chain = "{chain}"
-public_key = "{node_pk}"
+{chain_discriminant}public_key = "{node_pk}"
 private_key = "{node_sk}"
 
 trusted_peers = [
@@ -278,25 +366,32 @@ public_address = "127.0.0.1:{p2p}"
 
 [torii]
 address = "0.0.0.0:8080"
+max_content_len = {torii_max_content_len}
 
 [streaming]
 identity_public_key = "{stream_pub}"
 identity_private_key = "{stream_priv}"
+{sorafs_quota_overrides}
 
 [nexus]
 enabled = true
 lane_count = 3
+{governance_overrides}
 
 [genesis]
 public_key = "{genesis_pk}"
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
+        chain_discriminant = chain_discriminant,
         node_pk = node.public_key,
         node_sk = node.private_key,
         trusted_peers = trusted_peers,
         trusted_peers_pop = trusted_peers_pop,
         p2p = node.address.split(':').next_back().unwrap_or("1337"),
+        torii_max_content_len = torii_max_content_len,
+        sorafs_quota_overrides = sorafs_quota_overrides,
+        governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
         stream_pub = STREAM_ID_PUBLIC,
         stream_priv = STREAM_ID_PRIVATE,
@@ -349,12 +444,15 @@ fn render_readme(
     } else {
         "VRF seed: derived from chain id".to_string()
     };
+    let chain_discriminant_line = spec.chain_discriminant.map_or_else(String::new, |value| {
+        format!("- chain discriminant: {value}\n")
+    });
 
     format!(
         r#"# {slug} sample bundle
 
 - chain id: {chain}
-- collectors: k={k} r={r}
+{chain_discriminant_line}- collectors: k={k} r={r}
 - {vrf_line}
 - genesis public key: {genesis_pk}
 - peers:
@@ -371,6 +469,7 @@ Regenerate:
 "#,
         slug = spec.slug,
         chain = spec.chain_id,
+        chain_discriminant_line = chain_discriminant_line,
         k = spec.collectors_k,
         r = spec.collectors_r,
         vrf_line = vrf_line,
@@ -475,6 +574,7 @@ const PROFILES: &[ProfileSpec] = &[
         slug: "iroha3-dev",
         profile_flag: "iroha3-dev",
         chain_id: "iroha3-dev.local",
+        chain_discriminant: None,
         min_peers: 1,
         requires_seed: false,
         collectors_k: 1,
@@ -484,6 +584,7 @@ const PROFILES: &[ProfileSpec] = &[
         slug: "iroha3-taira",
         profile_flag: "iroha3-taira",
         chain_id: "iroha3-taira",
+        chain_discriminant: Some(369),
         min_peers: 7,
         requires_seed: true,
         collectors_k: 3,
@@ -493,6 +594,7 @@ const PROFILES: &[ProfileSpec] = &[
         slug: "iroha3-nexus",
         profile_flag: "iroha3-nexus",
         chain_id: "iroha3-nexus",
+        chain_discriminant: Some(753),
         min_peers: 4,
         requires_seed: true,
         collectors_k: 5,
@@ -579,6 +681,8 @@ mod tests {
         let genesis_key = deterministic_keypair("config-genesis", Algorithm::Ed25519);
         let rendered = render_config(&PROFILES[2], &peers, genesis_key.public_key());
         assert!(rendered.contains(PROFILES[2].chain_id));
+        assert!(rendered.contains("chain_discriminant = 753"));
+        assert!(rendered.contains("viral_incentive_pool_account"));
         assert!(rendered.contains(peers[0].public_key.as_str()));
         assert!(rendered.contains(&genesis_key.public_key().to_string()));
         assert!(rendered.contains(STREAM_ID_PUBLIC));
@@ -592,6 +696,43 @@ mod tests {
         let readme = render_readme(&PROFILES[0], &peers, genesis_key.public_key(), None);
         assert!(readme.contains(PROFILES[0].slug));
         assert!(readme.contains("Regenerate"));
+    }
+
+    #[test]
+    fn taira_readme_mentions_chain_discriminant() {
+        let peers = build_peers(&PROFILES[1]);
+        let genesis_key = deterministic_keypair("readme-taira-genesis", Algorithm::Ed25519);
+        let readme = render_readme(&PROFILES[1], &peers, genesis_key.public_key(), Some("ABCD"));
+        assert!(readme.contains("- chain discriminant: 369"));
+    }
+
+    #[test]
+    fn all_profile_configs_pin_default_torii_max_content_len() {
+        let expected = format!(
+            "max_content_len = {}",
+            format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN)
+        );
+        for profile in PROFILES {
+            let peers = build_peers(&profile);
+            let seed = format!("config-{}-genesis", profile.slug);
+            let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519);
+            let rendered = render_config(&profile, &peers, genesis_key.public_key());
+            assert!(
+                rendered.contains(&expected),
+                "profile {} should pin the Torii body-cap default explicitly",
+                profile.slug
+            );
+        }
+    }
+
+    #[test]
+    fn taira_config_raises_storage_pin_quota() {
+        let peers = build_peers(&PROFILES[1]);
+        let genesis_key = deterministic_keypair("config-taira-quota-genesis", Algorithm::Ed25519);
+        let rendered = render_config(&PROFILES[1], &peers, genesis_key.public_key());
+        assert!(rendered.contains("[sorafs.quota]"));
+        assert!(rendered.contains("storage_pin_max_events = 64"));
+        assert!(rendered.contains("storage_pin_window_secs = 3600"));
     }
 
     #[test]

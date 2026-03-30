@@ -971,7 +971,11 @@ mod prefetch_tests {
         let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
         let alice_scoped = alice.to_account_id(wonderland.clone());
         let domain = Domain::new(wonderland.clone()).build(&alice);
-        let account = Account::from_scoped_id(alice_scoped).build(&alice);
+        let account = Account::new_in_domain(
+            alice_scoped.account().clone(),
+            alice_scoped.domain().clone(),
+        )
+        .build(&alice);
         let world = World::with([domain], [account], []);
         let world_view = world.view();
 
@@ -1013,8 +1017,16 @@ mod prefetch_tests {
         let world = World::with(
             [alpha_domain, beta_domain],
             [
-                Account::from_scoped_id(alpha_account.clone()).build(alpha_account.account()),
-                Account::from_scoped_id(beta_account).build(alpha_account.account()),
+                Account::new_in_domain(
+                    alpha_account.account().clone(),
+                    alpha_account.domain().clone(),
+                )
+                .build(alpha_account.account()),
+                Account::new_in_domain(
+                    beta_account.account().clone(),
+                    beta_account.domain().clone(),
+                )
+                .build(alpha_account.account()),
             ],
             [],
         );
@@ -1041,9 +1053,11 @@ mod prefetch_tests {
         );
         let world = World::with(
             [Domain::new(domain_id.clone()).build(account_id.account())],
-            [Account::from_scoped_id(account_id.clone())
-                .with_label(Some(alias))
-                .build(account_id.account())],
+            [
+                Account::new_in_domain(account_id.account().clone(), account_id.domain().clone())
+                    .with_label(Some(alias))
+                    .build(account_id.account()),
+            ],
             [],
         );
         let world_view = world.view();
@@ -1897,13 +1911,24 @@ pub fn check_genesis_block(
     }
 
     let transactions = block.transactions_vec().as_slice();
+    let external_entrypoints: Vec<_> = block.external_entrypoints_cloned().collect();
     if transactions.is_empty() || transactions.len() > MAX_GENESIS_TRANSACTIONS {
+        return Err(InvalidGenesisError::BadTransactionsAmount);
+    }
+    if external_entrypoints.len() != transactions.len()
+        || external_entrypoints.iter().any(|entrypoint| {
+            !matches!(
+                entrypoint,
+                iroha_data_model::transaction::TransactionEntrypoint::External(_)
+            )
+        })
+    {
         return Err(InvalidGenesisError::BadTransactionsAmount);
     }
     let mut chain_id: Option<ChainId> = None;
     let expected_merkle_root = block
-        .external_transactions()
-        .map(SignedTransaction::hash_as_entrypoint)
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
         .collect::<MerkleTree<_>>()
         .root();
     if block.header().merkle_root() != expected_merkle_root {
@@ -2180,6 +2205,13 @@ mod chained {
             self
         }
 
+        /// Attach an SCCP commitment root to the block header.
+        #[must_use]
+        pub fn with_sccp_commitment_root(mut self, root: Option<[u8; 32]>) -> Self {
+            self.0.header.set_sccp_commitment_root(root);
+            self
+        }
+
         /// Attach the confidential feature digest that this block commits to.
         #[must_use]
         pub fn with_confidential_features(
@@ -2315,17 +2347,21 @@ mod new {
 
     impl From<NewBlock> for SignedBlock {
         fn from(block: NewBlock) -> Self {
-            let transactions: Vec<SignedTransaction> = block
-                .transactions
-                .into_iter()
-                .map(SignedTransaction::from)
-                .collect();
+            let mut transactions = Vec::new();
+            let mut external_entrypoints = Vec::with_capacity(block.transactions.len());
+            for accepted in block.transactions {
+                external_entrypoints.push(accepted.entrypoint().clone());
+                if let Some(signed) = accepted.external().cloned() {
+                    transactions.push(signed);
+                }
+            }
             let mut signed_block = SignedBlock::presigned_with_da(
                 block.signature,
                 block.header,
                 transactions,
                 block.da_commitments,
             );
+            signed_block.set_external_entrypoints(external_entrypoints);
             signed_block.set_da_proof_policies(block.da_proof_policies);
             signed_block.set_da_pin_intents(block.da_pin_intents);
             signed_block.set_previous_roster_evidence(block.previous_roster_evidence);

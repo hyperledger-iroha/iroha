@@ -18,21 +18,35 @@ macro_rules! norito_json {
 use std::{
     collections::HashSet,
     convert::{TryFrom, TryInto},
-    fmt, fs,
+    fmt, fs, mem,
     num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     ptr,
     str::FromStr,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
+use halo2_proofs::{
+    halo2curves::{
+        ff::PrimeField as _,
+        pasta::{EqAffine as Halo2Curve, Fp as Halo2Scalar},
+    },
+    plonk::{create_proof, keygen_pk, keygen_vk},
+    poly::commitment::ParamsProver,
+    poly::ipa::{
+        commitment::{IPACommitmentScheme, ParamsIPA},
+        multiopen::ProverIPA,
+    },
+    transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
+};
 use iroha::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
 };
+use iroha_core::zk::{hash_vk as hash_verifying_key_box, test_utils::halo2_fixture_envelope};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
@@ -99,8 +113,10 @@ use iroha_data_model::{
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::ContractManifest,
     transaction::{
-        Executable, TransactionSubmissionReceipt,
-        signed::{SignedTransaction, TransactionBuilder},
+        Executable, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
+        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
+        TransactionSubmissionReceipt,
+        signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
     trigger::{
         Trigger, TriggerId,
@@ -111,6 +127,11 @@ use iroha_primitives::{
     json::Json,
     numeric::Numeric,
     soradns::{GatewayHostBindings, derive_gateway_hosts},
+};
+use kaigi_zk::{
+    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit, compute_commitment,
+    compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, empty_roster_root_hash,
+    roster_root_limbs,
 };
 use napi::{
     ValueType,
@@ -124,7 +145,7 @@ use norito::{
     codec::{Decode, DecodeAll, Encode},
     core::{self, DecodeFromSlice},
     decode_from_bytes,
-    json::{self, Map, Value},
+    json::{self, JsonDeserialize, Map, Value},
 };
 use rand_core_06::OsRng;
 use sorafs_car::{
@@ -165,6 +186,8 @@ use tokio::runtime::Runtime;
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
 const SM2_PUBLIC_KEY_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
+const KAIGI_ROSTER_PUBLIC_INPUTS_DESC: &[u8] = br#"{"schema":"kaigi_roster_current","inputs":["commitment","nullifier","roster_root_limb0","roster_root_limb1","roster_root_limb2","roster_root_limb3"]}"#;
+const ZK1_ENVELOPE_PREFIX: &[u8] = b"ZK1\0";
 
 const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;
 const SORAFS_ALIAS_REFRESH_WINDOW_SECS: u64 = 2 * 60;
@@ -207,6 +230,19 @@ pub struct JsConfidentialKeyset {
     pub ovk: Buffer,
     /// Full view key (fvk).
     pub fvk: Buffer,
+}
+
+/// Proof artefacts required for a privacy-mode Kaigi join.
+#[napi(object)]
+pub struct JsKaigiRosterJoinProof {
+    /// Commitment digest bound into the Kaigi roster.
+    pub commitment: Buffer,
+    /// Join nullifier digest used for replay protection.
+    pub nullifier: Buffer,
+    /// Roster root that the proof binds to.
+    pub roster_root: Buffer,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
 }
 
 /// Canonical SM2 fixture describing deterministic signing outputs.
@@ -505,6 +541,191 @@ pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi:
 pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
     let digest = blake3_hash(payload.as_ref());
     Ok(Buffer::from(digest.as_bytes().to_vec()))
+}
+
+fn derive_kaigi_scalar_u64(seed: &[u8], label: &[u8]) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"iroha-js:kaigi:roster-join:v1");
+    hasher.update(label);
+    hasher.update(seed);
+    let digest = hasher.finalize();
+    let mut scalar = [0u8; 8];
+    scalar.copy_from_slice(&digest.as_bytes()[..8]);
+    let value = u64::from_le_bytes(scalar);
+    if value == 0 { 1 } else { value }
+}
+
+fn parse_kaigi_roster_root_hex(value: Option<String>) -> napi::Result<Hash> {
+    let Some(raw) = value.map(|entry| entry.trim().to_owned()) else {
+        return Ok(empty_roster_root_hash());
+    };
+    if raw.is_empty() {
+        return Ok(empty_roster_root_hash());
+    }
+    let trimmed = raw.strip_prefix("0x").unwrap_or(raw.as_str());
+    let decoded = hex::decode(trimmed).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("rosterRootHex must be valid hex: {err}"),
+        )
+    })?;
+    if decoded.len() != Hash::LENGTH {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "rosterRootHex must be {} bytes, got {}",
+                Hash::LENGTH,
+                decoded.len()
+            ),
+        ));
+    }
+    let mut bytes = [0u8; Hash::LENGTH];
+    bytes.copy_from_slice(decoded.as_slice());
+    Ok(Hash::prehashed(bytes))
+}
+
+fn usize_to_u32_len(len: usize, context: &str) -> u32 {
+    u32::try_from(len).unwrap_or_else(|_| panic!("{context} length exceeds u32::MAX"))
+}
+
+fn zk1_append_tlv(buf: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
+    buf.extend_from_slice(&tag);
+    buf.extend_from_slice(&usize_to_u32_len(payload.len(), "zk1 tlv payload").to_le_bytes());
+    buf.extend_from_slice(payload);
+}
+
+fn zk1_append_proof(buf: &mut Vec<u8>, proof: &[u8]) {
+    zk1_append_tlv(buf, *b"PROF", proof);
+}
+
+fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
+    if columns.is_empty() {
+        return;
+    }
+    let rows = columns[0].len();
+    if columns.iter().any(|column| column.len() != rows) {
+        return;
+    }
+
+    let mut payload = Vec::with_capacity(8 + rows * columns.len() * mem::size_of::<Halo2Scalar>());
+    payload
+        .extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
+    payload.extend_from_slice(&usize_to_u32_len(rows, "zk1 instance rows").to_le_bytes());
+    for row in 0..rows {
+        for column in columns {
+            payload.extend_from_slice(column[row].to_repr().as_ref());
+        }
+    }
+    zk1_append_tlv(buf, *b"I10P", payload.as_slice());
+}
+
+fn build_kaigi_roster_join_proof_bytes(
+    seed: &[u8],
+    roster_root: &Hash,
+) -> napi::Result<JsKaigiRosterJoinProof> {
+    let account_idx = derive_kaigi_scalar_u64(seed, b"account");
+    let domain_salt = derive_kaigi_scalar_u64(seed, b"domain");
+    let nullifier_seed = derive_kaigi_scalar_u64(seed, b"nullifier");
+
+    let account_scalar = Halo2Scalar::from(account_idx);
+    let domain_scalar = Halo2Scalar::from(domain_salt);
+    let nullifier_scalar = Halo2Scalar::from(nullifier_seed);
+    let root_scalars = roster_root_limbs(roster_root);
+
+    let params: ParamsIPA<Halo2Curve> = ParamsIPA::new(KAIGI_ROSTER_CIRCUIT_K);
+    let verifying_key = keygen_vk(&params, &KaigiRosterJoinCircuit::default()).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to generate Kaigi roster verifying key: {err}"),
+        )
+    })?;
+
+    let circuit = KaigiRosterJoinCircuit::new(
+        account_scalar,
+        domain_scalar,
+        nullifier_scalar,
+        root_scalars,
+    );
+    let proving_key = keygen_pk(&params, verifying_key.clone(), &circuit).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to generate Kaigi roster proving key: {err}"),
+        )
+    })?;
+
+    let commitment_scalar = compute_commitment(account_scalar, domain_scalar);
+    let nullifier_scalar_public = compute_nullifier(account_scalar, nullifier_scalar);
+    let mut instance_columns = vec![vec![commitment_scalar], vec![nullifier_scalar_public]];
+    instance_columns.extend(root_scalars.iter().map(|scalar| vec![*scalar]));
+    let instance_refs: Vec<&[Halo2Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
+    let proof_instances = vec![instance_refs.as_slice()];
+
+    let mut transcript = Blake2bWrite::<_, Halo2Curve, Challenge255<Halo2Curve>>::init(Vec::new());
+    create_proof::<
+        IPACommitmentScheme<Halo2Curve>,
+        ProverIPA<'_, Halo2Curve>,
+        Challenge255<Halo2Curve>,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &proving_key,
+        &[circuit],
+        &proof_instances,
+        OsRng,
+        &mut transcript,
+    )
+    .map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to create Kaigi roster proof: {err}"),
+        )
+    })?;
+    let proof_payload = transcript.finalize();
+
+    let mut zk1 = ZK1_ENVELOPE_PREFIX.to_vec();
+    zk1_append_proof(&mut zk1, proof_payload.as_slice());
+    zk1_append_instances_cols(&mut zk1, instance_refs.as_slice());
+
+    let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
+        backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        circuit_id: KAIGI_ROSTER_BACKEND.to_string(),
+        vk_hash: [0u8; 32],
+        public_inputs: KAIGI_ROSTER_PUBLIC_INPUTS_DESC.to_vec(),
+        proof_bytes: zk1,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&envelope).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to encode Kaigi roster proof envelope: {err}"),
+        )
+    })?;
+
+    Ok(JsKaigiRosterJoinProof {
+        commitment: Buffer::from(compute_commitment_bytes(account_idx, domain_salt).to_vec()),
+        nullifier: Buffer::from(compute_nullifier_bytes(account_idx, nullifier_seed).to_vec()),
+        roster_root: Buffer::from(<[u8; 32]>::from(*roster_root).to_vec()),
+        proof: Buffer::from(encoded),
+    })
+}
+
+/// Build a Halo2/IPA Kaigi roster-join proof for `ZkRosterV1` joins.
+#[napi(js_name = "buildKaigiRosterJoinProof")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_kaigi_roster_join_proof(
+    seed: Uint8Array,
+    roster_root_hex: Option<String>,
+) -> napi::Result<JsKaigiRosterJoinProof> {
+    if seed.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "seed must be non-empty",
+        ));
+    }
+    let roster_root = parse_kaigi_roster_root_hex(roster_root_hex)?;
+    build_kaigi_roster_join_proof_bytes(seed.as_ref(), &roster_root)
 }
 
 /// Generate an Ed25519 key pair using `iroha_crypto`.
@@ -5682,7 +5903,25 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             format!("CreateKaigi.call parse error: {err}"),
                         )
                     })?;
-                    let instruction = CreateKaigi { call };
+                    let commitment = parse_optional_commitment(
+                        create_fields.remove("commitment"),
+                        "CreateKaigi",
+                    )?;
+                    let nullifier =
+                        parse_optional_nullifier(create_fields.remove("nullifier"), "CreateKaigi")?;
+                    let roster_root = parse_optional_hash(
+                        create_fields.remove("roster_root"),
+                        "CreateKaigi.roster_root",
+                    )?;
+                    let proof =
+                        parse_optional_base64(create_fields.remove("proof"), "CreateKaigi.proof")?;
+                    let instruction = CreateKaigi {
+                        call,
+                        commitment,
+                        nullifier,
+                        roster_root,
+                        proof,
+                    };
                     return Ok(Box::new(instruction).into_instruction_box());
                 }
                 if let Some(json::Value::Object(mut join_fields)) = kaigi_map.remove("JoinKaigi") {
@@ -5767,13 +6006,27 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     })?;
                     let call_id: KaigiId =
                         json::from_value(call_id_value).map_err(norito_to_napi)?;
-                    let ended_at = end_fields
-                        .remove("ended_at_ms")
-                        .map(|value| json::from_value(value).map_err(norito_to_napi))
-                        .transpose()?;
+                    let ended_at = match end_fields.remove("ended_at_ms") {
+                        None | Some(json::Value::Null) => None,
+                        Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                    };
+                    let commitment =
+                        parse_optional_commitment(end_fields.remove("commitment"), "EndKaigi")?;
+                    let nullifier =
+                        parse_optional_nullifier(end_fields.remove("nullifier"), "EndKaigi")?;
+                    let roster_root = parse_optional_hash(
+                        end_fields.remove("roster_root"),
+                        "EndKaigi.roster_root",
+                    )?;
+                    let proof =
+                        parse_optional_base64(end_fields.remove("proof"), "EndKaigi.proof")?;
                     let end = EndKaigi {
                         call_id,
                         ended_at_ms: ended_at,
+                        commitment,
+                        nullifier,
+                        roster_root,
+                        proof,
                     };
                     return Ok(Box::new(end).into_instruction_box());
                 }
@@ -7209,6 +7462,22 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             "call".to_owned(),
             json::to_value(create.call()).map_err(norito_to_napi)?,
         );
+        payload.insert(
+            "commitment".to_owned(),
+            optional_commitment_to_json(create.commitment().as_ref()),
+        );
+        payload.insert(
+            "nullifier".to_owned(),
+            optional_nullifier_to_json(create.nullifier().as_ref()),
+        );
+        payload.insert(
+            "roster_root".to_owned(),
+            optional_hash_to_json(create.roster_root().as_ref()),
+        );
+        payload.insert(
+            "proof".to_owned(),
+            optional_proof_to_json(create.proof().as_ref()),
+        );
         return Ok(kaigi_json_value(
             "CreateKaigi",
             json::Value::Object(payload),
@@ -7279,6 +7548,22 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         payload.insert(
             "ended_at_ms".to_owned(),
             json::to_value(end.ended_at_ms()).map_err(norito_to_napi)?,
+        );
+        payload.insert(
+            "commitment".to_owned(),
+            optional_commitment_to_json(end.commitment().as_ref()),
+        );
+        payload.insert(
+            "nullifier".to_owned(),
+            optional_nullifier_to_json(end.nullifier().as_ref()),
+        );
+        payload.insert(
+            "roster_root".to_owned(),
+            optional_hash_to_json(end.roster_root().as_ref()),
+        );
+        payload.insert(
+            "proof".to_owned(),
+            optional_proof_to_json(end.proof().as_ref()),
         );
         return Ok(kaigi_json_value("EndKaigi", json::Value::Object(payload)));
     }
@@ -7547,6 +7832,262 @@ pub struct JsSignedTransaction {
     pub hash: Buffer,
 }
 
+/// Result of building an authority-free private Kaigi transaction entrypoint.
+#[napi(object)]
+pub struct JsPrivateKaigiTransactionEntrypoint {
+    /// Norito-encoded transaction entrypoint bytes.
+    pub transaction_entrypoint: Buffer,
+    /// Canonical pipeline hash used by Torii status polling.
+    pub hash: Buffer,
+    /// Action hash bound into the fee-spend proof.
+    pub action_hash: Buffer,
+}
+
+/// Result of building a private Kaigi confidential XOR fee-spend envelope.
+#[napi(object)]
+pub struct JsPrivateKaigiFeeSpendEnvelope {
+    /// Asset definition that the confidential fee spend targets.
+    pub asset_definition_id: String,
+    /// Recent shielded Merkle root bound into the spend.
+    pub anchor_root: Buffer,
+    /// Consumed nullifiers for the fee spend.
+    pub nullifiers: Vec<Buffer>,
+    /// Output commitments created by the fee spend.
+    pub output_commitments: Vec<Buffer>,
+    /// Encrypted payloads attached to the output commitments.
+    pub encrypted_change_payloads: Vec<Buffer>,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
+}
+
+fn parse_private_kaigi_json<T>(context: &str, payload: &str) -> napi::Result<T>
+where
+    T: JsonDeserialize,
+{
+    json::from_json(payload).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} json: {err}"),
+        )
+    })
+}
+
+fn parse_kaigi_id_literal(value: &str, context: &str) -> napi::Result<KaigiId> {
+    let trimmed = value.trim();
+    let Some((domain, call_name)) = trimmed.split_once(':') else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be in `domain:callName` format"),
+        ));
+    };
+    let domain_id = DomainId::from_str(domain).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} domain id: {err}"),
+        )
+    })?;
+    let call_name = Name::from_str(call_name).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} call name: {err}"),
+        )
+    })?;
+    Ok(KaigiId::new(domain_id, call_name))
+}
+
+fn normalize_private_kaigi_creation_time_ms(creation_time_ms: Option<i64>) -> napi::Result<u64> {
+    creation_time_ms.map_or_else(
+        || {
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+                .map_err(norito_to_napi)
+        },
+        |ms| {
+            u64::try_from(ms).map_err(|_| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "creation_time_ms must be non-negative",
+                )
+            })
+        },
+    )
+}
+
+fn validate_private_kaigi_fee_fixture(
+    vk_backend: &str,
+    vk_circuit_id: &str,
+    vk_bytes: &[u8],
+) -> napi::Result<Vec<u8>> {
+    if vk_backend != "halo2/ipa" {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "unsupported private Kaigi fee transfer verifier backend `{vk_backend}`; expected halo2/ipa"
+            ),
+        ));
+    }
+    if vk_bytes.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "vk_bytes must be present for private Kaigi fee spend construction",
+        ));
+    }
+
+    let network_vk =
+        iroha_data_model::proof::VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes.to_vec());
+    let fixture = halo2_fixture_envelope(
+        vk_circuit_id.to_owned(),
+        hash_verifying_key_box(&network_vk),
+    );
+    let fixture_vk_bytes = fixture.vk_bytes.ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported private Kaigi fee verifier circuit `{vk_circuit_id}`"),
+        )
+    })?;
+    if fixture_vk_bytes != vk_bytes {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "private Kaigi fee verifier `{vk_backend}::{vk_circuit_id}` does not match the built-in fixture circuit"
+            ),
+        ));
+    }
+    Ok(fixture.proof_bytes)
+}
+
+fn build_private_kaigi_fee_change_payload(
+    asset_definition_id: &str,
+    action_hash_hex: &str,
+    fee_amount: &str,
+) -> Vec<u8> {
+    json::to_string(&norito_json!({
+        "schema": "iroha.private_kaigi.change.v1",
+        "asset_definition_id": asset_definition_id,
+        "action_hash_hex": action_hash_hex,
+        "fee_amount": fee_amount,
+        "change_amount": "0",
+    }))
+    .expect("private Kaigi change payload JSON serialization")
+    .into_bytes()
+}
+
+fn normalize_private_kaigi_fee_amount(fee_amount: &str) -> napi::Result<String> {
+    let fee_amount = fee_amount.trim().to_owned();
+    if fee_amount.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "fee_amount must be non-empty",
+        ));
+    }
+    let _parsed_fee_amount = Numeric::from_str(&fee_amount).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid fee_amount numeric literal: {err}"),
+        )
+    })?;
+    Ok(fee_amount)
+}
+
+fn normalize_private_kaigi_nonce(nonce: Option<u32>) -> napi::Result<Option<NonZeroU32>> {
+    nonce
+        .map(|value| {
+            NonZeroU32::new(value).ok_or_else(|| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "nonce must be non-zero (fits in u32)",
+                )
+            })
+        })
+        .transpose()
+}
+
+fn parse_fixed_32_hex(context: &str, value: &str) -> napi::Result<[u8; 32]> {
+    let normalized = value.trim();
+    let normalized = normalized.strip_prefix("0x").unwrap_or(normalized);
+    let decoded = hex::decode(normalized).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be valid hex: {err}"),
+        )
+    })?;
+    if decoded.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be exactly 32 bytes"),
+        ));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&decoded);
+    Ok(out)
+}
+
+fn private_kaigi_fee_aux_json(
+    action_hash_hex: &str,
+    chain_id: &str,
+    asset_definition_id: &str,
+    fee_amount: &str,
+) -> Vec<u8> {
+    json::to_string(&norito_json!({
+        "schema": "iroha.private_kaigi.fee.v1",
+        "action_hash_hex": action_hash_hex,
+        "chain_id": chain_id,
+        "asset_definition_id": asset_definition_id,
+        "fee_amount": fee_amount,
+    }))
+    .expect("private Kaigi fee aux JSON serialization")
+    .into_bytes()
+}
+
+fn build_private_kaigi_fee_digest(label: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(label);
+    for part in parts {
+        hasher.update(&u64::try_from(part.len()).unwrap_or(u64::MAX).to_le_bytes());
+        hasher.update(part);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn build_private_kaigi_entrypoint_result(
+    tx: PrivateKaigiTransaction,
+) -> JsPrivateKaigiTransactionEntrypoint {
+    let action_hash = tx.action_hash();
+    let hash = tx.hash();
+    let entrypoint = TransactionEntrypoint::PrivateKaigi(tx);
+    let entrypoint_bytes = Encode::encode(&entrypoint);
+    JsPrivateKaigiTransactionEntrypoint {
+        transaction_entrypoint: Buffer::from(entrypoint_bytes),
+        hash: Buffer::from(hash.as_ref().to_vec()),
+        action_hash: Buffer::from(action_hash.as_ref().to_vec()),
+    }
+}
+
+fn encode_private_kaigi_fee_proof(
+    proof_bytes: &[u8],
+    action_hash_hex: &str,
+    chain_id: &str,
+    asset_definition_id: &str,
+    fee_amount: &str,
+) -> napi::Result<Vec<u8>> {
+    let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        norito::decode_from_bytes(proof_bytes).map_err(|err| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                format!("failed to decode private Kaigi fee proof fixture: {err}"),
+            )
+        })?;
+    envelope.aux =
+        private_kaigi_fee_aux_json(action_hash_hex, chain_id, asset_definition_id, fee_amount);
+    norito::to_bytes(&envelope).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to encode private Kaigi fee proof envelope: {err}"),
+        )
+    })
+}
+
 /// Build and sign a single-instruction `RegisterDomain` transaction.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -7640,6 +8181,195 @@ pub fn build_transaction(
         nonce,
         secret.as_ref(),
     )
+}
+
+/// Build a private Kaigi create transaction entrypoint.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_private_create_kaigi_transaction(
+    chain_id: String,
+    call_json: String,
+    artifacts_json: String,
+    fee_spend_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
+    let chain: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let call: PrivateKaigiTemplate = parse_private_kaigi_json("private create call", &call_json)?;
+    let artifacts: PrivateKaigiArtifacts =
+        parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
+    let fee_spend: PrivateKaigiFeeSpend =
+        parse_private_kaigi_json("private Kaigi fee spend", &fee_spend_json)?;
+    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
+    let tx = PrivateKaigiTransaction {
+        chain,
+        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
+        nonce: normalize_private_kaigi_nonce(nonce)?,
+        metadata,
+        action: PrivateKaigiAction::Create(PrivateCreateKaigi { call }),
+        artifacts,
+        fee_spend,
+    };
+    Ok(build_private_kaigi_entrypoint_result(tx))
+}
+
+/// Build a deterministic confidential XOR fee-spend envelope for private Kaigi.
+///
+/// This helper only supports transfer verifying keys whose circuit id matches one of the
+/// built-in Halo2 fixture circuits. The caller must pass the active `vk_transfer` record bytes
+/// advertised by the network so the helper can verify the local fixture matches the network VK.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_private_kaigi_fee_spend(
+    chain_id: String,
+    asset_definition_id: String,
+    action_hash: Uint8Array,
+    anchor_root_hex: String,
+    fee_amount: String,
+    vk_backend: String,
+    vk_circuit_id: String,
+    vk_bytes: Uint8Array,
+) -> napi::Result<JsPrivateKaigiFeeSpendEnvelope> {
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    if action_hash.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "action_hash must be exactly 32 bytes",
+        ));
+    }
+    let anchor_root = parse_fixed_32_hex("anchor_root_hex", &anchor_root_hex)?;
+    let fee_amount = normalize_private_kaigi_fee_amount(&fee_amount)?;
+    let vk_backend = vk_backend.trim();
+    let vk_circuit_id = vk_circuit_id.trim();
+    let proof_bytes =
+        validate_private_kaigi_fee_fixture(vk_backend, vk_circuit_id, vk_bytes.as_ref())?;
+    let asset_definition_string = asset_definition_id.to_string();
+    let action_hash_hex = hex::encode(action_hash.as_ref());
+    let nullifier = build_private_kaigi_fee_digest(
+        b"iroha.private_kaigi.fee.nullifier.v1",
+        &[
+            action_hash.as_ref(),
+            chain_id.as_bytes(),
+            asset_definition_string.as_bytes(),
+        ],
+    );
+    let output_commitment = build_private_kaigi_fee_digest(
+        b"iroha.private_kaigi.fee.output.v1",
+        &[
+            action_hash.as_ref(),
+            fee_amount.as_bytes(),
+            anchor_root.as_slice(),
+        ],
+    );
+    let encrypted_change_payload = build_private_kaigi_fee_change_payload(
+        &asset_definition_string,
+        &action_hash_hex,
+        &fee_amount,
+    );
+    let encoded = encode_private_kaigi_fee_proof(
+        &proof_bytes,
+        &action_hash_hex,
+        chain_id.trim(),
+        &asset_definition_string,
+        &fee_amount,
+    )?;
+
+    Ok(JsPrivateKaigiFeeSpendEnvelope {
+        asset_definition_id: asset_definition_id.to_string(),
+        anchor_root: Buffer::from(anchor_root.to_vec()),
+        nullifiers: vec![Buffer::from(nullifier.to_vec())],
+        output_commitments: vec![Buffer::from(output_commitment.to_vec())],
+        encrypted_change_payloads: vec![Buffer::from(encrypted_change_payload)],
+        proof: Buffer::from(encoded),
+    })
+}
+
+/// Build a private Kaigi join transaction entrypoint.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_private_join_kaigi_transaction(
+    chain_id: String,
+    call_id: String,
+    artifacts_json: String,
+    fee_spend_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
+    let chain: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let call_id = parse_kaigi_id_literal(&call_id, "call_id")?;
+    let artifacts: PrivateKaigiArtifacts =
+        parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
+    let fee_spend: PrivateKaigiFeeSpend =
+        parse_private_kaigi_json("private Kaigi fee spend", &fee_spend_json)?;
+    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
+    let tx = PrivateKaigiTransaction {
+        chain,
+        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
+        nonce: normalize_private_kaigi_nonce(nonce)?,
+        metadata,
+        action: PrivateKaigiAction::Join(PrivateJoinKaigi { call_id }),
+        artifacts,
+        fee_spend,
+    };
+    Ok(build_private_kaigi_entrypoint_result(tx))
+}
+
+/// Build a private Kaigi end transaction entrypoint.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_private_end_kaigi_transaction(
+    chain_id: String,
+    call_id: String,
+    ended_at_ms: Option<i64>,
+    artifacts_json: String,
+    fee_spend_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
+    let chain: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let call_id = parse_kaigi_id_literal(&call_id, "call_id")?;
+    let ended_at_ms = ended_at_ms
+        .map(|value| {
+            u64::try_from(value).map_err(|_| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "ended_at_ms must be non-negative when provided",
+                )
+            })
+        })
+        .transpose()?;
+    let artifacts: PrivateKaigiArtifacts =
+        parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
+    let fee_spend: PrivateKaigiFeeSpend =
+        parse_private_kaigi_json("private Kaigi fee spend", &fee_spend_json)?;
+    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
+    let tx = PrivateKaigiTransaction {
+        chain,
+        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
+        nonce: normalize_private_kaigi_nonce(nonce)?,
+        metadata,
+        action: PrivateKaigiAction::End(PrivateEndKaigi {
+            call_id,
+            ended_at_ms,
+        }),
+        artifacts,
+        fee_spend,
+    };
+    Ok(build_private_kaigi_entrypoint_result(tx))
 }
 
 /// Build a Norito-encoded trigger action that executes on a time schedule.
@@ -7832,6 +8562,22 @@ mod tests {
             Value::String(s) => s,
             other => panic!("expected hash literal string, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn build_kaigi_roster_join_proof_emits_envelope() {
+        let proof = build_kaigi_roster_join_proof_bytes(&[0x42; 32], &empty_roster_root_hash())
+            .expect("build proof");
+
+        assert_eq!(proof.commitment.len(), Hash::LENGTH);
+        assert_eq!(proof.nullifier.len(), Hash::LENGTH);
+        assert_eq!(proof.roster_root.len(), Hash::LENGTH);
+        assert!(!proof.proof.is_empty());
+
+        let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(proof.proof.as_ref()).expect("decode envelope");
+        assert_eq!(envelope.circuit_id, KAIGI_ROSTER_BACKEND);
+        assert_eq!(envelope.public_inputs, KAIGI_ROSTER_PUBLIC_INPUTS_DESC);
     }
 
     fn sample_hash(byte: u8) -> [u8; Hash::LENGTH] {
@@ -9403,7 +10149,22 @@ mod tests {
             room_policy: KaigiRoomPolicy::Authenticated,
             relay_manifest: Some(manifest),
         };
-        let instruction: InstructionBox = Box::new(CreateKaigi { call }).into_instruction_box();
+        let commitment = KaigiParticipantCommitment {
+            commitment: Hash::new(b"commitment::host"),
+            alias_tag: Some("host".to_owned()),
+        };
+        let nullifier = KaigiParticipantNullifier {
+            digest: Hash::new(b"nullifier::host"),
+            issued_at_ms: 7,
+        };
+        let instruction: InstructionBox = Box::new(CreateKaigi {
+            call,
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
+            roster_root: Some(Hash::new(b"roster-root")),
+            proof: Some(vec![0xFA, 0xCE]),
+        })
+        .into_instruction_box();
 
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi instruction");
@@ -9545,9 +10306,21 @@ mod tests {
     #[test]
     fn end_kaigi_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
+        let commitment = KaigiParticipantCommitment {
+            commitment: Hash::new(b"commitment::host"),
+            alias_tag: Some("host".to_owned()),
+        };
+        let nullifier = KaigiParticipantNullifier {
+            digest: Hash::new(b"nullifier::end"),
+            issued_at_ms: 99,
+        };
         let end = EndKaigi {
             call_id: call_id.clone(),
             ended_at_ms: Some(1_700_222_000_000),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
+            roster_root: Some(Hash::new(b"roster-root")),
+            proof: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
         };
         let instruction: InstructionBox = Box::new(end).into_instruction_box();
 

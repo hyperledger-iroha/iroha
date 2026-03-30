@@ -14,26 +14,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
-import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
-import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
 import org.hyperledger.iroha.android.offline.OfflineBuildClaimIssueRequest;
 import org.hyperledger.iroha.android.offline.OfflineBuildClaimIssueResponse;
-import org.hyperledger.iroha.android.offline.OfflineBundleProofStatus;
-import org.hyperledger.iroha.android.offline.OfflineCertificateIssueResponse;
 import org.hyperledger.iroha.android.offline.OfflineJsonParser;
 import org.hyperledger.iroha.android.offline.OfflineListParams;
 import org.hyperledger.iroha.android.offline.OfflineQueryEnvelope;
-import org.hyperledger.iroha.android.offline.OfflineProofRequestParams;
-import org.hyperledger.iroha.android.offline.OfflineProofRequestResult;
 import org.hyperledger.iroha.android.offline.OfflineRevocationList;
-import org.hyperledger.iroha.android.offline.OfflineSettlementBuildClaimOverride;
-import org.hyperledger.iroha.android.offline.OfflineSettlementSubmitResponse;
-import org.hyperledger.iroha.android.offline.OfflineSummaryList;
-import org.hyperledger.iroha.android.offline.OfflineTopUpResponse;
 import org.hyperledger.iroha.android.offline.OfflineToriiException;
 import org.hyperledger.iroha.android.offline.OfflineTransferList;
-import org.hyperledger.iroha.android.offline.OfflineWalletCertificate;
-import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
 
 /**
  * Lightweight HTTP client for Torii offline inspection endpoints (`/v1/offline/*`).
@@ -44,20 +32,16 @@ import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
  */
 public final class OfflineToriiClient {
 
-  private static final String ALLOWANCES_PATH = "/v1/offline/allowances";
   private static final String TRANSFERS_PATH = "/v1/offline/transfers";
-  private static final String SETTLEMENTS_PATH = "/v1/offline/settlements";
-  private static final String SUMMARIES_PATH = "/v1/offline/summaries";
   private static final String REVOCATIONS_PATH = "/v1/offline/revocations";
-  private static final String ALLOWANCES_QUERY_PATH = "/v1/offline/allowances/query";
+  private static final String REVOCATIONS_BUNDLE_PATH = "/v1/offline/revocations/bundle";
+  private static final String CASH_SETUP_PATH = "/v1/offline/cash/setup";
+  private static final String CASH_LOAD_PATH = "/v1/offline/cash/load";
+  private static final String CASH_REFRESH_PATH = "/v1/offline/cash/refresh";
+  private static final String CASH_SYNC_PATH = "/v1/offline/cash/sync";
+  private static final String CASH_REDEEM_PATH = "/v1/offline/cash/redeem";
   private static final String TRANSFERS_QUERY_PATH = "/v1/offline/transfers/query";
-  private static final String SUMMARIES_QUERY_PATH = "/v1/offline/summaries/query";
-  private static final String REVOCATIONS_QUERY_PATH = "/v1/offline/revocations/query";
-  private static final String TRANSFER_PROOF_PATH = "/v1/offline/transfers/proof";
-  private static final String BUNDLE_PROOF_STATUS_PATH = "/v1/offline/bundle/proof_status";
-  private static final String CERTIFICATE_ISSUE_PATH = "/v1/offline/certificates/issue";
   private static final String BUILD_CLAIM_ISSUE_PATH = "/v1/offline/build-claims/issue";
-  private static final String CERTIFICATE_RENEW_ISSUE_PATH = "/v1/offline/certificates";
 
   private final HttpTransportExecutor executor;
   private final URI baseUri;
@@ -78,19 +62,9 @@ public final class OfflineToriiClient {
     return new Builder();
   }
 
-  public CompletableFuture<OfflineAllowanceList> listAllowances(
-      final OfflineListParams params) {
-    return executeRequest(ALLOWANCES_PATH, params, OfflineJsonParser::parseAllowances);
-  }
-
   public CompletableFuture<OfflineTransferList> listTransfers(
       final OfflineListParams params) {
     return executeRequest(TRANSFERS_PATH, params, OfflineJsonParser::parseTransfers);
-  }
-
-  public CompletableFuture<OfflineSummaryList> listSummaries(
-      final OfflineListParams params) {
-    return executeRequest(SUMMARIES_PATH, params, OfflineJsonParser::parseSummaries);
   }
 
   public CompletableFuture<OfflineRevocationList> listRevocations(
@@ -98,113 +72,10 @@ public final class OfflineToriiClient {
     return executeRequest(REVOCATIONS_PATH, params, OfflineJsonParser::parseRevocations);
   }
 
-  public CompletableFuture<OfflineAllowanceList> queryAllowances(
-      final OfflineQueryEnvelope envelope) {
-    return executeQuery(ALLOWANCES_QUERY_PATH, envelope, OfflineJsonParser::parseAllowances);
-  }
-
   public CompletableFuture<OfflineTransferList> queryTransfers(
       final OfflineQueryEnvelope envelope) {
     return executeQuery(TRANSFERS_QUERY_PATH, envelope, OfflineJsonParser::parseTransfers);
   }
-
-  public CompletableFuture<OfflineSummaryList> querySummaries(
-      final OfflineQueryEnvelope envelope) {
-    return executeQuery(SUMMARIES_QUERY_PATH, envelope, OfflineJsonParser::parseSummaries);
-  }
-
-  public CompletableFuture<OfflineRevocationList> queryRevocations(
-      final OfflineQueryEnvelope envelope) {
-    return executeQuery(REVOCATIONS_QUERY_PATH, envelope, OfflineJsonParser::parseRevocations);
-  }
-
-  /** Submit an offline settlement bundle for on-ledger settlement. */
-  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlement(
-      final Map<String, Object> transferPayload, final String authority, final String privateKeyHex) {
-    return unsupportedServerSideSigning("/v1/offline/settlements");
-  }
-
-  /**
-   * Submit an offline settlement bundle and wait for the corresponding transaction to reach a
-   * terminal pipeline status.
-   *
-   * <p>This helper reduces boilerplate for clients that always want submit + status polling in one
-   * call. Any terminal rejection is surfaced via {@link TransactionStatusException} (or {@link
-   * TransactionStatusHttpException} when the polling endpoint itself fails).
-   */
-  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlementAndWait(
-      final Map<String, Object> transferPayload,
-      final String authority,
-      final String privateKeyHex,
-      final IrohaClient statusClient) {
-    return unsupportedServerSideSigning("/v1/offline/settlements");
-  }
-
-  /**
-   * Submit an offline settlement bundle and wait for the corresponding transaction to reach a
-   * terminal pipeline status.
-   */
-  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlementAndWait(
-      final Map<String, Object> transferPayload,
-      final String authority,
-      final String privateKeyHex,
-      final IrohaClient statusClient,
-      final PipelineStatusOptions statusOptions) {
-    return unsupportedServerSideSigning("/v1/offline/settlements");
-  }
-
-  /**
-   * Submit an offline settlement bundle with optional per-receipt build-claim overrides.
-   *
-   * <p>Set {@code repairExistingBuildClaims} when Torii should re-issue receipts that already have
-   * a build claim.
-   */
-  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlement(
-      final Map<String, Object> transferPayload,
-      final String authority,
-      final String privateKeyHex,
-      final List<OfflineSettlementBuildClaimOverride> buildClaimOverrides,
-      final boolean repairExistingBuildClaims) {
-    return unsupportedServerSideSigning("/v1/offline/settlements");
-  }
-
-  /**
-   * Submit an offline settlement bundle with optional build-claim overrides and wait for terminal
-   * transaction status.
-   */
-  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlementAndWait(
-      final Map<String, Object> transferPayload,
-      final String authority,
-      final String privateKeyHex,
-      final List<OfflineSettlementBuildClaimOverride> buildClaimOverrides,
-      final boolean repairExistingBuildClaims,
-      final IrohaClient statusClient) {
-    return unsupportedServerSideSigning("/v1/offline/settlements");
-  }
-
-  /**
-   * Submit an offline settlement bundle with optional build-claim overrides and wait for terminal
-   * transaction status.
-   */
-  public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlementAndWait(
-      final Map<String, Object> transferPayload,
-      final String authority,
-      final String privateKeyHex,
-      final List<OfflineSettlementBuildClaimOverride> buildClaimOverrides,
-      final boolean repairExistingBuildClaims,
-      final IrohaClient statusClient,
-      final PipelineStatusOptions statusOptions) {
-    return unsupportedServerSideSigning("/v1/offline/settlements");
-  }
-
-  /** Fetch one offline settlement bundle detail (alias for offline transfer detail). */
-  public CompletableFuture<OfflineTransferList.OfflineTransferItem> getSettlement(
-      final String bundleIdHex) {
-    Objects.requireNonNull(bundleIdHex, "bundleIdHex");
-    final String path = SETTLEMENTS_PATH + "/" + urlEncode(bundleIdHex.trim());
-    return executeGet(path, OfflineJsonParser::parseTransferItem);
-  }
-
   /** Fetch one offline transfer bundle detail. */
   public CompletableFuture<OfflineTransferList.OfflineTransferItem> getTransfer(
       final String bundleIdHex) {
@@ -213,44 +84,34 @@ public final class OfflineToriiClient {
     return executeGet(path, OfflineJsonParser::parseTransferItem);
   }
 
-  /** Fetch proof integrity status for an offline bundle. */
-  public CompletableFuture<OfflineBundleProofStatus> getBundleProofStatus(final String bundleIdHex) {
-    Objects.requireNonNull(bundleIdHex, "bundleIdHex");
-    final Map<String, String> query = Map.of("bundle_id_hex", bundleIdHex.trim());
-    final TransportRequest request = buildGetRequest(BUNDLE_PROOF_STATUS_PATH, query);
-    notifyRequest(request);
-    return executeHttpRequest(request, OfflineJsonParser::parseBundleProofStatus);
+  /** Fetch the signed offline revocation bundle as raw JSON. */
+  public CompletableFuture<String> getRevocationBundleJson() {
+    return executeGet(REVOCATIONS_BUNDLE_PATH, OfflineToriiClient::decodeJsonPayload);
   }
 
-  /**
-   * Build a FASTPQ witness payload by calling Torii `/v1/offline/transfers/proof`.
-   *
-   * <p>The request must include the transfer payload; the returned JSON string matches the
-   * `OfflineProofRequest*` structs and can be forwarded directly to the prover.
-   */
-  public CompletableFuture<OfflineProofRequestResult> buildProofRequest(
-      final OfflineProofRequestParams params) {
-    Objects.requireNonNull(params, "params");
-    final TransportRequest request = buildPostRequest(TRANSFER_PROOF_PATH, params.toJsonBytes());
-    notifyRequest(request);
-    return executeHttpRequest(
-        request,
-        payload ->
-            new OfflineProofRequestResult(
-                params.kind(), OfflineJsonParser.canonicalJson(payload)));
+  /** Post a JSON-encoded offline cash setup request and return the raw JSON response. */
+  public CompletableFuture<String> setupCash(final String requestJson) {
+    return executeJsonPost(CASH_SETUP_PATH, requestJson);
   }
 
-  /** Issue a signed offline wallet certificate. */
-  public CompletableFuture<OfflineCertificateIssueResponse> issueCertificate(
-      final OfflineWalletCertificateDraft draft) {
-    Objects.requireNonNull(draft, "draft");
-    final byte[] body =
-        org.hyperledger.iroha.android.client.JsonEncoder.encode(
-            Map.of("certificate", draft.toJsonMap()))
-            .getBytes(StandardCharsets.UTF_8);
-    final TransportRequest request = buildPostRequest(CERTIFICATE_ISSUE_PATH, body);
-    notifyRequest(request);
-    return executeHttpRequest(request, OfflineJsonParser::parseCertificateIssueResponse);
+  /** Post a JSON-encoded offline cash load request and return the raw JSON response. */
+  public CompletableFuture<String> loadCash(final String requestJson) {
+    return executeJsonPost(CASH_LOAD_PATH, requestJson);
+  }
+
+  /** Post a JSON-encoded offline cash refresh request and return the raw JSON response. */
+  public CompletableFuture<String> refreshCash(final String requestJson) {
+    return executeJsonPost(CASH_REFRESH_PATH, requestJson);
+  }
+
+  /** Post a JSON-encoded offline cash sync request and return the raw JSON response. */
+  public CompletableFuture<String> syncCash(final String requestJson) {
+    return executeJsonPost(CASH_SYNC_PATH, requestJson);
+  }
+
+  /** Post a JSON-encoded offline cash redeem request and return the raw JSON response. */
+  public CompletableFuture<String> redeemCash(final String requestJson) {
+    return executeJsonPost(CASH_REDEEM_PATH, requestJson);
   }
 
   /** Issue an operator-signed build claim for a receipt transaction id. */
@@ -263,90 +124,6 @@ public final class OfflineToriiClient {
     final TransportRequest request = buildPostRequest(BUILD_CLAIM_ISSUE_PATH, body);
     notifyRequest(request);
     return executeHttpRequest(request, OfflineJsonParser::parseBuildClaimIssueResponse);
-  }
-
-  /** Register a signed certificate on-ledger as an offline allowance. */
-  public CompletableFuture<Void> registerAllowance(
-      final OfflineWalletCertificate certificate,
-      final String authority,
-      final String privateKeyHex) {
-    return unsupportedServerSideSigning("/v1/offline/allowances");
-  }
-
-  /** Register a signed certificate on-ledger as an offline allowance and return the response. */
-  public CompletableFuture<OfflineAllowanceRegisterResponse> registerAllowanceDetailed(
-      final OfflineWalletCertificate certificate,
-      final String authority,
-      final String privateKeyHex) {
-    return unsupportedServerSideSigning("/v1/offline/allowances");
-  }
-
-  /** Renew a signed certificate on-ledger as an offline allowance. */
-  public CompletableFuture<OfflineAllowanceRegisterResponse> renewAllowance(
-      final String certificateIdHex,
-      final OfflineWalletCertificate certificate,
-      final String authority,
-      final String privateKeyHex) {
-    return unsupportedServerSideSigning("/v1/offline/allowances/{certificate_id_hex}/renew");
-  }
-
-  /**
-   * Issue and register an offline allowance certificate in one call (issue + register).
-   */
-  public CompletableFuture<OfflineTopUpResponse> topUpAllowance(
-      final OfflineWalletCertificateDraft draft,
-      final String authority,
-      final String privateKeyHex) {
-    return unsupportedServerSideSigning("/v1/offline/allowances");
-  }
-
-  /**
-   * Issue and register a renewed offline allowance certificate in one call.
-   */
-  public CompletableFuture<OfflineTopUpResponse> topUpAllowanceRenewal(
-      final String certificateIdHex,
-      final OfflineWalletCertificateDraft draft,
-      final String authority,
-      final String privateKeyHex) {
-    return unsupportedServerSideSigning("/v1/offline/allowances/{certificate_id_hex}/renew");
-  }
-
-  /** Issue a signed renewal certificate for an existing allowance. */
-  public CompletableFuture<OfflineCertificateIssueResponse> issueCertificateRenewal(
-      final String certificateIdHex, final OfflineWalletCertificateDraft draft) {
-    Objects.requireNonNull(certificateIdHex, "certificateIdHex");
-    Objects.requireNonNull(draft, "draft");
-    final String encodedId = urlEncode(certificateIdHex.trim());
-    final String path = CERTIFICATE_RENEW_ISSUE_PATH + "/" + encodedId + "/renew/issue";
-    final byte[] body =
-        org.hyperledger.iroha.android.client.JsonEncoder.encode(
-            Map.of("certificate", draft.toJsonMap()))
-            .getBytes(StandardCharsets.UTF_8);
-    final TransportRequest request = buildPostRequest(path, body);
-    notifyRequest(request);
-    return executeHttpRequest(request, OfflineJsonParser::parseCertificateIssueResponse);
-  }
-
-  private static byte[] buildAllowanceRegisterBody(
-      final OfflineWalletCertificate certificate,
-      final String authority,
-      final String privateKeyHex) {
-    final Map<String, Object> body = new LinkedHashMap<>();
-    body.put("authority", authority);
-    body.put("private_key", privateKeyHex);
-    body.put("certificate", certificate.toJsonMap());
-    return JsonEncoder.encode(body).getBytes(StandardCharsets.UTF_8);
-  }
-
-  private static void ensureTopUpCertificateIdsMatch(
-      final String issuedId, final String registeredId) {
-    if (issuedId == null || registeredId == null) {
-      throw new IllegalStateException("Missing certificate id in top-up responses");
-    }
-    if (!issuedId.equalsIgnoreCase(registeredId)) {
-      throw new IllegalStateException(
-          "Top-up certificate id mismatch: issued=" + issuedId + " registered=" + registeredId);
-    }
   }
 
   /** Exposes the underlying executor so auxiliary clients can share the same HTTP transport. */
@@ -365,6 +142,19 @@ public final class OfflineToriiClient {
     final TransportRequest request = buildGetRequest(path, Map.of());
     notifyRequest(request);
     return executeHttpRequest(request, parser);
+  }
+
+  private CompletableFuture<String> executeJsonPost(
+      final String path, final String requestJson) {
+    Objects.requireNonNull(requestJson, "requestJson");
+    final String trimmed = requestJson.trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException("requestJson must not be blank");
+    }
+    final TransportRequest request =
+        buildPostRequest(path, trimmed.getBytes(StandardCharsets.UTF_8));
+    notifyRequest(request);
+    return executeHttpRequest(request, OfflineToriiClient::decodeJsonPayload);
   }
 
   private TransportRequest buildGetRequest(final String path, final OfflineListParams params) {
@@ -507,12 +297,6 @@ public final class OfflineToriiClient {
     }
   }
 
-  private <T> CompletableFuture<T> unsupportedServerSideSigning(final String endpoint) {
-    throw new UnsupportedOperationException(
-        endpoint
-            + " no longer accepts server-side signing inputs; submit a locally signed transaction instead.");
-  }
-
   private <T> CompletableFuture<T> executeHttpRequest(
       final TransportRequest request, final ResponseParser<T> parser) {
     final CompletableFuture<T> future = new CompletableFuture<>();
@@ -633,6 +417,10 @@ public final class OfflineToriiClient {
       message.append(". body=").append(bodyPreview);
     }
     return message.toString();
+  }
+
+  private static String decodeJsonPayload(final byte[] payload) {
+    return new String(payload, StandardCharsets.UTF_8);
   }
 
   @FunctionalInterface

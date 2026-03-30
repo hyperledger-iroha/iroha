@@ -369,6 +369,7 @@ fn minimal_config_snapshot() {
                     dns_push_interval: 90s,
                     exit_class: "standard",
                     meter_family: "soranet.vpn.standard",
+                    helper_ticket_secret: None,
                 },
                 lane_profile: Core,
                 require_sm_handshake_match: true,
@@ -514,7 +515,7 @@ fn minimal_config_snapshot() {
                     1893456000,
                 ),
                 max_content_len: Bytes(
-                    16777216,
+                    64000000,
                 ),
                 data_dir: "./storage/torii",
                 receipt_signer: None,
@@ -2282,6 +2283,18 @@ fn ivm_banner_defaults_enabled() {
 
     assert!(config.ivm.banner.show, "banner should default to on");
     assert!(config.ivm.banner.beep, "beep should default to on");
+}
+
+#[test]
+fn torii_max_content_len_defaults_to_sixty_four_megabytes() {
+    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("config should be valid");
+
+    assert_eq!(
+        config.torii.max_content_len.0,
+        defaults::torii::MAX_CONTENT_LEN.0,
+        "minimal configs should inherit the runtime Torii body-cap default"
+    );
 }
 
 #[test]

@@ -19,6 +19,7 @@ workspace = true
 napi = { version = "3.5.1", default-features = false, features = ["napi6", "tokio_rt"] }
 napi-derive = { version = "3.3.2", default-features = false, features = ["type-def"] }
 iroha_crypto = { workspace = true, features = ["std", "rand", "sm"] }
+iroha_core = { workspace = true, features = ["iroha-core-tests"] }
 iroha_data_model = { workspace = true, features = ["std", "json", "transparent_api"] }
 iroha_primitives = { workspace = true }
 norito = { workspace = true }
@@ -32,6 +33,8 @@ sorafs_chunker = { workspace = true }
 sorafs_orchestrator = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 iroha = { workspace = true }
+kaigi_zk = { path = "../kaigi_zk" }
+halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }
 bs58 = "0.5.1"
 
 [dev-dependencies]

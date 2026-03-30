@@ -165,11 +165,11 @@ impl MochiApp {
 
                 ui.add_space(12.0);
                 ui.horizontal_wrapped(|ui| {
-                    if let Some(inputs) = self.bootstrap_inputs(supervisor, peer_rows) {
-                        if ui.button("Copy shell env").clicked() {
-                            Self::copy_text(ui, inputs.render_shell_exports());
-                            self.last_info = Some("Copied local app bootstrap exports.".to_owned());
-                        }
+                    if let Some(inputs) = self.bootstrap_inputs(supervisor, peer_rows)
+                        && ui.button("Copy shell env").clicked()
+                    {
+                        Self::copy_text(ui, inputs.render_shell_exports());
+                        self.last_info = Some("Copied local app bootstrap exports.".to_owned());
                     }
                     if ui.button("Write bootstrap files").clicked() {
                         self.write_bootstrap_files(supervisor, peer_rows);

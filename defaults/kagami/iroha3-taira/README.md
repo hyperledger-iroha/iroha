@@ -1,6 +1,7 @@
 # iroha3-taira sample bundle
 
 - chain id: iroha3-taira
+- chain discriminant: 369
 - collectors: k=3 r=2
 - VRF seed (hex): 8BBF8F12EC79F8D85D18E2CE7A84B66C53E9CD4D4EBA357CD33CF28F0D65720B
 - genesis public key: ed0120CFBB23652880ABCAEEE2FA6F512A1657E5D7EDBC7B45589721FD86C2FEC9F559
@@ -30,8 +31,9 @@ Operational note:
 - For the public Taira deployment, prefer the checked-in validator/edge bundle
   under `configs/soranexus/taira/`, including `taira-irohad.service`,
   `taira-explorer.nginx.conf`, `validator_roster.example.toml`,
-  `scripts/render_taira_validator_bundle.py`, and `check_mcp_rollout.sh`, so
-  the public `/v1/mcp` route is proven locally before cutover.
+  `validator_secrets.example.toml`, `scripts/render_taira_validator_bundle.py`,
+  and `check_mcp_rollout.sh`, so the public `/v1/mcp` route is proven locally
+  before cutover.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-taira

@@ -212,6 +212,18 @@ fn print_access_hint_diagnostics(diag: &AccessHintDiagnostics, format: Diagnosti
     }
 }
 
+fn manifest_entrypoints_are_globally_wildcarded(
+    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
+) -> bool {
+    manifest.entrypoints.as_ref().is_some_and(|entrypoints| {
+        !entrypoints.is_empty()
+            && entrypoints.iter().all(|entrypoint| {
+                entrypoint.read_keys.iter().any(|key| key == "*")
+                    && entrypoint.write_keys.iter().any(|key| key == "*")
+            })
+    })
+}
+
 /// Serialize a manifest to pretty JSON using Norito’s JSON helpers.
 /// The JSON is inspection-only; deploy flows derive manifests directly from the artifact.
 fn manifest_to_json(
@@ -486,7 +498,9 @@ fn main() {
             std::process::exit(1);
         }
     };
-    print_access_hint_diagnostics(&report.access_hint_diagnostics, diagnostic_format);
+    if !manifest_entrypoints_are_globally_wildcarded(&manifest) {
+        print_access_hint_diagnostics(&report.access_hint_diagnostics, diagnostic_format);
+    }
     let manifest_opt = manifest_out.is_some().then_some(manifest);
 
     // Pick output path
@@ -593,5 +607,33 @@ mod tests {
             !warnings.is_empty(),
             "expected unused-state lint to be emitted"
         );
+    }
+
+    #[test]
+    fn wildcarded_entrypoints_suppress_access_hint_output() {
+        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: Some(vec![
+                iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
+                    name: "run".to_string(),
+                    kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                    params: Vec::new(),
+                    return_type: None,
+                    permission: None,
+                    read_keys: vec!["*".to_string()],
+                    write_keys: vec!["*".to_string()],
+                    access_hints_complete: Some(true),
+                    access_hints_skipped: Vec::new(),
+                    triggers: Vec::new(),
+                },
+            ]),
+            kotoba: None,
+            provenance: None,
+        };
+        assert!(manifest_entrypoints_are_globally_wildcarded(&manifest));
     }
 }

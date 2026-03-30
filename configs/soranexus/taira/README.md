@@ -14,7 +14,9 @@ network online quickly.
 - `config.toml`: baseline validator config for peer 1 and the shared template
   source for rendered per-validator configs.
 - `validator_roster.example.toml`: copy-me roster template for all validator
-  public addresses, keypairs, and PoPs. Keep the populated file user-local.
+  public addresses, public keys, and PoPs. Keep the populated file user-local.
+- `validator_secrets.example.toml`: copy-me secret template for per-validator
+  private keys. Keep the populated file user-local.
 - `genesis.json`: NPoS genesis with DA enabled.
 - `dns_records.json`: DNS targets for public Torii + Explorer hostnames.
 - `explorer.runtime-config.json`: runtime config for the Explorer frontend.
@@ -26,9 +28,16 @@ network online quickly.
   the shipped Taira config and genesis.
 - `taira-irohad.env.example`: sample `/etc/default/taira-irohad` overrides for
   pointing the systemd unit at a rendered validator config.
+- `taira-canary-client.example.toml`: runtime-only example signer config for
+  the signed rollout canary.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, including the optional signed write
   canary for final public cutover.
+- `bootstrap_kaigi_localnet.sh`: local-only relay bootstrap that re-signs the
+  served `dist/taira-localnet` genesis with seeded Kaigi relay metadata,
+  health samples, and the canonical Taira onboarding/faucet authority account,
+  then rewrites the live peer configs and restarts the detached
+  `taira-localnet` session.
 - `taira-explorer.nginx.conf`: multi-domain nginx edge config for
   `taira.sora.org` and `taira-explorer.sora.org`.
 
@@ -38,10 +47,13 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 
 1. Copy `validator_roster.example.toml` to a user-local path such as
    `configs/soranexus/taira/validator_roster.local.toml`.
-2. Fill in every validator's real `public_key`, `private_key`, `pop_hex`, and
-   `public_address`.
+2. Copy `validator_secrets.example.toml` to a user-local path such as
+   `configs/soranexus/taira/validator_secrets.local.toml`.
+3. Fill in every validator's real `public_key`, `pop_hex`, and
+   `public_address` in the public roster, then put the matching
+   `private_key` values in the secrets file.
 3. Render the per-validator bundle:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --output-dir dist/taira-validators`
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 4. Point each validator host at its own generated
    `dist/taira-validators/<validator-slug>/config.toml`.
 
@@ -86,10 +98,17 @@ For the Polkaswap static bundle, the browser URL is:
 This keeps `https://taira.sora.org/` as the Torii/API origin while giving every
 public Torii node an IPFS-style address surface for static content.
 
-Current implementation note:
+Gateway behavior:
 
-- Torii serves CID routes from manifests already stored on that node.
-- Universal read-through fetch from other nodes on cache miss is still pending.
+- Torii serves CID routes from local storage when the manifest is already
+  cached.
+- On a local miss, Torii resolves the CID through the approved replication
+  order set, uses the provider advert cache to find a Torii-capable provider,
+  fetches the manifest and payload over the existing storage endpoints, and
+  stores the bundle locally before serving it.
+- Keep both `torii.sorafs.discovery_enabled = true` and
+  `torii.sorafs_storage.enabled = true` on public gateway nodes so CID
+  browsing can rehydrate from peer providers.
 
 Named host bindings in `sorafs_sites.json` remain available as an optional
 alias layer, but they are no longer the primary deployment path.
@@ -122,7 +141,29 @@ site in one JSON request (`payload_b64`), so the nginx host serving
 `POST /v1/sorafs/storage/pin` with `413 Payload Too Large` before Torii sees
 the request. Torii must also run with `torii.max_content_len` high enough for
 the base64-expanded JSON body; the shipped Taira profile now pins that to
-`64_000_000`.
+`64_000_000`, and the local bootstrap overlay now rewrites the served
+`dist/taira-localnet/peer*.toml` files to keep that same cap live after every
+reset. Taira also overrides `[sorafs.quota] storage_pin_max_events = 64` so
+publish/retry loops on the public testnet do not immediately exhaust the
+generic `4/hour` storage-pin quota inherited from the global default.
+
+After every Taira reset or `irohad` rebuild, verify the manifest-registration
+ingress before retrying `yarn taira:publish`:
+
+- `curl -sSki -X POST https://taira.sora.org/v1/sorafs/pin/register -H 'content-type: application/json' --data '{}'`
+
+Expected result:
+
+- `HTTP 400` with a handler-level validation error such as `missing field authority`
+
+Unexpected result:
+
+- `HTTP 405` with `Allow: GET,HEAD`
+
+That `405` means the served `irohad` is stale and missing the mounted
+`POST /v1/sorafs/pin/register` route, even if
+`GET /v1/sorafs/pin/register` still falls through to the digest lookup
+handler.
 
 ### Codex / MCP rollout
 
@@ -157,13 +198,23 @@ The rollout script now also requires the live `/status` snapshot to show at
 least 4 validators in the commit QC set. If it fails that check, rebuild the
 validator configs from the shared roster before debugging ingress or MCP.
 
-That config must be a normal `iroha` client TOML with a pre-provisioned low-risk
-signer. Keep it out of the repo and out of shell history where possible.
+That config must be a normal `iroha` client TOML for a low-risk signer that
+already exists on Taira. Start from `taira-canary-client.example.toml`, not
+`defaults/client.toml`: the generic repo client uses the zero chain id and is
+not valid for Taira. If the signer still has zero balance for the live faucet
+asset, `check_mcp_rollout.sh` will now solve the public faucet puzzle, claim
+starter funds for that account, wait for the queued transfer to land, and then
+retry the signed ping automatically. Keep the populated canary config out of
+the repo and out of shell history where possible.
 
 If the script fails with `route_unavailable`, treat that as a deployment or
 topology failure, not an app-level validation issue: the public Torii ingress is
 up, but it still cannot reach an authoritative peer for lane `0` / dataspace
 `0`.
+If it fails with `Failed to find asset` even after the automatic faucet
+bootstrap path runs, treat that as a faucet-health or signer-selection issue:
+the configured account either does not exist on Taira yet or the live faucet
+could not fund it.
 
 ## Governance mode
 
@@ -172,7 +223,7 @@ up, but it still cannot reach an authoritative peer for lane `0` / dataspace
 - `nexus.governance.default_module = "parliament"`
 - `nexus.governance.modules.parliament.module_type = "parliament_sortition_jit"`
 - governance lane metadata binds lane 1 to `governance = "parliament"`
-- top-level `[governance]` sets multibody committee/quorum parameters
+- top-level `[gov]` sets multibody committee/quorum parameters
 
 This avoids fallback to legacy council-epoch approval mode during deployment.
 
@@ -183,7 +234,7 @@ Taira must declare the Nexus fee asset explicitly as the live XOR alias:
 ```toml
 [nexus.fees]
 fee_asset_id = "xor#universal"
-fee_sink_account_id = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+fee_sink_account_id = "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
 base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"
@@ -206,7 +257,7 @@ away from the shipped MCP-enabled config:
    `/opt/iroha`.
 2. Render the per-validator config bundle from a user-local roster file, then
    copy the correct validator config onto the host, for example:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --output-dir dist/taira-validators`
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
    - `sudo install -d -o iroha -g iroha /etc/iroha/taira-validator-1`
    - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
 3. Install the sample systemd unit from
@@ -240,6 +291,9 @@ away from the shipped MCP-enabled config:
 8. Before declaring public Codex/Torii rollout complete, require the signed
    write canary to pass:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --write-config /run/secrets/taira-canary-client.toml`
+   - the script now auto-discovers `${REPO_ROOT}/target/{debug,release}/iroha`
+     and falls back to `cargo run -p iroha_cli --bin iroha -- ...` if `iroha`
+     is not already installed on `PATH`
    - if you only need a read-only check for debugging, opt into that mode
      explicitly with `--skip-write-canary`
 
@@ -272,6 +326,18 @@ From `../iroha2-block-explorer-web`:
      `/v1/sorafs/storage/pin`.
    - keep `torii.max_content_len = 64_000_000` in `config.toml`; otherwise
      Torii rejects the JSON body before the SoraFS storage handler sees it.
+   - after every local reset, confirm the served `dist/taira-localnet/peer*.toml`
+     copies still contain `max_content_len = 64000000`; the local bootstrap
+     script patches them from `configs/soranexus/taira/config.toml`, but a
+     stale bundle can still bring the old default back.
+   - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
+     served peer configs; otherwise a handful of failed storage-pin probes can
+     exhaust the default `4 requests / 3600s` window before a real
+     `yarn taira:publish` retry.
+   - a publish-sized ingress smoke should clear the old 16 MiB limit:
+     `POST /v1/sorafs/storage/pin` with a `24_000_037` byte JSON body should
+     reach the handler and return a normal `400` (for example `invalid base64
+     in manifest_b64`), not `413`, `429`, or `502`.
    - keep the dedicated `location = /v1/connect/ws` blocks intact; they forward
      the required websocket `Upgrade` / `Connection: upgrade` headers for
      Iroha Connect on `taira.sora.org`.
@@ -317,3 +383,46 @@ From `../iroha2-block-explorer-web`:
 
 The Explorer runtime config targets `https://taira.sora.org`, so both UI reads
 and `/v1/*` proxy traffic follow the Taira Torii endpoint.
+
+## Local Kaigi bootstrap
+
+The served local Taira testnet on this machine does not expose a working public
+lane write path after a fresh reset yet, so Kaigi relay metadata must be seeded
+into the localnet's signed genesis overlay rather than submitted live through
+Torii. Without that overlay, `/v1/kaigi/relays` will stay empty.
+
+For the local `dist/taira-localnet` deployment, use:
+
+1. Build the helper used to re-sign the localnet genesis overlay:
+   - `cargo build -p iroha_kagami --example taira_kaigi_localnet --release`
+2. Run the local bootstrap:
+   - `bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+   - if you built the helper in a non-default target dir, point the bootstrap
+     at it explicitly, for example:
+     `IROHA_TAIRA_KAIGI_HELPER_BIN=/tmp/iroha_taira_kaigi_helper/debug/examples/taira_kaigi_localnet bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+3. Verify the relay endpoints and explorer page:
+   - `curl -sk https://taira.sora.org/v1/kaigi/relays | jq .`
+   - `curl -sk https://taira.sora.org/v1/kaigi/relays/health | jq .`
+   - open `https://taira-explorer.sora.org/kaigi/relays`
+
+The script is intentionally localnet-specific:
+
+- it reuses the first three validator accounts already present in
+  `dist/taira-localnet/peer{0,1,2}.toml`, so no extra linked-domain account
+  registration is required;
+- it derives the local client account from `dist/taira-localnet/client.toml`,
+  signs a fresh `genesis.signed.nrt` overlay from `genesis.json`, and seeds the
+  `nexus` domain metadata keys `kaigi_relay__*` and
+  `kaigi_relay_feedback__*` so Torii's Kaigi relay endpoints have data to
+  serve immediately after restart; and
+- it skips `cargo test --example ...` harness binaries during helper
+  auto-detection, so the bootstrap only reuses executables that actually
+  expose the `--genesis` overlay CLI; and
+- after any fresh local Taira reset, rerun this script if you want the Kaigi
+  explorer page to reflect live relay data again.
+
+The health snapshot's `healthy_total` will reflect the seeded relay feedback,
+but `registrations_total` can remain `0` because that counter comes from live
+telemetry rather than the seeded metadata overlay. The explorer overview still
+shows the correct relay count because it floors the overview total to the
+actual relay list length.

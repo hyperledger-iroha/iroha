@@ -1045,6 +1045,7 @@ mod tests {
             &cfg,
             true,
             false,
+            false,
         );
         assert_eq!(selected, Some(PriorityTier::Votes));
     }
@@ -1135,6 +1136,7 @@ mod tests {
             &loop_state.last_served,
             &cfg,
             true,
+            false,
             false,
         );
         assert_eq!(selected, Some(PriorityTier::Blocks));
@@ -1238,6 +1240,7 @@ mod tests {
             &budgets,
             &loop_state.last_served,
             &cfg,
+            false,
             false,
             false,
         );
@@ -1379,6 +1382,7 @@ mod tests {
             &budgets,
             &loop_state.last_served,
             &cfg,
+            false,
             false,
             false,
         );
@@ -2524,6 +2528,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -2890,6 +2895,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -2968,6 +2974,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3042,6 +3049,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3105,6 +3113,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3235,6 +3244,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3380,6 +3390,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3399,6 +3410,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3492,6 +3504,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3511,6 +3524,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3605,6 +3619,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3618,6 +3633,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3734,6 +3750,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -3747,6 +3764,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -5109,6 +5127,7 @@ mod tests {
     #[derive(Default)]
     struct QueuePriorityRecordingActor {
         events: Vec<&'static str>,
+        prioritize_votes: bool,
     }
 
     impl WorkerActor for QueuePriorityRecordingActor {
@@ -5138,6 +5157,10 @@ mod tests {
 
         fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
             Ok(())
+        }
+
+        fn prioritize_vote_drain(&self) -> bool {
+            self.prioritize_votes
         }
 
         fn tick(&mut self) -> bool {
@@ -6478,6 +6501,130 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
+    fn run_worker_iteration_prioritizes_votes_when_quorum_recovery_is_urgent() {
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
+        let vote = Vote {
+            phase: Phase::Prepare,
+            block_hash,
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        vote_tx
+            .send(inbound(BlockMessage::QcVote(vote)))
+            .expect("send prevote");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::Votes);
+
+        let rbc_chunk = RbcChunk {
+            block_hash,
+            height: 1,
+            view: 0,
+            epoch: 0,
+            idx: 0,
+            bytes: vec![1, 2, 3],
+        };
+        rbc_chunk_tx
+            .send(inbound(BlockMessage::RbcChunk(rbc_chunk)))
+            .expect("send rbc chunk");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::RbcChunks);
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash: Hash::new(b"payload"),
+        };
+        block_payload_tx
+            .send(inbound(BlockMessage::Proposal(proposal)))
+            .expect("send proposal");
+        status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let past = now
+            .checked_sub(Duration::from_secs(2))
+            .unwrap_or_else(Instant::now);
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_served: [past; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = QueuePriorityRecordingActor {
+            events: Vec::new(),
+            prioritize_votes: true,
+        };
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.events, vec!["other", "rbc", "other"]);
+        assert_eq!(stats.votes_handled, 1);
+        assert_eq!(stats.rbc_chunks_handled, 1);
+        assert_eq!(stats.block_payloads_handled, 1);
+        assert!(stats.progress);
+        assert!(!stats.budget_exceeded);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
     fn run_worker_iteration_ticks_after_drains() {
         status::reset_worker_loop_snapshot_for_tests();
 
@@ -7807,6 +7954,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -7941,6 +8089,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -8318,6 +8467,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -11280,6 +11430,9 @@ trait WorkerActor {
     fn poll_rbc_persist_results(&mut self) -> bool {
         false
     }
+    fn prioritize_vote_drain(&self) -> bool {
+        false
+    }
     fn should_bypass_tick_gap(&self) -> bool {
         false
     }
@@ -11331,6 +11484,10 @@ impl WorkerActor for crate::sumeragi::main_loop::Actor {
 
     fn poll_rbc_persist_results(&mut self) -> bool {
         crate::sumeragi::main_loop::Actor::poll_rbc_persist_results_inner(self)
+    }
+
+    fn prioritize_vote_drain(&self) -> bool {
+        false
     }
 
     fn should_bypass_tick_gap(&self) -> bool {
@@ -11962,6 +12119,7 @@ fn drain_mailbox<A: WorkerActor>(
             && stats.consensus_handled == 0
             && stats.lane_relays_handled == 0
             && stats.background_handled == 0;
+        let force_votes_over_payload = actor.prioritize_vote_drain();
         let prefer_votes = votes_pending && !force_payload_turn && stats.votes_handled < vote_burst;
         let tier = if force_payload_turn {
             payload_turn
@@ -11974,6 +12132,7 @@ fn drain_mailbox<A: WorkerActor>(
                 cfg,
                 prefer_votes,
                 suppress_starved_payload_preemption,
+                force_votes_over_payload,
             )
         };
         let Some(tier) = tier else {
@@ -12351,6 +12510,7 @@ fn select_next_tier(
     cfg: &WorkerLoopConfig,
     prefer_votes: bool,
     suppress_starved_payload_preemption: bool,
+    force_votes_over_payload: bool,
 ) -> Option<PriorityTier> {
     let votes_pending =
         budgets.remaining(PriorityTier::Votes) > 0 && mailbox.has_pending(PriorityTier::Votes);
@@ -12395,10 +12555,16 @@ fn select_next_tier(
             && tier == PriorityTier::BlockPayload
             && votes_pending)
         {
+            if force_votes_over_payload
+                && votes_pending
+                && matches!(tier, PriorityTier::RbcChunks | PriorityTier::BlockPayload)
+            {
+                return Some(PriorityTier::Votes);
+            }
             return Some(tier);
         }
     }
-    if prefer_votes && votes_pending {
+    if (prefer_votes || force_votes_over_payload) && votes_pending {
         return Some(PriorityTier::Votes);
     }
     // After the vote burst, rotate to the oldest pending tier while keeping votes ahead of

@@ -1146,7 +1146,10 @@ export interface ToriiVpnProfile {
   dnsPushIntervalSecs: number;
   meterFamily: string;
   routePushes: ReadonlyArray<string>;
+  excludedRoutes: ReadonlyArray<string>;
   dnsServers: ReadonlyArray<string>;
+  tunnelAddresses: ReadonlyArray<string>;
+  mtuBytes: number;
   displayBillingLabel: string;
 }
 
@@ -1157,17 +1160,32 @@ export interface ToriiVpnSession {
   relayEndpoint: string;
   leaseSecs: number;
   expiresAtMs: number;
+  connectedAtMs: number;
   meterFamily: string;
   routePushes: ReadonlyArray<string>;
+  excludedRoutes: ReadonlyArray<string>;
   dnsServers: ReadonlyArray<string>;
+  tunnelAddresses: ReadonlyArray<string>;
+  mtuBytes: number;
   helperTicketHex: string;
+  bytesIn: number;
+  bytesOut: number;
   status: string;
 }
 
-export interface ToriiVpnSessionDeleteResult {
+export interface ToriiVpnReceipt {
   sessionId: string;
-  status: string;
+  accountId: string;
+  exitClass: string;
+  relayEndpoint: string;
+  meterFamily: string;
+  connectedAtMs: number;
   disconnectedAtMs: number;
+  durationMs: number;
+  bytesIn: number;
+  bytesOut: number;
+  status: string;
+  receiptSource: string;
 }
 
 export type SnsNameStatus =
@@ -3351,6 +3369,25 @@ export interface SubscriptionActionResponse {
   tx_hash_hex: string;
 }
 
+export interface ToriiOfflineCashReadinessResponse {
+  offline_recursive_stark: boolean;
+  [key: string]: unknown;
+}
+
+export interface ToriiOfflineCashRequest {
+  [key: string]: unknown;
+}
+
+export interface ToriiOfflineCashEnvelope {
+  lineage_state: Record<string, unknown>;
+  settlement?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface ToriiOfflineRevocationBundle {
+  [key: string]: unknown;
+}
+
 export interface ToriiOfflineAllowanceItem {
   certificate_id_hex: string;
   controller_id: string;
@@ -4263,6 +4300,90 @@ export interface KaigiRelayEventsOptions {
   signal?: AbortSignal;
 }
 
+export interface KaigiCallEventRef {
+  call_id: string;
+  domain: string;
+  call_name: string;
+}
+
+export interface KaigiCallView {
+  call_id: string;
+  domain: string;
+  call_name: string;
+  host_account_id?: string | null;
+  billing_account_id?: string | null;
+  title?: string | null;
+  description?: string | null;
+  max_participants?: number | null;
+  gas_rate_per_minute: number;
+  metadata: Record<string, unknown>;
+  scheduled_start_ms?: number | null;
+  privacy_mode: string;
+  room_policy: string;
+  relay_manifest?: Record<string, unknown> | null;
+  roster_root_hex: string;
+  participant_count: number;
+  commitment_count: number;
+  nullifier_count: number;
+  usage_commitment_count: number;
+  status: string;
+  created_at_ms: number;
+  ended_at_ms?: number | null;
+  total_duration_ms: number;
+  total_billed_gas: number;
+  segments_recorded: number;
+}
+
+export interface KaigiCallSignal {
+  entrypoint_hash: string;
+  authority?: string | null;
+  timestamp_ms?: number | null;
+  call_id: string;
+  signal_kind: string;
+  host_account_id?: string | null;
+  participant_account_id?: string | null;
+  created_at_ms: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface KaigiCallSignalsList {
+  total: number;
+  items: ReadonlyArray<KaigiCallSignal>;
+}
+
+export interface KaigiCallSignalsOptions {
+  afterTimestampMs?: NumericLike;
+  after_timestamp_ms?: NumericLike;
+  limit?: NumericLike;
+  offset?: NumericLike;
+  signal?: AbortSignal;
+}
+
+export interface KaigiCallRosterUpdatedEvent {
+  kind: "roster_updated";
+  call: KaigiCallEventRef;
+  privacy_mode: string;
+  participant_count: number;
+  commitment_count: number;
+  nullifier_count: number;
+  roster_root_hex?: string | null;
+}
+
+export interface KaigiCallEndedEvent {
+  kind: "ended";
+  call: KaigiCallEventRef;
+  status: string;
+  ended_at_ms: number;
+}
+
+export type KaigiCallEventPayload = KaigiCallRosterUpdatedEvent | KaigiCallEndedEvent;
+
+export interface KaigiCallEventsOptions {
+  kind?: string | ReadonlyArray<string>;
+  lastEventId?: string;
+  signal?: AbortSignal;
+}
+
 type ExclusiveSingleOrMany<
   SingleKey extends PropertyKey,
   SingleValue,
@@ -4316,6 +4437,23 @@ export interface ConfidentialKeyset {
   ovkHex: string;
   fvkHex: string;
   asHex(): Record<string, string>;
+}
+
+export interface KaigiRosterJoinProof {
+  commitment: Buffer;
+  nullifier: Buffer;
+  rosterRoot: Buffer;
+  proof: Buffer;
+  commitmentHex: string;
+  nullifierHex: string;
+  rosterRootHex: string;
+  proofBase64: string;
+}
+
+export interface KaigiRosterJoinProofOptions {
+  seed: ArrayBufferView | ArrayBuffer | Buffer;
+  rosterRootHex?: string | null;
+  roster_root_hex?: string | null;
 }
 
 export interface RegisterDomainInput {
@@ -4819,6 +4957,10 @@ export interface CreateKaigiInput {
   privacyMode?: KaigiPrivacyModeInput;
   roomPolicy?: KaigiRoomPolicyInput;
   relayManifest?: KaigiRelayManifestInput | null;
+  commitment?: KaigiParticipantCommitmentInput | null;
+  nullifier?: KaigiParticipantNullifierInput | null;
+  rosterRoot?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
+  proof?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
 }
 
 export interface JoinKaigiInput {
@@ -4835,6 +4977,10 @@ export interface LeaveKaigiInput extends JoinKaigiInput {}
 export interface EndKaigiInput {
   callId: KaigiIdLike;
   endedAtMs?: NumericLike | null;
+  commitment?: KaigiParticipantCommitmentInput | null;
+  nullifier?: KaigiParticipantNullifierInput | null;
+  rosterRoot?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
+  proof?: ArrayBufferView | ArrayBuffer | Buffer | string | null;
 }
 
 export interface RecordKaigiUsageInput {
@@ -6016,6 +6162,61 @@ export interface EndKaigiTransactionInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
+export interface PrivateKaigiEntrypointResult {
+  transactionEntrypoint: Buffer;
+  hash: Buffer;
+  actionHash: Buffer;
+}
+
+export interface PrivateKaigiFeeSpendResult {
+  asset_definition_id: string;
+  anchor_root: Buffer;
+  nullifiers: ReadonlyArray<Buffer>;
+  output_commitments: ReadonlyArray<Buffer>;
+  encrypted_change_payloads: ReadonlyArray<Buffer>;
+  proof: Buffer;
+}
+
+export interface PrivateKaigiFeeSpendInput {
+  chainId: string;
+  assetDefinitionId: string;
+  actionHash: BinaryLike;
+  anchorRootHex: string;
+  feeAmount: NumericLike;
+  verifyingKey: Record<string, unknown>;
+}
+
+export interface PrivateCreateKaigiTransactionInput {
+  chainId: string;
+  call: Record<string, unknown>;
+  artifacts: Record<string, unknown>;
+  feeSpend: Record<string, unknown>;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  nonce?: number | null;
+}
+
+export interface PrivateJoinKaigiTransactionInput {
+  chainId: string;
+  callId: string;
+  artifacts: Record<string, unknown>;
+  feeSpend: Record<string, unknown>;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  nonce?: number | null;
+}
+
+export interface PrivateEndKaigiTransactionInput {
+  chainId: string;
+  callId: string;
+  endedAtMs?: number | null;
+  artifacts: Record<string, unknown>;
+  feeSpend: Record<string, unknown>;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  nonce?: number | null;
+}
+
 export interface RecordKaigiUsageTransactionInput {
   chainId: string;
   authority: string;
@@ -6819,13 +7020,24 @@ export declare class ToriiClient {
       canonicalAuth: CanonicalRequestAuth;
     },
   ): Promise<ToriiVpnSession>;
+  getVpnSession(
+    sessionId: string,
+    options: {
+      signal?: AbortSignal;
+      canonicalAuth: CanonicalRequestAuth;
+    },
+  ): Promise<ToriiVpnSession | null>;
   deleteVpnSession(
     sessionId: string,
     options?: {
       signal?: AbortSignal;
       canonicalAuth: CanonicalRequestAuth;
     },
-  ): Promise<ToriiVpnSessionDeleteResult | null>;
+  ): Promise<ToriiVpnReceipt | null>;
+  listVpnReceipts(options: {
+    signal?: AbortSignal;
+    canonicalAuth: CanonicalRequestAuth;
+  }): Promise<ReadonlyArray<ToriiVpnReceipt>>;
   getSnsPolicy(suffixId: number, options?: { signal?: AbortSignal }): Promise<SnsSuffixPolicy>;
   getSnsRegistration(
     selector: string,
@@ -7015,6 +7227,18 @@ export declare class ToriiClient {
   streamSumeragiStatus<T = ToriiSumeragiStatus>(
     options?: Omit<EventStreamOptions, "filter">,
   ): AsyncGenerator<ToriiSseEvent<T>, void, unknown>;
+  getKaigiCall(
+    callId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KaigiCallView | null>;
+  listKaigiCallSignals(
+    callId: string,
+    options?: KaigiCallSignalsOptions,
+  ): Promise<KaigiCallSignalsList>;
+  streamKaigiCallEvents(
+    callId: string,
+    options?: KaigiCallEventsOptions,
+  ): AsyncGenerator<ToriiSseEvent<KaigiCallEventPayload>, void, unknown>;
   listKaigiRelays(
     options?: { signal?: AbortSignal },
   ): Promise<KaigiRelaySummaryList>;
@@ -7237,30 +7461,32 @@ export declare class ToriiClient {
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionActionResponse>;
-  listOfflineAllowances(
-    options?: OfflineAllowanceListOptions,
-  ): Promise<ToriiOfflineAllowanceListResponse>;
-  queryOfflineAllowances(
-    options?: IterableQueryOptions,
-  ): Promise<ToriiOfflineAllowanceListResponse>;
-  iterateOfflineAllowances(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>;
-  iterateOfflineAllowancesQuery(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>;
-  listOfflineSummaries(
-    options?: IterableListOptions,
-  ): Promise<ToriiOfflineSummaryListResponse>;
-  queryOfflineSummaries(
-    options?: IterableQueryOptions,
-  ): Promise<ToriiOfflineSummaryListResponse>;
-  iterateOfflineSummaries(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineSummaryItem, void, unknown>;
-  iterateOfflineSummariesQuery(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineSummaryItem, void, unknown>;
+  getOfflineCashReadiness(
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashReadinessResponse>;
+  setupOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  loadOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  refreshOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  syncOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  redeemOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  getOfflineRevocationBundle(
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineRevocationBundle>;
   listOfflineTransfers(
     options?: OfflineTransferListOptions,
   ): Promise<ToriiOfflineTransferListResponse>;
@@ -7276,54 +7502,13 @@ export declare class ToriiClient {
   listOfflineRevocations(
     options?: IterableListOptions,
   ): Promise<ToriiOfflineRevocationListResponse>;
-  queryOfflineRevocations(
-    options?: IterableQueryOptions,
-  ): Promise<ToriiOfflineRevocationListResponse>;
   iterateOfflineRevocations(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<ToriiOfflineRevocationItem, void, unknown>;
-  iterateOfflineRevocationsQuery(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineRevocationItem, void, unknown>;
-  issueOfflineCertificate(
-    certificate: ToriiOfflineWalletCertificateDraft,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCertificateIssueResponse>;
-  issueOfflineCertificateRenewal(
-    certificateIdHex: string,
-    certificate: ToriiOfflineWalletCertificateDraft,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCertificateIssueResponse>;
-  submitOfflineSettlement(
-    request: ToriiOfflineSettlementSubmitRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineSettlementSubmitResponse>;
-  submitOfflineSettlementAndWait(
-    request: ToriiOfflineSettlementSubmitRequest,
-    options?: SubmitOfflineSettlementAndWaitOptions,
-  ): Promise<ToriiOfflineSettlementSubmitResponse>;
   issueOfflineBuildClaim(
     request: ToriiOfflineBuildClaimIssueRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiOfflineBuildClaimIssueResponse>;
-  registerOfflineAllowance(
-    request: ToriiOfflineAllowanceRegisterRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineAllowanceRegisterResponse>;
-  renewOfflineAllowance(
-    certificateIdHex: string,
-    request: ToriiOfflineAllowanceRegisterRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineAllowanceRegisterResponse>;
-  topUpOfflineAllowance(
-    request: ToriiOfflineTopUpRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineTopUpResponse>;
-  topUpOfflineAllowanceRenewal(
-    certificateIdHex: string,
-    request: ToriiOfflineTopUpRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineTopUpResponse>;
   getOfflineRejectionStats(options?: {
     telemetryProfile?: string;
     signal?: AbortSignal;
@@ -7403,6 +7588,10 @@ export function verifySm2(
   publicKey: ArrayBufferView | ArrayBuffer | Buffer,
   distid?: string,
 ): boolean;
+
+export function buildKaigiRosterJoinProof(
+  options: KaigiRosterJoinProofOptions,
+): KaigiRosterJoinProof;
 
 export function signEd25519(
   message: ArrayBufferView | ArrayBuffer | Buffer | string,
@@ -8099,15 +8288,27 @@ export function buildPrecommitTriggerAction(
 export function buildCreateKaigiTransaction(
   input: CreateKaigiTransactionInput,
 ): SignedTransactionResult;
+export function buildPrivateKaigiFeeSpend(
+  input: PrivateKaigiFeeSpendInput,
+): PrivateKaigiFeeSpendResult;
+export function buildPrivateCreateKaigiTransaction(
+  input: PrivateCreateKaigiTransactionInput,
+): PrivateKaigiEntrypointResult;
 export function buildJoinKaigiTransaction(
   input: JoinKaigiTransactionInput,
 ): SignedTransactionResult;
+export function buildPrivateJoinKaigiTransaction(
+  input: PrivateJoinKaigiTransactionInput,
+): PrivateKaigiEntrypointResult;
 export function buildLeaveKaigiTransaction(
   input: LeaveKaigiTransactionInput,
 ): SignedTransactionResult;
 export function buildEndKaigiTransaction(
   input: EndKaigiTransactionInput,
 ): SignedTransactionResult;
+export function buildPrivateEndKaigiTransaction(
+  input: PrivateEndKaigiTransactionInput,
+): PrivateKaigiEntrypointResult;
 export function buildRecordKaigiUsageTransaction(
   input: RecordKaigiUsageTransactionInput,
 ): SignedTransactionResult;
@@ -8186,6 +8387,17 @@ export function submitSignedTransaction(
     pollIntervalMs?: number;
     timeoutMs?: number;
     privateKey?: ArrayBufferView | ArrayBuffer | Buffer;
+  },
+): Promise<{ hash: string; submission: unknown; status?: unknown }>;
+
+export function submitTransactionEntrypoint(
+  client: ToriiClient,
+  transactionEntrypoint: ArrayBufferView | ArrayBuffer | Buffer,
+  options: {
+    hashHex: string;
+    waitForCommit?: boolean;
+    pollIntervalMs?: number;
+    timeoutMs?: number;
   },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
 

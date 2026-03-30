@@ -983,9 +983,11 @@ impl InstructionDraft {
             InstructionDraft::RegisterDomain { domain } => {
                 Register::domain(Domain::new(domain.clone())).into()
             }
-            InstructionDraft::RegisterAccount { account } => {
-                Register::account(Account::from_scoped_id(account.clone())).into()
-            }
+            InstructionDraft::RegisterAccount { account } => Register::account(
+                Account::new(account.account().clone())
+                    .with_linked_domain(account.domain().clone()),
+            )
+            .into(),
             InstructionDraft::RegisterAssetDefinition {
                 definition,
                 mintable,
@@ -1804,7 +1806,8 @@ mod tests {
         };
 
         assert_eq!(register.object.id, ALICE_ID.clone());
-        assert_eq!(register.object.scoped_id().as_ref(), Some(&expected));
+        assert_eq!(register.object.linked_domains().len(), 1);
+        assert!(register.object.linked_domains().contains(expected.domain()));
     }
 
     #[test]

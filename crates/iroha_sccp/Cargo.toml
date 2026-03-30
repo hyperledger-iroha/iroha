@@ -1,0 +1,23 @@
+[package]
+name = "iroha_sccp"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+std = [
+    "serde/std",
+    "dep:norito",
+]
+serde = ["dep:serde"]
+
+[dependencies]
+blake2 = { version = "0.10.6", default-features = false }
+tiny-keccak = { version = "2.0.2", default-features = false, features = ["keccak"] }
+serde = { version = "1.0.228", default-features = false, features = ["derive"], optional = true }
+norito = { path = "../norito", optional = true }

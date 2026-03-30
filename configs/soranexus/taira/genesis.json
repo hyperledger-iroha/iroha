@@ -1,6 +1,7 @@
 {
   "bls_domain": "bls-iroha2:npos-sumeragi:v1",
   "chain": "809574f5-fee7-5e69-bfcf-52451e42d50f",
+  "chain_discriminant": 369,
   "consensus_fingerprint": "0xc731aafd4ac091f98b789331c6a16bcb3afb3349651d33213745435e15a85dce",
   "consensus_mode": "Npos",
   "crypto": {
@@ -36,7 +37,7 @@
         {
           "Register": {
             "Account": {
-              "id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "id": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "metadata": {
                 "key": "value"
               }
@@ -46,7 +47,7 @@
         {
           "Register": {
             "Account": {
-              "id": "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76",
+              "id": "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76",
               "metadata": {
                 "key": "value"
               }
@@ -82,7 +83,7 @@
         {
           "Register": {
             "Account": {
-              "id": "sorauロ1PスNgソリ9マユ2ユ9トZタテフWwヒセヰトツT3WコTxカオホKモロmキNSD7UG",
+              "id": "testuロ1PスNgソリ9マユ2ユ9トZタテフWwヒセヰトツT3WコTxカオホKモロmキNSD7UG",
               "metadata": {
                 
               }
@@ -118,6 +119,13 @@
         {
           "Register": {
             "AssetDefinition": {
+              "confidential_policy": {
+                "mode": "Convertible",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
               "id": "xor#universal",
               "logo": null,
               "metadata": {
@@ -144,7 +152,7 @@
         {
           "Register": {
             "Account": {
-              "id": "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
+              "id": "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
               "metadata": {
                 
               }
@@ -258,25 +266,25 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-              "source": "sorauロ1シマ2スヘネdmcLfDBwoスリシoF5sHeカdカQbネxGVヰ8tCホBMY2FH"
+              "source": "testuロ1シマ2スヘネdmcLfDBwoスリシoF5sHeカdカQbネxGVヰ8tCホBMY2FH"
             }
           }
         },
         {
           "Transfer": {
             "Domain": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": "wonderland",
-              "source": "sorauロ1シマ2スヘネdmcLfDBwoスリシoF5sHeカdカQbネxGVヰ8tCホBMY2FH"
+              "source": "testuロ1シマ2スヘネdmcLfDBwoスリシoF5sHeカdカQbネxGVヰ8tCホBMY2FH"
             }
           }
         },
         {
           "Grant": {
             "Permission": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -286,7 +294,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+              "destination": "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": {
                 "name": "CanRegisterDomain"
               }

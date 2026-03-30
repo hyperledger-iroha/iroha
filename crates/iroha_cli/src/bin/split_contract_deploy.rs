@@ -48,7 +48,7 @@ fn sign_and_submit(
     instructions: impl IntoIterator<Item = InstructionBox>,
 ) -> Result<HashOf<SignedTransaction>> {
     let tx = TransactionBuilder::new(client.chain.clone(), authority.clone())
-        .with_instructions(instructions.into_iter())
+        .with_instructions(instructions)
         .with_metadata(Metadata::default())
         .sign(private_key);
     client.submit_transaction_blocking(&tx)

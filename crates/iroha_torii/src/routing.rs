@@ -139,6 +139,14 @@ use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
 };
 use iroha_primitives::json::Json as IrohaJson;
+use iroha_sccp::{
+    BurnPayloadV1, GovernancePayloadV1, NexusBridgeFinalityProofV1, NexusCommitQcV1,
+    NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentRosterMemberV1,
+    NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
+    NexusSccpGovernanceProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
+    burn_message_id, canonical_burn_payload_bytes, canonical_governance_payload_bytes,
+    commitment_leaf_hash, parliament_certificate_hash, payload_hash,
+};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
 #[cfg(feature = "telemetry")]
@@ -1442,6 +1450,177 @@ pub struct KaigiRelayHealthSnapshotDto {
 
 #[cfg(feature = "app_api")]
 #[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Call-level Kaigi view returned by the app-facing Torii API.
+pub struct KaigiCallViewDto {
+    /// Full Kaigi call identifier.
+    pub call_id: String,
+    /// Domain component of the call identifier.
+    pub domain: String,
+    /// Call-name component of the call identifier.
+    pub call_name: String,
+    /// Host authority currently recorded on-chain (transparent mode only).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub host_account_id: Option<String>,
+    /// Optional billing authority used for settlement.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub billing_account_id: Option<String>,
+    /// Optional title assigned by the host.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Optional description assigned by the host.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Maximum allowed participants excluding the host.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub max_participants: Option<u32>,
+    /// Host-selected gas rate for the call.
+    pub gas_rate_per_minute: u64,
+    /// Arbitrary host metadata stored with the call.
+    pub metadata: IrohaJson,
+    /// Optional scheduled start timestamp in milliseconds.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub scheduled_start_ms: Option<u64>,
+    /// Simplified privacy label used by app clients.
+    pub privacy_mode: String,
+    /// Simplified room-policy label used by app clients.
+    pub room_policy: String,
+    /// Optional relay manifest snapshot.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub relay_manifest: Option<IrohaJson>,
+    /// Current roster Merkle root in hex form.
+    pub roster_root_hex: String,
+    /// Number of visible participants currently attached to the call.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub participant_count: Option<u32>,
+    /// Number of roster commitments recorded for the call.
+    pub commitment_count: u32,
+    /// Number of nullifiers recorded for the call.
+    pub nullifier_count: u32,
+    /// Number of usage commitments recorded for the call.
+    pub usage_commitment_count: u32,
+    /// Lifecycle status label.
+    pub status: String,
+    /// Creation timestamp in milliseconds.
+    pub created_at_ms: u64,
+    /// Optional ended timestamp in milliseconds.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<u64>,
+    /// Total recorded call duration in milliseconds.
+    pub total_duration_ms: u64,
+    /// Total gas billed across all usage segments.
+    pub total_billed_gas: u64,
+    /// Number of usage segments recorded so far.
+    pub segments_recorded: u32,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// App-facing Kaigi signaling record derived from committed transaction metadata.
+pub struct KaigiCallSignalDto {
+    /// Entrypoint hash of the transaction carrying the signal.
+    pub entrypoint_hash: String,
+    /// Authority that submitted the signal transaction (transparent mode only).
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub authority: Option<String>,
+    /// Optional transaction creation timestamp.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub timestamp_ms: Option<u64>,
+    /// Full Kaigi call identifier.
+    pub call_id: String,
+    /// Normalized signal kind.
+    pub signal_kind: String,
+    /// Optional host account id advertised by the signal envelope.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub host_account_id: Option<String>,
+    /// Optional participant account id advertised by the signal envelope.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub participant_account_id: Option<String>,
+    /// Signal creation timestamp supplied in metadata.
+    pub created_at_ms: u64,
+    /// Parsed signal metadata payload.
+    pub metadata: IrohaJson,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Paginated list of call-level Kaigi signaling records.
+pub struct KaigiCallSignalListDto {
+    /// Total number of matching signals before pagination.
+    pub total: u64,
+    /// Current result page.
+    pub items: Vec<KaigiCallSignalDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// SSE payload reference for a Kaigi call.
+pub struct KaigiCallEventCallRefDto {
+    /// Full Kaigi call identifier.
+    pub call_id: String,
+    /// Domain component of the call identifier.
+    pub domain: String,
+    /// Call-name component of the call identifier.
+    pub call_name: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
+/// Optional query parameters for Kaigi call-signal listing.
+pub struct KaigiCallSignalsParams {
+    /// Only include signals whose metadata timestamp is at or after this value.
+    #[norito(default)]
+    pub after_timestamp_ms: Option<u64>,
+    /// Maximum number of signals to return.
+    #[norito(default)]
+    pub limit: Option<u64>,
+    /// Number of matching signals to skip.
+    #[norito(default)]
+    pub offset: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
+/// Optional query parameters for Kaigi call SSE streams.
+pub struct KaigiCallEventsParams {
+    /// Restrict events to a comma-separated list of kinds (`roster_updated`, `ended`).
+    #[norito(default)]
+    pub kind: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
     Default, Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
 /// Optional query parameters for the Kaigi relay SSE stream.
@@ -1531,6 +1710,176 @@ fn collect_kaigi_relays(state: &CoreState) -> Result<Vec<KaigiRelaySnapshot>, Er
         }
     }
     Ok(out)
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_privacy_mode_label(mode: iroha_data_model::kaigi::KaigiPrivacyMode) -> &'static str {
+    match mode {
+        iroha_data_model::kaigi::KaigiPrivacyMode::Transparent => "transparent",
+        iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1 => "private",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_room_policy_label(policy: iroha_data_model::kaigi::KaigiRoomPolicy) -> &'static str {
+    match policy {
+        iroha_data_model::kaigi::KaigiRoomPolicy::Public => "public",
+        iroha_data_model::kaigi::KaigiRoomPolicy::Authenticated => "authenticated",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_status_label(status: iroha_data_model::kaigi::KaigiStatus) -> &'static str {
+    match status {
+        iroha_data_model::kaigi::KaigiStatus::Active => "active",
+        iroha_data_model::kaigi::KaigiStatus::Ended => "ended",
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_call_event_ref(call_id: &KaigiId) -> KaigiCallEventCallRefDto {
+    KaigiCallEventCallRefDto {
+        call_id: call_id.to_string(),
+        domain: call_id.domain_id.to_string(),
+        call_name: call_id.call_name.to_string(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn load_kaigi_record(
+    state: &CoreState,
+    call_id: &KaigiId,
+) -> Result<iroha_data_model::kaigi::KaigiRecord, Error> {
+    let world = state.world_view();
+    let domain = world
+        .domain(&call_id.domain_id)
+        .map_err(|_| explorer_not_found())?;
+    let key = iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name)
+        .map_err(|err| conversion_error(format!("invalid kaigi call id: {err}")))?;
+    let Some(raw) = domain.metadata().get(&key) else {
+        return Err(explorer_not_found());
+    };
+    raw.clone()
+        .try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>()
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                err.to_string(),
+            ))
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_call_view_from_record(record: &iroha_data_model::kaigi::KaigiRecord) -> KaigiCallViewDto {
+    let reveal_authorities =
+        record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
+    KaigiCallViewDto {
+        call_id: record.id.to_string(),
+        domain: record.id.domain_id.to_string(),
+        call_name: record.id.call_name.to_string(),
+        host_account_id: reveal_authorities
+            .then(|| crate::account_literal::display_literal(&record.host)),
+        billing_account_id: reveal_authorities
+            .then(|| {
+                record
+                    .billing_account
+                    .as_ref()
+                    .map(crate::account_literal::display_literal)
+            })
+            .flatten(),
+        title: record.title.clone(),
+        description: record.description.clone(),
+        max_participants: record.max_participants,
+        gas_rate_per_minute: record.gas_rate_per_minute,
+        metadata: IrohaJson::from(metadata_to_json(&record.metadata)),
+        scheduled_start_ms: record.scheduled_start_ms,
+        privacy_mode: kaigi_privacy_mode_label(record.privacy_mode).to_owned(),
+        room_policy: kaigi_room_policy_label(record.room_policy).to_owned(),
+        relay_manifest: record
+            .relay_manifest
+            .as_ref()
+            .map(|manifest| IrohaJson::from(json_value(manifest))),
+        roster_root_hex: hex::encode(<[u8; 32]>::from(record.roster_root)),
+        participant_count: reveal_authorities
+            .then(|| u32::try_from(record.participants.len()).unwrap_or(u32::MAX)),
+        commitment_count: u32::try_from(record.roster_commitments.len()).unwrap_or(u32::MAX),
+        nullifier_count: u32::try_from(record.nullifier_log.len()).unwrap_or(u32::MAX),
+        usage_commitment_count: u32::try_from(record.usage_commitments.len()).unwrap_or(u32::MAX),
+        status: kaigi_status_label(record.status).to_owned(),
+        created_at_ms: record.created_at_ms,
+        ended_at_ms: record.ended_at_ms,
+        total_duration_ms: record.total_duration_ms,
+        total_billed_gas: record.total_billed_gas,
+        segments_recorded: record.segments_recorded,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_metadata_value<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value
+        .as_object()
+        .and_then(|record| record.get(key))
+        .or_else(|| value.get(key))
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_metadata_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        kaigi_metadata_value(value, key)?
+            .as_str()
+            .map(ToOwned::to_owned)
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_metadata_u64(value: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| kaigi_metadata_value(value, key)?.as_u64())
+}
+
+#[cfg(feature = "app_api")]
+fn kaigi_signal_from_transaction(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    reveal_authorities: bool,
+) -> Option<KaigiCallSignalDto> {
+    let (metadata, authority, timestamp_ms) = match tx.entrypoint() {
+        TransactionEntrypoint::External(signed) => (
+            signed.metadata(),
+            reveal_authorities.then(|| crate::account_literal::display_literal(signed.authority())),
+            u64::try_from(signed.creation_time().as_millis()).ok(),
+        ),
+        TransactionEntrypoint::PrivateKaigi(private) => {
+            (&private.metadata, None, Some(private.creation_time_ms))
+        }
+        TransactionEntrypoint::Time(_) => return None,
+    };
+    let key: Name = "kaigi_signal".parse().ok()?;
+    let signal_json = metadata.get(&key)?.try_into_any_norito::<Value>().ok()?;
+    let call_id = kaigi_metadata_string(&signal_json, &["callId", "call_id"])?;
+    let signal_kind = kaigi_metadata_string(&signal_json, &["signalKind", "signal_kind"])
+        .unwrap_or_else(|| "signal".to_owned())
+        .to_ascii_lowercase();
+    let created_at_ms = kaigi_metadata_u64(&signal_json, &["createdAtMs", "created_at_ms"])?;
+
+    Some(KaigiCallSignalDto {
+        entrypoint_hash: tx.entrypoint_hash().to_string(),
+        authority,
+        timestamp_ms,
+        call_id,
+        signal_kind,
+        host_account_id: reveal_authorities
+            .then(|| kaigi_metadata_string(&signal_json, &["hostAccountId", "host_account_id"]))
+            .flatten(),
+        participant_account_id: reveal_authorities
+            .then(|| {
+                kaigi_metadata_string(
+                    &signal_json,
+                    &["participantAccountId", "participant_account_id"],
+                )
+            })
+            .flatten(),
+        created_at_ms,
+        metadata: IrohaJson::from(signal_json),
+    })
 }
 
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -4048,6 +4397,446 @@ pub async fn handle_v1_bridge_finality_bundle(
     Ok(resp)
 }
 
+static SCCP_BURN_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpBurnProofV1>>> =
+    LazyLock::new(|| RwLock::new(BTreeMap::new()));
+static SCCP_GOVERNANCE_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpGovernanceProofV1>>> =
+    LazyLock::new(|| RwLock::new(BTreeMap::new()));
+
+fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Error {
+    match err {
+        iroha_core::bridge::BridgeFinalityError::InvalidHeight(_)
+        | iroha_core::bridge::BridgeFinalityError::BlockNotFound(_)
+        | iroha_core::bridge::BridgeFinalityError::QcNotFound(_) => {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        }
+        iroha_core::bridge::BridgeFinalityError::QcHashMismatch { .. }
+        | iroha_core::bridge::BridgeFinalityError::MissingValidatorPop { .. } => Error::Query(
+            iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
+        ),
+    }
+}
+
+fn sccp_bad_request(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
+    ))
+}
+
+fn sccp_not_found() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+    ))
+}
+
+fn sccp_internal_error(message: impl Into<String>) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::InternalError(
+        message.into(),
+    ))
+}
+
+fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
+    let trimmed = value.trim_start_matches("0x");
+    let bytes = hex::decode(trimmed)
+        .map_err(|err| sccp_bad_request(format!("invalid message_id: {err}")))?;
+    if bytes.len() != 32 {
+        return Err(sccp_bad_request("message_id must be 32 bytes"));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
+where
+    T: norito::core::NoritoSerialize + serde::Serialize,
+{
+    let format = match crate::utils::negotiate_response_format(accept) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+
+    if matches!(format, crate::utils::ResponseFormat::Norito) {
+        let body = to_bytes(bundle).map_err(|err| {
+            sccp_internal_error(format!(
+                "failed to serialize SCCP bundle Norito payload: {err}"
+            ))
+        })?;
+        let mut resp = Response::new(Body::from(body));
+        resp.headers_mut().insert(
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+        );
+        return Ok(resp);
+    }
+
+    let body = serde_json::to_vec_pretty(bundle).map_err(|err| {
+        sccp_internal_error(format!("failed to serialize SCCP bundle JSON: {err}"))
+    })?;
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+fn sccp_governance_message_kind(payload: &GovernancePayloadV1) -> SccpHubMessageKind {
+    match payload {
+        GovernancePayloadV1::Add(_) => SccpHubMessageKind::TokenAdd,
+        GovernancePayloadV1::Pause(_) => SccpHubMessageKind::TokenPause,
+        GovernancePayloadV1::Resume(_) => SccpHubMessageKind::TokenResume,
+    }
+}
+
+fn hash_of_to_h256<T>(hash: &iroha_crypto::HashOf<T>) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hash.as_ref().as_ref());
+    out
+}
+
+fn sccp_consensus_phase(
+    phase: iroha_data_model::block::consensus::CertPhase,
+) -> NexusConsensusPhaseV1 {
+    match phase {
+        iroha_data_model::block::consensus::CertPhase::Prepare => NexusConsensusPhaseV1::Prepare,
+        iroha_data_model::block::consensus::CertPhase::Commit => NexusConsensusPhaseV1::Commit,
+        iroha_data_model::block::consensus::CertPhase::NewView => NexusConsensusPhaseV1::NewView,
+    }
+}
+
+fn build_sccp_finality_proof_bytes(
+    finality_proof: &iroha_data_model::bridge::BridgeFinalityProof,
+    commitment_root: [u8; 32],
+) -> Result<Vec<u8>> {
+    let Some(block_root) = finality_proof.block_header.sccp_commitment_root() else {
+        return Err(sccp_bad_request(
+            "requested Nexus block does not anchor an SCCP commitment root",
+        ));
+    };
+    if block_root != commitment_root {
+        return Err(sccp_bad_request(
+            "requested SCCP commitment root does not match the finalized Nexus block header",
+        ));
+    }
+    let block_header_bytes = to_bytes(&finality_proof.block_header).map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode finalized Nexus block header for SCCP proof: {err}"
+        ))
+    })?;
+
+    to_bytes(&NexusBridgeFinalityProofV1 {
+        version: 1,
+        chain_id: finality_proof.chain_id.as_str().to_owned(),
+        height: finality_proof.height,
+        block_hash: hash_of_to_h256(&finality_proof.block_hash),
+        commitment_root,
+        block_header_bytes,
+        commit_qc: NexusCommitQcV1 {
+            version: 1,
+            phase: sccp_consensus_phase(finality_proof.commit_qc.phase),
+            height: finality_proof.commit_qc.height,
+            view: finality_proof.commit_qc.view,
+            epoch: finality_proof.commit_qc.epoch,
+            mode_tag: finality_proof.commit_qc.mode_tag.clone(),
+            subject_block_hash: hash_of_to_h256(&finality_proof.commit_qc.subject_block_hash),
+            validator_set_hash_version: finality_proof.commit_qc.validator_set_hash_version,
+            validator_public_keys: finality_proof
+                .commit_qc
+                .validator_set
+                .iter()
+                .map(|peer| peer.public_key().to_string())
+                .collect(),
+            validator_set_pops: finality_proof.validator_set_pops.clone(),
+            signers_bitmap: finality_proof.commit_qc.aggregate.signers_bitmap.clone(),
+            bls_aggregate_signature: finality_proof
+                .commit_qc
+                .aggregate
+                .bls_aggregate_signature
+                .clone(),
+        },
+    })
+    .map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode Nexus SCCP finality proof payload: {err}"
+        ))
+    })
+}
+
+fn min_votes_for_len(len: usize) -> u16 {
+    if len > 3 {
+        u16::try_from(((len.saturating_sub(1)) / 3) * 2 + 1).unwrap_or(u16::MAX)
+    } else {
+        u16::try_from(len).unwrap_or(u16::MAX)
+    }
+}
+
+fn parliament_epoch_for_height(state: &CoreState, height: u64) -> u64 {
+    let term_blocks = state.gov.parliament_term_blocks.max(1);
+    height / term_blocks
+}
+
+fn parliament_member_public_keys(account_id: &iroha_data_model::account::AccountId) -> Vec<String> {
+    match &account_id.controller {
+        iroha_data_model::account::controller::AccountController::Single(public_key) => {
+            vec![public_key.to_string()]
+        }
+        iroha_data_model::account::controller::AccountController::Multisig(policy) => policy
+            .members()
+            .iter()
+            .map(|member| member.public_key().to_string())
+            .collect(),
+    }
+}
+
+fn validate_parliament_certificate(
+    state: &CoreState,
+    certificate: &iroha_data_model::governance::types::ParliamentEnactmentCertificate,
+    payload: &GovernancePayloadV1,
+    height: u64,
+) -> Result<Vec<u8>> {
+    if certificate.payload.at_window.lower > certificate.payload.at_window.upper {
+        return Err(sccp_bad_request(
+            "parliament certificate has an invalid enactment window",
+        ));
+    }
+    if height < certificate.payload.at_window.lower || height > certificate.payload.at_window.upper
+    {
+        return Err(sccp_bad_request(
+            "requested proof height is outside the parliament enactment window",
+        ));
+    }
+
+    let expected_preimage_hash = payload_hash(&canonical_governance_payload_bytes(payload));
+    if certificate.payload.preimage_hash != expected_preimage_hash {
+        return Err(sccp_bad_request(
+            "parliament certificate preimage_hash does not match the SCCP governance payload",
+        ));
+    }
+
+    if certificate.signatures.signatures.is_empty() {
+        return Err(sccp_bad_request(
+            "parliament certificate must include at least one signature",
+        ));
+    }
+    if certificate.signatures.scheme
+        != iroha_data_model::governance::types::EnactmentSignatureScheme::SimpleThreshold
+    {
+        return Err(sccp_bad_request(
+            "unsupported parliament signature scheme for SCCP governance proof",
+        ));
+    }
+
+    let roster_epoch = parliament_epoch_for_height(state, height);
+    let world = state.world_view();
+    let Some(council_term) = world.council().get(&roster_epoch) else {
+        return Err(sccp_bad_request(format!(
+            "no persisted council roster found for parliament epoch {roster_epoch}"
+        )));
+    };
+    if council_term.members.is_empty() {
+        return Err(sccp_bad_request(
+            "persisted council roster for SCCP governance proof is empty",
+        ));
+    }
+
+    let roster_members: Vec<_> = council_term
+        .members
+        .iter()
+        .map(|member| NexusParliamentRosterMemberV1 {
+            signer: member.to_string(),
+            public_keys: parliament_member_public_keys(member),
+        })
+        .collect();
+    let roster_by_signer = roster_members
+        .iter()
+        .map(|member| (member.signer.as_str(), &member.public_keys))
+        .collect::<BTreeMap<_, _>>();
+    let required_signatures = min_votes_for_len(roster_members.len());
+
+    let mut seen_signers = BTreeSet::new();
+    for signature in &certificate.signatures.signatures {
+        if !seen_signers.insert(signature.signer.clone()) {
+            return Err(sccp_bad_request(
+                "parliament certificate contains duplicate signers",
+            ));
+        }
+        let signer_key = signature.signer.to_string();
+        let Some(allowed_public_keys) = roster_by_signer.get(signer_key.as_str()) else {
+            return Err(sccp_bad_request(
+                "parliament certificate signer is not a member of the anchored council roster",
+            ));
+        };
+        if !allowed_public_keys
+            .iter()
+            .any(|public_key| public_key == &signature.public_key.to_string())
+        {
+            return Err(sccp_bad_request(
+                "parliament certificate signer key is not authorized by the anchored council roster",
+            ));
+        }
+        signature
+            .signature
+            .verify(&signature.public_key, &certificate.payload)
+            .map_err(|err| {
+                sccp_bad_request(format!(
+                    "parliament certificate contains an invalid signature: {err}"
+                ))
+            })?;
+    }
+    if certificate.signatures.signatures.len() < usize::from(required_signatures) {
+        return Err(sccp_bad_request(format!(
+            "parliament certificate has {} signatures but requires {}",
+            certificate.signatures.signatures.len(),
+            required_signatures
+        )));
+    }
+
+    let payload_bytes = to_bytes(&certificate.payload).map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode parliament enactment payload for SCCP bundle: {err}"
+        ))
+    })?;
+
+    to_bytes(&NexusParliamentCertificateV1 {
+        version: 1,
+        preimage_hash: certificate.payload.preimage_hash,
+        enactment_window_start: certificate.payload.at_window.lower,
+        enactment_window_end: certificate.payload.at_window.upper,
+        payload_bytes,
+        signature_scheme: NexusParliamentSignatureSchemeV1::SimpleThreshold,
+        roster_epoch,
+        roster_members,
+        required_signatures,
+        signatures: certificate
+            .signatures
+            .signatures
+            .iter()
+            .map(|signature| NexusParliamentSignatureV1 {
+                signer: signature.signer.to_string(),
+                public_key: signature.public_key.to_string(),
+                signature: signature.signature.payload().to_vec(),
+            })
+            .collect(),
+    })
+    .map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode Nexus parliament certificate payload: {err}"
+        ))
+    })
+}
+
+pub fn publish_sccp_burn_bundle(
+    state: &CoreState,
+    height: u64,
+    payload: BurnPayloadV1,
+) -> Result<NexusSccpBurnProofV1> {
+    let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
+        .map_err(map_bridge_finality_error)?;
+    let commitment = SccpHubCommitmentV1 {
+        version: 1,
+        kind: SccpHubMessageKind::Burn,
+        target_domain: payload.dest_domain,
+        message_id: burn_message_id(&payload),
+        payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
+        parliament_certificate_hash: None,
+    };
+    let commitment_root = commitment_leaf_hash(&commitment);
+    let bundle = NexusSccpBurnProofV1 {
+        version: 1,
+        commitment_root,
+        commitment,
+        merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
+        payload,
+        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root)?,
+    };
+    SCCP_BURN_BUNDLES
+        .write()
+        .expect("SCCP burn bundle registry poisoned")
+        .insert(bundle.commitment.message_id, bundle.clone());
+    Ok(bundle)
+}
+
+pub fn publish_sccp_governance_bundle(
+    state: &CoreState,
+    height: u64,
+    payload: GovernancePayloadV1,
+    certificate: iroha_data_model::governance::types::ParliamentEnactmentCertificate,
+) -> Result<NexusSccpGovernanceProofV1> {
+    let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
+        .map_err(map_bridge_finality_error)?;
+    let parliament_certificate =
+        validate_parliament_certificate(state, &certificate, &payload, height)?;
+    let commitment = SccpHubCommitmentV1 {
+        version: 1,
+        kind: sccp_governance_message_kind(&payload),
+        target_domain: iroha_sccp::governance_target_domain(&payload),
+        message_id: iroha_sccp::governance_message_id(&payload),
+        payload_hash: payload_hash(&canonical_governance_payload_bytes(&payload)),
+        parliament_certificate_hash: Some(parliament_certificate_hash(&parliament_certificate)),
+    };
+    let commitment_root = commitment_leaf_hash(&commitment);
+    let bundle = NexusSccpGovernanceProofV1 {
+        version: 1,
+        commitment_root,
+        commitment,
+        merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
+        payload,
+        parliament_certificate,
+        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root)?,
+    };
+    SCCP_GOVERNANCE_BUNDLES
+        .write()
+        .expect("SCCP governance bundle registry poisoned")
+        .insert(bundle.commitment.message_id, bundle.clone());
+    Ok(bundle)
+}
+
+#[cfg(test)]
+pub(crate) fn clear_sccp_bundles_for_tests() {
+    SCCP_BURN_BUNDLES
+        .write()
+        .expect("SCCP burn bundle registry poisoned")
+        .clear();
+    SCCP_GOVERNANCE_BUNDLES
+        .write()
+        .expect("SCCP governance bundle registry poisoned")
+        .clear();
+}
+
+/// GET /v1/sccp/proofs/burn/{message_id} — Nexus SCCP burn bundle keyed by canonical message id.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_burn_bundle(
+    message_id_hex: String,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = SCCP_BURN_BUNDLES
+        .read()
+        .expect("SCCP burn bundle registry poisoned")
+        .get(&message_id)
+        .cloned()
+        .ok_or_else(sccp_not_found)?;
+    sccp_bundle_response(&bundle, accept.as_ref())
+}
+
+/// GET /v1/sccp/proofs/governance/{message_id} — Nexus SCCP governance bundle keyed by canonical message id.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_governance_bundle(
+    message_id_hex: String,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = SCCP_GOVERNANCE_BUNDLES
+        .read()
+        .expect("SCCP governance bundle registry poisoned")
+        .get(&message_id)
+        .cloned()
+        .ok_or_else(sccp_not_found)?;
+    sccp_bundle_response(&bundle, accept.as_ref())
+}
+
 /// GET /v1/sumeragi/validator-sets — Bounded history of validator-set snapshots (newest first)
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_validator_sets(
@@ -5907,7 +6696,8 @@ mod multisig_guard_tests {
 
         let domain = Domain::new(domain_id.clone()).build(multisig_id.account());
         let multisig_account =
-            Account::from_scoped_id(multisig_id.clone()).build(multisig_id.account());
+            Account::new_in_domain(multisig_id.account().clone(), multisig_id.domain().clone())
+                .build(multisig_id.account());
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -5938,7 +6728,11 @@ mod multisig_guard_tests {
             Role::new(role_id.clone(), signatory_id.clone().into()).build(signatory_id.account());
 
         let domain = Domain::new(domain_id.clone()).build(signatory_id.account());
-        let account = Account::from_scoped_id(signatory_id.clone()).build(signatory_id.account());
+        let account = Account::new_in_domain(
+            signatory_id.account().clone(),
+            signatory_id.domain().clone(),
+        )
+        .build(signatory_id.account());
         let mut world = World::with_assets_and_roles([domain], [account], [], [], [], [role]);
         world.grant_role_for_tests(signatory_id.clone().into(), role_id);
 
@@ -5971,7 +6765,8 @@ mod multisig_guard_tests {
 
         let domain = Domain::new(domain_id.clone()).build(multisig_id.account());
         let multisig_account =
-            Account::from_scoped_id(multisig_id.clone()).build(multisig_id.account());
+            Account::new_in_domain(multisig_id.account().clone(), multisig_id.domain().clone())
+                .build(multisig_id.account());
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -5994,11 +6789,12 @@ mod multisig_guard_tests {
 pub(crate) fn accept_transaction_for_ingress(
     chain_id: Arc<ChainId>,
     state: Arc<CoreState>,
-    tx: SignedTransaction,
+    tx: impl Into<TransactionEntrypoint>,
     telemetry: &MaybeTelemetry,
 ) -> Result<iroha_core::tx::AcceptedTransaction<'static>> {
     #[cfg(not(feature = "telemetry"))]
     let _ = telemetry;
+    let tx = tx.into();
 
     let (max_clock_drift, tx_limits, state_view) = {
         let state_view = state.world.view();
@@ -6009,17 +6805,19 @@ pub(crate) fn accept_transaction_for_ingress(
             state_view,
         )
     };
-    if let Some(rejection) = reject_direct_multisig_signing(&state_view, &tx) {
+    if let TransactionEntrypoint::External(signed) = &tx
+        && let Some(rejection) = reject_direct_multisig_signing(&state_view, signed)
+    {
         iroha_logger::warn!(
-            authority = %tx.authority(),
+            authority = %signed.authority(),
             "rejecting transaction directly signed by multisig account"
         );
         #[cfg(feature = "telemetry")]
         telemetry.with_metrics(|tel| {
             tel.inc_torii_multisig_direct_sign_reject();
-            let signature_count = tx.signature_count() as u64;
+            let signature_count = signed.signature_count() as u64;
             let signature_limit = tx_limits.max_signatures().get();
-            let authority_label = match tx.authority().controller() {
+            let authority_label = match signed.authority().controller() {
                 iroha_data_model::account::AccountController::Single(_) => "single",
                 iroha_data_model::account::AccountController::Multisig(_) => "multisig",
             };
@@ -6029,16 +6827,25 @@ pub(crate) fn accept_transaction_for_ingress(
     }
     drop(state_view);
     #[cfg(feature = "telemetry")]
-    let signature_count = tx.signature_count() as u64;
-    #[cfg(feature = "telemetry")]
-    let signature_limit = tx_limits.max_signatures().get();
-    #[cfg(feature = "telemetry")]
-    let authority_label = match tx.authority().controller() {
-        iroha_data_model::account::AccountController::Single(_) => "single",
-        iroha_data_model::account::AccountController::Multisig(_) => "multisig",
+    let (signature_count, signature_limit, authority_label) = match &tx {
+        TransactionEntrypoint::External(signed) => {
+            let authority_label = match signed.authority().controller() {
+                iroha_data_model::account::AccountController::Single(_) => "single",
+                iroha_data_model::account::AccountController::Multisig(_) => "multisig",
+            };
+            (
+                signed.signature_count() as u64,
+                tx_limits.max_signatures().get(),
+                authority_label,
+            )
+        }
+        TransactionEntrypoint::PrivateKaigi(_) => {
+            (0, tx_limits.max_signatures().get(), "private_kaigi")
+        }
+        TransactionEntrypoint::Time(_) => (0, tx_limits.max_signatures().get(), "time"),
     };
     let crypto_cfg = state.crypto();
-    match iroha_core::tx::AcceptedTransaction::accept(
+    match iroha_core::tx::AcceptedTransaction::accept_entrypoint(
         tx,
         &chain_id,
         max_clock_drift,
@@ -6077,7 +6884,7 @@ pub(crate) fn push_accepted_transaction_for_ingress(
         .push_with_lane_with_state(accepted_tx, state.as_ref())
         .map_err(|queue::Failure { tx, err }| {
             iroha_logger::warn!(
-                tx_hash=%tx.as_ref().as_ref().hash(), ?err,
+                tx_hash=%tx.as_ref().hash(), ?err,
                 "Failed to push into queue"
             );
 
@@ -6102,12 +6909,12 @@ async fn handle_transaction_inner(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    tx: SignedTransaction,
+    tx: impl Into<TransactionEntrypoint>,
     _telemetry: &MaybeTelemetry,
 ) -> Result<RoutingDecision> {
     let accepted_tx = accept_transaction_for_ingress(chain_id, state.clone(), tx, _telemetry)?;
     iroha_logger::debug!(
-        tx = %accepted_tx.as_ref().hash(),
+        tx = %accepted_tx.hash(),
         "transaction accepted by Torii; enqueuing"
     );
     push_accepted_transaction_for_ingress(queue, state, accepted_tx)
@@ -6117,7 +6924,7 @@ pub async fn handle_transaction(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    tx: SignedTransaction,
+    tx: impl Into<TransactionEntrypoint>,
 ) -> Result<()> {
     let telemetry = MaybeTelemetry::disabled();
     handle_transaction_inner(chain_id, queue, state, tx, &telemetry)
@@ -6162,7 +6969,7 @@ pub async fn handle_transaction_with_metrics(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    tx: SignedTransaction,
+    tx: impl Into<TransactionEntrypoint>,
     telemetry: MaybeTelemetry,
     endpoint: &'static str,
 ) -> Result<RoutingDecision> {
@@ -10156,12 +10963,21 @@ mod multisig_selector_tests {
         let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name);
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let multisig_account = Account::from_scoped_id(multisig_id)
-            .with_label(Some(label))
-            .with_metadata(multisig_metadata)
-            .build(&authority);
-        let signer_one_account = Account::from_scoped_id(signer_one_id.clone()).build(&authority);
-        let signer_two_account = Account::from_scoped_id(signer_two_id.clone()).build(&authority);
+        let multisig_account =
+            Account::new_in_domain(multisig_id.account().clone(), multisig_id.domain().clone())
+                .with_label(Some(label))
+                .with_metadata(multisig_metadata)
+                .build(&authority);
+        let signer_one_account = Account::new_in_domain(
+            signer_one_id.account().clone(),
+            signer_one_id.domain().clone(),
+        )
+        .build(&authority);
+        let signer_two_account = Account::new_in_domain(
+            signer_two_id.account().clone(),
+            signer_two_id.domain().clone(),
+        )
+        .build(&authority);
 
         let mut world = World::with(
             [domain],
@@ -10314,12 +11130,21 @@ mod multisig_selector_tests {
         let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name);
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id).build(&authority);
-        let multisig_account = Account::from_scoped_id(multisig_id)
-            .with_label(Some(label))
-            .with_metadata(multisig_metadata)
-            .build(&authority);
-        let signer_one_account = Account::from_scoped_id(signer_one_id.clone()).build(&authority);
-        let signer_two_account = Account::from_scoped_id(signer_two_id.clone()).build(&authority);
+        let multisig_account =
+            Account::new_in_domain(multisig_id.account().clone(), multisig_id.domain().clone())
+                .with_label(Some(label))
+                .with_metadata(multisig_metadata)
+                .build(&authority);
+        let signer_one_account = Account::new_in_domain(
+            signer_one_id.account().clone(),
+            signer_one_id.domain().clone(),
+        )
+        .build(&authority);
+        let signer_two_account = Account::new_in_domain(
+            signer_two_id.account().clone(),
+            signer_two_id.domain().clone(),
+        )
+        .build(&authority);
         let state = build_state(World::with(
             [domain],
             [multisig_account, signer_one_account, signer_two_account],
@@ -10458,7 +11283,7 @@ mod multisig_selector_tests {
         let scoped = dm::ScopedAccountId::new(domain_id.clone(), keypair.public_key().clone());
         let authority = scoped.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::from_scoped_id(scoped)
+        let account = Account::new_in_domain(scoped.account().clone(), scoped.domain().clone())
             .with_label(Some(account::rekey::AccountLabel::new(
                 domain_id,
                 "cbdc".parse().expect("label"),
@@ -10512,11 +11337,20 @@ mod multisig_selector_tests {
         let label = account::rekey::AccountLabel::new(domain_id.clone(), label_name.clone());
         let authority = signer_one_id.account().clone();
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let multisig_account = Account::from_scoped_id(multisig_id)
-            .with_label(Some(label))
-            .build(&authority);
-        let signer_one_account = Account::from_scoped_id(signer_one_id.clone()).build(&authority);
-        let signer_two_account = Account::from_scoped_id(signer_two_id.clone()).build(&authority);
+        let multisig_account =
+            Account::new_in_domain(multisig_id.account().clone(), multisig_id.domain().clone())
+                .with_label(Some(label))
+                .build(&authority);
+        let signer_one_account = Account::new_in_domain(
+            signer_one_id.account().clone(),
+            signer_one_id.domain().clone(),
+        )
+        .build(&authority);
+        let signer_two_account = Account::new_in_domain(
+            signer_two_id.account().clone(),
+            signer_two_id.domain().clone(),
+        )
+        .build(&authority);
 
         let mut world = World::with(
             [domain],
@@ -11560,9 +12394,12 @@ mod multisig_selector_tests {
                 controls: vec![record],
             }),
         );
-        let account = Account::from_scoped_id(scoped_account_id)
-            .with_metadata(metadata)
-            .build(&authority);
+        let account = Account::new_in_domain(
+            scoped_account_id.account().clone(),
+            scoped_account_id.domain().clone(),
+        )
+        .with_metadata(metadata)
+        .build(&authority);
         let state = build_state(World::with([domain], [account], [definition]));
 
         let JsonBody(response) = handle_post_asset_transfer_control_get(
@@ -19112,7 +19949,7 @@ mod sorafs_capacity_tests {
                 micropayment_probability_bps: 10_000,
                 micropayment_payout_nano: 50_000_000,
             },
-            metadata: Metadata::default(),
+            metadata: dm::Metadata::default(),
         };
 
         let record = node
@@ -20040,6 +20877,7 @@ pub async fn handle_p2p_ws(
 struct TxProjection {
     authority: Option<String>,
     timestamp_ms: Option<u64>,
+    entrypoint_kind: String,
     entrypoint_hash: String,
     result_ok: bool,
 }
@@ -20050,6 +20888,17 @@ fn tx_field_value(
     field: &str,
 ) -> Option<String> {
     match field {
+        "entrypoint_kind" => Some(match tx.entrypoint() {
+            iroha_data_model::transaction::signed::TransactionEntrypoint::External(_) => {
+                "external".to_owned()
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
+                "private_kaigi".to_owned()
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::Time(_) => {
+                "time".to_owned()
+            }
+        }),
         // authority account id string if External entrypoint
         "authority" => match &tx.entrypoint() {
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
@@ -20057,6 +20906,7 @@ fn tx_field_value(
                 // transparent_api feature. The response projection still controls visibility.
                 Some(signed.payload().authority.to_string())
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => None,
             _ => None,
         },
         // creation timestamp if External entrypoint
@@ -20064,6 +20914,9 @@ fn tx_field_value(
             iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                 // Use API method to avoid relying on internal payload field names
                 Some(format!("{}", signed.creation_time().as_millis()))
+            }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+                Some(tx.creation_time_ms.to_string())
             }
             _ => None,
         },
@@ -20084,6 +20937,9 @@ fn tx_field_value(
             match &tx.entrypoint() {
                 iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
                     signed.metadata().get(&name).map(|json| json.get().clone())
+                }
+                iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+                    tx.metadata.get(&name).map(|json| json.get().clone())
                 }
                 _ => None,
             }
@@ -20424,6 +21280,7 @@ fn tx_references_account_id(
             signed.authority() == expected
                 || executable_contains_account_id(signed.instructions(), expected)
         }
+        TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(entry) => entry
             .instructions
             .iter()
@@ -20440,6 +21297,17 @@ fn tx_references_domain_id(
         TransactionEntrypoint::External(signed) => {
             executable_contains_domain_id(signed.instructions(), expected)
         }
+        TransactionEntrypoint::PrivateKaigi(private) => match &private.action {
+            iroha_data_model::transaction::PrivateKaigiAction::Create(create) => {
+                create.call.id.domain_id == *expected
+            }
+            iroha_data_model::transaction::PrivateKaigiAction::Join(join) => {
+                join.call_id.domain_id == *expected
+            }
+            iroha_data_model::transaction::PrivateKaigiAction::End(end) => {
+                end.call_id.domain_id == *expected
+            }
+        },
         TransactionEntrypoint::Time(entry) => entry
             .instructions
             .iter()
@@ -20594,6 +21462,7 @@ fn tx_collect_asset_ids(
                 }
             }
         }
+        TransactionEntrypoint::PrivateKaigi(_) => {}
         TransactionEntrypoint::Time(entry) => {
             for instr in entry.instructions.iter() {
                 visit_instruction(instr);
@@ -20812,11 +21681,17 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
             Some(format!("{}", signed.authority())),
             Some(signed.authority().clone()),
         ),
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => {
+            (None, None)
+        }
         _ => (None, None),
     };
     let ts_ms_opt: Option<i128> = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.creation_time().as_millis() as i128)
+        }
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+            Some(i128::from(tx.creation_time_ms))
         }
         _ => None,
     };
@@ -20835,6 +21710,7 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                     _ => false,
                 }
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => false,
             _ => false,
         };
         if default_ok {
@@ -20862,6 +21738,9 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
     let metadata_map = match tx.entrypoint() {
         iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
             Some(signed.metadata())
+        }
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+            Some(&tx.metadata)
         }
         _ => None,
     };
@@ -21173,6 +22052,7 @@ fn tx_matches_account_history_subject(
         TransactionEntrypoint::External(signed) => {
             signed.authority().controller() == account_id.controller()
         }
+        TransactionEntrypoint::PrivateKaigi(_) => false,
         TransactionEntrypoint::Time(_) => false,
     }
 }
@@ -21208,6 +22088,8 @@ fn project_tx(
     // Use shared extractor to ensure parity with other filter/projection logic
     let authority = tx_field_value(tx, "authority");
     let timestamp_ms = tx_field_value(tx, "timestamp_ms").and_then(|s| s.parse::<u64>().ok());
+    let entrypoint_kind =
+        tx_field_value(tx, "entrypoint_kind").unwrap_or_else(|| "unknown".to_owned());
     let entry_hash = format!("{}", tx.entrypoint_hash());
     let result_ok = {
         let default_ok = match tx.entrypoint() {
@@ -21219,6 +22101,7 @@ fn project_tx(
                     _ => false,
                 }
             }
+            iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(_) => false,
             _ => false,
         };
         if default_ok {
@@ -21235,8 +22118,12 @@ fn project_tx(
             match fp.0.as_str() {
                 "authority" => proj.authority.clone_from(&authority),
                 "timestamp_ms" => proj.timestamp_ms = timestamp_ms,
+                "entrypoint_kind" => proj.entrypoint_kind.clone_from(&entrypoint_kind),
                 _ => {}
             }
+        }
+        if proj.entrypoint_kind.is_empty() {
+            proj.entrypoint_kind = entrypoint_kind;
         }
         proj.entrypoint_hash = entry_hash;
         proj.result_ok = result_ok;
@@ -21245,6 +22132,7 @@ fn project_tx(
         TxProjection {
             authority,
             timestamp_ms,
+            entrypoint_kind,
             entrypoint_hash: entry_hash,
             result_ok,
         }
@@ -22427,9 +23315,12 @@ mod stateful_account_path_parser_tests {
         );
         let world = World::with(
             [Domain::new(domain_id).build(&authority)],
-            [Account::from_scoped_id(scoped_account_id)
-                .with_label(Some(alias))
-                .build(&authority)],
+            [Account::new_in_domain(
+                scoped_account_id.account().clone(),
+                scoped_account_id.domain().clone(),
+            )
+            .with_label(Some(alias))
+            .build(&authority)],
             [],
         );
         let state = Arc::new(State::new_for_testing(
@@ -24260,6 +25151,202 @@ mod tx_query_filter_tests {
     }
 
     #[test]
+    fn kaigi_signal_from_transaction_extracts_metadata() {
+        let (authority, keypair) = account_with_key();
+        let mut metadata = dm::Metadata::default();
+        metadata.insert(
+            "kaigi_signal".parse().expect("metadata key"),
+            Json::new(crate::json_object(vec![
+                crate::json_entry("schema", "iroha-demo-kaigi-chain-signal/v1"),
+                crate::json_entry("callId", "kaigi:weekly-sync"),
+                crate::json_entry("signalKind", "answer"),
+                crate::json_entry("hostAccountId", authority.to_string()),
+                crate::json_entry("participantAccountId", authority.to_string()),
+                crate::json_entry("createdAtMs", 1_700_000_000_000_u64),
+                crate::json_entry(
+                    "encryptedSignal",
+                    crate::json_object(vec![crate::json_entry(
+                        "schema",
+                        "iroha-demo-kaigi-sealed-box/v1",
+                    )]),
+                ),
+            ])),
+        );
+
+        let tx = make_external_tx_with_metadata(
+            &authority,
+            &keypair,
+            1_700_000_000_100,
+            None,
+            true,
+            metadata,
+        );
+
+        let signal = kaigi_signal_from_transaction(&tx, true).expect("signal should parse");
+        let authority_literal = authority.to_string();
+        assert_eq!(signal.call_id, "kaigi:weekly-sync");
+        assert_eq!(signal.signal_kind, "answer");
+        assert_eq!(signal.created_at_ms, 1_700_000_000_000);
+        assert_eq!(signal.timestamp_ms, Some(1_700_000_000_100));
+        assert_eq!(
+            signal.authority.as_deref(),
+            Some(authority_literal.as_str())
+        );
+        assert_eq!(
+            signal.participant_account_id.as_deref(),
+            Some(authority_literal.as_str())
+        );
+    }
+
+    #[test]
+    fn kaigi_signal_from_transaction_hides_identities_for_private_calls() {
+        let (authority, keypair) = account_with_key();
+        let mut metadata = dm::Metadata::default();
+        metadata.insert(
+            "kaigi_signal".parse().expect("metadata key"),
+            Json::new(crate::json_object(vec![
+                crate::json_entry("schema", "iroha-demo-kaigi-chain-signal/v1"),
+                crate::json_entry("callId", "kaigi:weekly-sync"),
+                crate::json_entry("signalKind", "answer"),
+                crate::json_entry("hostAccountId", authority.to_string()),
+                crate::json_entry("participantAccountId", authority.to_string()),
+                crate::json_entry("createdAtMs", 1_700_000_000_000_u64),
+            ])),
+        );
+
+        let tx = make_external_tx_with_metadata(
+            &authority,
+            &keypair,
+            1_700_000_000_100,
+            None,
+            true,
+            metadata,
+        );
+
+        let signal = kaigi_signal_from_transaction(&tx, false).expect("signal should parse");
+        assert_eq!(signal.call_id, "kaigi:weekly-sync");
+        assert!(signal.authority.is_none());
+        assert!(signal.host_account_id.is_none());
+        assert!(signal.participant_account_id.is_none());
+    }
+
+    #[test]
+    fn kaigi_call_view_hides_host_identity_for_private_calls() {
+        let (host, _) = account_with_key();
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            "kaigi".parse().expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let record = iroha_data_model::kaigi::KaigiRecord {
+            id: call_id,
+            host,
+            billing_account: None,
+            title: Some("Weekly Sync".to_owned()),
+            description: None,
+            max_participants: Some(1),
+            gas_rate_per_minute: 0,
+            metadata: Metadata::default(),
+            scheduled_start_ms: Some(1_700_000_000_000),
+            privacy_mode: iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1,
+            room_policy: iroha_data_model::kaigi::KaigiRoomPolicy::Authenticated,
+            relay_manifest: None,
+            host_commitment: None,
+            participants: Vec::new(),
+            participant_metadata: std::collections::BTreeMap::new(),
+            roster_root: Hash::prehashed([0x44; Hash::LENGTH]).into(),
+            roster_commitments: Vec::new(),
+            nullifier_log: Vec::new(),
+            usage_commitments: Vec::new(),
+            status: iroha_data_model::kaigi::KaigiStatus::Active,
+            created_at_ms: 1_700_000_000_000,
+            ended_at_ms: None,
+            total_duration_ms: 0,
+            total_billed_gas: 0,
+            segments_recorded: 0,
+        };
+
+        let view = kaigi_call_view_from_record(&record);
+        assert!(view.host_account_id.is_none());
+        assert!(view.billing_account_id.is_none());
+    }
+
+    #[test]
+    fn convert_kaigi_call_event_maps_roster_and_end_updates() {
+        use iroha_data_model::events::data::prelude::{DomainEvent, KaigiRosterSummary};
+
+        let call_id = iroha_data_model::kaigi::KaigiId::new(
+            "kaigi".parse().expect("domain"),
+            "weekly-sync".parse().expect("call name"),
+        );
+        let roster_event = EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Domain(DomainEvent::KaigiRosterSummary(
+                KaigiRosterSummary::new(
+                    call_id.clone(),
+                    iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1,
+                    1,
+                    1,
+                    0,
+                    Some(Hash::prehashed([0x44; Hash::LENGTH]).into()),
+                ),
+            )),
+        ));
+        let (kind, payload) =
+            convert_kaigi_call_event(&roster_event, &call_id).expect("roster event");
+        assert_eq!(kind, "roster_updated");
+        assert_eq!(
+            payload.get("kind").and_then(Value::as_str),
+            Some("roster_updated"),
+        );
+        assert_eq!(
+            payload.get("privacy_mode").and_then(Value::as_str),
+            Some("private"),
+        );
+
+        let (host, _) = account_with_key();
+        let record = iroha_data_model::kaigi::KaigiRecord {
+            id: call_id.clone(),
+            host,
+            billing_account: None,
+            title: None,
+            description: None,
+            max_participants: None,
+            gas_rate_per_minute: 0,
+            metadata: dm::Metadata::default(),
+            scheduled_start_ms: None,
+            privacy_mode: iroha_data_model::kaigi::KaigiPrivacyMode::Transparent,
+            room_policy: iroha_data_model::kaigi::KaigiRoomPolicy::Authenticated,
+            relay_manifest: None,
+            host_commitment: None,
+            roster_root: Hash::prehashed([0x55; Hash::LENGTH]).into(),
+            roster_commitments: Vec::new(),
+            nullifier_log: Vec::new(),
+            usage_commitments: Vec::new(),
+            status: iroha_data_model::kaigi::KaigiStatus::Ended,
+            created_at_ms: 1,
+            ended_at_ms: Some(2),
+            total_duration_ms: 0,
+            total_billed_gas: 0,
+            segments_recorded: 0,
+            participants: Vec::new(),
+            participant_metadata: std::collections::BTreeMap::new(),
+        };
+        let ended_event = EventBox::Data(SharedDataEvent::from(
+            iroha_data_model::events::data::DataEvent::Domain(DomainEvent::MetadataInserted(
+                iroha_data_model::events::data::prelude::MetadataChanged {
+                    target: call_id.domain_id.clone(),
+                    key: iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name)
+                        .expect("call key"),
+                    value: Json::new(record),
+                },
+            )),
+        ));
+        let (kind, payload) =
+            convert_kaigi_call_event(&ended_event, &call_id).expect("ended event");
+        assert_eq!(kind, "ended");
+        assert_eq!(payload.get("ended_at_ms").and_then(Value::as_u64), Some(2));
+    }
+
+    #[test]
     fn explorer_pagination_window_matches_paginate_semantics() {
         assert_eq!(explorer_pagination_window(0, 0), (1, 0, 1));
         assert_eq!(explorer_pagination_window(1, 5), (5, 0, 5));
@@ -25043,9 +26130,12 @@ mod tx_query_integration_smoke {
             .ok();
         let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let actor_id = dm::ScopedAccountId::new(domain_id.clone(), kp_actor.public_key().clone());
-        dm::Register::account(dm::Account::from_scoped_id(actor_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            actor_id.account().clone(),
+            actor_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
         stx0.apply();
         let valid0 = unverified0
             .clone()
@@ -25154,15 +26244,24 @@ mod tx_query_integration_smoke {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
-        dm::Register::account(dm::Account::from_scoped_id(alice_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
-        dm::Register::account(dm::Account::from_scoped_id(bob_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            exec_id.account().clone(),
+            exec_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            alice_id.account().clone(),
+            alice_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            bob_id.account().clone(),
+            bob_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
@@ -25301,9 +26400,12 @@ mod tx_query_integration_smoke {
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::ScopedAccountId::new(domain_id.clone(), kp_a.public_key().clone());
         let account_literal = acc_a.account().to_string();
-        dm::Register::account(dm::Account::from_scoped_id(acc_a.clone()))
-            .execute(exec_id.account(), &mut stx)
-            .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            acc_a.account().clone(),
+            acc_a.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx)
+        .ok();
         stx.apply();
         // Validate and persist a minimal block record to initialize transactions state
         let valid0 = unverified0
@@ -25484,14 +26586,20 @@ mod tx_query_integration_smoke {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
-        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .unwrap();
+        dm::Register::account(dm::Account::new_in_domain(
+            exec_id.account().clone(),
+            exec_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .unwrap();
         let kp_actor = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let actor_id = dm::ScopedAccountId::new(domain_id.clone(), kp_actor.public_key().clone());
-        dm::Register::account(dm::Account::from_scoped_id(actor_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .unwrap();
+        dm::Register::account(dm::Account::new_in_domain(
+            actor_id.account().clone(),
+            actor_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .unwrap();
         stx0.apply();
         let valid0 = unverified0
             .clone()
@@ -25591,15 +26699,24 @@ mod tx_query_integration_smoke {
         dm::Register::domain(dm::Domain::new(dom_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
-        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .unwrap();
-        dm::Register::account(dm::Account::from_scoped_id(acc_a.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .unwrap();
-        dm::Register::account(dm::Account::from_scoped_id(acc_b.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .unwrap();
+        dm::Register::account(dm::Account::new_in_domain(
+            exec_id.account().clone(),
+            exec_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .unwrap();
+        dm::Register::account(dm::Account::new_in_domain(
+            acc_a.account().clone(),
+            acc_a.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .unwrap();
+        dm::Register::account(dm::Account::new_in_domain(
+            acc_b.account().clone(),
+            acc_b.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .unwrap();
         stx0.apply();
         let valid0 = unverified0
             .clone()
@@ -26869,9 +27986,12 @@ mod tx_query_integration_smoke {
             dm::Register::domain(dm::Domain::new(dom.clone()))
                 .execute(exec_id.account(), &mut stx0)
                 .ok();
-            dm::Register::account(dm::Account::from_scoped_id(acc_b.clone()))
-                .execute(exec_id.account(), &mut stx0)
-                .ok();
+            dm::Register::account(dm::Account::new_in_domain(
+                acc_b.account().clone(),
+                acc_b.domain().clone(),
+            ))
+            .execute(exec_id.account(), &mut stx0)
+            .ok();
             stx0.apply();
             let valid0 = unverified0
                 .clone()
@@ -27047,9 +28167,12 @@ mod tx_query_integration_smoke {
             dm::Register::domain(dm::Domain::new(dom.clone()))
                 .execute(exec_id.account(), &mut stx0)
                 .ok();
-            dm::Register::account(dm::Account::from_scoped_id(acc_a.clone()))
-                .execute(exec_id.account(), &mut stx0)
-                .ok();
+            dm::Register::account(dm::Account::new_in_domain(
+                acc_a.account().clone(),
+                acc_a.domain().clone(),
+            ))
+            .execute(exec_id.account(), &mut stx0)
+            .ok();
             stx0.apply();
             let valid0 = unverified0
                 .clone()
@@ -30369,6 +31492,58 @@ pub async fn handle_v1_kaigi_relays_health(
 }
 
 #[cfg(feature = "app_api")]
+/// GET `/v1/kaigi/calls/{call_id}` — return the current stored Kaigi call record.
+pub async fn handle_v1_kaigi_call(
+    state: Arc<CoreState>,
+    call_id: KaigiId,
+) -> Result<AxResponse, Error> {
+    let record = load_kaigi_record(state.as_ref(), &call_id)?;
+    Ok(JsonBody(kaigi_call_view_from_record(&record)).into_response())
+}
+
+#[cfg(feature = "app_api")]
+/// GET `/v1/kaigi/calls/{call_id}/signals` — list committed signal metadata for a call.
+pub async fn handle_v1_kaigi_call_signals(
+    state: Arc<CoreState>,
+    call_id: KaigiId,
+    crate::NoritoQuery(params): crate::NoritoQuery<KaigiCallSignalsParams>,
+) -> Result<AxResponse, Error> {
+    let record = load_kaigi_record(state.as_ref(), &call_id)?;
+    let reveal_authorities =
+        record.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent;
+    let after_timestamp_ms = params.after_timestamp_ms;
+    let limit = params
+        .limit
+        .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
+        .unwrap_or(50)
+        .max(1);
+    let offset = params
+        .offset
+        .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
+        .unwrap_or(0);
+
+    let call_literal = call_id.to_string();
+    let mut items = committed_transactions_snapshot(state.as_ref())
+        .into_iter()
+        .filter_map(|tx| kaigi_signal_from_transaction(&tx, reveal_authorities))
+        .filter(|signal| signal.call_id == call_literal)
+        .filter(|signal| {
+            after_timestamp_ms.is_none_or(|minimum| {
+                signal.created_at_ms >= minimum
+                    || signal
+                        .timestamp_ms
+                        .is_some_and(|timestamp| timestamp >= minimum)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    items.sort_unstable_by(|left, right| left.created_at_ms.cmp(&right.created_at_ms));
+    let total = items.len() as u64;
+    let items = items.into_iter().skip(offset).take(limit).collect();
+    Ok(JsonBody(KaigiCallSignalListDto { total, items }).into_response())
+}
+
+#[cfg(feature = "app_api")]
 fn parse_kaigi_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
     let raw = kind?.trim();
     if raw.is_empty() {
@@ -30378,6 +31553,20 @@ fn parse_kaigi_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
         .split(',')
         .map(|entry| entry.trim().to_ascii_lowercase())
         .filter(|entry| !entry.is_empty())
+        .collect();
+    if set.is_empty() { None } else { Some(set) }
+}
+
+#[cfg(feature = "app_api")]
+fn parse_kaigi_call_kind_filter(kind: Option<&str>) -> Option<BTreeSet<String>> {
+    let raw = kind?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let set: BTreeSet<String> = raw
+        .split(',')
+        .map(|entry| entry.trim().to_ascii_lowercase())
+        .filter(|entry| matches!(entry.as_str(), "roster_updated" | "ended"))
         .collect();
     if set.is_empty() { None } else { Some(set) }
 }
@@ -30428,6 +31617,116 @@ fn convert_kaigi_event(
         }
         _ => None,
     }
+}
+
+#[cfg(feature = "app_api")]
+fn convert_kaigi_call_event(event_box: &EventBox, call_id: &KaigiId) -> Option<(String, Value)> {
+    use iroha_data_model::events::data::{DataEvent, prelude::DomainEvent};
+
+    let EventBox::Data(data_event) = event_box else {
+        return None;
+    };
+    match data_event.as_ref() {
+        DataEvent::Domain(DomainEvent::KaigiRosterSummary(summary)) if &summary.call == call_id => {
+            let mut entries = vec![
+                json_entry("kind", "roster_updated"),
+                json_entry("call", json_value(&kaigi_call_event_ref(call_id))),
+                json_entry(
+                    "privacy_mode",
+                    kaigi_privacy_mode_label(summary.privacy_mode),
+                ),
+                json_entry("commitment_count", summary.commitment_count),
+                json_entry("nullifier_count", summary.nullifier_count),
+            ];
+            if summary.privacy_mode == iroha_data_model::kaigi::KaigiPrivacyMode::Transparent {
+                entries.push(json_entry("participant_count", summary.participant_count));
+            }
+            if let Some(root) = summary.roster_root {
+                entries.push(json_entry(
+                    "roster_root_hex",
+                    hex::encode(<[u8; 32]>::from(root)),
+                ));
+            }
+            Some(("roster_updated".to_owned(), json_object(entries)))
+        }
+        DataEvent::Domain(DomainEvent::MetadataInserted(change))
+            if change.target() == &call_id.domain_id =>
+        {
+            let expected_key =
+                iroha_data_model::kaigi::kaigi_metadata_key(&call_id.call_name).ok()?;
+            if change.key() != &expected_key {
+                return None;
+            }
+            let record = change
+                .value()
+                .try_into_any_norito::<iroha_data_model::kaigi::KaigiRecord>()
+                .ok()?;
+            if record.id != *call_id || record.status != iroha_data_model::kaigi::KaigiStatus::Ended
+            {
+                return None;
+            }
+            Some((
+                "ended".to_owned(),
+                json_object(vec![
+                    json_entry("kind", "ended"),
+                    json_entry("call", json_value(&kaigi_call_event_ref(call_id))),
+                    json_entry("status", kaigi_status_label(record.status)),
+                    json_entry(
+                        "ended_at_ms",
+                        record.ended_at_ms.unwrap_or(record.created_at_ms),
+                    ),
+                ]),
+            ))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+/// GET `/v1/kaigi/calls/{call_id}/events` — SSE stream of Kaigi call lifecycle updates.
+pub fn handle_v1_kaigi_call_events_sse(
+    events: EventsSender,
+    call_id: KaigiId,
+    crate::NoritoQuery(params): crate::NoritoQuery<KaigiCallEventsParams>,
+) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
+    let kind_filter = parse_kaigi_call_kind_filter(params.kind.as_deref());
+
+    let stream = stream::unfold(
+        (events.subscribe(), kind_filter),
+        move |(mut rx, kind_filter)| {
+            let call_id = call_id.clone();
+            async move {
+                use tokio::sync::broadcast::error::RecvError;
+                match rx.recv().await {
+                    Ok(event_box) => {
+                        let Some((kind, payload)) = convert_kaigi_call_event(&event_box, &call_id)
+                        else {
+                            return Some((
+                                Ok(SseEvent::default().comment("ignored")),
+                                (rx, kind_filter),
+                            ));
+                        };
+                        let matches_kind =
+                            kind_filter.as_ref().map_or(true, |set| set.contains(&kind));
+                        let event = if matches_kind {
+                            let body = norito::json::to_json(&payload)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            SseEvent::default().event("kaigi.call").data(body)
+                        } else {
+                            SseEvent::default().comment("filtered")
+                        };
+                        Some((Ok(event), (rx, kind_filter)))
+                    }
+                    Err(RecvError::Lagged(_)) => {
+                        Some((Ok(SseEvent::default().comment("lagged")), (rx, kind_filter)))
+                    }
+                    Err(RecvError::Closed) => None,
+                }
+            }
+        },
+    );
+
+    Sse::new(stream)
 }
 
 #[cfg(feature = "app_api")]
@@ -37470,6 +38769,7 @@ mod tx_projection_display_tests {
             authority: Some(account.to_string()),
             timestamp_ms: Some(123),
             entrypoint_hash: "deadbeef".into(),
+            entrypoint_kind: "unknown".into(),
             result_ok: true,
         };
         let items = tx_projections_to_json(&[projection]);
@@ -37487,6 +38787,7 @@ mod tx_projection_display_tests {
             authority: Some(account.to_string()),
             timestamp_ms: None,
             entrypoint_hash: "cafebabe".into(),
+            entrypoint_kind: "unknown".into(),
             result_ok: false,
         };
         let items = tx_projections_to_json(&[projection]);
@@ -37503,6 +38804,7 @@ mod tx_projection_display_tests {
             authority: Some("operator1@hbl".to_string()),
             timestamp_ms: Some(123),
             entrypoint_hash: "deadbeef".into(),
+            entrypoint_kind: "unknown".into(),
             result_ok: true,
         };
         let items = tx_projections_to_json(&[projection]);
@@ -41598,8 +42900,10 @@ mod accounts_query_tests {
         );
         let exec_id = exec_authority.clone().to_account_id(domain_id.clone());
         let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
-        let mut accounts =
-            vec![dm::Account::from_scoped_id(exec_id.clone()).build(&exec_authority)];
+        let mut accounts = vec![
+            dm::Account::new_in_domain(exec_id.account().clone(), exec_id.domain().clone())
+                .build(&exec_authority),
+        ];
         for _ in 0..5 {
             let authority = dm::AccountId::new(
                 KeyPair::random_with_algorithm(Algorithm::Ed25519)
@@ -41607,7 +42911,13 @@ mod accounts_query_tests {
                     .clone(),
             );
             let account_id = authority.clone().to_account_id(domain_id.clone());
-            accounts.push(dm::Account::from_scoped_id(account_id).build(&authority));
+            accounts.push(
+                dm::Account::new_in_domain(
+                    account_id.account().clone(),
+                    account_id.domain().clone(),
+                )
+                .build(&authority),
+            );
         }
         let state = Arc::new(State::new_for_testing(
             World::with([domain], accounts, []),
@@ -41670,10 +42980,14 @@ mod accounts_query_tests {
             World::with(
                 [domain],
                 [
-                    dm::Account::from_scoped_id(exec_id).build(&exec_authority),
-                    dm::Account::from_scoped_id(account_id.clone())
-                        .with_label(Some(label.clone()))
-                        .build(&labelled_authority),
+                    dm::Account::new_in_domain(exec_id.account().clone(), exec_id.domain().clone())
+                        .build(&exec_authority),
+                    dm::Account::new_in_domain(
+                        account_id.account().clone(),
+                        account_id.domain().clone(),
+                    )
+                    .with_label(Some(label.clone()))
+                    .build(&labelled_authority),
                 ],
                 [],
             ),
@@ -41850,10 +43164,14 @@ mod accounts_query_tests {
             World::with(
                 [domain],
                 [
-                    dm::Account::from_scoped_id(exec_id).build(&exec_authority),
-                    dm::Account::from_scoped_id(account_id.clone())
-                        .with_label(Some(label.clone()))
-                        .build(&labelled_authority),
+                    dm::Account::new_in_domain(exec_id.account().clone(), exec_id.domain().clone())
+                        .build(&exec_authority),
+                    dm::Account::new_in_domain(
+                        account_id.account().clone(),
+                        account_id.domain().clone(),
+                    )
+                    .with_label(Some(label.clone()))
+                    .build(&labelled_authority),
                 ],
                 [],
             ),
@@ -44260,18 +45578,30 @@ mod explorer_asset_definition_econometrics_tests {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
-        dm::Register::account(dm::Account::from_scoped_id(alice_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
-        dm::Register::account(dm::Account::from_scoped_id(bob_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
-        dm::Register::account(dm::Account::from_scoped_id(carol_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            exec_id.account().clone(),
+            exec_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            alice_id.account().clone(),
+            alice_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            bob_id.account().clone(),
+            bob_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            carol_id.account().clone(),
+            carol_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
@@ -44567,15 +45897,24 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
-        dm::Register::account(dm::Account::from_scoped_id(alice_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
-        dm::Register::account(dm::Account::from_scoped_id(bob_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            exec_id.account().clone(),
+            exec_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            alice_id.account().clone(),
+            alice_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            bob_id.account().clone(),
+            bob_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
@@ -44737,15 +46076,24 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
             .ok();
-        dm::Register::account(dm::Account::from_scoped_id(exec_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
-        dm::Register::account(dm::Account::from_scoped_id(alice_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
-        dm::Register::account(dm::Account::from_scoped_id(bob_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            exec_id.account().clone(),
+            exec_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            alice_id.account().clone(),
+            alice_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
+        dm::Register::account(dm::Account::new_in_domain(
+            bob_id.account().clone(),
+            bob_id.domain().clone(),
+        ))
+        .execute(exec_id.account(), &mut stx0)
+        .ok();
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
@@ -47704,6 +49052,14 @@ pub async fn handle_v1_nexus_public_lane_validators(
             entries.push(validator_record_to_json(record));
         }
     }
+    if entries.is_empty() {
+        entries.extend(
+            state
+                .authoritative_lane_validator_accounts(lane_id)
+                .into_iter()
+                .map(|validator| manifest_validator_to_json(lane_id, &validator)),
+        );
+    }
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
     let payload = build_lane_items_payload(
         lane_id,
@@ -47987,6 +49343,29 @@ fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Valu
             .map(Value::from)
             .unwrap_or(Value::Null),
     );
+    map.insert("authority_source".into(), Value::from("staking"));
+    (canonical_validator, Value::Object(map))
+}
+
+#[cfg(feature = "app_api")]
+fn manifest_validator_to_json(lane_id: LaneId, validator: &AccountId) -> (String, Value) {
+    let mut map = Map::new();
+    let canonical_validator = validator.to_string();
+    let validator_literal = crate::account_literal::display_literal(validator);
+    map.insert("lane_id".into(), Value::from(u64::from(lane_id)));
+    map.insert("validator".into(), Value::from(validator_literal.clone()));
+    map.insert("stake_account".into(), Value::from(validator_literal));
+    map.insert("total_stake".into(), Value::from("0"));
+    map.insert("self_stake".into(), Value::from("0"));
+    map.insert(
+        "status".into(),
+        validator_status_to_json(&PublicLaneValidatorStatus::Active),
+    );
+    map.insert("activation_epoch".into(), Value::Null);
+    map.insert("activation_height".into(), Value::Null);
+    map.insert("metadata".into(), metadata_to_json(&Metadata::default()));
+    map.insert("last_reward_epoch".into(), Value::Null);
+    map.insert("authority_source".into(), Value::from("manifest"));
     (canonical_validator, Value::Object(map))
 }
 
@@ -48085,19 +49464,81 @@ fn public_lane_unbonding_to_json(unbonding: &PublicLaneUnbonding) -> Value {
 
 #[cfg(all(test, feature = "app_api"))]
 mod public_lane_tests {
+    use std::{num::NonZeroU32, sync::Arc};
+
+    use axum::body::to_bytes;
+    use axum::response::IntoResponse;
+    use iroha_core::{
+        governance::manifest::LaneManifestRegistry,
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State as CoreState, World},
+    };
+    use iroha_crypto::KeyPair;
     use iroha_data_model::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         metadata::Metadata,
         nexus::{
-            PublicLanePendingReward, PublicLaneRewardRecord, PublicLaneRewardRole,
-            PublicLaneRewardShare,
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig,
+            LaneStorageProfile, LaneVisibility, PublicLanePendingReward, PublicLaneRewardRecord,
+            PublicLaneRewardRole, PublicLaneRewardShare,
         },
     };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
 
     use super::*;
+
+    fn manifest_registry_for_test(
+        lane_catalog: &LaneCatalog,
+        lane_id: LaneId,
+        validators: &[AccountId],
+    ) -> Arc<LaneManifestRegistry> {
+        let manifest_root = std::env::temp_dir().join(format!(
+            "iroha-torii-routing-manifests-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&manifest_root).expect("create manifest directory");
+        let alias = format!("lane-{}", lane_id.as_u32());
+        let validators_json = validators
+            .iter()
+            .map(|validator| format!("\"{validator}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let manifest = format!(
+            r#"{{"lane":"{alias}","governance":"parliament","version":1,"validators":[{validators_json}],"quorum":1}}"#
+        );
+        std::fs::write(
+            manifest_root.join(format!("{alias}.manifest.json")),
+            manifest,
+        )
+        .expect("write manifest");
+
+        let mut governance_modules = std::collections::BTreeMap::new();
+        governance_modules.insert(
+            "parliament".to_owned(),
+            iroha_config::parameters::actual::GovernanceModule::default(),
+        );
+        let governance_catalog = iroha_config::parameters::actual::GovernanceCatalog {
+            default_module: None,
+            modules: governance_modules,
+        };
+        let registry_cfg = iroha_config::parameters::actual::LaneRegistry {
+            manifest_directory: Some(manifest_root),
+            ..iroha_config::parameters::actual::LaneRegistry::default()
+        };
+
+        Arc::new(LaneManifestRegistry::from_config(
+            lane_catalog,
+            &governance_catalog,
+            &registry_cfg,
+        ))
+    }
 
     #[test]
     fn validator_record_to_json_uses_canonical_i105_literals() {
@@ -48134,6 +49575,112 @@ mod public_lane_tests {
         assert_eq!(
             obj.get("lane_id").and_then(Value::as_u64),
             Some(u64::from(record.lane_id))
+        );
+        assert_eq!(
+            obj.get("authority_source").and_then(Value::as_str),
+            Some("staking")
+        );
+    }
+
+    #[test]
+    fn manifest_validator_to_json_marks_manifest_source() {
+        let validator = ALICE_ID.clone();
+        let (_, value) = manifest_validator_to_json(LaneId::new(7), &validator);
+        let obj = value
+            .as_object()
+            .expect("manifest validator should encode as object");
+        let expected_validator = crate::account_literal::display_literal(&validator);
+
+        assert_eq!(
+            obj.get("validator").and_then(Value::as_str),
+            Some(expected_validator.as_str())
+        );
+        assert_eq!(
+            obj.get("authority_source").and_then(Value::as_str),
+            Some("manifest")
+        );
+    }
+
+    #[tokio::test]
+    async fn lane_validators_endpoint_uses_manifest_roster_for_admin_managed_lane() {
+        let keypair = KeyPair::random();
+        let validator = AccountId::new(keypair.public_key().clone());
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("non-zero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: lane_id,
+                    dataspace_id,
+                    alias: format!("lane-{}", lane_id.as_u32()),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace_id,
+                alias: "restricted".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+
+        let mut state = Arc::new(CoreState::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        Arc::get_mut(&mut state)
+            .expect("unique state")
+            .set_nexus(nexus)
+            .expect("install nexus config");
+        let registry = manifest_registry_for_test(
+            &Arc::get_mut(&mut state)
+                .expect("unique state")
+                .nexus_snapshot()
+                .lane_catalog,
+            lane_id,
+            std::slice::from_ref(&validator),
+        );
+        Arc::get_mut(&mut state)
+            .expect("unique state")
+            .install_lane_manifests(&registry);
+
+        let response = handle_v1_nexus_public_lane_validators(
+            state,
+            lane_id,
+            PublicLaneValidatorsQueryParams::default(),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("validator endpoint should succeed")
+        .into_response();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let json: Value = norito::json::from_slice(&body).expect("response should decode");
+
+        assert_eq!(json["total"].as_u64(), Some(1));
+        assert_eq!(
+            json["items"][0]["validator"].as_str(),
+            Some(crate::account_literal::display_literal(&validator).as_str())
+        );
+        assert_eq!(
+            json["items"][0]["authority_source"].as_str(),
+            Some("manifest")
         );
     }
 
@@ -53735,8 +55282,16 @@ mod subscription_api_tests {
         let provider_account = provider.to_account_id(domain_id.clone());
         let subscriber_account = subscriber.to_account_id(domain_id.clone());
         let accounts = vec![
-            Account::from_scoped_id(provider_account).build(&provider),
-            Account::from_scoped_id(subscriber_account).build(&subscriber),
+            Account::new_in_domain(
+                provider_account.account().clone(),
+                provider_account.domain().clone(),
+            )
+            .build(&provider),
+            Account::new_in_domain(
+                subscriber_account.account().clone(),
+                subscriber_account.domain().clone(),
+            )
+            .build(&subscriber),
         ];
         let asset_definitions: Vec<AssetDefinition> = plans
             .into_iter()
@@ -57348,6 +58903,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -57368,6 +58924,7 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,
@@ -57385,6 +58942,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -57405,6 +58963,7 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,

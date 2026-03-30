@@ -15,7 +15,12 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::KeyPair;
-use iroha_data_model::{ChainId, account::AccountId, isi::Log, transaction::TransactionBuilder};
+use iroha_data_model::{
+    ChainId,
+    account::AccountId,
+    isi::Log,
+    transaction::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+};
 use iroha_logger::Level;
 use iroha_torii::{OnlinePeersProvider, Torii};
 use iroha_torii_shared::uri;
@@ -109,12 +114,23 @@ impl NoritoRpcHarness {
 
 /// Construct a signed transaction payload suitable for Norito-RPC ingress tests.
 #[allow(dead_code)]
-pub fn sample_transaction_bytes() -> Vec<u8> {
+pub fn sample_signed_transaction() -> SignedTransaction {
     let chain_id: ChainId = ChainId::from("test-chain");
     let key_pair = KeyPair::random();
     let account = AccountId::of(key_pair.public_key().clone());
     TransactionBuilder::new(chain_id, account)
         .with_instructions([Log::new(Level::INFO, "norito-rpc test".to_owned())])
         .sign(key_pair.private_key())
-        .encode_versioned()
+}
+
+/// Construct a versioned external transaction payload suitable for public `/transaction` tests.
+#[allow(dead_code)]
+pub fn sample_transaction_bytes() -> Vec<u8> {
+    sample_signed_transaction().encode_versioned()
+}
+
+/// Construct a versioned internal entrypoint payload for negative public-ingress tests.
+#[allow(dead_code)]
+pub fn sample_transaction_entrypoint_bytes() -> Vec<u8> {
+    TransactionEntrypoint::External(sample_signed_transaction()).encode_versioned()
 }

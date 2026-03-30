@@ -220,6 +220,54 @@ impl From<crate::isi::staking::ExitPublicLaneValidator> for InstructionBox {
     }
 }
 
+impl From<crate::isi::kaigi::CreateKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::CreateKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::JoinKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::JoinKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::LeaveKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::LeaveKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::EndKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::EndKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::RecordKaigiUsage> for InstructionBox {
+    fn from(i: crate::isi::kaigi::RecordKaigiUsage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::SetKaigiRelayManifest> for InstructionBox {
+    fn from(i: crate::isi::kaigi::SetKaigiRelayManifest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::RegisterKaigiRelay> for InstructionBox {
+    fn from(i: crate::isi::kaigi::RegisterKaigiRelay) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::ReportKaigiRelayHealth> for InstructionBox {
+    fn from(i: crate::isi::kaigi::ReportKaigiRelayHealth) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::nexus::SetLaneRelayEmergencyValidators> for InstructionBox {
     fn from(i: crate::isi::nexus::SetLaneRelayEmergencyValidators) -> Self {
         InstructionBox(Box::new(i))
@@ -1213,7 +1261,9 @@ fn json_numeric_opt(
                 "asset transfer cap_amount must be non-negative".to_owned(),
             ));
         }
-        return Ok(Some(iroha_primitives::numeric::Numeric::from(value as u64)));
+        return Ok(Some(iroha_primitives::numeric::Numeric::from(
+            value.cast_unsigned(),
+        )));
     }
     if let Some(value) = value.as_str() {
         let parsed = iroha_primitives::numeric::Numeric::from_str(value.trim())
@@ -1227,11 +1277,11 @@ fn json_numeric_opt(
 
 #[cfg(feature = "json")]
 fn instruction_box_from_object(
-    map: norito::json::Map,
+    map: &norito::json::Map,
 ) -> Result<InstructionBox, norito::json::Error> {
     use std::str::FromStr as _;
 
-    let name = json_required_string(&map, "name")?;
+    let name = json_required_string(map, "name")?;
     let params = map
         .get("params")
         .and_then(norito::json::Value::as_object)
@@ -1332,7 +1382,7 @@ impl norito::json::JsonDeserialize for InstructionBox {
     ) -> Result<Self, norito::json::Error> {
         match norito::json::Value::json_deserialize(parser)? {
             norito::json::Value::String(encoded) => instruction_box_from_base64_literal(&encoded),
-            norito::json::Value::Object(map) => instruction_box_from_object(map),
+            norito::json::Value::Object(map) => instruction_box_from_object(&map),
             other => Err(norito::json::Error::Message(format!(
                 "instruction JSON must be either a base64 string or an object, found {other:?}"
             ))),

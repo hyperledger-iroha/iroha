@@ -71,6 +71,9 @@ mod model {
         /// Optional hash covering previous-height roster evidence embedded in the block payload.
         #[getset(get_copy = "pub", set = "pub")]
         pub prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+        /// Optional SCCP commitment root finalized in this block.
+        #[getset(get_copy = "pub", set = "pub")]
+        pub sccp_commitment_root: Option<[u8; 32]>,
         /// Creation timestamp as Unix time in milliseconds.
         #[getset(skip)]
         pub creation_time_ms: u64,
@@ -129,6 +132,8 @@ pub mod wire {
         pub Option<[u8; 32]>,
         /// Optional hash of previous-height roster evidence embedded in the block payload.
         pub Option<[u8; 32]>,
+        /// Optional SCCP commitment root finalized in this block.
+        pub Option<[u8; 32]>,
         /// Optional confidential feature digest committed in the header.
         pub Option<ConfidentialFeatureDigestWire>,
     );
@@ -137,7 +142,7 @@ pub mod wire {
         fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
             let tuple = (
                 self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9,
-                self.10,
+                self.10, self.11,
             );
             <(
                 NonZeroU64,
@@ -147,6 +152,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 u64,
                 u64,
+                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
@@ -156,7 +162,7 @@ pub mod wire {
         fn encoded_len_hint(&self) -> Option<usize> {
             let tuple = (
                 self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9,
-                self.10,
+                self.10, self.11,
             );
             <(
                 NonZeroU64,
@@ -166,6 +172,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 u64,
                 u64,
+                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
@@ -175,7 +182,7 @@ pub mod wire {
         fn encoded_len_exact(&self) -> Option<usize> {
             let tuple = (
                 self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9,
-                self.10,
+                self.10, self.11,
             );
             <(
                 NonZeroU64,
@@ -185,6 +192,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 u64,
                 u64,
+                Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
@@ -206,6 +214,7 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
+                Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
             ) = <(
                 NonZeroU64,
@@ -218,10 +227,24 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
+                Option<[u8; 32]>,
                 Option<ConfidentialFeatureDigestWire>,
             ) as ncore::NoritoDeserialize>::deserialize(archived.cast());
-            let (h, p, m, r, proof_hash, t, v, d, pins, prev_roster, f) = tuple;
-            Self(h, p, m, r, proof_hash, t, v, d, pins, prev_roster, f)
+            let (h, p, m, r, proof_hash, t, v, d, pins, prev_roster, sccp_root, f) = tuple;
+            Self(
+                h,
+                p,
+                m,
+                r,
+                proof_hash,
+                t,
+                v,
+                d,
+                pins,
+                prev_roster,
+                sccp_root,
+                f,
+            )
         }
     }
     /// Wire mapping for `ConfidentialFeatureDigest`.
@@ -381,6 +404,7 @@ impl From<BlockHeader> for wire::BlockHeaderWire {
             opt_hash_to_bytes(b.da_commitments_hash),
             opt_hash_to_bytes(b.da_pin_intents_hash),
             opt_hash_to_bytes(b.prev_roster_evidence_hash),
+            b.sccp_commitment_root,
             digest_to_wire(b.confidential_features),
         )
     }
@@ -408,7 +432,8 @@ impl From<wire::BlockHeaderWire> for BlockHeader {
         header.set_da_commitments_hash(opt_hash_from_bytes::<DaCommitmentBundle>(w.7));
         header.set_da_pin_intents_hash(opt_hash_from_bytes::<DaPinIntentBundle>(w.8));
         header.set_prev_roster_evidence_hash(opt_hash_from_bytes::<PreviousRosterEvidence>(w.9));
-        header.set_confidential_features(digest_from_wire(w.10));
+        header.set_sccp_commitment_root(w.10);
+        header.set_confidential_features(digest_from_wire(w.11));
         header
     }
 }
@@ -452,6 +477,7 @@ impl BlockHeader {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms,
             view_change_index,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
@@ -494,6 +520,8 @@ impl BlockHeader {
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
             /// Optional previous-roster evidence hash.
             prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+            /// Optional SCCP commitment root.
+            sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
@@ -510,6 +538,7 @@ impl BlockHeader {
                     da_commitments_hash,
                     da_pin_intents_hash,
                     prev_roster_evidence_hash,
+                    sccp_commitment_root,
                     creation_time_ms,
                     view_change_index,
                     confidential_features,
@@ -523,6 +552,7 @@ impl BlockHeader {
                     da_commitments_hash,
                     da_pin_intents_hash,
                     prev_roster_evidence_hash,
+                    sccp_commitment_root,
                     creation_time_ms,
                     view_change_index,
                     confidential_features,

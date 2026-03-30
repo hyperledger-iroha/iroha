@@ -49,6 +49,19 @@ pub struct PrivacyArtifacts<'a> {
     pub proof: Option<&'a [u8]>,
 }
 
+/// Information supplied with a privacy-mode host action.
+#[derive(Debug)]
+pub struct HostPrivacyArtifacts<'a> {
+    /// Commitment describing the private host identity.
+    pub commitment: Option<&'a KaigiParticipantCommitment>,
+    /// Optional nullifier supplied by the host action.
+    pub nullifier: Option<&'a KaigiParticipantNullifier>,
+    /// Optional roster root bound into the proof.
+    pub roster_root: Option<&'a Hash>,
+    /// Raw proof bytes (Norito-encoded `OpenVerifyEnvelope`).
+    pub proof: Option<&'a [u8]>,
+}
+
 /// Ensure that a transparent Kaigi does not receive privacy-artifact payloads.
 pub fn ensure_transparent_payload(artifacts: &PrivacyArtifacts<'_>) -> Result<(), Error> {
     if artifacts.commitment.is_some()
@@ -110,6 +123,54 @@ fn verify_usage_stub(proof: Option<&[u8]>) -> Result<(), Error> {
     Ok(())
 }
 
+#[cfg(any(test, feature = "kaigi_privacy_mocks"))]
+fn verify_host_stub(
+    artifacts: &HostPrivacyArtifacts<'_>,
+    expected_root: &Hash,
+    expected_commitment: Option<&KaigiParticipantCommitment>,
+) -> Result<(), Error> {
+    let commitment = artifacts
+        .commitment
+        .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
+    let nullifier = artifacts
+        .nullifier
+        .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
+
+    if commitment
+        .alias_tag
+        .as_deref()
+        .is_some_and(|tag| tag.len() > 64)
+    {
+        return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
+    }
+
+    if let Some(expected_commitment) = expected_commitment
+        && commitment.commitment != expected_commitment.commitment
+    {
+        return Err(privacy_error("host commitment mismatch"));
+    }
+
+    let proof = artifacts
+        .proof
+        .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
+    if proof.is_empty() {
+        return Err(privacy_error("privacy proof payload must be non-empty"));
+    }
+
+    let Some(advertised_root) = artifacts.roster_root else {
+        return Err(privacy_error("privacy mode requires roster root"));
+    };
+    if advertised_root != expected_root {
+        return Err(privacy_error("roster root mismatch"));
+    }
+
+    if nullifier.digest == Hash::prehashed([0u8; Hash::LENGTH]) {
+        return Err(privacy_error("privacy nullifier must be non-zero"));
+    }
+
+    Ok(())
+}
+
 pub fn verify_roster_join(
     state_transaction: &mut StateTransaction<'_, '_>,
     artifacts: &PrivacyArtifacts<'_>,
@@ -126,32 +187,6 @@ pub fn verify_roster_join(
         let proof_bytes = validate_roster_artifacts(artifacts, expected_root)?;
         let vk_cfg = state_transaction.zk.kaigi_roster_join_vk.clone();
         return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi roster join");
-    }
-
-    #[allow(unreachable_code)]
-    Err(privacy_error("kaigi privacy mode unavailable"))
-}
-
-pub fn verify_roster_leave(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    artifacts: &PrivacyArtifacts<'_>,
-    expected_root: &Hash,
-) -> Result<(), Error> {
-    #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
-    {
-        let _ = state_transaction;
-        return verify_roster_stub(artifacts, expected_root);
-    }
-
-    #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
-    {
-        let proof_bytes = validate_roster_artifacts(artifacts, expected_root)?;
-        let vk_cfg = state_transaction
-            .zk
-            .kaigi_roster_leave_vk
-            .clone()
-            .or_else(|| state_transaction.zk.kaigi_roster_join_vk.clone());
-        return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi roster leave");
     }
 
     #[allow(unreachable_code)]
@@ -182,6 +217,56 @@ pub fn verify_usage_commitment(
     Err(privacy_error("kaigi privacy mode unavailable"))
 }
 
+pub fn verify_host_create(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    artifacts: &HostPrivacyArtifacts<'_>,
+    expected_root: &Hash,
+) -> Result<(), Error> {
+    #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
+    {
+        let _ = state_transaction;
+        return verify_host_stub(artifacts, expected_root, None);
+    }
+
+    #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
+    {
+        let proof_bytes = validate_host_artifacts(artifacts, expected_root, None)?;
+        let vk_cfg = state_transaction.zk.kaigi_roster_join_vk.clone();
+        return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi host create");
+    }
+
+    #[allow(unreachable_code)]
+    Err(privacy_error("kaigi privacy mode unavailable"))
+}
+
+pub fn verify_host_action(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    artifacts: &HostPrivacyArtifacts<'_>,
+    expected_root: &Hash,
+    expected_commitment: &KaigiParticipantCommitment,
+) -> Result<(), Error> {
+    #[cfg(any(test, feature = "kaigi_privacy_mocks"))]
+    {
+        let _ = state_transaction;
+        return verify_host_stub(artifacts, expected_root, Some(expected_commitment));
+    }
+
+    #[cfg(not(any(test, feature = "kaigi_privacy_mocks")))]
+    {
+        let proof_bytes =
+            validate_host_artifacts(artifacts, expected_root, Some(expected_commitment))?;
+        let vk_cfg = state_transaction
+            .zk
+            .kaigi_roster_leave_vk
+            .clone()
+            .or_else(|| state_transaction.zk.kaigi_roster_join_vk.clone());
+        return verify_with_config(state_transaction, proof_bytes, vk_cfg, "kaigi host action");
+    }
+
+    #[allow(unreachable_code)]
+    Err(privacy_error("kaigi privacy mode unavailable"))
+}
+
 #[cfg(not(feature = "kaigi_privacy_mocks"))]
 #[allow(dead_code)]
 fn validate_roster_artifacts<'a>(
@@ -205,6 +290,59 @@ fn validate_roster_artifacts<'a>(
 
     if artifacts.host == artifacts.authority {
         return Err(privacy_error("host must not re-enter privacy roster"));
+    }
+
+    let proof_bytes = artifacts
+        .proof
+        .ok_or_else(|| privacy_error("privacy mode requires proof"))?;
+    if proof_bytes.is_empty() {
+        return Err(privacy_error("privacy proof payload must be non-empty"));
+    }
+
+    let Some(advertised_root) = artifacts.roster_root else {
+        return Err(privacy_error("privacy mode requires roster root"));
+    };
+    if advertised_root != expected_root {
+        return Err(privacy_error("roster root mismatch"));
+    }
+
+    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes)
+        .map_err(|_| privacy_error("failed to decode privacy proof envelope"))?;
+    if envelope.circuit_id == KAIGI_ROSTER_BACKEND {
+        let instance_cols = crate::zk::extract_pasta_fp_instances(&envelope.proof_bytes)
+            .ok_or_else(|| privacy_error("failed to parse roster privacy proof instances"))?;
+        verify_roster_root_limbs(&instance_cols, expected_root)?;
+    }
+
+    Ok(proof_bytes)
+}
+
+#[cfg(not(feature = "kaigi_privacy_mocks"))]
+#[allow(dead_code)]
+fn validate_host_artifacts<'a>(
+    artifacts: &'a HostPrivacyArtifacts<'a>,
+    expected_root: &Hash,
+    expected_commitment: Option<&KaigiParticipantCommitment>,
+) -> Result<&'a [u8], Error> {
+    let commitment = artifacts
+        .commitment
+        .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
+    artifacts
+        .nullifier
+        .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
+
+    if commitment
+        .alias_tag
+        .as_deref()
+        .is_some_and(|tag| tag.len() > 64)
+    {
+        return Err(privacy_error("commitment alias_tag exceeds 64 characters"));
+    }
+
+    if let Some(expected_commitment) = expected_commitment
+        && commitment.commitment != expected_commitment.commitment
+    {
+        return Err(privacy_error("host commitment mismatch"));
     }
 
     let proof_bytes = artifacts

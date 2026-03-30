@@ -8,6 +8,7 @@ use color_eyre::eyre::WrapErr as _;
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
+    account::address::ChainDiscriminantGuard,
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
@@ -26,8 +27,8 @@ use iroha_version::BuildLine;
 use crate::{
     Outcome, RunArgs,
     genesis::profile::{
-        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
-        profile_requires_npos, resolve_vrf_seed,
+        GenesisProfile, ProfileDefaults, known_chain_discriminant_for_chain_id, parse_vrf_seed_hex,
+        profile_defaults, profile_requires_npos, resolve_vrf_seed,
     },
     tui,
 };
@@ -549,6 +550,11 @@ impl<T: Write> RunArgs<T> for Args {
             resolved_vrf_seed,
             build_line,
         )?;
+        let _chain_discriminant = profile_defaults
+            .as_ref()
+            .and_then(|defaults| defaults.chain_discriminant)
+            .or_else(|| known_chain_discriminant_for_chain_id(summary_chain.as_str()))
+            .map(ChainDiscriminantGuard::enter);
         let json = norito::json::to_json_pretty(&genesis)?;
         writeln!(writer, "{json}").wrap_err("failed to write serialized genesis to the buffer")?;
         if let Some(profile) = profile {
@@ -855,14 +861,18 @@ mod profile_cli_tests {
     }
 
     fn run_and_parse(args: Args) -> color_eyre::Result<RawGenesisTransaction> {
+        let json = run_to_string(args)?;
+        let manifest: RawGenesisTransaction =
+            norito::json::from_str(&json).map_err(|err| color_eyre::eyre::eyre!(err))?;
+        Ok(manifest)
+    }
+
+    fn run_to_string(args: Args) -> color_eyre::Result<String> {
         let mut buf = BufWriter::new(Vec::new());
         args.run(&mut buf)?;
         buf.flush().expect("flush buffer");
         let bytes = buf.into_inner().expect("buffer into inner");
-        let json = String::from_utf8(bytes).expect("utf8 output");
-        let manifest: RawGenesisTransaction =
-            norito::json::from_str(&json).map_err(|err| color_eyre::eyre::eyre!(err))?;
-        Ok(manifest)
+        Ok(String::from_utf8(bytes).expect("utf8 output"))
     }
 
     #[test]
@@ -998,6 +1008,22 @@ mod profile_cli_tests {
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("npos parameters should be present");
         assert_eq!(npos.epoch_seed(), seed);
+    }
+
+    #[test]
+    fn taira_profile_renders_test_prefix_account_literals() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
+        args.vrf_seed_hex = Some(hex::encode([0x22u8; 32]));
+
+        let json = run_to_string(args).expect("taira profile should render");
+        assert!(
+            json.contains("\"testu"),
+            "taira profile JSON should contain testnet i105 literals: {json}"
+        );
+        assert!(
+            !json.contains("\"sorau"),
+            "taira profile JSON must not leak mainnet i105 literals: {json}"
+        );
     }
 }
 
@@ -1369,10 +1395,9 @@ fn generate_synthetic(
 
         for _ in 0..accounts_per_domain {
             let (account_id, _account_keypair) = gen_account_in(&domain_id);
-            builder = builder.append_instruction(Register::account(Account::new_in_domain(
-                account_id.clone(),
-                domain_id.clone(),
-            )));
+            builder = builder.append_instruction(Register::account(
+                Account::new(account_id.clone()).with_linked_domain(domain_id.clone()),
+            ));
 
             for asset_definition_id in &synthetic_asset_definitions {
                 let mint = Mint::asset_numeric(
@@ -1433,16 +1458,19 @@ mod tests {
     fn profile_defaults_assign_chain_and_collectors() {
         let dev = profile_defaults(GenesisProfile::Iroha3Dev);
         assert_eq!(dev.chain_id, ChainId::from("iroha3-dev.local"));
+        assert_eq!(dev.chain_discriminant, None);
         assert_eq!(dev.collectors_k, 1);
         assert_eq!(dev.collectors_redundant_send_r, 1);
 
         let taira = profile_defaults(GenesisProfile::Iroha3Taira);
         assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
+        assert_eq!(taira.chain_discriminant, Some(369));
         assert_eq!(taira.collectors_k, 3);
         assert_eq!(taira.collectors_redundant_send_r, 3);
 
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
+        assert_eq!(nexus.chain_discriminant, Some(753));
         assert_eq!(nexus.collectors_k, 5);
         assert_eq!(nexus.collectors_redundant_send_r, 3);
     }

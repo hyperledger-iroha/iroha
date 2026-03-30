@@ -1394,7 +1394,12 @@ pub struct StoragePinRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Clone, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize, PartialEq, Eq,
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    PartialEq,
+    Eq,
 )]
 /// File entry describing how a logical dataset file maps into the concatenated payload.
 pub struct StorageFileEntryDto {
@@ -2861,12 +2866,10 @@ fn resolve_bound_site_manifest(
 #[derive(Debug, Clone)]
 struct RemoteCidSource {
     manifest_digest_hex: String,
-    provider_id: [u8; 32],
     provider_id_hex: String,
     torii_base_url: reqwest::Url,
 }
 
-#[derive(Debug)]
 struct RemoteSiteBundle {
     manifest: ManifestV1,
     payload: Vec<u8>,
@@ -3033,7 +3036,6 @@ async fn resolve_remote_cid_sources(
         };
         sources.push(RemoteCidSource {
             manifest_digest_hex,
-            provider_id,
             provider_id_hex,
             torii_base_url,
         });
@@ -3078,10 +3080,8 @@ async fn fetch_remote_site_bundle_from_source(
             details.trim()
         ));
     }
-    let manifest_response =
-        norito::json::from_slice::<StorageManifestResponseDto>(&manifest_body).map_err(|err| {
-            format!("failed to decode remote manifest metadata response: {err}")
-        })?;
+    let manifest_response = norito::json::from_slice::<StorageManifestResponseDto>(&manifest_body)
+        .map_err(|err| format!("failed to decode remote manifest metadata response: {err}"))?;
     if manifest_response.manifest_digest_hex != source.manifest_digest_hex {
         return Err(format!(
             "remote manifest digest mismatch: expected {}, found {}",
@@ -3097,7 +3097,8 @@ async fn fetch_remote_site_bundle_from_source(
     if manifest.root_cid != cid_bytes {
         return Err("remote manifest CID does not match requested CID".to_string());
     }
-    let manifest_digest_hex = hex::encode(manifest.digest().map_err(|err| err.to_string())?);
+    let manifest_digest = manifest.digest().map_err(|err| err.to_string())?;
+    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
     if manifest_digest_hex != source.manifest_digest_hex {
         return Err(format!(
             "decoded remote manifest digest mismatch: expected {}, found {manifest_digest_hex}",
@@ -3139,10 +3140,8 @@ async fn fetch_remote_site_bundle_from_source(
             details.trim()
         ));
     }
-    let fetch_response =
-        norito::json::from_slice::<StorageFetchResponseDto>(&fetch_body).map_err(|err| {
-            format!("failed to decode remote site payload response: {err}")
-        })?;
+    let fetch_response = norito::json::from_slice::<StorageFetchResponseDto>(&fetch_body)
+        .map_err(|err| format!("failed to decode remote site payload response: {err}"))?;
     let payload = BASE64_STANDARD
         .decode(fetch_response.data_b64.as_bytes())
         .map_err(|err| format!("failed to decode remote site payload bytes: {err}"))?;
@@ -3211,9 +3210,11 @@ fn cache_remote_site_bundle(
     state: &SharedAppState,
     bundle: RemoteSiteBundle,
 ) -> Result<StoredManifest, Response> {
-    let profile = chunk_profile_for_manifest(&bundle.manifest).map_err(ResponseError::into_response)?;
-    let plan = build_plan_for_storage_pin_request(&bundle.payload, profile, bundle.files.as_deref())
-        .map_err(|err| json_error(StatusCode::BAD_GATEWAY, err))?;
+    let profile =
+        chunk_profile_for_manifest(&bundle.manifest).map_err(ResponseError::into_response)?;
+    let plan =
+        build_plan_for_storage_pin_request(&bundle.payload, profile, bundle.files.as_deref())
+            .map_err(|err| json_error(StatusCode::BAD_GATEWAY, err))?;
     let manifest_digest: [u8; 32] = bundle
         .manifest
         .digest()
@@ -9175,7 +9176,7 @@ mod advert_tests {
 
     fn encode_replication_order_bytes_with_providers(
         order_id: &ReplicationOrderId,
-        manifest_digest: &ManifestDigest,
+        _manifest_digest: &ManifestDigest,
         manifest_cid: &[u8],
         providers: Vec<[u8; 32]>,
         deadline_epoch: u64,
@@ -10831,6 +10832,176 @@ mod advert_tests {
                 "public, max-age=31536000, immutable"
             ))
         );
+    }
+
+    #[tokio::test]
+    async fn cid_gateway_fetches_and_caches_remote_site_on_miss() {
+        let index_bytes = b"<!doctype html><title>Gateway</title>";
+        let asset_bytes = b"console.log('gateway-cache');";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "app.js".to_owned()],
+                    data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: index_bytes.to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xE4, &payload);
+        let manifest_digest: [u8; 32] = manifest.digest().expect("compute manifest digest").into();
+        let manifest_id_hex = hex::encode(manifest_digest);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind remote storage listener");
+        let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
+        let manifest_requests = Arc::new(AtomicUsize::new(0));
+        let fetch_requests = Arc::new(AtomicUsize::new(0));
+        let remote_provider_id_hex = hex::encode([0x11; 32]);
+        let mut remote_files = Vec::with_capacity(plan.files.len());
+        let mut remote_offset = 0_u64;
+        for file in &plan.files {
+            remote_files.push(StorageStoredFileDto {
+                path: file.path.clone(),
+                offset: remote_offset,
+                size: file.size,
+                first_chunk: file.first_chunk as u64,
+                chunk_count: file.chunk_count as u64,
+            });
+            remote_offset = remote_offset.saturating_add(file.size);
+        }
+        let manifest_response_value = norito::json::to_value(&StorageManifestResponseDto {
+            manifest_id_hex: manifest_id_hex.clone(),
+            manifest_b64: BASE64_STANDARD
+                .encode(norito::to_bytes(&manifest).expect("encode manifest")),
+            manifest_digest_hex: manifest_id_hex.clone(),
+            payload_digest_hex: hex::encode(plan.payload_digest.as_bytes()),
+            content_length: plan.content_length,
+            chunk_count: plan.chunks.len() as u64,
+            chunk_profile_handle: format!(
+                "{}.{}@{}",
+                manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+            ),
+            stored_at_unix_secs: 1_700_000_000,
+            files: remote_files,
+        })
+        .expect("serialize remote manifest response");
+        let fetch_response_value = norito::json::to_value(&StorageFetchResponseDto {
+            manifest_id_hex: manifest_id_hex.clone(),
+            offset: 0,
+            length: payload.len() as u64,
+            data_b64: BASE64_STANDARD.encode(payload.as_slice()),
+        })
+        .expect("serialize remote fetch response");
+        let remote_router = Router::new()
+            .route(
+                "/v1/sorafs/storage/manifest/{manifest_id_hex}",
+                get({
+                    let manifest_requests = Arc::clone(&manifest_requests);
+                    let manifest_id_hex = manifest_id_hex.clone();
+                    let manifest_response_value = manifest_response_value.clone();
+                    move |AxumPath(requested_manifest_id_hex): AxumPath<String>| {
+                        let manifest_requests = Arc::clone(&manifest_requests);
+                        let manifest_id_hex = manifest_id_hex.clone();
+                        let manifest_response_value = manifest_response_value.clone();
+                        async move {
+                            manifest_requests.fetch_add(1, Ordering::SeqCst);
+                            assert_eq!(requested_manifest_id_hex, manifest_id_hex);
+                            crate::JsonBody(manifest_response_value).into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/sorafs/storage/fetch",
+                post({
+                    let fetch_requests = Arc::clone(&fetch_requests);
+                    let provider_id_hex = remote_provider_id_hex.clone();
+                    let manifest_id_hex = manifest_id_hex.clone();
+                    let fetch_response_value = fetch_response_value.clone();
+                    move |body: Bytes| {
+                        let fetch_requests = Arc::clone(&fetch_requests);
+                        let provider_id_hex = provider_id_hex.clone();
+                        let manifest_id_hex = manifest_id_hex.clone();
+                        let fetch_response_value = fetch_response_value.clone();
+                        async move {
+                            fetch_requests.fetch_add(1, Ordering::SeqCst);
+                            let request = norito::json::from_slice::<StorageFetchRequestDto>(&body)
+                                .expect("decode remote fetch request");
+                            assert_eq!(request.manifest_id_hex, manifest_id_hex);
+                            assert_eq!(
+                                request.provider_id_hex.as_deref(),
+                                Some(provider_id_hex.as_str())
+                            );
+                            crate::JsonBody(fetch_response_value).into_response()
+                        }
+                    }
+                }),
+            );
+        let remote_server = tokio::spawn(async move {
+            axum::serve(listener, remote_router)
+                .await
+                .expect("serve remote storage routes");
+        });
+
+        let fixture = make_signed_advert_with_host(&remote_origin);
+        let app = app_state_with_seeded_cache(&fixture);
+        let inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        seed_registry_manifest_for_gateway(&inner.state, &manifest, fixture.provider_id());
+        assert!(
+            inner
+                .sorafs_node
+                .manifest_metadata_by_digest(&manifest_digest)
+                .is_err(),
+            "test node should start without the requested CID cached locally"
+        );
+        let state = Arc::new(inner);
+
+        let cid_root =
+            handle_get_sorafs_cid_root(State(state.clone()), Path(content_cid.clone())).await;
+        assert_eq!(cid_root.status(), StatusCode::OK);
+        let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
+            .await
+            .expect("read cid root body");
+        assert_eq!(cid_root_body, &index_bytes[..]);
+        assert_eq!(manifest_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(fetch_requests.load(Ordering::SeqCst), 1);
+
+        let cid_asset = handle_get_sorafs_cid_path(
+            State(state.clone()),
+            Path((content_cid.clone(), "assets/app.js".to_owned())),
+        )
+        .await;
+        assert_eq!(cid_asset.status(), StatusCode::OK);
+        let cid_asset_body = body::to_bytes(cid_asset.into_body(), usize::MAX)
+            .await
+            .expect("read cid asset body");
+        assert_eq!(cid_asset_body, &asset_bytes[..]);
+        assert_eq!(
+            manifest_requests.load(Ordering::SeqCst),
+            1,
+            "second request should hit the local cache instead of re-fetching manifest metadata",
+        );
+        assert_eq!(
+            fetch_requests.load(Ordering::SeqCst),
+            1,
+            "second request should hit the local cache instead of re-fetching payload bytes",
+        );
+        assert!(
+            state
+                .sorafs_node
+                .manifest_metadata_by_digest(&manifest_digest)
+                .is_ok(),
+            "CID gateway miss should hydrate local storage from a remote provider",
+        );
+
+        remote_server.abort();
     }
 
     #[tokio::test]
@@ -15198,6 +15369,10 @@ mod advert_tests {
     }
 
     fn make_signed_advert() -> ProviderFixture {
+        make_signed_advert_with_host("storage.example.test")
+    }
+
+    fn make_signed_advert_with_host(host_pattern: &str) -> ProviderFixture {
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
         let provider_id = [0x11; 32];
         let stake_pool_id = [0x21; 32];
@@ -15243,7 +15418,7 @@ mod advert_tests {
             capabilities: capabilities.clone(),
             endpoints: vec![AdvertEndpoint {
                 kind: EndpointKind::Torii,
-                host_pattern: "storage.example.test".to_owned(),
+                host_pattern: host_pattern.to_owned(),
                 metadata: vec![EndpointMetadata {
                     key: EndpointMetadataKey::Region,
                     value: b"global".to_vec(),

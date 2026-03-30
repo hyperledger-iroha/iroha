@@ -2,7 +2,7 @@
   "aliases": [
     {
       "alias_label": "sora/docs",
-      "bound_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
+      "bound_by": "sorauロ1Pカt8オgキララク5ユニヰチウヱワヲヱLLノVセユXケシリnノハjク9eQL2MVG9T",
       "bound_epoch": 12,
       "expiry_epoch": 36,
       "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -24,8 +24,8 @@
         "storage_class": "hot"
       },
       "status": "approved",
-      "status_epoch": 7,
-      "submitted_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
+      "status_epoch": 5,
+      "submitted_by": "sorauロ1Pカt8オgキララク5ユニヰチウヱワヲヱLLノVセユXケシリnノハjク9eQL2MVG9T",
       "submitted_epoch": 5
     }
   ],
@@ -47,7 +47,7 @@
       ],
       "canonical_order_b64": "TlJUMAAA2Mwcpetyx7PYzByl63LHswDzAQAAAAAAAH8+HrLuyz5sAAEAAAAAAAAAASAAAAAAAAAAREREREREREREREREREREREREREREREREREREREREREQhAAAAAAAAABkAAAAAAAAAYmFmeXJlcGxpY2FleGFtcGxlY2lkcm9vdCAAAAAAAAAAqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqoYAAAAAAAAABAAAAAAAAAAc29yYWZzLnNmMUAxLjAuMAIAAAAAAAAAAwDjAAAAAAAAAAMAAAAAAAAAQQAAAAAAAAAgAAAAAAAAAFFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRCAAAAAAAAAAAAgAAAAAAAAEAAAAAAAAAAEEAAAAAAAAAIAAAAAAAAABSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUlJSUggAAAAAAAAAAAIAAAAAAAABAAAAAAAAAABBAAAAAAAAACAAAAAAAAAAU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1MIAAAAAAAAAAACAAAAAAAAAQAAAAAAAAAACAAAAAAAAAAA8VNlAAAAAAgAAAAAAAAAgEJVZQAAAAAkAAAAAAAAAAQAAAAAAAAAgFEBAAQAAAAAAAAArIQBAAQAAAAAAAAA0H4BAAgAAAAAAAAAAAAAAAAAAAA=",
       "deadline_epoch": 28,
-      "issued_by": "sorauﾛ1Pｶt8ｵgｷﾗﾗｸ5ﾕﾆヰﾁｳヱﾜｦヱLLﾉVｾﾕXｹｼﾘnﾉﾊjｸ9eQL2MVG9T",
+      "issued_by": "sorauロ1Pカt8オgキララク5ユニヰチウヱワヲヱLLノVセユXケシリnノハjク9eQL2MVG9T",
       "issued_epoch": 20,
       "manifest_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "order_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",

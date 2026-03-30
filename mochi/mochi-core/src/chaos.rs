@@ -416,6 +416,7 @@ where
         .map_err(|err| ChaosError::Message(err.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_izanami_fault<F>(
     handle: &Handle,
     peer: MochiFaultPeer,

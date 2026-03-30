@@ -3868,7 +3868,7 @@
     },
     "/transaction": {
       "post": {
-        "description": "Submit a SignedTransaction encoded as Norito bytes.",
+        "description": "Submit a versioned SignedTransaction encoded as Norito bytes. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
         "requestBody": {
           "content": {
             "application/octet-stream": {
@@ -3899,7 +3899,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Submit a signed transaction.",
+        "summary": "Submit a versioned signed transaction.",
         "tags": [
           "Transactions"
         ]
@@ -4367,6 +4367,37 @@
         "summary": "Fetch account portfolio.",
         "tags": [
           "Accounts"
+        ]
+      }
+    },
+    "/v1/aliases/by_account": {
+      "post": {
+        "description": "Resolve the aliases currently bound to a canonical account id.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List aliases bound to an account.",
+        "tags": [
+          "Aliases"
         ]
       }
     },
@@ -5102,9 +5133,9 @@
         ]
       }
     },
-    "/v1/contracts/call": {
+    "/v1/contracts/aliases/resolve": {
       "post": {
-        "description": "Invoke a contract instance entrypoint.",
+        "description": "Resolve an on-chain contract alias to its canonical contract address and current lease status.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5127,7 +5158,38 @@
             "description": "Successful response"
           }
         },
-        "summary": "Call a contract instance.",
+        "summary": "Resolve a contract alias.",
+        "tags": [
+          "Contracts"
+        ]
+      }
+    },
+    "/v1/contracts/call": {
+      "post": {
+        "description": "Invoke a contract entrypoint by canonical contract address or by on-chain contract alias.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Call a deployed contract.",
         "tags": [
           "Contracts"
         ]
@@ -5299,12 +5361,105 @@
         ]
       }
     },
+    "/v1/contracts/deploy": {
+      "post": {
+        "description": "Deploy contract bytecode, derive a canonical contract address, and activate it in the target dataspace (default `universal`).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Deploy a public contract.",
+        "tags": [
+          "Contracts"
+        ]
+      }
+    },
+    "/v1/contracts/instance": {
+      "post": {
+        "description": "Create a contract instance from registered code.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Create a contract instance.",
+        "tags": [
+          "Contracts"
+        ]
+      }
+    },
+    "/v1/contracts/instance/activate": {
+      "post": {
+        "description": "Activate a previously created contract instance.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Activate a contract instance.",
+        "tags": [
+          "Contracts"
+        ]
+      }
+    },
     "/v1/contracts/instances/{ns}": {
       "get": {
-        "description": "Return active contract instances for a namespace.",
+        "description": "Return active contract instances for a dataspace.",
         "parameters": [
           {
-            "description": "Contract namespace identifier.",
+            "description": "Contract dataspace identifier.",
             "in": "path",
             "name": "ns",
             "required": true,
@@ -5325,7 +5480,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "List contract instances by namespace.",
+        "summary": "List contract instances by dataspace.",
         "tags": [
           "Contracts"
         ]
@@ -5407,6 +5562,68 @@
         "summary": "Read smart contract state.",
         "tags": [
           "Contracts"
+        ]
+      }
+    },
+    "/v1/contracts/view": {
+      "post": {
+        "description": "Execute a manifest-validated read-only contract view entrypoint and return its decoded result.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Execute a read-only contract view.",
+        "tags": [
+          "Contracts"
+        ]
+      }
+    },
+    "/v1/controls/asset-transfer/get": {
+      "post": {
+        "description": "Resolve an asset-transfer control request and return the current control snapshot.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch asset-transfer control state.",
+        "tags": [
+          "Controls"
         ]
       }
     },
@@ -7885,6 +8102,108 @@
         ]
       }
     },
+    "/v1/multisig/approvals/get": {
+      "post": {
+        "description": "Resolve a multisig selector and fetch a recorded approval by proposal selector.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias or approval not found."
+          }
+        },
+        "summary": "Fetch a multisig approval.",
+        "tags": [
+          "Multisig"
+        ]
+      }
+    },
+    "/v1/multisig/approvals/list": {
+      "post": {
+        "description": "Resolve a multisig selector and list approvals recorded for the active concrete multisig authority.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias not found."
+          }
+        },
+        "summary": "List multisig approvals.",
+        "tags": [
+          "Multisig"
+        ]
+      }
+    },
     "/v1/multisig/approve": {
       "post": {
         "description": "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
@@ -8568,6 +8887,37 @@
         "summary": "Register a push device.",
         "tags": [
           "Push"
+        ]
+      }
+    },
+    "/v1/offline/policy": {
+      "post": {
+        "description": "Replace the active offline policy snapshot used by the app-facing offline controls.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Set the offline policy snapshot.",
+        "tags": [
+          "Offline"
         ]
       }
     },
@@ -12737,6 +13087,162 @@
         ]
       }
     },
+    "/v1/transactions/history": {
+      "get": {
+        "description": "Return the app-facing transaction history view for the active query filters.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List transaction history entries.",
+        "tags": [
+          "Transactions"
+        ]
+      }
+    },
+    "/v1/vpn/profile": {
+      "get": {
+        "description": "Return the wallet-facing Sora VPN profile advertised by this node.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch the public VPN profile.",
+        "tags": [
+          "VPN"
+        ]
+      }
+    },
+    "/v1/vpn/receipts": {
+      "get": {
+        "description": "List canonical Sora VPN receipts for the active wallet account.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List VPN receipts.",
+        "tags": [
+          "VPN"
+        ]
+      }
+    },
+    "/v1/vpn/sessions": {
+      "post": {
+        "description": "Create a signed Sora VPN session for the active wallet account.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Create a VPN session.",
+        "tags": [
+          "VPN"
+        ]
+      }
+    },
+    "/v1/vpn/sessions/{session_id}": {
+      "delete": {
+        "description": "Tear down a signed Sora VPN session and return the canonical receipt.",
+        "parameters": [
+          {
+            "description": "VPN session identifier.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Delete a VPN session.",
+        "tags": [
+          "VPN"
+        ]
+      },
+      "get": {
+        "description": "Return the current status of a signed Sora VPN session.",
+        "parameters": [
+          {
+            "description": "VPN session identifier.",
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch a VPN session.",
+        "tags": [
+          "VPN"
+        ]
+      }
+    },
     "/v1/webhooks": {
       "get": {
         "description": "List registered webhooks.",
@@ -13486,6 +13992,10 @@
     {
       "description": "Iroha Connect session and relay endpoints.",
       "name": "Connect"
+    },
+    {
+      "description": "Sora VPN profile, session, and receipt endpoints.",
+      "name": "VPN"
     },
     {
       "description": "Model Context Protocol endpoint for agent tool orchestration.",

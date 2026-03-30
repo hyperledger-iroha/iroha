@@ -1013,25 +1013,37 @@ manifest together.
 
 Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 
-## Offline allowances, transfers, and auditing
+## Offline cash, transfers, revocations, and auditing
 
-The SDK now exposes a lightweight `OfflineToriiClient` plus the model types
-required to consume `/v1/offline/allowances` and `/v1/offline/transfers`. The
-client reuses the existing `ClientConfig` headers/observers and can be created
-from any `HttpClientTransport`:
+The SDK now exposes a lightweight `OfflineToriiClient` for the first-release
+offline cash contract. Use the shared client for:
+
+- `POST /v1/offline/cash/{setup,load,refresh,sync,redeem}` via raw JSON helpers
+- `GET /v1/offline/revocations` and `GET /v1/offline/revocations/bundle`
+- `GET /v1/offline/transfers`, `GET /v1/offline/transfers/{bundle_id_hex}`, and `POST /v1/offline/transfers/query`
+
+The client reuses the existing `ClientConfig` headers/observers and can be
+created from any `HttpClientTransport`:
 
 ```java
-OfflineListParams params = OfflineListParams.builder()
-    .limit(10L)
-    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"<merchant_account_i105>\"]}")
-    .build();
+String setupRequestJson = """
+    {
+      "operation_id": "setup-001",
+      "account_id": "<wallet_account_i105>",
+      "device_binding": {
+        "platform": "android",
+        "device_id": "<device_id>"
+      },
+      "device_proof": {
+        "kind": "play_integrity"
+      }
+    }
+    """;
 
-transport.offlineToriiClient().listAllowances(params)
-    .thenAccept(list -> {
-        for (OfflineAllowanceList.OfflineAllowanceItem item : list.items()) {
-            System.out.println(item.assetDefinitionName());
-        }
-    });
+transport
+    .offlineToriiClient()
+    .setupCash(setupRequestJson)
+    .thenAccept(responseJson -> System.out.println(responseJson));
 
 OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
     .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"<merchant_account_i105>\"]}")
@@ -1042,124 +1054,38 @@ transport.offlineToriiClient().queryTransfers(query)
     .thenAccept(list -> System.out.println("Fetched " + list.total() + " transfers"));
 ```
 
-For offline allowance responses, `item.assetId()` remains the concrete `AssetId`, while
-`item.assetDefinitionId()`, `item.assetDefinitionName()`, and `item.assetDefinitionAlias()`
-describe the referenced asset definition for display.
-Register signed certificates on-ledger by posting them to the offline allowances endpoint:
+OfflineListParams revocationParams = OfflineListParams.builder()
+    .limit(10L)
+    .build();
 
-```java
-OfflineWalletCertificate certificate =
-    new OfflineWalletCertificate(
-        controllerId,
-        controllerId,
-        allowanceCommitment,
-        spendPublicKeyHex,
-        attestationReportBytes,
-        issuedAtMs,
-        expiresAtMs,
-        policy,
-        operatorSignatureHex,
-        metadata,
-        verdictIdHex,
-        attestationNonceHex,
-        refreshAtMs);
+transport.offlineToriiClient().listRevocations(revocationParams)
+    .thenAccept(list -> System.out.println("Fetched " + list.total() + " revocations"));
 
-transport.offlineToriiClient().registerAllowance(certificate, authorityId, authorityPrivateKeyHex);
+transport.offlineToriiClient().getRevocationBundleJson()
+    .thenAccept(bundleJson -> System.out.println(bundleJson));
 ```
 
-If you want to issue and register in one call, use the top-up helpers:
+`setupCash(...)`, `loadCash(...)`, `refreshCash(...)`, `syncCash(...)`, and
+`redeemCash(...)` accept JSON strings and return the raw JSON envelope so wallet
+adapters can keep their own serializers while reusing the shared transport,
+header, and error handling logic.
 
-```java
-OfflineWalletCertificateDraft draft = /* build draft certificate */;
+Legacy server-side signing flows such as certificate issuance, allowance
+registration, and settlement submission were removed from the public offline
+client surface so callers cannot accidentally target removed Torii routes.
 
-transport
-    .offlineToriiClient()
-    .topUpAllowance(draft, authorityId, authorityPrivateKeyHex)
-    .thenAccept(topUp -> System.out.println(topUp.registration().certificateIdHex()));
+For offline transfer responses, `item.assetId()` remains the concrete `AssetId`,
+while `item.certificateIdHex()`, `item.verdictIdHex()`, and
+`item.attestationNonceHex()` expose the offline cash provenance metadata needed
+for wallet debugging and audit trails.
 
-transport
-    .offlineToriiClient()
-    .topUpAllowanceRenewal(existingCertificateIdHex, draft, authorityId, authorityPrivateKeyHex);
-```
-
-If you need Torii to sign a receipt build claim directly (for example before
-submitting settlement), call `issueBuildClaim`:
-
-```java
-OfflineBuildClaimIssueRequest buildClaimRequest =
-    OfflineBuildClaimIssueRequest.builder()
-        .certificateIdHex(existingCertificateIdHex)
-        .txIdHex(receiptTxIdHex)
-        .platform("apple") // or "android"
-        .appId("com.example.ios")
-        .buildNumber(77L)
-        .build();
-
-transport
-    .offlineToriiClient()
-    .issueBuildClaim(buildClaimRequest)
-    .thenAccept(
-        response -> {
-          System.out.println(response.claimIdHex());
-          System.out.println(response.typedBuildClaim().platform()); // Apple / Android
-        });
-```
-
-When settling offline bundles, you can optionally request per-receipt build-claim
-overrides (for example, Android multi-package certificates) and repair existing claims:
-
-```java
-OfflineSettlementBuildClaimOverride claimOverride =
-    OfflineSettlementBuildClaimOverride.builder()
-        .txIdHex("ab".repeat(32))
-        .appId("com.example.android")
-        .buildNumber(77L)
-        .build();
-
-transport
-    .offlineToriiClient()
-    .submitSettlement(
-        transferPayload,
-        authorityId,
-        authorityPrivateKeyHex,
-        List.of(claimOverride),
-        true);
-```
-
-For operational debugging, use `submitSettlementAndWait(...)` so settlement submission and
-pipeline-status polling happen together, and inspect structured error details when Torii rejects:
+Fetch a single transfer bundle detail through the same client:
 
 ```java
 transport
     .offlineToriiClient()
-    .submitSettlementAndWait(
-        transferPayload,
-        authorityId,
-        authorityPrivateKeyHex,
-        transport,
-        PipelineStatusOptions.builder().intervalMillis(250L).maxAttempts(40).build())
-    .whenComplete(
-        (settlement, error) -> {
-          if (error == null) {
-            System.out.println("bundle=" + settlement.bundleIdHex());
-            System.out.println("tx_hash=" + settlement.transactionHashHex());
-            return;
-          }
-          Throwable cause = error instanceof java.util.concurrent.CompletionException
-              ? error.getCause()
-              : error;
-          if (cause instanceof OfflineToriiException offline) {
-            offline.statusCode().ifPresent(code -> System.err.println("status=" + code));
-            offline.rejectCode().ifPresent(code -> System.err.println("reject_code=" + code));
-            offline.responseBody().ifPresent(body -> System.err.println("body=" + body));
-          } else if (cause instanceof TransactionStatusHttpException txHttp) {
-            System.err.println("status=" + txHttp.statusCode());
-            txHttp.rejectCode().ifPresent(code -> System.err.println("reject_code=" + code));
-            txHttp.responseBody().ifPresent(body -> System.err.println("body=" + body));
-          } else if (cause instanceof TransactionStatusException tx) {
-            tx.rejectionReason().ifPresent(reason -> System.err.println("reason=" + reason));
-          }
-        });
+    .getTransfer("deadbeef")
+    .thenAccept(transfer -> System.out.println(transfer.bundleIdHex()));
 ```
 
 For jurisdictions that require offline spend logs, use the shared audit logger

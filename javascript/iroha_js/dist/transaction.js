@@ -1578,6 +1578,183 @@ export function buildEndKaigiTransaction({
 }
 
 /**
+ * Build a deterministic confidential XOR fee-spend envelope for private Kaigi.
+ */
+export function buildPrivateKaigiFeeSpend({
+  chainId,
+  assetDefinitionId,
+  actionHash,
+  anchorRootHex,
+  feeAmount,
+  verifyingKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildPrivateKaigiFeeSpend !== "function") {
+    throw new Error(
+      "native binding 'buildPrivateKaigiFeeSpend' is unavailable",
+    );
+  }
+  const record =
+    verifyingKey && typeof verifyingKey === "object" && !Array.isArray(verifyingKey)
+      ? verifyingKey
+      : null;
+  if (!record) {
+    throw new TypeError("privateKaigiFeeSpend.verifyingKey must be an object");
+  }
+  const inlineKey =
+    record.inline_key ??
+    record.inlineKey ??
+    null;
+  if (!inlineKey || typeof inlineKey !== "object" || Array.isArray(inlineKey)) {
+    throw new TypeError(
+      "privateKaigiFeeSpend.verifyingKey.inline_key must be present",
+    );
+  }
+  const bytesBase64 = String(
+    inlineKey.bytes_b64 ??
+      inlineKey.bytesBase64 ??
+      "",
+  ).trim();
+  if (!bytesBase64) {
+    throw new TypeError(
+      "privateKaigiFeeSpend.verifyingKey.inline_key.bytes_b64 must be present",
+    );
+  }
+  const result = native.buildPrivateKaigiFeeSpend(
+    String(chainId ?? "").trim(),
+    String(assetDefinitionId ?? "").trim(),
+    toBuffer(actionHash),
+    String(anchorRootHex ?? "").trim(),
+    String(feeAmount ?? "").trim(),
+    String(record.id?.backend ?? record.backend ?? "").trim(),
+    String(record.record?.circuit_id ?? record.circuit_id ?? record.circuitId ?? "").trim(),
+    Buffer.from(bytesBase64, "base64"),
+  );
+  return {
+    asset_definition_id: String(result.assetDefinitionId ?? result.asset_definition_id),
+    anchor_root: Buffer.from(result.anchorRoot ?? result.anchor_root),
+    nullifiers: Array.isArray(result.nullifiers)
+      ? result.nullifiers.map((entry) => Buffer.from(entry))
+      : [],
+    output_commitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+      : [],
+    encrypted_change_payloads: Array.isArray(
+      result.encryptedChangePayloads ?? result.encrypted_change_payloads,
+    )
+      ? (result.encryptedChangePayloads ?? result.encrypted_change_payloads).map((entry) =>
+          Buffer.from(entry),
+        )
+      : [],
+    proof: Buffer.from(result.proof),
+  };
+}
+
+/**
+ * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(Create)`.
+ */
+export function buildPrivateCreateKaigiTransaction({
+  chainId,
+  call,
+  artifacts,
+  feeSpend,
+  metadata = null,
+  creationTimeMs = null,
+  nonce = null,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildPrivateCreateKaigiTransaction !== "function") {
+    throw new Error(
+      "native binding 'buildPrivateCreateKaigiTransaction' is unavailable",
+    );
+  }
+  const result = native.buildPrivateCreateKaigiTransaction(
+    String(chainId ?? "").trim(),
+    JSON.stringify(call ?? {}),
+    JSON.stringify(artifacts ?? {}),
+    JSON.stringify(feeSpend ?? {}),
+    normalizeMetadataPayload(metadata, "privateCreateKaigi.metadata"),
+    creationTimeMs,
+    nonce,
+  );
+  return {
+    transactionEntrypoint: Buffer.from(result.transactionEntrypoint),
+    hash: Buffer.from(result.hash),
+    actionHash: Buffer.from(result.actionHash),
+  };
+}
+
+/**
+ * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(Join)`.
+ */
+export function buildPrivateJoinKaigiTransaction({
+  chainId,
+  callId,
+  artifacts,
+  feeSpend,
+  metadata = null,
+  creationTimeMs = null,
+  nonce = null,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildPrivateJoinKaigiTransaction !== "function") {
+    throw new Error(
+      "native binding 'buildPrivateJoinKaigiTransaction' is unavailable",
+    );
+  }
+  const result = native.buildPrivateJoinKaigiTransaction(
+    String(chainId ?? "").trim(),
+    String(callId ?? "").trim(),
+    JSON.stringify(artifacts ?? {}),
+    JSON.stringify(feeSpend ?? {}),
+    normalizeMetadataPayload(metadata, "privateJoinKaigi.metadata"),
+    creationTimeMs,
+    nonce,
+  );
+  return {
+    transactionEntrypoint: Buffer.from(result.transactionEntrypoint),
+    hash: Buffer.from(result.hash),
+    actionHash: Buffer.from(result.actionHash),
+  };
+}
+
+/**
+ * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(End)`.
+ */
+export function buildPrivateEndKaigiTransaction({
+  chainId,
+  callId,
+  endedAtMs = null,
+  artifacts,
+  feeSpend,
+  metadata = null,
+  creationTimeMs = null,
+  nonce = null,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildPrivateEndKaigiTransaction !== "function") {
+    throw new Error(
+      "native binding 'buildPrivateEndKaigiTransaction' is unavailable",
+    );
+  }
+  const result = native.buildPrivateEndKaigiTransaction(
+    String(chainId ?? "").trim(),
+    String(callId ?? "").trim(),
+    endedAtMs,
+    JSON.stringify(artifacts ?? {}),
+    JSON.stringify(feeSpend ?? {}),
+    normalizeMetadataPayload(metadata, "privateEndKaigi.metadata"),
+    creationTimeMs,
+    nonce,
+  );
+  return {
+    transactionEntrypoint: Buffer.from(result.transactionEntrypoint),
+    hash: Buffer.from(result.hash),
+    actionHash: Buffer.from(result.actionHash),
+  };
+}
+
+/**
  * Build a transaction containing a `Kaigi::RecordKaigiUsage` instruction.
  */
 export function buildRecordKaigiUsageTransaction({
@@ -2204,6 +2381,52 @@ export async function submitSignedTransaction(
     status = await client.getTransactionStatus(hashHex, { allowShortHash: true });
     if (isTerminalStatus(status)) {
       return { hash: hashHex, submission, status };
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await delay(pollIntervalMs);
+  }
+
+  throw new Error("timed out waiting for transaction status");
+}
+
+/**
+ * Submit a raw transaction entrypoint payload and optionally wait for a terminal status.
+ * @param {ToriiClient} client
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} transactionEntrypoint
+ * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} options
+ * @returns {Promise<{hash: string, submission: any, status?: any}>}
+ */
+export async function submitTransactionEntrypoint(
+  client,
+  transactionEntrypoint,
+  options,
+) {
+  if (!(client instanceof ToriiClient)) {
+    throw new TypeError("client must be an instance of ToriiClient");
+  }
+  if (!options || typeof options !== "object") {
+    throw new TypeError("options.hashHex is required for entrypoint submission");
+  }
+  const hashHex = String(options.hashHex ?? "").trim();
+  if (!/^[0-9a-fA-F]{64}$/.test(hashHex)) {
+    throw new TypeError("options.hashHex must be a 32-byte hex string");
+  }
+  const payload = toBuffer(transactionEntrypoint);
+  const submission = await client.submitTransaction(payload);
+
+  if (!options.waitForCommit) {
+    return { hash: hashHex.toLowerCase(), submission };
+  }
+
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const deadline = Date.now() + timeoutMs;
+
+  let status;
+  while (Date.now() <= deadline) {
+    status = await client.getTransactionStatus(hashHex, { allowShortHash: true });
+    if (isTerminalStatus(status)) {
+      return { hash: hashHex.toLowerCase(), submission, status };
     }
     // eslint-disable-next-line no-await-in-loop
     await delay(pollIntervalMs);

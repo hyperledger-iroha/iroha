@@ -62,6 +62,9 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
     fun toI105(prefix: Int): String = encodeI105(prefix, _canonicalBytes)
 
     @Throws(AccountAddressException::class)
+    fun toI105Default(): String = toI105(DEFAULT_I105_DISCRIMINANT)
+
+    @Throws(AccountAddressException::class)
     fun displayFormats(): DisplayFormats = displayFormats(DEFAULT_I105_DISCRIMINANT)
 
     @Throws(AccountAddressException::class)

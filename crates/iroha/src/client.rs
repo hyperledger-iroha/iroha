@@ -5928,7 +5928,8 @@ impl Client {
             crate::data_model::transaction::TransactionEntrypoint::External(entry) => {
                 entry.hash() == target
             }
-            crate::data_model::transaction::TransactionEntrypoint::Time(_) => false,
+            crate::data_model::transaction::TransactionEntrypoint::Time(_)
+            | crate::data_model::transaction::TransactionEntrypoint::PrivateKaigi(_) => false,
         }
     }
 
@@ -6041,6 +6042,8 @@ impl Client {
         &self,
         transaction: &SignedTransaction,
     ) -> (B, HashOf<SignedTransaction>) {
+        // Public Torii ingress accepts a versioned SignedTransaction; internal
+        // TransactionEntrypoint wrapping happens on the server boundary.
         let transaction_bytes: Vec<u8> = transaction.encode_versioned();
         let mut headers = self.headers.clone();
         headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
@@ -10981,6 +10984,7 @@ mod tx_confirmation_stream_tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,
@@ -10997,6 +11001,7 @@ mod tx_confirmation_stream_tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,
@@ -11068,6 +11073,7 @@ mod tx_confirmation_stream_tests {
                     da_commitments_hash: None,
                     da_pin_intents_hash: None,
                     prev_roster_evidence_hash: None,
+                    sccp_commitment_root: None,
                     creation_time_ms: 0,
                     view_change_index: 0,
                     confidential_features: None,
@@ -11096,6 +11102,7 @@ mod tx_confirmation_stream_tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,
@@ -11145,6 +11152,7 @@ mod tx_confirmation_stream_tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,
@@ -11780,6 +11788,7 @@ mod tests {
     };
     use iroha_telemetry::metrics::GovernanceStatus;
     use iroha_test_samples::{ALICE_ID, gen_account_in};
+    use iroha_version::codec::DecodeVersioned;
     use sorafs_car::multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport};
     use sorafs_manifest::repair::{
         REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
@@ -13926,7 +13935,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_transaction_uses_norito_content_type_header() {
+    fn submit_transaction_uses_norito_content_type_header_and_signed_transaction_payload() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let capabilities_body = format!(r#"{{"data_model_version":{DATA_MODEL_VERSION}}}"#);
         let responder = {
@@ -13983,6 +13992,12 @@ mod tests {
             content_type_headers[0].1.as_str(),
             APPLICATION_NORITO,
             "transaction requests must advertise Norito payloads"
+        );
+        SignedTransaction::decode_all_versioned(&snapshot.body)
+            .expect("transaction request body must be a versioned SignedTransaction");
+        assert!(
+            TransactionEntrypoint::decode_all_versioned(&snapshot.body).is_err(),
+            "public /transaction requests must not use internal TransactionEntrypoint envelopes"
         );
     }
 

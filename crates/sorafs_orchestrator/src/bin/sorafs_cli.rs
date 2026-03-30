@@ -115,6 +115,12 @@ fn parse_u32_arg(flag: &str, raw: &str, context: &str) -> Result<u32, String> {
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
+fn parse_u16_arg(flag: &str, raw: &str, context: &str) -> Result<u16, String> {
+    raw.trim()
+        .parse::<u16>()
+        .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
+}
+
 fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
     raw.trim()
         .parse::<Decimal>()
@@ -125,6 +131,38 @@ fn parse_account_id_arg(flag: &str, raw: &str, context: &str) -> Result<AccountI
     AccountId::parse_encoded(raw.trim())
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
+}
+
+fn parse_account_id_arg_with_prefix(
+    flag: &str,
+    raw: &str,
+    context: &str,
+    expected_prefix: Option<u16>,
+) -> Result<AccountId, String> {
+    if let Some(prefix) = expected_prefix {
+        let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(prefix);
+        return AccountId::parse_encoded(raw.trim())
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| {
+                format!("failed to parse `{flag}` for `{context}` as account id: {err}")
+            });
+    }
+
+    parse_account_id_arg(flag, raw, context)
+}
+
+fn authority_payload_literal(
+    authority: &AccountId,
+    network_prefix: Option<u16>,
+) -> Result<String, String> {
+    match network_prefix {
+        Some(prefix) => authority
+            .to_i105_for_discriminant(prefix)
+            .map_err(|err| format!("failed to encode authority for payload: {err}")),
+        None => authority
+            .canonical_i105()
+            .map_err(|err| format!("failed to encode authority for payload: {err}")),
+    }
 }
 
 fn parse_appeal_verdict(value: &str) -> Result<AppealVerdict, String> {
@@ -1756,7 +1794,7 @@ fn usage() -> String {
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest sign --manifest=PATH (--bundle-out=PATH | --signature-out=PATH) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--identity-token=JWT | --identity-token-env=VAR | --identity-token-file=PATH | --identity-token-provider=github-actions [--identity-token-audience=AUD]] [--include-token=true|false] [--issued-at=UNIX]
   sorafs_cli manifest verify-signature --manifest=PATH (--bundle=PATH | (--signature=PATH --public-key-hex=HEX)) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--expect-token-hash=HEX]
-  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
+  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
@@ -4415,6 +4453,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let mut submitted_epoch: Option<u64> = None;
     let mut resolve_submitted_epoch = false;
     let mut authority_str: Option<String> = None;
+    let mut authority_network_prefix: Option<u16> = None;
     let mut private_key_inline: Option<String> = None;
     let mut private_key_path: Option<PathBuf> = None;
     let mut alias_namespace: Option<String> = None;
@@ -4446,6 +4485,13 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
                 resolve_submitted_epoch = parse_bool_flag(value, "--resolve-submitted-epoch")?;
             }
             "--authority" => authority_str = Some(value.to_string()),
+            "--network-prefix" => {
+                authority_network_prefix = Some(parse_u16_arg(
+                    "--network-prefix",
+                    value,
+                    "sorafs_cli manifest submit",
+                )?);
+            }
             "--private-key" => {
                 if private_key_path.is_some() {
                     return Err(
@@ -4550,9 +4596,22 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         ));
     }
     let manifest_car_digest_hex = hex_encode(manifest.car_digest);
-    let authority = AccountId::parse_encoded(&authority_str)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| format!("invalid authority: {err}"))?;
+    let authority = parse_account_id_arg_with_prefix(
+        "--authority",
+        &authority_str,
+        "sorafs_cli manifest submit",
+        authority_network_prefix,
+    )
+    .map_err(|err| {
+        err.strip_prefix(
+            "failed to parse `--authority` for `sorafs_cli manifest submit` as account id: ",
+        )
+        .map_or_else(
+            || format!("invalid authority: {err}"),
+            |reason| format!("invalid authority: {reason}"),
+        )
+    })?;
+    let authority_literal = authority_payload_literal(&authority, authority_network_prefix)?;
     let private_key = match (private_key_inline, private_key_path) {
         (Some(inline), None) => parse_private_key_inline(&inline)?,
         (None, Some(path)) => load_private_key_from_file(&path)?,
@@ -4595,7 +4654,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     };
 
     let payload = build_pin_register_payload(
-        &authority,
+        &authority_literal,
         private_key.clone(),
         &manifest,
         chunk_digest,
@@ -4647,16 +4706,18 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         )
     } else if should_fallback_manifest_submit_status(status) {
         let fallback = submit_manifest_via_transaction_endpoint(
-            &client,
-            &torii_base_url,
-            &authority,
-            &private_key,
+            &ManifestSubmitRequest {
+                client: &client,
+                torii_base_url: &torii_base_url,
+                authority: &authority,
+                private_key: &private_key,
+                alias_inputs: alias_inputs.as_ref(),
+                api_version_hint: api_version_hint.as_deref(),
+            },
             &manifest,
             chunk_digest,
             submitted_epoch,
-            alias_inputs.as_ref(),
             successor_digest,
-            api_version_hint.as_deref(),
         )
         .map_err(|err| {
             format!(
@@ -4701,7 +4762,7 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         Value::from(response_status.as_u16() as u64),
     );
     summary.insert("submitted_epoch".into(), Value::from(submitted_epoch));
-    summary.insert("authority".into(), Value::from(authority.to_string()));
+    summary.insert("authority".into(), Value::from(authority_literal));
     summary.insert("submission_mode".into(), Value::from(submission_mode));
     summary.insert(
         "manifest_path".into(),
@@ -4797,17 +4858,21 @@ struct TransactionConfirmation {
     rejection_message: Option<String>,
 }
 
+struct ManifestSubmitRequest<'a> {
+    client: &'a HttpClient,
+    torii_base_url: &'a Url,
+    authority: &'a AccountId,
+    private_key: &'a PrivateKey,
+    alias_inputs: Option<&'a AliasInputs>,
+    api_version_hint: Option<&'a str>,
+}
+
 fn submit_manifest_via_transaction_endpoint(
-    client: &HttpClient,
-    torii_base_url: &Url,
-    authority: &AccountId,
-    private_key: &PrivateKey,
+    request: &ManifestSubmitRequest<'_>,
     manifest: &ManifestV1,
     chunk_digest: [u8; 32],
     submitted_epoch: u64,
-    alias_inputs: Option<&AliasInputs>,
     successor_digest: Option<[u8; 32]>,
-    api_version_hint: Option<&str>,
 ) -> Result<ManifestSubmitFallback, String> {
     use iroha_data_model::{
         ChainId,
@@ -4815,13 +4880,13 @@ fn submit_manifest_via_transaction_endpoint(
         sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
     };
 
-    let chain_id = resolve_chain_id_from_sorafs_registry(client, torii_base_url)?;
+    let chain_id = resolve_chain_id_from_sorafs_registry(request.client, request.torii_base_url)?;
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let chunker = chunker_handle_from_profile(&manifest.chunking);
     let policy = convert_pin_policy(&manifest.pin_policy);
-    let alias = alias_inputs.map(|inputs| ManifestAliasBinding {
+    let alias = request.alias_inputs.map(|inputs| ManifestAliasBinding {
         namespace: inputs.namespace.clone(),
         name: inputs.name.clone(),
         proof: inputs.proof.clone(),
@@ -4836,23 +4901,27 @@ fn submit_manifest_via_transaction_endpoint(
         alias,
         successor_of,
     };
-    let transaction = TransactionBuilder::new(ChainId::from(chain_id.clone()), authority.clone())
-        .with_instructions([InstructionBox::from(instruction)])
-        .sign(private_key);
+    let transaction =
+        TransactionBuilder::new(ChainId::from(chain_id.clone()), request.authority.clone())
+            .with_instructions([InstructionBox::from(instruction)])
+            .sign(request.private_key);
     let tx_hash_hex = hex_encode(transaction.hash().as_ref());
-    let tx_endpoint = torii_base_url
+    let tx_endpoint = request
+        .torii_base_url
         .join("transaction")
         .map_err(|err| format!("failed to build Torii transaction endpoint URL: {err}"))?;
-    let mut request = client
+    let mut request_builder = request
+        .client
         .post(tx_endpoint.as_str())
         .header(CONTENT_TYPE, "application/x-norito");
-    if let Some(version) = api_version_hint
+    if let Some(version) = request
+        .api_version_hint
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        request = request.header("x-iroha-api-version", version);
+        request_builder = request_builder.header("x-iroha-api-version", version);
     }
-    let response = request
+    let response = request_builder
         .body(transaction.encode_versioned())
         .send()
         .map_err(|err| format!("failed to submit fallback transaction to Torii: {err}"))?;
@@ -4869,12 +4938,16 @@ fn submit_manifest_via_transaction_endpoint(
         ));
     }
 
-    let confirmation =
-        wait_for_transaction_confirmation(client, torii_base_url, &tx_hash_hex).map_err(|err| {
-            format!(
-                "submitted fallback transaction `{tx_hash_hex}` but failed to confirm the result: {err}"
-            )
-        })?;
+    let confirmation = wait_for_transaction_confirmation(
+        request.client,
+        request.torii_base_url,
+        &tx_hash_hex,
+    )
+    .map_err(|err| {
+        format!(
+            "submitted fallback transaction `{tx_hash_hex}` but failed to confirm the result: {err}"
+        )
+    })?;
 
     let mut map = Map::new();
     map.insert(
@@ -6945,7 +7018,7 @@ fn alias_inputs_from_flags(
 }
 
 fn build_pin_register_payload(
-    authority: &AccountId,
+    authority_literal: &str,
     private_key: PrivateKey,
     manifest: &ManifestV1,
     chunk_digest_sha3: [u8; 32],
@@ -6981,7 +7054,10 @@ fn build_pin_register_payload(
     );
 
     let mut map = Map::new();
-    map.insert("authority".into(), Value::from(authority.to_string()));
+    map.insert(
+        "authority".into(),
+        Value::from(authority_literal.to_owned()),
+    );
     map.insert(
         "private_key".into(),
         to_value(&ExposedPrivateKey(private_key))
@@ -7179,6 +7255,7 @@ fn registry_pin_policy_to_value(policy: &RegistryPinPolicy) -> Value {
 mod tests {
     use std::{fs, path::Path};
 
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::json::Map;
     use sorafs_manifest::{
         GovernanceProofs, PinPolicy as ManifestPinPolicy, StorageClass as ManifestStorageClass,
@@ -7208,6 +7285,102 @@ mod tests {
             .extend_metadata([("release".into(), "test".into())])
             .build()
             .expect("manifest build")
+    }
+
+    #[test]
+    fn parse_account_id_arg_with_prefix_accepts_matching_i105_discriminant() {
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let encoded = account
+            .to_i105_for_discriminant(369)
+            .expect("encode i105 with taira discriminant");
+
+        let parsed = parse_account_id_arg_with_prefix(
+            "--authority",
+            &encoded,
+            "sorafs_cli manifest submit",
+            Some(369),
+        )
+        .expect("parse authority with explicit discriminant");
+
+        assert_eq!(parsed, account);
+    }
+
+    #[test]
+    fn parse_account_id_arg_with_prefix_rejects_mismatched_i105_discriminant() {
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x6B; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let encoded = account
+            .to_i105_for_discriminant(369)
+            .expect("encode i105 with taira discriminant");
+
+        let err = parse_account_id_arg_with_prefix(
+            "--authority",
+            &encoded,
+            "sorafs_cli manifest submit",
+            Some(753),
+        )
+        .expect_err("mismatched discriminant should fail");
+
+        assert!(
+            err.contains("ERR_UNEXPECTED_NETWORK_PREFIX"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn authority_payload_literal_preserves_explicit_i105_discriminant() {
+        let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(753);
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x7C; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let expected = account
+            .to_i105_for_discriminant(369)
+            .expect("encode taira authority");
+
+        let literal =
+            authority_payload_literal(&account, Some(369)).expect("render authority payload");
+
+        assert_eq!(literal, expected);
+    }
+
+    #[test]
+    fn build_pin_register_payload_uses_supplied_authority_literal() {
+        let manifest = sample_manifest();
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x8D; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let authority_literal = account
+            .to_i105_for_discriminant(369)
+            .expect("encode taira authority");
+
+        let payload = build_pin_register_payload(
+            &authority_literal,
+            KeyPair::from_seed(vec![0x9E; 32], Algorithm::Ed25519)
+                .private_key()
+                .clone(),
+            &manifest,
+            [0xCD; 32],
+            99,
+            None,
+            None,
+        )
+        .expect("build payload");
+
+        assert_eq!(
+            payload["authority"].as_str().expect("authority literal"),
+            authority_literal
+        );
     }
 
     #[test]

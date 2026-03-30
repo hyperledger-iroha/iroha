@@ -1274,6 +1274,7 @@ fn block_with_da_commitment(manifest_hash: ManifestDigest) -> SignedBlock {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -4853,24 +4854,6 @@ async fn quorum_timeout_extends_when_da_enabled() {
     );
 
     harness.shutdown.send();
-}
-
-#[test]
-fn online_peer_deferral_skips_bootstrap_without_observed_peers() {
-    let should_defer = super::should_defer_for_online_peers(1, 3, false, 0, None);
-    assert!(
-        !should_defer,
-        "bootstrap should not defer solely because online peers are unknown"
-    );
-}
-
-#[test]
-fn online_peer_deferral_applies_after_successful_proposal() {
-    let should_defer = super::should_defer_for_online_peers(1, 3, false, 0, Some(Instant::now()));
-    assert!(
-        should_defer,
-        "deferral should apply once online peer tracking has been established"
-    );
 }
 
 #[test]
@@ -11427,6 +11410,7 @@ async fn block_sync_update_skips_fetch_when_checkpoint_present() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 4,
         confidential_features: None,
@@ -11907,6 +11891,7 @@ async fn block_sync_caches_qc_before_block_known() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -12003,6 +11988,7 @@ async fn block_sync_cache_rejects_qc_epoch_mismatch() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -12110,6 +12096,7 @@ async fn block_sync_cache_uses_activation_height_mode_tag() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -12189,6 +12176,7 @@ async fn process_precommit_qc_allows_realign_on_missing_parent() {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: view,
             confidential_features: None,
@@ -12284,6 +12272,7 @@ async fn process_precommit_qc_defers_realign_when_locked_payload_missing() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -13882,6 +13871,7 @@ async fn commit_pipeline_uses_commit_qc_roster_for_validation() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -31811,6 +31801,7 @@ async fn maybe_emit_rbc_deliver_recovers_block_created_locally() {
         creation_time_ms,
         view_change_index: view,
         confidential_features,
+        sccp_commitment_root: None,
     };
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(tx);
@@ -32847,6 +32838,7 @@ fn manifest_block_guard_rejects_hash_mismatch_on_audit_lane() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35215,6 +35207,7 @@ fn block_sync_selection_uses_persisted_commit_roster_snapshot() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35335,6 +35328,7 @@ fn block_sync_update_uses_journal_roster() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35474,6 +35468,7 @@ fn block_sync_update_includes_commit_qc_from_history() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35582,6 +35577,7 @@ fn block_sync_update_includes_commit_qc_from_precommit_signers() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35671,6 +35667,7 @@ fn block_sync_update_includes_checkpoint_from_history() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -35780,6 +35777,7 @@ fn block_sync_update_canonicalizes_signature_indices_for_roster() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 1,
         confidential_features: None,
@@ -35867,6 +35865,7 @@ fn block_sync_update_uses_activation_height_mode_tag() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -35933,6 +35932,7 @@ fn block_sync_update_uses_active_roster_for_checkpoint() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -36056,6 +36056,7 @@ fn block_sync_update_uses_history_after_restart_like_path() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: 0,
         confidential_features: None,
@@ -37471,8 +37472,12 @@ async fn seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_v
         "slot-owned handoff should preserve the quorum-timeout reason on the seeded frontier owner"
     );
     assert!(
-        actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
-        "seeded same-height commit vote evidence must suppress competing local proposals after a view advance"
+        actor.slot_has_proposal_evidence(height, view),
+        "seeded same-height commit vote evidence should count as proposal evidence for its exact slot"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
+        "seeded same-height vote evidence must not leak into later views"
     );
 
     harness.shutdown.send();
@@ -48953,10 +48958,17 @@ async fn roster_unavailability_candidate_source_matches_consensus_mode() {
         "permissioned candidate source should clamp live-key filtering to the committed horizon"
     );
 
+    let npos_lane_ids =
+        crate::state::validator_lane_ids_for_peer(&world, actor.common_config.peer.id());
+    let npos_candidates = if npos_lane_ids.is_empty() {
+        super::roster::stake_active_validator_roster_from_world(&world)
+    } else {
+        super::roster::stake_active_validator_roster_for_lanes_from_world(&world, &npos_lane_ids)
+    };
     let npos_expected = super::roster::canonicalize_roster_for_mode(
         super::roster::filter_roster_with_live_consensus_keys_at_height_world(
             &world,
-            super::roster::stake_active_validator_roster_from_world(&world),
+            npos_candidates.clone(),
             live_height,
         ),
         ConsensusMode::Npos,
@@ -48969,7 +48981,7 @@ async fn roster_unavailability_candidate_source_matches_consensus_mode() {
     let npos_far_expected = super::roster::canonicalize_roster_for_mode(
         super::roster::filter_roster_with_live_consensus_keys_at_height_world(
             &world,
-            super::roster::stake_active_validator_roster_from_world(&world),
+            npos_candidates,
             far_live_height,
         ),
         ConsensusMode::Npos,
@@ -60141,6 +60153,131 @@ async fn force_view_change_if_idle_preserves_quorum_timeout_owner_across_post_ro
             .forced_view_after_timeout
             .is_some_and(|forced| forced == (height, current_view.saturating_add(1))),
         "direct frontier rotation should install the next forced-view marker"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_treats_post_rotation_stale_frontier_owner_as_no_proposal() {
+    use std::borrow::Cow;
+
+    let _guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = false;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let initial_view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    let stale_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD4; Hash::LENGTH]));
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        initial_view,
+        stale_block_hash,
+        now,
+        Duration::from_secs(1),
+        None,
+        BTreeSet::new(),
+        true,
+        false,
+        true,
+        None,
+        None,
+    ));
+
+    actor.trigger_view_change_with_cause(height, initial_view, super::ViewChangeCause::MissingQc);
+
+    let current_view = initial_view.saturating_add(1);
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "setup should advance to the post-rotation view"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height == height
+                && slot.view == initial_view
+                && slot.block_hash == stale_block_hash),
+        "stale frontier ownership should survive for repair after the view advances"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, current_view),
+        "old-view frontier ownership must not count as proposal evidence for the post-rotation round"
+    );
+
+    let no_proposal_timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let proposal_seen_timeout = super::idle_view_timeout(
+        true,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    assert!(
+        no_proposal_timeout < proposal_seen_timeout,
+        "test requires the no-proposal timeout to be shorter so the stale-owner classification is observable"
+    );
+
+    let rotate_at = now
+        .checked_add(no_proposal_timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let round_started = rotate_at
+        .checked_sub(no_proposal_timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(rotate_at);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, round_started);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: round_started,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
+
+    let before = super::status::snapshot();
+    assert!(
+        actor.force_view_change_if_idle(rotate_at),
+        "post-rotation stale frontier ownership should follow the no-proposal MissingQc timeout path"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1)),
+        "idle MissingQc should rotate again once the shorter no-proposal timeout elapses"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total,
+        before.view_change_causes.missing_qc_total.saturating_add(1),
+        "post-rotation idle timeout should count one additional MissingQc rotation"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -73026,6 +73163,107 @@ async fn pacemaker_skips_proposal_when_only_inflight_transactions() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_allows_proposal_with_low_online_peers_after_prior_success() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let block1 = sample_block(1, 0, None);
+    actor.kura.store_block(block1.clone()).expect("store block");
+    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+    state.push_block_hash_for_testing(block1.hash());
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+
+    let committed_height = actor.state.view().height() as u64;
+    let tracked_height = committed_height.saturating_add(1);
+    let mut highest_qc = actor.latest_committed_qc().unwrap_or_else(|| {
+        let mut qc = sample_qc_ref(committed_height, 0);
+        qc.phase = Phase::Commit;
+        qc
+    });
+    highest_qc.phase = Phase::Commit;
+
+    let topology = actor.effective_commit_topology();
+    let required = super::network_topology::Topology::new(topology.clone()).min_votes_for_commit();
+    let local_peer = actor.common_config.peer.id().clone();
+    let search_limit = u64::try_from(topology.len().saturating_mul(8))
+        .unwrap_or(0)
+        .max(1);
+    let view = (0..search_limit)
+        .find(|candidate_view| {
+            let mut candidate_topology = super::network_topology::Topology::new(topology.clone());
+            actor
+                .leader_index_for(&mut candidate_topology, tracked_height, *candidate_view)
+                .ok()
+                .is_some_and(|leader| {
+                    candidate_topology
+                        .position(local_peer.public_key())
+                        .is_some_and(|idx| idx == leader)
+                })
+        })
+        .expect("find view where local peer is leader");
+
+    let mut recorded = 0usize;
+    for peer in topology.iter() {
+        if peer == &local_peer {
+            continue;
+        }
+        actor.subsystems.propose.new_view_tracker.record(
+            tracked_height,
+            view,
+            peer.clone(),
+            highest_qc,
+        );
+        recorded = recorded.saturating_add(1);
+        if recorded.saturating_add(1) >= required {
+            break;
+        }
+    }
+
+    let now = Instant::now();
+    actor
+        .phase_tracker
+        .on_view_change(tracked_height, view, now);
+    actor.subsystems.propose.last_successful_proposal =
+        Some(now.checked_sub(Duration::from_millis(1)).unwrap_or(now));
+
+    let remote_online = actor.network.online_peers(std::collections::HashSet::len);
+    assert_eq!(remote_online, 0, "test expects no remote peers online");
+    assert!(
+        remote_online.saturating_add(1) < required,
+        "test requires local + online snapshot to remain below commit quorum"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "low online peer counts should stay advisory even after a prior successful proposal"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, view)
+            .is_some(),
+        "proposal should be assembled despite the transient online-peer undercount"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_defers_reproposal_when_authoritative_block_already_owns_slot() {
     use std::borrow::Cow;
 
@@ -73125,6 +73363,85 @@ async fn pacemaker_defers_reproposal_when_frontier_slot_owns_current_height() {
             .get_proposal(tracked_height, 0)
             .is_none(),
         "frontier-slot ownership should block same-height proposal assembly even without cached proposal metadata"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_stale_frontier_owner()
+ {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.highest_qc = None;
+
+    let tracked_height = actor.state.view().height() as u64 + 1;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(tracked_height, now);
+    let stale_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC3; Hash::LENGTH]));
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        tracked_height,
+        0,
+        stale_block_hash,
+        now,
+        Duration::from_secs(1),
+        None,
+        BTreeSet::new(),
+        true,
+        false,
+        true,
+        None,
+        None,
+    ));
+
+    actor.trigger_view_change_with_cause(tracked_height, 0, super::ViewChangeCause::MissingQc);
+
+    assert_eq!(
+        actor.phase_tracker.current_view(tracked_height),
+        Some(1),
+        "missing-QC recovery should advance the round to the next view"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height == tracked_height
+                && slot.view == 0
+                && slot.block_hash == stale_block_hash),
+        "view advance should preserve the stale frontier candidate for repair"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(tracked_height, 1),
+        "stale frontier ownership from the prior view must not suppress proposal assembly for the new view"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "pacemaker should assemble a fresh proposal once only stale old-view frontier ownership remains"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, 1)
+            .is_some(),
+        "new-view proposal should be cached for the post-rotation slot"
     );
 
     harness.shutdown.send();
@@ -75387,145 +75704,6 @@ async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn pacemaker_defers_when_active_roster_empty() {
-    use crate::sumeragi::status;
-
-    status::reset_commit_certs_for_tests();
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let block1 = sample_block(1, 0, None);
-    let block2 = sample_block(2, 0, Some(block1.hash()));
-    actor
-        .kura
-        .store_block(block1.clone())
-        .expect("store block 1");
-    actor
-        .kura
-        .store_block(block2.clone())
-        .expect("store block 2");
-    let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
-    state.push_block_hash_for_testing(block1.hash());
-    state.push_block_hash_for_testing(block2.hash());
-
-    let validator_set = actor.effective_commit_topology();
-    let parent_hash = block2.hash();
-    let mut signers = BTreeSet::new();
-    for idx in 0..validator_set.len() {
-        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
-    }
-    let signers_bitmap = super::build_signers_bitmap(&signers, validator_set.len());
-    let topology = super::network_topology::Topology::new(validator_set.clone());
-    let bls_aggregate_signature = aggregate_signature_for_bitmap(
-        &actor.common_config.chain,
-        PERMISSIONED_TAG,
-        Phase::Commit,
-        parent_hash,
-        2,
-        0,
-        0,
-        &signers_bitmap,
-        &topology,
-        &harness.key_pairs,
-    );
-    status::record_commit_qc(Qc {
-        phase: Phase::Commit,
-        subject_block_hash: parent_hash,
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
-        height: 2,
-        view: 0,
-        epoch: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        aggregate: QcAggregate {
-            signers_bitmap,
-            bls_aggregate_signature,
-        },
-    });
-
-    {
-        let mut topo_block = actor.state.commit_topology.block();
-        topo_block.mutate_vec(Vec::clear);
-        topo_block.commit();
-    }
-    {
-        let mut world_block = actor.state.world.block();
-        world_block.peers.get_mut().clear();
-        world_block.commit();
-    }
-    {
-        let key_pair = KeyPair::random();
-        let peer_id = PeerId::new(key_pair.public_key().clone());
-        let address: SocketAddr = "127.0.0.1:7099".parse().expect("socket address parses");
-        let peer = Peer::new(address.into(), peer_id);
-        let trusted = trusted_with_pops(peer, Vec::new(), BTreeMap::new());
-        actor.common_config.trusted_peers = iroha_config::base::WithOrigin::inline(trusted);
-    }
-    assert!(
-        actor.state.commit_topology_snapshot().is_empty(),
-        "commit topology should be empty for this test"
-    );
-
-    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
-    actor.highest_qc = None;
-
-    let committed_height = actor.state.view().height() as u64;
-    let tracked_height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let offline_grace = actor.commit_quorum_timeout();
-    let now = Instant::now();
-    let start = now
-        .checked_sub(offline_grace + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor.phase_tracker.start_new_round(tracked_height, start);
-
-    let active_roster = actor.effective_commit_topology();
-    let proposed = actor.on_pacemaker_propose_ready(now);
-    if active_roster.len() <= 1 {
-        assert!(
-            proposed,
-            "single-validator fallback roster should allow pacemaker progress"
-        );
-    } else {
-        assert!(
-            !proposed,
-            "pacemaker should defer when online validators are below quorum"
-        );
-        assert!(
-            actor
-                .subsystems
-                .propose
-                .proposal_cache
-                .get_proposal(tracked_height, 0)
-                .is_none(),
-            "no proposal should be assembled while quorum is unavailable"
-        );
-    }
-
-    status::reset_commit_certs_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_updates_highest_qc_status_from_new_view() {
     let _guard = super::status::qc_status_test_guard();
     super::status::set_locked_qc(0, 0, None);
@@ -76720,6 +76898,7 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 1,
         view_change_index: view,
         confidential_features: None,
@@ -80952,7 +81131,8 @@ async fn slot_has_proposal_evidence_preserves_authoritative_frontier_owner_witho
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn slot_has_proposal_evidence_preserves_same_height_candidate_across_view_change() {
+async fn slot_has_proposal_evidence_keeps_frontier_candidate_across_view_change_without_leaking_into_next_view()
+ {
     let mut harness = test_actor_harness(4).await;
     let _proof_guard = super::status::view_change_proof_test_guard();
     let actor = &mut harness.actor;
@@ -80999,8 +81179,12 @@ async fn slot_has_proposal_evidence_preserves_same_height_candidate_across_view_
         "same-height view advance should still proceed through the slot FSM"
     );
     assert!(
-        actor.slot_has_proposal_evidence(height, view + 1),
-        "same-height view changes must preserve authoritative proposal evidence from the existing slot owner"
+        actor.slot_has_proposal_evidence(height, view),
+        "same-view frontier ownership must remain authoritative after the view advances"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, view + 1),
+        "stale same-height frontier ownership must not be treated as proposal evidence for the next view"
     );
     assert!(
         actor
@@ -81014,7 +81198,8 @@ async fn slot_has_proposal_evidence_preserves_same_height_candidate_across_view_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn slot_has_proposal_evidence_counts_await_body_and_deep_catchup_slot_ownership() {
+async fn slot_has_proposal_evidence_limits_await_body_and_deep_catchup_slot_ownership_to_exact_view()
+ {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -81039,8 +81224,12 @@ async fn slot_has_proposal_evidence_counts_await_body_and_deep_catchup_slot_owne
     ));
 
     assert!(
-        actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
-        "an active committed+1 slot awaiting the exact body must still suppress competing same-height proposal/view-change churn"
+        actor.slot_has_proposal_evidence(height, view),
+        "an active committed+1 slot awaiting the exact body should still count as proposal evidence for its exact view"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
+        "await-body frontier ownership must not suppress proposal evidence for later views"
     );
 
     let lag_actions = actor.apply_frontier_slot_event(
@@ -81051,8 +81240,12 @@ async fn slot_has_proposal_evidence_counts_await_body_and_deep_catchup_slot_owne
     );
     assert_eq!(lag_actions.enter_deep_catchup, Some("frontier_stall_reset"));
     assert!(
-        actor.slot_has_proposal_evidence(height, view.saturating_add(2)),
-        "deep-catchup ownership must continue to count as same-height proposal evidence until the slot is finalized or superseded"
+        actor.slot_has_proposal_evidence(height, view),
+        "deep-catchup ownership should still count as proposal evidence for the exact stale slot"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, view.saturating_add(2)),
+        "deep-catchup ownership must not continue suppressing proposal evidence for later views"
     );
 
     harness.shutdown.send();
@@ -92374,8 +92567,12 @@ async fn zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_othe
         "current-frontier timeout handoff should stay inside the slot owner, not the legacy frontier recovery controller"
     );
     assert!(
-        actor.slot_has_proposal_evidence(height, local_view.saturating_add(1)),
-        "same-height QC-owned slot should suppress later local reproposals even after the local pending view advanced"
+        actor.slot_has_proposal_evidence(height, committed_view),
+        "same-height QC-owned slot should still count as proposal evidence for the exact authoritative slot"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, local_view.saturating_add(1)),
+        "same-height QC-owned slot must not suppress later reproposals once the view moves beyond the authoritative slot"
     );
     assert!(
         actor.subsystems.propose.forced_view_after_timeout.is_none(),
@@ -94098,7 +94295,7 @@ async fn reschedule_near_quorum_vote_backed_defers_during_first_frontier_settle_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reschedule_defers_vote_backed_quorum_timeout_while_consensus_backlogged() {
+async fn reschedule_ignores_vote_backed_quorum_timeout_rbc_queue_backlog() {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
@@ -94171,30 +94368,24 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_consensus_backlogged
     );
 
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let quiet_window = super::saturating_mul_duration(actor.rebroadcast_cooldown(), 8)
+        .max(Duration::from_millis(400))
+        .max(quorum_timeout);
+    let stalled_at = Instant::now() - quiet_window - Duration::from_millis(1);
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
-    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
-    pending.touch_progress(Instant::now());
+    pending.inserted_at = stalled_at;
+    pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    let _ = actor.try_replay_deferred_votes();
+    actor
+        .pending
+        .missing_block_requests
+        .retain(|_, request| !(request.height == height && request.view == view_idx));
 
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
     assert!(
-        !actor.reschedule_stale_pending_blocks(None),
-        "vote-backed pending should defer while consensus backlog is still progressing"
-    );
-    let pending_after = actor
-        .pending
-        .pending_blocks
-        .get(&block_hash)
-        .expect("pending retained");
-    assert!(
-        pending_after.last_quorum_reschedule.is_none(),
-        "vote-backed pending should not be quorum-rescheduled under active consensus backlog"
-    );
-
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::RbcChunks, 1);
-    assert!(
         actor.reschedule_stale_pending_blocks(None),
-        "clearing consensus backlog should allow quorum reschedule"
+        "unrelated RBC queue depth should not suppress a vote-backed quorum retransmit once the quiet window expires"
     );
     let pending_after = actor
         .pending
@@ -94203,7 +94394,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_consensus_backlogged
         .expect("pending retained");
     assert!(
         pending_after.last_quorum_reschedule.is_some(),
-        "pending should be quorum-rescheduled once consensus backlog clears"
+        "vote-backed pending should still reschedule under unrelated RBC queue depth"
     );
 
     harness.shutdown.send();
@@ -94299,7 +94490,7 @@ async fn reschedule_skips_vote_backed_quorum_timeout_while_progress_is_recent() 
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress() {
+async fn reschedule_rearms_repeated_vote_backed_quorum_timeout_at_terminal_height() {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
     let mut consensus_cfg = test_sumeragi_config();
@@ -94360,8 +94551,11 @@ async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progre
     actor.handle_vote(vote);
 
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
+    let quiet_window = super::saturating_mul_duration(actor.rebroadcast_cooldown(), 8)
+        .max(Duration::from_millis(400))
+        .max(quorum_timeout);
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
-    let stalled_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    let stalled_at = Instant::now() - quiet_window - Duration::from_millis(1);
     pending.inserted_at = stalled_at;
     pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
@@ -94369,6 +94563,8 @@ async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progre
         .pending
         .missing_block_requests
         .retain(|_, request| !(request.height == height && request.view == view_idx));
+    actor.frontier_slot = None;
+    actor.frontier_recovery = None;
 
     assert!(
         actor.reschedule_stale_pending_blocks(None),
@@ -94402,23 +94598,24 @@ async fn reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progre
     actor.touch_pending_progress(block_hash, height, view_idx, non_vote_progress_at);
     let second_attempt_at = non_vote_progress_at + quorum_timeout + Duration::from_millis(1);
     assert!(
-        !actor.reschedule_stale_pending_blocks_with_now(second_attempt_at, None),
-        "vote-backed quorum timeout should not reschedule again without higher vote count"
+        actor.reschedule_stale_pending_blocks_with_now(second_attempt_at, None),
+        "terminal contiguous-frontier vote-backed recovery should rearm on cooldown even without higher vote count"
     );
     let pending_after = actor
         .pending
         .pending_blocks
         .get(&block_hash)
         .expect("pending retained");
-    assert_eq!(
-        pending_after.last_quorum_reschedule,
-        Some(stale_reschedule),
-        "duplicate reschedule should not update the send gate"
+    assert!(
+        pending_after
+            .last_quorum_reschedule
+            .is_some_and(|at| at >= second_attempt_at),
+        "re-armed vote-backed recovery should refresh the resend gate at the new attempt instant"
     );
     let posts_after_second: Vec<_> = harness.background_rx.try_iter().collect();
     assert!(
-        posts_after_second.is_empty(),
-        "non-vote progress should not emit retransmit work"
+        !posts_after_second.is_empty(),
+        "re-armed terminal-height recovery should emit another retransmit burst"
     );
 
     harness.shutdown.send();
@@ -94496,6 +94693,7 @@ async fn reschedule_defers_first_vote_backed_quorum_timeout_during_frontier_sett
     pending.inserted_at = now - quorum_timeout - Duration::from_millis(1);
     pending.touch_progress(now - settling_progress_age);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    let _ = actor.try_replay_deferred_votes();
     actor
         .pending
         .missing_block_requests
@@ -94521,8 +94719,29 @@ async fn reschedule_defers_first_vote_backed_quorum_timeout_during_frontier_sett
     );
 
     let stale_now = now + Duration::from_millis(2);
+    let second_reschedule = actor.reschedule_stale_pending_blocks_with_now(stale_now, None);
+    if !second_reschedule {
+        eprintln!(
+            "debug_settle_window targets={:?} last_quorum_reschedule={:?} frontier_slot={:?} frontier_recovery={:?}",
+            actor.quorum_retransmit_targets_for_missing_votes(
+                block_hash,
+                height,
+                view_idx,
+                &actor.effective_commit_topology(),
+                required,
+                1,
+            ),
+            actor
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .and_then(|pending| pending.last_quorum_reschedule),
+            actor.frontier_slot,
+            actor.frontier_recovery,
+        );
+    }
     assert!(
-        actor.reschedule_stale_pending_blocks_with_now(stale_now, None),
+        second_reschedule,
         "first vote-backed resend should arm once the settle window expires"
     );
     let pending_after = actor
@@ -94746,6 +94965,7 @@ async fn reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_w
         .unwrap_or(now);
     pending.touch_progress(last_progress);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    let _ = actor.try_replay_deferred_votes();
     actor
         .pending
         .missing_block_requests
@@ -94908,6 +95128,10 @@ async fn reschedule_skips_vote_backed_retransmit_while_same_height_rbc_sender_ac
         .unwrap_or(now);
     pending.touch_progress(last_progress);
     actor.pending.pending_blocks.insert(block_hash, pending);
+    actor
+        .pending
+        .missing_block_requests
+        .retain(|_, request| !(request.height == height && request.view == view_idx));
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
         frontier_height: height,
         phase: super::FrontierRecoveryPhase::CatchUp,
@@ -95033,6 +95257,11 @@ async fn reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window()
             .unwrap_or(now),
     );
     actor.pending.pending_blocks.insert(block_hash, pending);
+    let _ = actor.try_replay_deferred_votes();
+    actor
+        .pending
+        .missing_block_requests
+        .retain(|_, request| !(request.height == height && request.view == view_idx));
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
         frontier_height: height,
         phase: super::FrontierRecoveryPhase::CatchUp,
@@ -95190,7 +95419,7 @@ async fn reschedule_forces_after_backlog_extension_cap_reached() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
+async fn reschedule_ignores_quorum_timeout_vote_queue_backlog() {
     let _worker_guard = super::status::worker_queue_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -95208,35 +95437,21 @@ async fn reschedule_defers_quorum_timeout_while_vote_queue_backlogged() {
     let quorum_timeout = actor.quorum_timeout(actor.runtime_da_enabled());
 
     let mut pending = PendingBlock::new(block, payload_hash, height, view_idx);
-    pending.inserted_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    let stalled_at = Instant::now() - quorum_timeout - Duration::from_millis(1);
+    pending.inserted_at = stalled_at;
+    pending.touch_progress(stalled_at);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view_idx, payload_hash);
 
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::Votes);
 
     assert!(
-        !actor.reschedule_stale_pending_blocks(None),
-        "vote backlog should defer quorum reschedule"
-    );
-    let pending_after = actor
-        .pending
-        .pending_blocks
-        .get(&block_hash)
-        .expect("pending retained");
-    assert!(
-        pending_after.last_quorum_reschedule.is_none(),
-        "pending should not be quorum-rescheduled while vote queue is backlogged"
-    );
-
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
-
-    assert!(
         actor.reschedule_stale_pending_blocks(None),
-        "clearing vote backlog should allow quorum reschedule"
+        "generic vote queue depth should not suppress quorum-timeout recovery"
     );
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
-        "zero-vote reschedule should drop the pending block once vote backlog clears"
+        "zero-vote reschedule should drop the pending block even while vote ingress is queued"
     );
 
     harness.shutdown.send();
@@ -97516,6 +97731,7 @@ fn empty_block(height: u64, view: u64, parent: Option<HashOf<BlockHeader>>) -> S
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -97563,6 +97779,7 @@ fn sample_block_with_signature_index(
         creation_time_ms,
         view_change_index: view,
         confidential_features: None,
+        sccp_commitment_root: None,
     };
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(heartbeat);
@@ -97646,6 +97863,7 @@ fn block_with_txs(
         da_commitments_hash: None,
         da_pin_intents_hash: None,
         prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
         creation_time_ms: 0,
         view_change_index: view,
         confidential_features: None,
@@ -97739,6 +97957,7 @@ fn heartbeat_block_for_state(
         creation_time_ms,
         view_change_index: view,
         confidential_features,
+        sccp_commitment_root: None,
     };
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(heartbeat);
@@ -100070,7 +100289,10 @@ fn requeue_block_transactions_preserves_payloads_on_commit_failure() {
     let mut tx_b_builder = TransactionBuilder::new(chain_id, account);
     tx_b_builder.set_nonce(NonZeroU32::new(2).expect("nonce must be non-zero"));
     let tx_b = tx_b_builder.sign(kp.private_key());
-    let txs = vec![tx_a.clone(), tx_b.clone()];
+    let txs = vec![
+        TransactionEntrypoint::External(tx_a.clone()),
+        TransactionEntrypoint::External(tx_b.clone()),
+    ];
 
     let (requeued, failures, duplicate_failures, gossip_hashes) =
         super::requeue_block_transactions(&queue, &state, txs);
@@ -100138,8 +100360,11 @@ fn prev_block_mismatch_requeues_payload() {
     );
     let tx = sample_transaction();
     let block = block_with_txs(9, 3, None, vec![tx.clone()]);
-    let outcome =
-        super::handle_prev_block_mismatch(&queue, &state, block.transactions_vec().clone());
+    let outcome = super::handle_prev_block_mismatch(
+        &queue,
+        &state,
+        block.external_entrypoints_cloned().collect(),
+    );
 
     assert_eq!(outcome.requeued, 1, "payload should be requeued");
     assert_eq!(outcome.failures, 0, "requeue should succeed under capacity");

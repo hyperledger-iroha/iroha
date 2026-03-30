@@ -11446,36 +11446,31 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func setupOfflineCash(
         _ requestBody: ToriiOfflineCashSetupRequest
     ) async throws -> ToriiOfflineCashEnvelope {
-        let _ = requestBody
-        throw serverSideSigningRemoved("/v1/offline/cash/setup")
+        try await postOfflineCashRequest("/v1/offline/cash/setup", body: requestBody)
     }
 
     public func loadOfflineCash(
         _ requestBody: ToriiOfflineCashLoadRequest
     ) async throws -> ToriiOfflineCashEnvelope {
-        let _ = requestBody
-        throw serverSideSigningRemoved("/v1/offline/cash/load")
+        try await postOfflineCashRequest("/v1/offline/cash/load", body: requestBody)
     }
 
     public func refreshOfflineCash(
         _ requestBody: ToriiOfflineCashRefreshRequest
     ) async throws -> ToriiOfflineCashEnvelope {
-        let _ = requestBody
-        throw serverSideSigningRemoved("/v1/offline/cash/refresh")
+        try await postOfflineCashRequest("/v1/offline/cash/refresh", body: requestBody)
     }
 
     public func syncOfflineCash(
         _ requestBody: ToriiOfflineCashSyncRequest
     ) async throws -> ToriiOfflineCashEnvelope {
-        let _ = requestBody
-        throw serverSideSigningRemoved("/v1/offline/cash/sync")
+        try await postOfflineCashRequest("/v1/offline/cash/sync", body: requestBody)
     }
 
     public func redeemOfflineCash(
         _ requestBody: ToriiOfflineCashRedeemRequest
     ) async throws -> ToriiOfflineCashEnvelope {
-        let _ = requestBody
-        throw serverSideSigningRemoved("/v1/offline/cash/redeem")
+        try await postOfflineCashRequest("/v1/offline/cash/redeem", body: requestBody)
     }
 
     public func listOfflineRevocations(
@@ -11493,6 +11488,22 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         let request = try makeRequest(path: "/v1/offline/revocations/bundle", method: .get)
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineRevocationBundle.self, from: data)
+    }
+
+    private func postOfflineCashRequest<RequestBody: Encodable>(
+        _ path: String,
+        body requestBody: RequestBody
+    ) async throws -> ToriiOfflineCashEnvelope {
+        let encoder = JSONEncoder()
+        let body = try encoder.encode(requestBody)
+        let request = try makeRequest(
+            path: path,
+            method: .post,
+            body: body,
+            headers: ["Content-Type": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
     }
 
     public func waitForTransactionStatus(hashHex: String,

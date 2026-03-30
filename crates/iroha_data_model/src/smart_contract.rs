@@ -100,6 +100,7 @@ pub mod payloads {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 prev_roster_evidence_hash: None,
+                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,
@@ -412,6 +413,10 @@ impl ContractAddress {
     ///
     /// The preimage is domain-separated and includes the chain discriminant so the resulting
     /// address is network-specific.
+    ///
+    /// # Errors
+    /// Returns an error when the derived HRP is invalid, the deployer account cannot be
+    /// canonicalized into an address, or the final Bech32m literal cannot be encoded.
     pub fn derive(
         chain_discriminant: u16,
         deployer: &AccountId,
@@ -449,6 +454,10 @@ impl ContractAddress {
     }
 
     /// Decode the dataspace identifier embedded in the address payload.
+    ///
+    /// # Errors
+    /// Returns an error when the address literal cannot be decoded or when it uses an unsupported
+    /// payload version.
     pub fn dataspace_id(&self) -> Result<DataSpaceId, ContractAddressError> {
         let (_, payload) = decode_contract_address(self.as_ref())?;
         let version = payload[0];

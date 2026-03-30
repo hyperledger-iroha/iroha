@@ -129,14 +129,12 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let new_domain = Domain::new(domain_id.clone());
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
-    let reg_from = RegisterBox::from(Register::account(NewAccount::new_in_domain(
-        from.clone(),
-        domain_id.clone(),
-    )));
-    let reg_to = RegisterBox::from(Register::account(NewAccount::new_in_domain(
-        to.clone(),
-        domain_id.clone(),
-    )));
+    let reg_from = RegisterBox::from(Register::account(
+        NewAccount::new(from.clone()).with_linked_domain(domain_id.clone()),
+    ));
+    let reg_to = RegisterBox::from(Register::account(
+        NewAccount::new(to.clone()).with_linked_domain(domain_id.clone()),
+    ));
     let new_asset_def =
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
@@ -281,14 +279,12 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let domain_id: DomainId = domain_raw.parse().expect("domain id");
     let new_domain = Domain::new(domain_id.clone());
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
-    let reg_from = RegisterBox::from(Register::account(NewAccount::new_in_domain(
-        from.clone(),
-        domain_id.clone(),
-    )));
-    let reg_to = RegisterBox::from(Register::account(NewAccount::new_in_domain(
-        to.clone(),
-        domain_id.clone(),
-    )));
+    let reg_from = RegisterBox::from(Register::account(
+        NewAccount::new(from.clone()).with_linked_domain(domain_id.clone()),
+    ));
+    let reg_to = RegisterBox::from(Register::account(
+        NewAccount::new(to.clone()).with_linked_domain(domain_id.clone()),
+    ));
     let reg_asset_def = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.to_string()),
     ));
@@ -394,18 +390,15 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let mut tx = block.transaction();
 
     let reg_domain = RegisterBox::from(Register::domain(Domain::new(domain_id.clone())));
-    let reg_authority = RegisterBox::from(Register::account(NewAccount::new_in_domain(
-        authority.clone(),
-        domain_id.clone(),
-    )));
-    let reg_reserve = RegisterBox::from(Register::account(NewAccount::new_in_domain(
-        reserve.clone(),
-        domain_id.clone(),
-    )));
-    let reg_dst = RegisterBox::from(Register::account(NewAccount::new_in_domain(
-        dst.clone(),
-        domain_id.clone(),
-    )));
+    let reg_authority = RegisterBox::from(Register::account(
+        NewAccount::new(authority.clone()).with_linked_domain(domain_id.clone()),
+    ));
+    let reg_reserve = RegisterBox::from(Register::account(
+        NewAccount::new(reserve.clone()).with_linked_domain(domain_id.clone()),
+    ));
+    let reg_dst = RegisterBox::from(Register::account(
+        NewAccount::new(dst.clone()).with_linked_domain(domain_id.clone()),
+    ));
     let reg_aed = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(aed_asset_def.clone()).with_name("aed".to_owned()),
     ));

@@ -322,6 +322,12 @@ impl FaultScenario {
 }
 
 /// Apply a single fault scenario to a peer using the supplied deterministic seed.
+///
+/// # Errors
+///
+/// Returns an error when the selected fault scenario cannot be applied or the peer restart path
+/// fails while the scenario is active.
+#[allow(clippy::too_many_arguments)]
 pub async fn apply_fault_scenario<P: FaultPeer>(
     scenario: FaultScenarioKind,
     peer: &P,
@@ -657,6 +663,10 @@ fn sample_u64<R: Rng>(rng: &mut R, range: &RangeInclusive<u64>) -> u64 {
 /// Minimal client surface used by fault helpers that need to submit invalid traffic.
 pub trait FaultClient: Clone + Send + Sync + 'static {
     /// Submit one instruction and surface any failure to the fault harness.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the underlying client rejects the instruction submission.
     fn submit_instruction<I>(&self, instruction: I) -> Result<()>
     where
         I: Into<InstructionBox>;
@@ -683,6 +693,11 @@ pub trait FaultPeer: Clone + Send + Sync + 'static {
     /// Client handle for submitting invalid traffic during a fault run.
     fn client(&self) -> Self::Client;
     /// The peer's current trusted-peer roster expressed as TOML values.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the peer configuration cannot be inspected or converted to TOML
+    /// values for the fault harness.
     fn trusted_peers_pop_entries(&self) -> Result<Vec<Value>>;
     /// Stop the peer process and return once shutdown has been requested.
     fn shutdown(&self) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;

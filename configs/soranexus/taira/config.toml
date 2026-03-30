@@ -2,8 +2,9 @@
 # Network prefix: `taira`
 # Start with: `irohad --sora --config configs/soranexus/taira/config.toml`
 # This is the checked-in peer-1 baseline. For real multi-validator deploys,
-# render per-validator configs from `validator_roster.example.toml` with
-# `python3 scripts/render_taira_validator_bundle.py --roster ... --output-dir ...`.
+# render per-validator configs from `validator_roster.example.toml` plus
+# `validator_secrets.example.toml` with
+# `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`.
 
 chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
 chain_discriminant = 369
@@ -38,12 +39,12 @@ expose_operator_routes = false
 allow_tool_prefixes = ["iroha."]
 
 [torii.onboarding]
-authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
+authority = "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3"
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
 allowed_permissions = []
 
 [torii.faucet]
-authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
+authority = "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3"
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
 asset_definition_id = "xor#universal"
 amount = "25000"
@@ -66,6 +67,10 @@ admission_envelopes_dir = "configs/soranexus/taira/sorafs_admission"
 catalog_path = "configs/soranexus/taira/sorafs_gateway_denylist.catalog.json"
 opt_out_packs = []
 extra_packs = []
+
+[sorafs.quota]
+storage_pin_max_events = 64
+storage_pin_window_secs = 3600
 
 [sorafs.repair]
 enabled = false
@@ -101,7 +106,7 @@ lane_count = 3
 
 [nexus.fees]
 fee_asset_id = "xor#universal"
-fee_sink_account_id = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+fee_sink_account_id = "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
 base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"
@@ -202,8 +207,13 @@ window_slots = 48
 seed_tag = "iroha:da:rotate:v1\u0000"
 latency_decay = 0.25
 
-[governance]
+[gov]
 plain_voting_enabled = false
+citizenship_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+bond_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+slash_receiver_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+viral_incentive_pool_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+viral_escrow_account = "testuロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
 parliament_committee_size = 21
 parliament_term_blocks = 43200
 parliament_min_stake = 1
@@ -217,3 +227,6 @@ review_panel_size = 13
 policy_jury_size = 25
 oversight_committee_size = 7
 fma_committee_size = 5
+
+[gov.sorafs_telemetry]
+submitters = ["testuロ1Pカt8オgキララク5ユニヰチウヱワヲヱLLノVセユXケシリnノハjク9eQL2MVG9T"]

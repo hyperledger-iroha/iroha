@@ -15,6 +15,7 @@ use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
+    account::address::ChainDiscriminantGuard,
     isi::staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     parameter::system::{
         SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
@@ -33,7 +34,10 @@ use iroha_version::BuildLine;
 
 use crate::{
     Outcome, RunArgs,
-    genesis::{ConsensusPolicy, generate_default, validate_consensus_mode_for_line},
+    genesis::{
+        ConsensusPolicy, generate_default, profile::known_chain_discriminant_for_chain_id,
+        validate_consensus_mode_for_line,
+    },
     tui,
 };
 
@@ -348,6 +352,8 @@ const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: u32 = 536_870_912; // 512
 const LOCALNET_TX_GOSSIP_PERIOD_FAST_MS: u64 = 100;
 /// Transaction gossip resend ticks for 1s localnet pipelines.
 const LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST: u32 = 1;
+/// Tx gossip frame cap for Nexus-enabled localnets so large public transactions still fit.
+const LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS: usize = 1_048_576;
 /// Default listener host for generated P2P and Torii services.
 pub const DEFAULT_BIND_HOST: &str = "0.0.0.0";
 /// Default advertised host for generated peers and client config.
@@ -391,6 +397,9 @@ const LOCALNET_TORII_TX_BURST_PER_AUTHORITY: u32 = 2_000_000;
 const LOCALNET_TORII_PREAUTH_RATE_PER_IP_PER_SEC: u32 = 1_000_000;
 /// Default Torii pre-auth burst limit (per IP) for localnet.
 const LOCALNET_TORII_PREAUTH_BURST_PER_IP: u32 = 2_000_000;
+/// Torii request body cap emitted explicitly in localnet configs.
+const LOCALNET_TORII_MAX_CONTENT_LEN: u64 =
+    iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
 /// Torii pre-auth allowlist to keep localnet CLI traffic from tripping bans.
 const LOCALNET_PREAUTH_ALLOW_CIDRS: [&str; 2] = ["127.0.0.0/8", "::1/128"];
 /// Multiplier applied to block+commit time for localnet commit inflight timeout.
@@ -773,8 +782,22 @@ fn account_id_raw_string(account_id: &AccountId) -> String {
     account_id.to_string()
 }
 
-fn account_id_runtime_literal(account_id: &AccountId) -> String {
-    account_id_raw_string(account_id)
+fn account_id_runtime_literal(account_id: &AccountId, chain_discriminant: Option<u16>) -> String {
+    chain_discriminant.map_or_else(
+        || account_id_raw_string(account_id),
+        |discriminant| {
+            account_id
+                .to_i105_for_discriminant(discriminant)
+                .expect("known localnet account id must render for requested chain discriminant")
+        },
+    )
+}
+
+fn account_literal_for_chain_discriminant(raw: &str, chain_discriminant: u16) -> String {
+    let account_id = AccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("known account literal must parse");
+    account_id_runtime_literal(&account_id, Some(chain_discriminant))
 }
 
 #[allow(clippy::too_many_lines)]
@@ -796,6 +819,7 @@ fn generate_localnet_with_line<T: Write>(
 
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_id = configured_chain_id();
+    let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
     let peers = build_peers(
         opts.peers.get(),
         seed_bytes,
@@ -890,13 +914,16 @@ fn generate_localnet_with_line<T: Write>(
         &genesis,
         &genesis_public_key,
         genesis_private.clone(),
+        chain_discriminant,
         &genesis_json_path,
         &genesis_signed_path,
     )?;
     tui::success("Genesis ready");
 
     tui::status("Writing peer configs");
-    let gas_account_id = gas_account_id.as_ref().map(account_id_runtime_literal);
+    let gas_account_id = gas_account_id
+        .as_ref()
+        .map(|account_id| account_id_runtime_literal(account_id, chain_discriminant));
     let trusted = peers
         .iter()
         .map(|p| format!("{}@{}", p.public_key, hosts.public.addr_literal(p.p2p_port)))
@@ -941,14 +968,17 @@ fn generate_localnet_with_line<T: Write>(
             &tiered_state_dir,
             &da_store_dir,
             &chain_id,
+            chain_discriminant,
             (&hosts.bind, &hosts.public),
             opts.consensus_mode,
-            mcp_enabled,
-            nexus_enabled,
-            npos_bootstrap,
+            RenderPeerFeatures {
+                mcp_enabled,
+                nexus_enabled,
+                npos_bootstrap,
+                da_rbc_enabled,
+            },
             dataspace_fault_tolerance,
             gas_account_id.as_deref(),
-            da_rbc_enabled,
             redundant_send_r,
             collectors_k,
             commit_inflight_timeout_ms,
@@ -1169,6 +1199,14 @@ fn configured_chain_id() -> String {
         .unwrap_or_else(|| DEFAULT_CHAIN_ID.to_owned())
 }
 
+#[derive(Clone, Copy)]
+struct RenderPeerFeatures {
+    mcp_enabled: bool,
+    nexus_enabled: bool,
+    npos_bootstrap: bool,
+    da_rbc_enabled: bool,
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn render_peer_config(
     peer: &Peer,
@@ -1181,14 +1219,12 @@ fn render_peer_config(
     tiered_state_root: &Path,
     da_store_root: &Path,
     chain_id: &str,
+    chain_discriminant: Option<u16>,
     hosts: (&CanonicalHost, &CanonicalHost),
     consensus_mode: SumeragiConsensusMode,
-    mcp_enabled: bool,
-    nexus_enabled: bool,
-    npos_bootstrap: bool,
+    features: RenderPeerFeatures,
     dataspace_fault_tolerance: Option<u32>,
     gas_account_id: Option<&str>,
-    da_rbc_enabled: bool,
     redundant_send_r: Option<u8>,
     collectors_k: Option<u16>,
     commit_inflight_timeout_ms: u64,
@@ -1200,6 +1236,12 @@ fn render_peer_config(
     use toml::{Table, Value};
 
     let (bind_host, public_host) = hosts;
+    let RenderPeerFeatures {
+        mcp_enabled,
+        nexus_enabled,
+        npos_bootstrap,
+        da_rbc_enabled,
+    } = features;
 
     let trusted_list = trusted_peers
         .iter()
@@ -1222,6 +1264,12 @@ fn render_peer_config(
 
     let mut root = Table::new();
     root.insert("chain".into(), Value::String(chain_id.to_owned()));
+    if let Some(chain_discriminant) = chain_discriminant {
+        root.insert(
+            "chain_discriminant".into(),
+            Value::Integer(i64::from(chain_discriminant)),
+        );
+    }
     root.insert(
         "private_key".into(),
         Value::String(peer.private_key.to_string()),
@@ -1518,6 +1566,56 @@ fn render_peer_config(
     );
     root.insert("streaming".into(), Value::Table(streaming));
 
+    if let Some(chain_discriminant) = chain_discriminant {
+        let mut governance = Table::new();
+        let citizenship_escrow_account = account_id_runtime_literal(
+            &iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
+            Some(chain_discriminant),
+        );
+        let bond_escrow_account = account_id_runtime_literal(
+            &iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
+            Some(chain_discriminant),
+        );
+        let slash_receiver_account = account_id_runtime_literal(
+            &iroha_config::parameters::defaults::governance::slash_receiver_account_id(),
+            Some(chain_discriminant),
+        );
+        governance.insert(
+            "citizenship_escrow_account".into(),
+            Value::String(citizenship_escrow_account),
+        );
+        governance.insert(
+            "bond_escrow_account".into(),
+            Value::String(bond_escrow_account),
+        );
+        governance.insert(
+            "slash_receiver_account".into(),
+            Value::String(slash_receiver_account.clone()),
+        );
+        governance.insert(
+            "viral_incentive_pool_account".into(),
+            Value::String(slash_receiver_account.clone()),
+        );
+        governance.insert(
+            "viral_escrow_account".into(),
+            Value::String(slash_receiver_account),
+        );
+        let telemetry_submitters =
+            iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
+                .into_iter()
+                .map(|literal| {
+                    Value::String(account_literal_for_chain_discriminant(
+                        &literal,
+                        chain_discriminant,
+                    ))
+                })
+                .collect();
+        let mut sorafs_telemetry = Table::new();
+        sorafs_telemetry.insert("submitters".into(), Value::Array(telemetry_submitters));
+        governance.insert("sorafs_telemetry".into(), Value::Table(sorafs_telemetry));
+        root.insert("gov".into(), Value::Table(governance));
+    }
+
     let mut confidential = Table::new();
     confidential.insert("enabled".into(), Value::Boolean(true));
     confidential.insert("assume_valid".into(), Value::Boolean(false));
@@ -1597,6 +1695,15 @@ fn render_peer_config(
         "consensus_ingress_critical_bytes_burst".into(),
         Value::Integer(i64::from(LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST)),
     );
+    if nexus_enabled {
+        network.insert(
+            "max_frame_bytes_tx_gossip".into(),
+            Value::Integer(
+                i64::try_from(LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS)
+                    .expect("LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS fits i64"),
+            ),
+        );
+    }
     if let Some(overrides) = tx_gossip_overrides {
         network.insert(
             "transaction_gossip_period_ms".into(),
@@ -1679,6 +1786,13 @@ fn render_peer_config(
         "api_high_load_tx_threshold".into(),
         Value::Integer(i64::try_from(queue_capacity).expect("queue capacity fits i64")),
     );
+    torii.insert(
+        "max_content_len".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_TORII_MAX_CONTENT_LEN)
+                .expect("LOCALNET_TORII_MAX_CONTENT_LEN fits i64"),
+        ),
+    );
     if mcp_enabled {
         let mut mcp = Table::new();
         mcp.insert("enabled".into(), Value::Boolean(true));
@@ -1745,10 +1859,9 @@ fn extend_genesis(
         let domain_id: DomainId = "wonderland"
             .parse()
             .expect("default genesis must include wonderland domain");
-        builder = builder.append_instruction(Register::account(Account::new_in_domain(
-            AccountId::new(pk.clone()),
-            domain_id,
-        )));
+        builder = builder.append_instruction(Register::account(
+            Account::new(AccountId::new(pk.clone())).with_linked_domain(domain_id),
+        ));
     }
 
     for asset in assets {
@@ -2050,10 +2163,9 @@ fn append_localnet_npos_bootstrap(
         registrations.domains.insert(universal_domain.clone());
     }
     if !registrations.accounts.contains(gas_account_id) {
-        builder = builder.append_instruction(Register::account(Account::new_in_domain(
-            gas_account_id.clone(),
-            ivm_domain.clone(),
-        )));
+        builder = builder.append_instruction(Register::account(
+            Account::new(gas_account_id.clone()).with_linked_domain(ivm_domain.clone()),
+        ));
         registrations.accounts.insert(gas_account_id.clone());
     }
 
@@ -2075,10 +2187,9 @@ fn append_localnet_npos_bootstrap(
     for peer in peers {
         let validator_id = AccountId::new(peer.public_key.clone());
         if !registrations.accounts.contains(&validator_id) {
-            builder = builder.append_instruction(Register::account(Account::new_in_domain(
-                validator_id.clone(),
-                nexus_domain.clone(),
-            )));
+            builder = builder.append_instruction(Register::account(
+                Account::new(validator_id.clone()).with_linked_domain(nexus_domain.clone()),
+            ));
             registrations.accounts.insert(validator_id.clone());
         }
         builder = builder.append_instruction(Mint::asset_numeric(
@@ -2120,16 +2231,20 @@ fn write_genesis(
     genesis: &RawGenesisTransaction,
     genesis_public_key: &iroha_crypto::PublicKey,
     genesis_private_key: ExposedPrivateKey,
+    chain_discriminant: Option<u16>,
     json_path: &Path,
     signed_path: &Path,
 ) -> Result<()> {
-    let json = norito::json::to_json_pretty(genesis)?;
+    let chain_discriminant =
+        chain_discriminant.unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
+    let genesis = genesis.clone().with_chain_discriminant(chain_discriminant);
+    let _chain_discriminant = Some(ChainDiscriminantGuard::enter(chain_discriminant));
+    let json = norito::json::to_json_pretty(&genesis)?;
     fs::write(json_path, json).wrap_err("failed to write genesis.json")?;
 
     let genesis_key_pair = KeyPair::new(genesis_public_key.clone(), genesis_private_key.0)
         .wrap_err("make genesis key pair")?;
     let block = genesis
-        .clone()
         .build_and_sign(&genesis_key_pair)
         .wrap_err("sign genesis block")?;
     let framed = block.0.encode_wire().wrap_err("frame genesis block")?;
@@ -2870,6 +2985,19 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
 
+        assert_eq!(
+            peer_cfg
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|torii| torii.get("max_content_len"))
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_TORII_MAX_CONTENT_LEN)
+                    .expect("LOCALNET_TORII_MAX_CONTENT_LEN fits i64")
+            ),
+            "localnet configs should pin the resolved Torii body-cap default explicitly"
+        );
+
         let telemetry_enabled = peer_cfg
             .get("telemetry_enabled")
             .and_then(toml::Value::as_bool)
@@ -2921,12 +3049,38 @@ mod tests {
             .and_then(toml::Value::as_table)
             .expect("torii.mcp table");
         assert_eq!(
+            peer_cfg
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|torii| torii.get("max_content_len"))
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_TORII_MAX_CONTENT_LEN)
+                    .expect("LOCALNET_TORII_MAX_CONTENT_LEN fits i64")
+            ),
+            "Sora-profile localnet should pin the resolved Torii body-cap default explicitly"
+        );
+        assert_eq!(
             mcp.get("enabled").and_then(toml::Value::as_bool),
             Some(true)
         );
         assert_eq!(
             mcp.get("profile").and_then(toml::Value::as_str),
             Some("writer")
+        );
+        let network = peer_cfg
+            .get("network")
+            .and_then(toml::Value::as_table)
+            .expect("network table");
+        assert_eq!(
+            network
+                .get("max_frame_bytes_tx_gossip")
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS)
+                    .expect("LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS fits i64")
+            ),
+            "sora-profile localnet should raise tx gossip frame cap for large public writes"
         );
         assert_eq!(
             mcp.get("expose_operator_routes")
@@ -4746,7 +4900,7 @@ mod tests {
             Some(true),
             "npos iroha3 localnet should enable nexus without a sora profile"
         );
-        let gas_account_id = account_id_runtime_literal(&gas_account_id);
+        let gas_account_id = account_id_runtime_literal(&gas_account_id, None);
         let staking = nexus
             .get("staking")
             .and_then(toml::Value::as_table)
@@ -4829,8 +4983,36 @@ mod tests {
         let seed_bytes = Some(b"localnet-gas-runtime-literal".as_slice());
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
         let gas_account_id = localnet_gas_account_id(&genesis_public_key);
-        let literal = account_id_runtime_literal(&gas_account_id);
+        let literal = account_id_runtime_literal(&gas_account_id, None);
         assert_eq!(literal, gas_account_id.to_string());
+    }
+
+    #[test]
+    fn account_id_runtime_literal_respects_requested_chain_discriminant() {
+        let seed_bytes = Some(b"localnet-gas-runtime-taira".as_slice());
+        let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let gas_account_id = localnet_gas_account_id(&genesis_public_key);
+        let literal = account_id_runtime_literal(&gas_account_id, Some(369));
+        assert!(
+            literal.starts_with("test"),
+            "expected testnet i105 literal, got {literal}"
+        );
+        assert!(
+            !literal.starts_with("sora"),
+            "localnet runtime literal must not use mainnet prefix under Taira"
+        );
+    }
+
+    #[test]
+    fn default_sorafs_telemetry_submitter_literal_respects_requested_chain_discriminant() {
+        let source = iroha_config::parameters::defaults::governance::sorafs_telemetry::submitters()
+            .into_iter()
+            .next()
+            .expect("default submitter");
+        let literal = account_literal_for_chain_discriminant(&source, 369);
+        println!("{literal}");
+        assert!(literal.starts_with("testu"));
+        assert!(!literal.starts_with("sorau"));
     }
 
     #[test]
@@ -4867,7 +5049,8 @@ mod tests {
             .filter_map(|instruction| instruction.as_any().downcast_ref::<Register<Account>>())
             .filter(|register| {
                 register.object.id == genesis_account_id
-                    && register.object.domain() == Some(&ivm_domain)
+                    && register.object.linked_domains().len() == 1
+                    && register.object.linked_domains().contains(&ivm_domain)
             })
             .count();
 

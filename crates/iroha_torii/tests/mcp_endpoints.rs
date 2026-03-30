@@ -2620,6 +2620,28 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly offline transfer query MCP tool"
     );
     assert!(
+        names.iter().any(|name| name == "iroha.offline.cash.setup"),
+        "expected agent-friendly offline cash setup MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.offline.cash.load"),
+        "expected agent-friendly offline cash load MCP tool"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name == "iroha.offline.cash.refresh"),
+        "expected agent-friendly offline cash refresh MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.offline.cash.sync"),
+        "expected agent-friendly offline cash sync MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.offline.cash.redeem"),
+        "expected agent-friendly offline cash redeem MCP tool"
+    );
+    assert!(
         names
             .iter()
             .any(|name| name == "iroha.offline.revocations.list"),

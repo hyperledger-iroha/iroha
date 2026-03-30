@@ -86,6 +86,7 @@ iroha_logger = { workspace = true }
 iroha_data_model = { workspace = true, features = ["http", "json", "bridge"] }
 iroha_executor_data_model = { workspace = true }
 iroha_crypto = { workspace = true }
+iroha_sccp = { path = "../iroha_sccp", features = ["serde"] }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_chunker = { workspace = true }
 sorafs_node = { path = "../sorafs_node" }
@@ -158,6 +159,7 @@ criterion = { workspace = true }
 tower = "0.5.2"
 hyper = "1.7.0"
 ivm = { path = "../ivm" }
+iroha = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_core = { workspace = true, features = ["iroha-core-tests"] }
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore", "circuit-params"] }

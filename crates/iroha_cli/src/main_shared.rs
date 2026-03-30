@@ -1699,9 +1699,12 @@ mod account {
                         iroha::data_model::isi::Register::account(Account::new(
                             account_id,
                         ));
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to register account")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to register account")
                 }
                 Unregister(args) => {
                     let account_id = resolve_account_id(context, &args.id)
@@ -1840,6 +1843,9 @@ mod account {
         /// Canonical global account identifier for registration (canonical I105 literal)
         #[arg(short, long)]
         id: String,
+        /// Submit without waiting for confirmation.
+        #[arg(long)]
+        no_wait: bool,
     }
 
     #[derive(clap::Args, Debug)]
@@ -7170,6 +7176,22 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     {
         eyre::bail!("account literal must be canonical I105; canonical hex is not accepted");
     }
+
+    if let Some(raw_discriminant) = std::env::var_os("IROHA_ACCOUNT_CHAIN_DISCRIMINANT") {
+        let raw_discriminant = raw_discriminant.to_string_lossy();
+        let discriminant = raw_discriminant.parse::<u16>().map_err(|_| {
+            eyre!(
+                "IROHA_ACCOUNT_CHAIN_DISCRIMINANT must be a valid u16, got `{raw_discriminant}`"
+            )
+        })?;
+        let parsed = iroha::account_address::parse_account_address(trimmed, Some(discriminant))
+            .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
+        return parsed
+            .address
+            .to_account_id()
+            .map_err(|err| eyre!("account literal must be canonical I105: {err}"));
+    }
+
     let parsed = AccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
     Ok(parsed.into_account_id())
@@ -7276,6 +7298,23 @@ fn parse_register_account_id(literal: &str) -> Result<AccountId> {
             "`ledger account register --id` must be canonical I105; canonical hex is not accepted"
         );
     }
+
+    if let Some(raw_discriminant) = std::env::var_os("IROHA_ACCOUNT_CHAIN_DISCRIMINANT") {
+        let raw_discriminant = raw_discriminant.to_string_lossy();
+        let discriminant = raw_discriminant.parse::<u16>().map_err(|_| {
+            eyre!(
+                "IROHA_ACCOUNT_CHAIN_DISCRIMINANT must be a valid u16, got `{raw_discriminant}`"
+            )
+        })?;
+        let parsed = iroha::account_address::parse_account_address(trimmed, Some(discriminant))
+            .map_err(|err| {
+                eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
+            })?;
+        return parsed.address.to_account_id().map_err(|err| {
+            eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
+        });
+    }
+
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
         eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
     })?;
@@ -8748,9 +8787,12 @@ mod tests {
             let id3 = ScopedAccountId::new(domain.clone(), kp3.public_key().clone());
 
             // Build accounts; builder API needs an authority, use id1 for simplicity
-            let mut a1 = Account::from_scoped_id(id1.clone()).build(id1.account());
-            let mut a2 = Account::from_scoped_id(id2.clone()).build(id1.account());
-            let mut a3 = Account::from_scoped_id(id3.clone()).build(id1.account());
+            let mut a1 =
+                Account::new_in_domain(id1.account().clone(), id1.domain().clone()).build(id1.account());
+            let mut a2 =
+                Account::new_in_domain(id2.account().clone(), id2.domain().clone()).build(id1.account());
+            let mut a3 =
+                Account::new_in_domain(id3.account().clone(), id3.domain().clone()).build(id1.account());
 
             // Insert ranks: a2=1, a1=2, a3=None
             a1.metadata
@@ -9496,7 +9538,8 @@ mod tests {
                     let kp = KeyPair::random();
                     let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
                     // owner for builder is arbitrary for this harness
-                    Account::from_scoped_id(id.clone()).build(id.account())
+                    Account::new_in_domain(id.account().clone(), id.domain().clone())
+                        .build(id.account())
                 })
                 .collect();
             let key: Name = "rank".parse().unwrap();
@@ -9621,7 +9664,8 @@ mod tests {
                 .map(|_| {
                     let kp = KeyPair::random();
                     let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
-                    Account::from_scoped_id(id.clone()).build(id.account())
+                    Account::new_in_domain(id.account().clone(), id.domain().clone())
+                        .build(id.account())
                 })
                 .collect();
             let key: Name = "rank".parse().unwrap();
@@ -10660,7 +10704,8 @@ mod tests {
                 let kp = KeyPair::random();
                 let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
                 // owner is arbitrary in builder path
-                let mut a = Account::from_scoped_id(id.clone()).build(id.account());
+                let mut a =
+                    Account::new_in_domain(id.account().clone(), id.domain().clone()).build(id.account());
                 a.metadata
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
                 accounts.push(a);
@@ -11013,7 +11058,7 @@ mod cli_integration_harness {
         },
         #[cfg(feature = "ids_projection")]
         AccountIds {
-            ids: Vec<iroha::data_model::account::ScopedAccountId>,
+            ids: Vec<iroha::data_model::account::AccountId>,
             idx: usize,
             fetch: usize,
         },
@@ -11203,7 +11248,7 @@ mod cli_integration_harness {
                         };
                         return Ok((
                             QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::ScopedAccountId(first_ids)],
+                                tuple: vec![QueryOutputBatchBox::AccountId(first_ids)],
                             },
                             remaining,
                             next,
@@ -11405,7 +11450,7 @@ mod cli_integration_harness {
                     };
                     Ok((
                         QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::ScopedAccountId(batch)],
+                            tuple: vec![QueryOutputBatchBox::AccountId(batch)],
                         },
                         remaining,
                         next,
@@ -11537,8 +11582,8 @@ mod cli_integration_harness {
         let bob = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
         server.accounts = vec![
-            Account::from_scoped_id(alice.clone()).build(alice.account()),
-            Account::from_scoped_id(bob.clone()).build(bob.account()),
+            Account::new_in_domain(alice.account().clone(), alice.domain().clone()).build(alice.account()),
+            Account::new_in_domain(bob.account().clone(), bob.domain().clone()).build(bob.account()),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -11551,12 +11596,12 @@ mod cli_integration_harness {
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::ScopedAccountId(v) => v,
+            query::QueryOutputBatchBox::AccountId(v) => v,
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids.len(), 2);
-        assert!(ids.iter().any(|id| id == &alice));
-        assert!(ids.iter().any(|id| id == &bob));
+        assert!(ids.iter().any(|id| id == alice.account()));
+        assert!(ids.iter().any(|id| id == bob.account()));
     }
 
     #[test]
@@ -11691,9 +11736,9 @@ mod cli_integration_harness {
         let carol = sample_account_id("w", 5);
         let mut server = MockQueryServer::default();
         server.accounts = vec![
-            Account::from_scoped_id(alice.clone()).build(alice.account()),
-            Account::from_scoped_id(bob.clone()).build(bob.account()),
-            Account::from_scoped_id(carol.clone()).build(carol.account()),
+            Account::new_in_domain(alice.account().clone(), alice.domain().clone()).build(alice.account()),
+            Account::new_in_domain(bob.account().clone(), bob.domain().clone()).build(bob.account()),
+            Account::new_in_domain(carol.account().clone(), carol.domain().clone()).build(carol.account()),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -11708,12 +11753,12 @@ mod cli_integration_harness {
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::ScopedAccountId(v) => v,
+            query::QueryOutputBatchBox::AccountId(v) => v,
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&alice));
-        assert!(ids1.contains(&bob));
+        assert!(ids1.contains(alice.account()));
+        assert!(ids1.contains(bob.account()));
         assert_eq!(rem, 1);
         let cur = cur.expect("should continue");
 
@@ -11721,11 +11766,11 @@ mod cli_integration_harness {
             <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
                 .expect("cont ok");
         let ids2 = match batch2.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::ScopedAccountId(v) => v,
+            query::QueryOutputBatchBox::AccountId(v) => v,
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&carol));
+        assert!(ids2.contains(carol.account()));
         assert_eq!(rem2, 0);
         assert!(cur2.is_none());
     }

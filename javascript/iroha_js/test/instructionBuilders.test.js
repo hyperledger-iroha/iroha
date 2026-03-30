@@ -784,6 +784,10 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
             ],
           },
         },
+        commitment: null,
+        nullifier: null,
+        roster_root: null,
+        proof: null,
       },
     },
   };
@@ -810,6 +814,54 @@ test("noritoDecodeInstruction decodes Kaigi manifests", () => {
   const encoded = encodeInstruction(instruction);
   const decoded = noritoDecodeInstruction(encoded);
   assert.deepEqual(canonicalizeClone(decoded), canonicalizeClone(instruction));
+});
+
+test("buildCreateKaigiInstruction accepts privacy artifacts", () => {
+  const commitmentBytes = Buffer.alloc(32, 0x44);
+  const nullifierBytes = Buffer.alloc(32, 0x55);
+  const rosterRootBytes = Buffer.alloc(32, 0x66);
+  const proofBytes = Buffer.from([0xca, 0xfe]);
+  const instruction = buildCreateKaigiInstruction({
+    id: "wonderland:private-room",
+    host: ACCOUNT_ID,
+    privacyMode: "ZkRosterV1",
+    commitment: { commitment: commitmentBytes, aliasTag: "host" },
+    nullifier: { digest: nullifierBytes, issuedAtMs: 7 },
+    rosterRoot: rosterRootBytes,
+    proof: proofBytes,
+  });
+  const expected = {
+    Kaigi: {
+      CreateKaigi: {
+        call: {
+          id: { domain_id: "wonderland", call_name: "private-room" },
+          host: ACCOUNT_ID_CANONICAL,
+          title: null,
+          description: null,
+          max_participants: null,
+          gas_rate_per_minute: 0,
+          metadata: {},
+          scheduled_start_ms: null,
+          billing_account: null,
+          privacy_mode: { mode: "ZkRosterV1", state: null },
+          room_policy: { policy: "Authenticated", state: null },
+          relay_manifest: null,
+        },
+        commitment: {
+          commitment: normalizedHashHex(commitmentBytes),
+          alias_tag: "host",
+        },
+        nullifier: {
+          digest: normalizedHashHex(nullifierBytes),
+          issued_at_ms: 7,
+        },
+        roster_root: normalizedHashHex(rosterRootBytes),
+        proof: proofBytes.toString("base64"),
+      },
+    },
+  };
+  assert.deepEqual(instruction, expected);
+  assert.deepEqual(encodeAndDecode(instruction), expected);
 });
 
 test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
@@ -883,6 +935,44 @@ test("buildEndKaigiInstruction normalizes optional timestamp", () => {
       EndKaigi: {
         call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
         ended_at_ms: 1700001234567,
+        commitment: null,
+        nullifier: null,
+        roster_root: null,
+        proof: null,
+      },
+    },
+  };
+  assert.deepEqual(instruction, expected);
+  assert.deepEqual(encodeAndDecode(instruction), expected);
+});
+
+test("buildEndKaigiInstruction accepts privacy artifacts", () => {
+  const commitmentBytes = Buffer.alloc(32, 0x77);
+  const nullifierBytes = Buffer.alloc(32, 0x88);
+  const rosterRootBytes = Buffer.alloc(32, 0x99);
+  const proofBytes = Buffer.from([0xaa, 0xbb, 0xcc]);
+  const instruction = buildEndKaigiInstruction({
+    callId: "wonderland:weekly-sync",
+    commitment: { commitment: commitmentBytes, aliasTag: "host" },
+    nullifier: { digest: nullifierBytes, issuedAtMs: 13 },
+    rosterRoot: rosterRootBytes,
+    proof: proofBytes,
+  });
+  const expected = {
+    Kaigi: {
+      EndKaigi: {
+        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        ended_at_ms: null,
+        commitment: {
+          commitment: normalizedHashHex(commitmentBytes),
+          alias_tag: "host",
+        },
+        nullifier: {
+          digest: normalizedHashHex(nullifierBytes),
+          issued_at_ms: 13,
+        },
+        roster_root: normalizedHashHex(rosterRootBytes),
+        proof: proofBytes.toString("base64"),
       },
     },
   };
