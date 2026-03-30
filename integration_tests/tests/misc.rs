@@ -3,7 +3,19 @@
 
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::{client, data_model::prelude::*};
+use iroha::{
+    client,
+    data_model::{
+        account::AccountAddress,
+        metadata::Metadata,
+        prelude::*,
+        sns::{
+            DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameSelectorV1, PaymentProofV1,
+            RegisterNameRequestV1,
+        },
+    },
+};
+use iroha_primitives::json::Json;
 use iroha_telemetry::metrics::Status;
 use iroha_test_network::*;
 use sandbox::start_network_async_or_skip;
@@ -70,7 +82,27 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
     {
         let client = client.clone();
         spawn_blocking(move || {
-            client.submit_blocking(Register::domain(Domain::new("looking_glass".parse()?)))
+            let domain: DomainId = "lookingglass".parse()?;
+            let owner = client.account.clone();
+            let controller = AccountAddress::from_account_id(&owner)?;
+            client.sns().register(&RegisterNameRequestV1 {
+                selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain.name().as_ref())?,
+                owner: owner.clone(),
+                controllers: vec![NameControllerV1::account(&controller)],
+                term_years: 1,
+                pricing_class_hint: Some(0),
+                payment: PaymentProofV1 {
+                    asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
+                    gross_amount: 120,
+                    net_amount: 120,
+                    settlement_tx: Json::from("mock-settlement"),
+                    payer: owner,
+                    signature: Json::from("mock-signature"),
+                },
+                governance: None,
+                metadata: Metadata::default(),
+            })?;
+            client.submit_blocking(Register::domain(Domain::new(domain)))
         })
     }
     .await??;

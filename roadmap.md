@@ -2,6 +2,14 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 misc status smoke SNS lease alignment):
+the `misc_status_endpoints_smoke` integration fixture now matches the current
+SNS-backed runtime domain-registration invariant and no longer uses a
+registrar-invalid underscore label.
+
+Open work for this slice now remains:
+- none.
+
 Latest sync (2026-03-30 Torii OpenAPI parity for maintained PK routes):
 the checked-in Torii OpenAPI now matches the current maintained browser/app
 route set required by the PK deploy contract gate, so route-doc drift for the
