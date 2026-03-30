@@ -2,6 +2,63 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Remaining public-lane routing gaps are now closed across rebinding and admin-managed manifests
+- Added `RebindPublicLaneValidatorPeer` to the staking data model, instruction
+  registry, visitor surface, runtime executor, and CLI so stake-elected
+  validators can repair a stale authoritative `peer_id` binding in place
+  without exit/re-register churn (`crates/iroha_data_model/src/isi/staking.rs`,
+  `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`,
+  `crates/iroha_data_model/src/visit/{mod.rs,visit_instruction.rs}`,
+  `crates/iroha_core/src/smartcontracts/isi/staking.rs`,
+  `crates/iroha_cli/src/staking.rs`).
+- Changed admin-managed lane manifests from string validator arrays to explicit
+  `{ validator, peer_id }` bindings and switched authoritative peer resolution
+  for those lanes to the stored manifest `peer_id`, gated against current
+  runtime peer presence, live consensus keys, and commit-topology membership
+  instead of validator account signatories
+  (`crates/iroha_core/src/{governance/manifest.rs,state.rs}`,
+  `crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}`).
+- Torii validator snapshots now expose a non-null `peer_id` for both
+  stake-elected and admin-managed lanes, and the Nexus cross-dataspace
+  integration harnesses now use intentionally divergent validator accounts vs
+  peer ids so the routing model is exercised directly in test setup
+  (`integration_tests/tests/nexus/{cross_dataspace_localnet,cross_dataspace_zk_stark_localnet}.rs`).
+- Updated operator docs and playbooks so manifest examples, public-lane
+  lifecycle notes, and lane governance docs all describe explicit peer
+  bindings and the new rebind path
+  (`docs/source/{nexus_public_lanes,cbdc_lane_playbook,nexus_lanes}.md`).
+- Verification:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core -p iroha_torii -p iroha_data_model -p iroha_cli --all-targets`
+  - `cargo check -p integration_tests --test mod`
+  - `cargo test -p iroha_data_model rebind_public_lane_validator_peer_json_roundtrip --lib`
+  - `cargo test -p iroha_core rebind_updates_active_validator_peer_and_preserves_record_fields --lib`
+  - `cargo test -p iroha_core manifest_parses_validators_and_namespaces --lib`
+  - `cargo test -p iroha_torii authoritative_lane_peers_use_manifest_validators_for_admin_managed_lane --lib`
+  - `cargo test -p iroha_torii lane_validators_endpoint_uses_manifest_roster_for_admin_managed_lane --lib`
+  - `cargo test -p iroha_torii torii_proxy_candidate_peers_only_use_authoritative_peers --lib`
+  - `cargo test -p iroha_torii --test nexus_public_lanes`
+
+## 2026-03-30 Genesis JSON now preserves public-lane validator peer_id for Kagami/deploy output
+- Fixed the JSON genesis serializer in `crates/iroha_genesis/src/lib.rs` so
+  `RegisterPublicLaneValidator` now emits its authoritative `peer_id` instead
+  of dropping it during structured instruction export.
+- Added a regression assertion to
+  `deserialize_structured_instructions_supports_npos_bootstrap` so the NPoS
+  bootstrap round-trip now explicitly requires `peer_id` to survive
+  serialize/deserialize.
+- This closes the deployment gap where Kagami already constructed
+  `RegisterPublicLaneValidator` with `peer_id` in memory, but rendered
+  `genesis.json` omitted the field and downstream deploy tooling rejected the
+  bootstrap material.
+- Verification:
+  - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/.cache/cargo-target-genesis cargo test -p iroha_genesis deserialize_structured_instructions_supports_npos_bootstrap -- --nocapture`
+  - `cargo build -p iroha_kagami --bin kagami`
+  - downstream render-only validation via
+    `/Users/takemiyamakoto/dev/pk-deploy/scripts/pkdeploy/internal/deploy-12node-topology.sh --run-id hybrid-peerid-fixed-20260330T213800Z --render-only --reuse-remote-binary`
+    now passes the explicit validator `peer_id` guard and emits non-empty
+    `peer_id` bindings in all rendered genesis variants
+
 ## 2026-03-30 Nexus public-lane routing now uses explicit authoritative peer bindings
 - Split public-lane validator authority into two first-release roles:
   `validator` remains the staking/governance `AccountId`, while stake-elected

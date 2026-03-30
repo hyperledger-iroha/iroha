@@ -1194,6 +1194,10 @@ pub mod genesis_instructions_json {
             );
             let validator = account_literal(register.validator())?;
             fields.insert("validator".to_string(), Value::String(validator));
+            fields.insert(
+                "peer_id".to_string(),
+                Value::String(register.peer_id().to_string()),
+            );
             let stake_account = account_literal(register.stake_account())?;
             fields.insert("stake_account".to_string(), Value::String(stake_account));
             fields.insert(
@@ -1433,10 +1437,11 @@ pub mod genesis_instructions_json {
         #[test]
         fn deserialize_structured_instructions_supports_npos_bootstrap() {
             let validator_id = ALICE_ID.clone();
+            let validator_peer_id = PeerId::from(validator_id.signatory().clone());
             let register = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator_id.clone(),
-                PeerId::from(validator_id.signatory().clone()),
+                validator_peer_id.clone(),
                 validator_id.clone(),
                 Numeric::from(10_u64),
                 Metadata::default(),
@@ -1461,6 +1466,7 @@ pub mod genesis_instructions_json {
                 Some(register) => {
                     assert_eq!(*register.lane_id(), LaneId::SINGLE);
                     assert_eq!(register.validator(), &validator_id);
+                    assert_eq!(register.peer_id(), &validator_peer_id);
                     assert_eq!(register.stake_account(), &validator_id);
                     assert_eq!(register.initial_stake(), &Numeric::from(10_u64));
                     assert!(register.metadata().is_empty());

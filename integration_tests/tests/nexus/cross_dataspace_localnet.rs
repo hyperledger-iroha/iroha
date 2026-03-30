@@ -44,7 +44,7 @@ use iroha::{
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
-use iroha_crypto::PrivateKey;
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_data_model::query::{
     CommittedTxFilters,
@@ -133,6 +133,27 @@ fn soak_iterations() -> usize {
 fn cross_dataspace_gas_account_id() -> AccountId {
     // Use an existing single-domain subject to keep staking literals unambiguous.
     ALICE_ID.clone()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct ExpectedLaneValidatorBinding {
+    validator: String,
+    peer_id: String,
+}
+
+fn validator_authority_account_for_peer(index: usize) -> AccountId {
+    let mut seed = vec![0_u8; 32];
+    seed[0] = 0xC1;
+    seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
+    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+    AccountId::new(keypair.public_key().clone())
+}
+
+fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLaneValidatorBinding {
+    ExpectedLaneValidatorBinding {
+        validator: validator_authority_account_for_peer(index).to_string(),
+        peer_id: peer_id.to_string(),
+    }
 }
 
 fn localnet_builder() -> NetworkBuilder {
@@ -413,7 +434,7 @@ fn npos_multilane_genesis_post_topology_transactions(
             DS2_LANE_INDEX
         };
         let lane_id = LaneId::new(lane_index);
-        let validator_id = AccountId::new(peer.public_key().clone());
+        let validator_id = validator_authority_account_for_peer(index);
         bootstrap_tx.push(
             Register::account(Account::new_in_domain(
                 validator_id.clone(),
@@ -439,6 +460,7 @@ fn npos_multilane_genesis_post_topology_transactions(
             RegisterPublicLaneValidator::new(
                 lane_id,
                 validator_id.clone(),
+                peer.clone(),
                 validator_id.clone(),
                 Numeric::from(VALIDATOR_STAKE),
                 Metadata::default(),
@@ -913,7 +935,7 @@ fn wait_for_account_permissions(
 fn lane_validator_snapshot(
     snapshot: &JsonValue,
     context: &str,
-) -> Result<(usize, BTreeSet<String>)> {
+) -> Result<(usize, BTreeSet<ExpectedLaneValidatorBinding>)> {
     let root = snapshot
         .as_object()
         .ok_or_else(|| eyre!("{context}: lane validator response is not an object"))?;
@@ -935,6 +957,10 @@ fn lane_validator_snapshot(
             .get("validator")
             .and_then(JsonValue::as_str)
             .ok_or_else(|| eyre!("{context}: validator entry missing validator literal"))?;
+        let peer_id = entry
+            .get("peer_id")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| eyre!("{context}: validator entry missing peer_id literal"))?;
         let status_type = entry
             .get("status")
             .and_then(JsonValue::as_object)
@@ -942,7 +968,10 @@ fn lane_validator_snapshot(
             .and_then(JsonValue::as_str)
             .ok_or_else(|| eyre!("{context}: validator entry missing status.type"))?;
         if status_type == "Active" {
-            active.insert(validator.to_owned());
+            active.insert(ExpectedLaneValidatorBinding {
+                validator: validator.to_owned(),
+                peer_id: peer_id.to_owned(),
+            });
         }
     }
 
@@ -952,7 +981,7 @@ fn lane_validator_snapshot(
 fn wait_for_active_lane_validators(
     client: &Client,
     lane_id: LaneId,
-    expected_active: &BTreeSet<String>,
+    expected_active: &BTreeSet<ExpectedLaneValidatorBinding>,
     context: &str,
 ) -> Result<()> {
     let started = Instant::now();
@@ -1339,22 +1368,25 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "expected {TOTAL_PEERS} peers for cross-dataspace topology, got {}",
             peers.len()
         );
-        let nexus_lane_validators: Vec<AccountId> = peers
+        let nexus_lane_validators: Vec<ExpectedLaneValidatorBinding> = peers
             .iter()
+            .enumerate()
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(peer.id().public_key().clone()))
+            .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
             .collect();
-        let ds1_lane_validators: Vec<AccountId> = peers
+        let ds1_lane_validators: Vec<ExpectedLaneValidatorBinding> = peers
             .iter()
+            .enumerate()
             .skip(VALIDATORS_PER_LANE)
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(peer.id().public_key().clone()))
+            .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
             .collect();
-        let ds2_lane_validators: Vec<AccountId> = peers
+        let ds2_lane_validators: Vec<ExpectedLaneValidatorBinding> = peers
             .iter()
+            .enumerate()
             .skip(VALIDATORS_PER_LANE * 2)
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(peer.id().public_key().clone()))
+            .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
             .collect();
         let mut all_validators = Vec::with_capacity(TOTAL_PEERS);
         all_validators.extend(nexus_lane_validators.iter().cloned());
@@ -1366,18 +1398,10 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "validator groups must be disjoint and total {}",
             TOTAL_PEERS
         );
-        let expected_nexus_validators: BTreeSet<_> = nexus_lane_validators
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        let expected_ds1_validators: BTreeSet<_> = ds1_lane_validators
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        let expected_ds2_validators: BTreeSet<_> = ds2_lane_validators
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let expected_nexus_validators: BTreeSet<_> =
+            nexus_lane_validators.iter().cloned().collect();
+        let expected_ds1_validators: BTreeSet<_> = ds1_lane_validators.iter().cloned().collect();
+        let expected_ds2_validators: BTreeSet<_> = ds2_lane_validators.iter().cloned().collect();
         (
             expected_nexus_validators,
             expected_ds1_validators,

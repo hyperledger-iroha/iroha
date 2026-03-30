@@ -7,9 +7,25 @@ stake-elected public-lane validators now bind an explicit `peer_id` instead of
 relying on `validator AccountId.signatory == live peer identity`, and Torii
 routed public-lane proxying now uses only authoritative peer bindings and
 fails closed with `503 route_unavailable` when those bindings are missing,
-stale, or offline. This slice intentionally did not add new retry logic or
-deployment-pressure workarounds; the reset-path `429 queue_full` issue remains
-tracked separately from routing.
+stale, or offline. The remaining routing-model gaps are closed too:
+stake-elected lanes now have `RebindPublicLaneValidatorPeer` for deterministic
+peer repair, admin-managed manifests now declare explicit
+`{ validator, peer_id }` bindings instead of string validator lists, Torii
+validator snapshots expose non-null `peer_id` values for both authority
+sources, and the Nexus cross-dataspace harnesses compile again with
+intentionally divergent validator accounts vs peer ids. This slice still
+intentionally avoids new retry logic or deployment-pressure workarounds; the
+reset-path `429 queue_full` issue remains tracked separately from routing. The
+downstream Kagami/deploy serialization gap is also closed now:
+`iroha_genesis` preserves `peer_id` in JSON
+`RegisterPublicLaneValidator` output, so rendered genesis files keep the
+authoritative binding end to end instead of dropping it during export.
+
+Open work for this slice now remains:
+- run the broader long-lived verification suites (`cargo test --workspace` and
+  longer multi-peer Nexus envelopes) when time budget allows; the targeted
+  data-model/core/Torii checks and the cross-dataspace integration harness
+  compile path are already green.
 
 Latest sync (2026-03-30 JS SDK UTF-8 canonical-auth transport fallback):
 the JS Torii client now has a built-in raw Node HTTP/TLS path for UTF-8

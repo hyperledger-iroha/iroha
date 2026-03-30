@@ -9848,6 +9848,7 @@ mod tests {
         let governance_rules = GovernanceRules {
             version: 1,
             validators: vec![ALICE_ID.clone(), BOB_ID.clone()],
+            validator_bindings: Vec::new(),
             quorum: Some(2),
             protected_namespaces: ["governance", "treasury"]
                 .into_iter()

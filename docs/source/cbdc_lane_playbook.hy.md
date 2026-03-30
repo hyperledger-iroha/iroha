@@ -104,10 +104,10 @@ description = "Route CBDC contracts to the restricted lane"
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>"
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" }
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,18 @@ description = "Route CBDC contracts to the restricted lane"
 }
 ```
 
-Հիմնական պահանջներ.- Վավերացնողները **պետք է** լինեն կանոնական i105 հաշվի ID-ներ (առանց `@domain`; հավելված `@domain` միայն որպես հստակ երթուղային հուշում), որոնք առկա են կատալոգում: Սահմանեք `quorum` բազմապատիկ շեմին (≥2):
+Հիմնական պահանջներ.-
+
+- Validators **must** be declared as explicit bindings with a canonical I105
+  authority account plus a concrete `peer_id`. Legacy string-only validator
+  arrays are rejected.
+- Each manifest `peer_id` must resolve to a registered runtime peer with a live
+  consensus key that is present in the current commit topology; Torii routes
+  only to those authoritative peer bindings and fails closed when the runtime
+  truth disagrees with the manifest.
+- Validator accounts should remain stable governance identities even if the
+  underlying host or peer keys rotate; update the manifest `peer_id` binding
+  when the serving peer changes. Set `quorum` to the multisig threshold (≥2).
 - Պաշտպանված անունների տարածքները պարտադրվում են `Queue::push`-ով (տես `crates/iroha_core/src/queue.rs`), ուստի CBDC-ի բոլոր պայմանագրերը պետք է նշեն `gov_namespace` + `gov_contract_id`:
 - `composability_group` դաշտերը հետևում են `docs/source/nexus.md` §8.6-ում նկարագրված սխեմային; սեփականատերը (CBDC lane) տրամադրում է սպիտակ ցուցակը և քվոտաները: Սպիտակ ցուցակում նշված DS մանիֆեստները նշում են միայն `group_id_hex` + `activation_epoch`:
 - Մանիֆեստը պատճենելուց հետո գործարկեք `cargo test -p integration_tests nexus::lane_registry -- --nocapture`՝ հաստատելու համար, որ `LaneManifestRegistry::from_config`-ը բեռնում է այն:

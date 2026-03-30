@@ -104,10 +104,10 @@ Zolaq manifestləri `nexus.registry.manifest_directory` vasitəsilə konfiqurasi
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>"
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" }
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,18 @@ Zolaq manifestləri `nexus.registry.manifest_directory` vasitəsilə konfiqurasi
 }
 ```
 
-Əsas tələblər:- Təsdiqləyicilər **qataloqda mövcud olan kanonik i105 hesab identifikatorları olmalıdır (`@domain` yoxdur; `@domain`-i yalnız açıq marşrut göstərişi kimi əlavə edin). `quorum`-i multisig həddinə təyin edin (≥2).
+Əsas tələblər:-
+
+- Validators **must** be declared as explicit bindings with a canonical I105
+  authority account plus a concrete `peer_id`. Legacy string-only validator
+  arrays are rejected.
+- Each manifest `peer_id` must resolve to a registered runtime peer with a live
+  consensus key that is present in the current commit topology; Torii routes
+  only to those authoritative peer bindings and fails closed when the runtime
+  truth disagrees with the manifest.
+- Validator accounts should remain stable governance identities even if the
+  underlying host or peer keys rotate; update the manifest `peer_id` binding
+  when the serving peer changes. Set `quorum` to the multisig threshold (≥2).
 - Qorunan ad məkanları `Queue::push` (bax: `crates/iroha_core/src/queue.rs`) tərəfindən tətbiq edilir, buna görə də bütün CBDC müqavilələrində `gov_namespace` + `gov_contract_id` göstərilməlidir.
 - `composability_group` sahələri `docs/source/nexus.md` §8.6-da təsvir edilən sxemə uyğundur; sahibi (CBDC zolağı) ağ siyahı və kvotaları təmin edir. Ağ siyahıya alınmış DS manifestləri yalnız `group_id_hex` + `activation_epoch`-i təyin edir.
 - Manifesti kopyaladıqdan sonra `LaneManifestRegistry::from_config`-in onu yüklədiyini təsdiqləmək üçün `cargo test -p integration_tests nexus::lane_registry -- --nocapture`-i işə salın.

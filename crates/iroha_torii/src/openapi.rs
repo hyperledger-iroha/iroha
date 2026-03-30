@@ -9121,8 +9121,7 @@ fn openapi_schemas() -> Map {
                 },
                 "peer_id": {
                     "type": "string",
-                    "nullable": true,
-                    "description": "Peer identity bound to the validator for consensus and routed traffic. Null for manifest-backed admin-managed lanes."
+                    "description": "Peer identity bound to the validator for consensus and routed traffic."
                 },
                 "stake_account": {
                     "type": "string",

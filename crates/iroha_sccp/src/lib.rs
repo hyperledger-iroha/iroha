@@ -88,7 +88,7 @@ mod serde_utils {
 
     fn decode_hex_vec(value: &str) -> Result<Vec<u8>, String> {
         let raw = strip_hex_prefix(value).as_bytes();
-        if raw.len() % 2 != 0 {
+        if !raw.len().is_multiple_of(2) {
             return Err("hex value must have an even number of digits".to_owned());
         }
 
@@ -243,6 +243,7 @@ mod serde_utils {
     pub mod option_hex32 {
         use super::{Deserialize, Deserializer, Serializer, String, decode_hex_fixed, encode_hex};
 
+        #[allow(clippy::ref_option)]
         pub fn serialize<S>(value: &Option<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: Serializer,
@@ -317,6 +318,7 @@ mod serde_utils {
     pub mod u64_string {
         use super::{DecimalStringVisitor, Deserializer, Serializer, ToString};
 
+        #[allow(clippy::trivially_copy_pass_by_ref)]
         pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: Serializer,

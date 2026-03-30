@@ -882,6 +882,8 @@ mod model {
         FindDaPinIntentByAlias(self::da::prelude::FindDaPinIntentByAlias),
         /// Fetch a DA pin intent by lane/epoch/sequence tuple.
         FindDaPinIntentByLaneEpochSequence(self::da::prelude::FindDaPinIntentByLaneEpochSequence),
+        /// Fetch a verified lane relay record by its canonical relay reference.
+        FindLaneRelayEnvelopeByRef(self::nexus::prelude::FindLaneRelayEnvelopeByRef),
         /// Fetch the registered owner for a `SoraFS` provider.
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
         /// Fetch the active SNS owner for a dataspace alias.
@@ -930,6 +932,8 @@ mod model {
         DomainCommittee(crate::nexus::DomainCommittee),
         /// DA pin intent payload.
         DaPinIntent(crate::da::pin_intent::DaPinIntentWithLocation),
+        /// Verified lane relay payload.
+        VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
         /// Account identifier payload.
         AccountId(AccountId),
     }
@@ -2437,6 +2441,7 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByManifest => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByAlias => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
+    nexus::prelude::FindLaneRelayEnvelopeByRef => crate::nexus::VerifiedLaneRelayRecord,
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
 }
 
@@ -3063,6 +3068,26 @@ pub mod da {
             FindDaPinIntentByAlias, FindDaPinIntentByLaneEpochSequence, FindDaPinIntentByManifest,
             FindDaPinIntentByTicket,
         };
+    }
+}
+
+pub mod nexus {
+    //! Nexus relay query definitions.
+
+    use crate::nexus::LaneRelayEnvelopeRef;
+
+    queries! {
+        /// Fetch a verified lane relay by its canonical reference.
+        #[repr(transparent)]
+        pub struct FindLaneRelayEnvelopeByRef {
+            /// Canonical relay reference to look up.
+            pub relay_ref: LaneRelayEnvelopeRef,
+        }
+    }
+
+    pub mod prelude {
+        //! Prelude re-exports for Nexus relay queries.
+        pub use super::FindLaneRelayEnvelopeByRef;
     }
 }
 

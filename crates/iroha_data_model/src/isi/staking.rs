@@ -92,6 +92,34 @@ impl RegisterPublicLaneValidator {
 }
 
 isi! {
+    /// Rebind an existing public-lane validator to a new consensus peer identity.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RebindPublicLaneValidatorPeer {
+        /// Lane that the validator targets.
+        pub lane_id: LaneId,
+        /// Account that owns validator authority for the lane.
+        pub validator: AccountId,
+        /// Replacement peer identity that signs consensus messages for the lane.
+        pub peer_id: PeerId,
+    }
+}
+
+impl RebindPublicLaneValidatorPeer {
+    /// Build a public-lane validator peer-rebinding instruction.
+    #[must_use]
+    pub fn new(lane_id: LaneId, validator: AccountId, peer_id: PeerId) -> Self {
+        Self {
+            lane_id,
+            validator,
+            peer_id,
+        }
+    }
+}
+
+isi! {
     /// Bond additional stake for an existing validator (self or delegator supplied).
     pub struct BondPublicLaneStake {
         /// Lane identifier.
@@ -155,6 +183,18 @@ mod tests {
         assert_eq!(instruction.stake_account(), &validator);
         assert_eq!(instruction.initial_stake(), &Numeric::from(10_u64));
         assert_eq!(instruction.metadata(), &metadata);
+    }
+
+    #[test]
+    fn rebind_public_lane_validator_peer_new_sets_fields() {
+        let validator = sample_account();
+        let peer_id = sample_peer_id();
+        let instruction =
+            RebindPublicLaneValidatorPeer::new(LaneId::SINGLE, validator.clone(), peer_id.clone());
+
+        assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
+        assert_eq!(instruction.validator(), &validator);
+        assert_eq!(instruction.peer_id(), &peer_id);
     }
 }
 
@@ -247,6 +287,7 @@ isi! {
 }
 
 impl crate::seal::Instruction for RegisterPublicLaneValidator {}
+impl crate::seal::Instruction for RebindPublicLaneValidatorPeer {}
 impl crate::seal::Instruction for ActivatePublicLaneValidator {}
 impl crate::seal::Instruction for ExitPublicLaneValidator {}
 impl crate::seal::Instruction for BondPublicLaneStake {}
@@ -259,7 +300,9 @@ impl crate::seal::Instruction for ClaimPublicLaneRewards {}
 
 #[cfg(test)]
 mod json_tests {
-    use super::{ActivatePublicLaneValidator, RegisterPublicLaneValidator};
+    use super::{
+        ActivatePublicLaneValidator, RebindPublicLaneValidatorPeer, RegisterPublicLaneValidator,
+    };
     use crate::{account::AccountId, metadata::Metadata, nexus::LaneId, peer::PeerId};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
@@ -300,6 +343,22 @@ mod json_tests {
         let encoded = to_value(&isi).expect("encode ActivatePublicLaneValidator");
         let decoded: ActivatePublicLaneValidator =
             from_value(encoded).expect("decode ActivatePublicLaneValidator");
+
+        assert_eq!(decoded, isi);
+    }
+
+    #[test]
+    fn rebind_public_lane_validator_peer_json_roundtrip() {
+        let _domain: crate::domain::DomainId = "wonderland".parse().expect("domain id");
+        let validator_key = KeyPair::from_seed(vec![0xC1; 32], Algorithm::Ed25519);
+        let peer_key = KeyPair::from_seed(vec![0xC2; 32], Algorithm::Ed25519);
+        let validator = AccountId::new(validator_key.public_key().clone());
+        let peer_id = PeerId::new(peer_key.public_key().clone());
+        let isi = RebindPublicLaneValidatorPeer::new(LaneId::new(3), validator, peer_id);
+
+        let encoded = to_value(&isi).expect("encode RebindPublicLaneValidatorPeer");
+        let decoded: RebindPublicLaneValidatorPeer =
+            from_value(encoded).expect("decode RebindPublicLaneValidatorPeer");
 
         assert_eq!(decoded, isi);
     }

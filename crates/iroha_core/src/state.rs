@@ -192,7 +192,9 @@ use crate::{
     block::{CommittedBlock, ValidBlock},
     compliance::LaneComplianceEngine,
     executor::Executor,
-    governance::manifest::{LaneManifestRegistry, LaneManifestRegistryHandle},
+    governance::manifest::{
+        LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
+    },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::Kura,
     nexus::space_directory::{
@@ -18381,13 +18383,39 @@ impl State {
         let manifest_registry = self.lane_manifests.read().clone();
         let nexus = self.nexus_snapshot();
         let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
+        let block_height = self
+            .latest_block_header_fast()
+            .map(|header| header.height().get())
+            .unwrap_or_else(|| {
+                self.world
+                    .view()
+                    .consensus_keys()
+                    .iter()
+                    .map(|(_, record)| record.activation_height)
+                    .max()
+                    .unwrap_or(0)
+            });
+        let commit_topology = self.commit_topology_snapshot();
         Self::authoritative_lane_peer_ids_from_sources(
             &self.world.view(),
             lane_id,
             validator_mode,
             manifest_registry.as_ref(),
             &nexus,
+            &commit_topology,
+            block_height,
         )
+    }
+
+    /// Return the explicit manifest validator bindings configured for a lane, if any.
+    pub fn manifest_lane_validator_bindings(
+        &self,
+        lane_id: LaneId,
+    ) -> Vec<ManifestValidatorBinding> {
+        self.lane_manifests
+            .read()
+            .lane_validator_bindings(lane_id)
+            .unwrap_or_default()
     }
 
     fn lane_relay_committee_seed(
@@ -18507,13 +18535,27 @@ impl State {
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
+        commit_topology: &[PeerId],
+        block_height: u64,
     ) -> Vec<PeerId> {
-        if let Some(mut validators) = manifest_registry.lane_validators(lane_id) {
-            validators.sort();
-            validators.dedup();
-            return validators
+        if let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id) {
+            let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
+            let topology_peers: BTreeSet<PeerId> = commit_topology.iter().cloned().collect();
+            let enforce_topology_membership = !topology_peers.is_empty();
+            bindings.retain(|binding| {
+                present_peers.contains(&binding.peer_id)
+                    && (!enforce_topology_membership || topology_peers.contains(&binding.peer_id))
+                    && peer_has_live_consensus_key(world, &binding.peer_id, block_height)
+            });
+            bindings.sort_by(|lhs, rhs| {
+                lhs.validator
+                    .cmp(&rhs.validator)
+                    .then_with(|| lhs.peer_id.cmp(&rhs.peer_id))
+            });
+            bindings.dedup_by(|lhs, rhs| lhs.peer_id == rhs.peer_id);
+            return bindings
                 .into_iter()
-                .filter_map(|validator| validator.try_signatory().cloned().map(PeerId::from))
+                .map(|binding| binding.peer_id)
                 .collect();
         }
 
@@ -28444,7 +28486,9 @@ mod tests {
     use crate::{
         block::{BlockBuilder, BlockValidationError, ValidBlock, valid::validate_axt_envelopes},
         da::DaShardCursorJournal,
-        governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        },
         kura::Kura,
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         query::store::LiveQueryStore,
@@ -31047,8 +31091,21 @@ mod tests {
     ) {
         let mut statuses = BTreeMap::new();
         for (lane_id, dataspace_id, validators) in lanes {
+            let validator_bindings = validators
+                .iter()
+                .map(|validator| ManifestValidatorBinding {
+                    validator: validator.clone(),
+                    peer_id: PeerId::from(
+                        validator
+                            .try_signatory()
+                            .expect("manifest test validators must be single-signatory")
+                            .clone(),
+                    ),
+                })
+                .collect();
             let rules = GovernanceRules {
                 validators: validators.clone(),
+                validator_bindings,
                 ..GovernanceRules::default()
             };
             let status = LaneManifestStatus {

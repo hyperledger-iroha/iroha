@@ -49055,9 +49055,9 @@ pub async fn handle_v1_nexus_public_lane_validators(
     if entries.is_empty() {
         entries.extend(
             state
-                .authoritative_lane_validator_accounts(lane_id)
+                .manifest_lane_validator_bindings(lane_id)
                 .into_iter()
-                .map(|validator| manifest_validator_to_json(lane_id, &validator)),
+                .map(|binding| manifest_validator_to_json(lane_id, &binding)),
         );
     }
     entries.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0));
@@ -49349,13 +49349,16 @@ fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Valu
 }
 
 #[cfg(feature = "app_api")]
-fn manifest_validator_to_json(lane_id: LaneId, validator: &AccountId) -> (String, Value) {
+fn manifest_validator_to_json(
+    lane_id: LaneId,
+    binding: &iroha_core::governance::manifest::ManifestValidatorBinding,
+) -> (String, Value) {
     let mut map = Map::new();
-    let canonical_validator = validator.to_string();
-    let validator_literal = crate::account_literal::display_literal(validator);
+    let canonical_validator = binding.validator.to_string();
+    let validator_literal = crate::account_literal::display_literal(&binding.validator);
     map.insert("lane_id".into(), Value::from(u64::from(lane_id)));
     map.insert("validator".into(), Value::from(validator_literal.clone()));
-    map.insert("peer_id".into(), Value::Null);
+    map.insert("peer_id".into(), Value::from(binding.peer_id.to_string()));
     map.insert("stake_account".into(), Value::from(validator_literal));
     map.insert("total_stake".into(), Value::from("0"));
     map.insert("self_stake".into(), Value::from("0"));
@@ -49471,7 +49474,7 @@ mod public_lane_tests {
     use axum::body::to_bytes;
     use axum::response::IntoResponse;
     use iroha_core::{
-        governance::manifest::LaneManifestRegistry,
+        governance::manifest::{LaneManifestRegistry, ManifestValidatorBinding},
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State as CoreState, World},
@@ -49495,7 +49498,7 @@ mod public_lane_tests {
     fn manifest_registry_for_test(
         lane_catalog: &LaneCatalog,
         lane_id: LaneId,
-        validators: &[AccountId],
+        validator_bindings: &[(AccountId, PeerId)],
     ) -> Arc<LaneManifestRegistry> {
         let manifest_root = std::env::temp_dir().join(format!(
             "iroha-torii-routing-manifests-{}-{}",
@@ -49507,9 +49510,11 @@ mod public_lane_tests {
         ));
         std::fs::create_dir_all(&manifest_root).expect("create manifest directory");
         let alias = format!("lane-{}", lane_id.as_u32());
-        let validators_json = validators
+        let validators_json = validator_bindings
             .iter()
-            .map(|validator| format!("\"{validator}\""))
+            .map(|(validator, peer_id)| {
+                format!(r#"{{"validator":"{validator}","peer_id":"{peer_id}"}}"#)
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let manifest = format!(
@@ -49587,16 +49592,29 @@ mod public_lane_tests {
 
     #[test]
     fn manifest_validator_to_json_marks_manifest_source() {
-        let validator = ALICE_ID.clone();
-        let (_, value) = manifest_validator_to_json(LaneId::new(7), &validator);
+        let peer_id = PeerId::from(
+            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let binding = ManifestValidatorBinding {
+            validator: ALICE_ID.clone(),
+            peer_id: peer_id.clone(),
+        };
+        let (_, value) = manifest_validator_to_json(LaneId::new(7), &binding);
         let obj = value
             .as_object()
             .expect("manifest validator should encode as object");
-        let expected_validator = crate::account_literal::display_literal(&validator);
+        let expected_validator = crate::account_literal::display_literal(&binding.validator);
+        let expected_peer_id = peer_id.to_string();
 
         assert_eq!(
             obj.get("validator").and_then(Value::as_str),
             Some(expected_validator.as_str())
+        );
+        assert_eq!(
+            obj.get("peer_id").and_then(Value::as_str),
+            Some(expected_peer_id.as_str())
         );
         assert_eq!(
             obj.get("authority_source").and_then(Value::as_str),
@@ -49606,8 +49624,13 @@ mod public_lane_tests {
 
     #[tokio::test]
     async fn lane_validators_endpoint_uses_manifest_roster_for_admin_managed_lane() {
-        let keypair = KeyPair::random();
-        let validator = AccountId::new(keypair.public_key().clone());
+        let validator_keypair = KeyPair::random();
+        let validator = AccountId::new(validator_keypair.public_key().clone());
+        let peer_id = PeerId::from(
+            KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
         let lane_id = LaneId::new(1);
         let dataspace_id = DataSpaceId::new(7);
         let lane_catalog = LaneCatalog::new(
@@ -49656,7 +49679,7 @@ mod public_lane_tests {
                 .nexus_snapshot()
                 .lane_catalog,
             lane_id,
-            std::slice::from_ref(&validator),
+            &[(validator.clone(), peer_id.clone())],
         );
         Arc::get_mut(&mut state)
             .expect("unique state")
@@ -49675,6 +49698,7 @@ mod public_lane_tests {
             .await
             .expect("response body should be readable");
         let json: Value = norito::json::from_slice(&body).expect("response should decode");
+        let expected_peer_id = peer_id.to_string();
 
         assert_eq!(json["total"].as_u64(), Some(1));
         assert_eq!(
@@ -49684,6 +49708,10 @@ mod public_lane_tests {
         assert_eq!(
             json["items"][0]["authority_source"].as_str(),
             Some("manifest")
+        );
+        assert_eq!(
+            json["items"][0]["peer_id"].as_str(),
+            Some(expected_peer_id.as_str())
         );
     }
 

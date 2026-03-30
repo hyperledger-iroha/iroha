@@ -7,7 +7,7 @@ use crate::{
     isi::{
         ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
-        nexus::SetLaneRelayEmergencyValidators,
+        nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdmitSoracloudPrivateCompileProfile,
             AdvanceSoracloudRollout, AdvertiseSoracloudModelHost,
@@ -31,7 +31,8 @@ use crate::{
             WithdrawSoracloudModelHost,
         },
         staking::{
-            ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
+            ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
+            RegisterPublicLaneValidator,
         },
     },
     prelude::*,
@@ -109,6 +110,8 @@ fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
 ) -> bool {
     if let Some(v) = isi.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
         visitor.visit_register_public_lane_validator(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RebindPublicLaneValidatorPeer>() {
+        visitor.visit_rebind_public_lane_validator_peer(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ActivatePublicLaneValidator>() {
         visitor.visit_activate_public_lane_validator(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ExitPublicLaneValidator>() {
@@ -118,6 +121,8 @@ fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
         .downcast_ref::<SetLaneRelayEmergencyValidators>()
     {
         visitor.visit_set_lane_relay_emergency_validators(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterVerifiedLaneRelay>() {
+        visitor.visit_register_verified_lane_relay(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RegisterIdentifierPolicy>() {
         visitor.visit_register_identifier_policy(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ActivateIdentifierPolicy>() {
@@ -454,9 +459,11 @@ macro_rules! instruction_visitors {
             visit_send_to_twitter(&SendToTwitter),
             visit_cancel_twitter_escrow(&CancelTwitterEscrow),
             visit_register_public_lane_validator(&RegisterPublicLaneValidator),
+            visit_rebind_public_lane_validator_peer(&RebindPublicLaneValidatorPeer),
             visit_activate_public_lane_validator(&ActivatePublicLaneValidator),
             visit_exit_public_lane_validator(&ExitPublicLaneValidator),
             visit_set_lane_relay_emergency_validators(&SetLaneRelayEmergencyValidators),
+            visit_register_verified_lane_relay(&RegisterVerifiedLaneRelay),
             visit_register_identifier_policy(&RegisterIdentifierPolicy),
             visit_activate_identifier_policy(&ActivateIdentifierPolicy),
             visit_claim_identifier(&ClaimIdentifier),
@@ -572,6 +579,37 @@ mod tests {
         let isi = InstructionBox::from(instruction);
 
         let mut visitor = RegisterVisitor { called: false };
+        visit_instruction(&mut visitor, &isi);
+        assert!(visitor.called);
+    }
+
+    #[test]
+    fn visit_rebind_public_lane_validator_peer_dispatches() {
+        struct RebindVisitor {
+            called: bool,
+        }
+
+        impl Visit for RebindVisitor {
+            fn visit_rebind_public_lane_validator_peer(
+                &mut self,
+                _: &RebindPublicLaneValidatorPeer,
+            ) {
+                self.called = true;
+            }
+        }
+
+        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let validator_key = KeyPair::from_seed(vec![0x12; 32], Algorithm::Ed25519);
+        let peer_key = KeyPair::from_seed(vec![0x13; 32], Algorithm::Ed25519);
+        let validator = AccountId::new(validator_key.public_key().clone());
+        let peer_id = PeerId::from(peer_key.public_key().clone());
+        let isi = InstructionBox::from(RebindPublicLaneValidatorPeer::new(
+            LaneId::SINGLE,
+            validator,
+            peer_id,
+        ));
+
+        let mut visitor = RebindVisitor { called: false };
         visit_instruction(&mut visitor, &isi);
         assert!(visitor.called);
     }

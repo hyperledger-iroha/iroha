@@ -104,10 +104,10 @@ Lane манифестууд нь `nexus.registry.manifest_directory` (`crates/ir
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>",
-    "<i105-account-id>"
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" }
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,18 @@ Lane манифестууд нь `nexus.registry.manifest_directory` (`crates/ir
 }
 ```
 
-Гол шаардлага:- Баталгаажуулагчид **заавал** нь каталогт байгаа i105 дансны стандарт ID (`@domain` байхгүй; `@domain`-г зөвхөн тодорхой чиглүүлэлтийн сануулга болгон нэмнэ үү) байх ёстой. `quorum`-г multisig босго (≥2) болгож тохируулна уу.
+Гол шаардлага:-
+
+- Validators **must** be declared as explicit bindings with a canonical I105
+  authority account plus a concrete `peer_id`. Legacy string-only validator
+  arrays are rejected.
+- Each manifest `peer_id` must resolve to a registered runtime peer with a live
+  consensus key that is present in the current commit topology; Torii routes
+  only to those authoritative peer bindings and fails closed when the runtime
+  truth disagrees with the manifest.
+- Validator accounts should remain stable governance identities even if the
+  underlying host or peer keys rotate; update the manifest `peer_id` binding
+  when the serving peer changes. Set `quorum` to the multisig threshold (≥2).
 - Хамгаалагдсан нэрийн орон зайг `Queue::push` (`crates/iroha_core/src/queue.rs`-ыг үзнэ үү) хэрэгжүүлдэг тул бүх CBDC гэрээнд `gov_namespace` + `gov_contract_id` заах ёстой.
 - `composability_group` талбарууд нь `docs/source/nexus.md` §8.6-д тодорхойлсон схемийн дагуу байна; эзэмшигч (CBDC lane) нь цагаан жагсаалт болон квотыг нийлүүлдэг. Зөвшөөрөгдсөн жагсаалтад орсон DS манифест нь зөвхөн `group_id_hex` + `activation_epoch`-г зааж өгдөг.
 - Манифестыг хуулж авсны дараа `LaneManifestRegistry::from_config` ачаалж байгааг баталгаажуулахын тулд `cargo test -p integration_tests nexus::lane_registry -- --nocapture` ажиллуулна уу.
