@@ -2,6 +2,67 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 full reruns on top of transaction-gossip cache normalization):
+the additional transaction-gossip wire/cache fix removed the residual
+recovered malformed payload churn as the dominant soak failure source, but the
+full preserved-peer stable envelopes still do not pass.
+
+- permissioned rerun:
+  `/tmp/izanami_permissioned_txgossipfix_20260330T011035Z.log`
+  with peer artifacts in
+  `/tmp/iroha-soak-permissioned-txgossipfix_20260330T011035Z`
+  now shows only `3` recovered malformed decrypted payload drops total and no
+  `LengthMismatch` / peer-decode / low-online proposer signatures, yet still
+  collapses much earlier at `strict_min_height=199` / `quorum_min_height=199`
+  with `strict_reference_height=201` behind heavy ingress distress
+  (`PRTRY:QUEUE_FULL=873`, `no ingress endpoints=667`) and a synchronized
+  `no lagging peers` strict-min freeze;
+- NPoS rerun:
+  `/tmp/izanami_npos_txgossipfix_20260330T013139Z.log`
+  with peer artifacts in
+  `/tmp/iroha-soak-npos-txgossipfix_20260330T013139Z`
+  also shows only `3` recovered malformed payload drops total and no old
+  transport/proposer signatures, runs the full hour to
+  `strict_min_height=1568`, and now fails only at the duration checkpoint on
+  the stable latency gate with
+  `quorum p95 block interval 3335ms exceeded threshold 1000ms`; and
+- compared with the March 29 transport-fix reruns, the shared transport churn
+  has collapsed from `3991/3435` recovered malformed payload drops
+  (permissioned/NPoS) to `3/3`, so the remaining blockers are no longer the
+  transport-induced framing root cause traced earlier.
+
+Open work for this slice now remains:
+- explain and fix the permissioned synchronized global liveness stop visible in
+  `/tmp/izanami_permissioned_txgossipfix_20260330T011035Z.log`, where the run
+  now fails at `199/201` with no lagging peers and severe ingress distress
+  despite the transport-churn reduction;
+- explain and fix the remaining NPoS stable-performance bottleneck visible in
+  `/tmp/izanami_npos_txgossipfix_20260330T013139Z.log`, where the run survives
+  the full hour and reaches `1568` blocks but still misses the shared-host
+  `1000ms` p95 interval gate by landing at `3335ms`; and
+- capture the exact producer of the remaining three recovered malformed
+  high-stream payload frames now that the transport cache contract is largely
+  clean, mainly to confirm they are incidental noise and not a hidden common
+  cause behind the permissioned/NPoS residual failures.
+
+Latest sync (2026-03-30 transaction-gossip cache normalization):
+the remaining recovered malformed payload churn from the March 29 preserved
+peer reruns has been traced to the transaction-gossip cache contract on the
+shared peer stream and fixed by normalizing cached gossip payloads to a
+canonical framed `SignedTransaction` wire form.
+
+- `crates/iroha_core/src/gossiper.rs` now canonicalizes cached
+  `GossipTransaction` bytes to a canonical full Norito-framed
+  `SignedTransaction`, re-emits the same bytes on cached and uncached paths,
+  and decodes `TransactionGossip` with an explicit len-prefixed field decoder
+  instead of relying on the derive-generated field walker around nested framed
+  payloads; and
+- `crates/iroha_core/src/queue.rs` now normalizes queue-generated gossip cache
+  payloads through that same canonical transaction framing path so the gossip
+  cache stays ambient-flag-free at the source.
+
+Open work for this slice is tracked in the latest sync above.
+
 Latest sync (2026-03-30 transport-induced consensus stall chain fix):
 the March 29 Torii public-ingress regression is already fixed separately; the
 remaining preserved-peer stable stall chain was transport-induced and is now

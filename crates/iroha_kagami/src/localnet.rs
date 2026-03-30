@@ -2225,7 +2225,8 @@ fn write_genesis(
     json_path: &Path,
     signed_path: &Path,
 ) -> Result<()> {
-    let chain_discriminant = chain_discriminant.unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
+    let chain_discriminant =
+        chain_discriminant.unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
     let genesis = genesis.clone().with_chain_discriminant(chain_discriminant);
     let _chain_discriminant = Some(ChainDiscriminantGuard::enter(chain_discriminant));
     let json = norito::json::to_json_pretty(&genesis)?;

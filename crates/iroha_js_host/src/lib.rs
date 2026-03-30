@@ -608,7 +608,8 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
     }
 
     let mut payload = Vec::with_capacity(8 + rows * columns.len() * mem::size_of::<Halo2Scalar>());
-    payload.extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
+    payload
+        .extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
     payload.extend_from_slice(&usize_to_u32_len(rows, "zk1 instance rows").to_le_bytes());
     for row in 0..rows {
         for column in columns {
@@ -8197,8 +8198,7 @@ pub fn build_private_create_kaigi_transaction(
     let chain: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
-    let call: PrivateKaigiTemplate =
-        parse_private_kaigi_json("private create call", &call_json)?;
+    let call: PrivateKaigiTemplate = parse_private_kaigi_json("private create call", &call_json)?;
     let artifacts: PrivateKaigiArtifacts =
         parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
     let fee_spend: PrivateKaigiFeeSpend =

@@ -601,12 +601,19 @@ fn collect_poseidon_entry(
             },
         ),
         gpu: if probe.gpu_available {
-            measure_map_optional(&columns.coeff, config.warmups, config.iterations, |coeffs| {
-                let batch =
-                    PoseidonColumnBatch::from_domains_and_columns(&poseidon_domain_refs, coeffs)
-                        .expect("gpu poseidon batch shape");
-                hash_columns_gpu_batch(&batch)
-            })
+            measure_map_optional(
+                &columns.coeff,
+                config.warmups,
+                config.iterations,
+                |coeffs| {
+                    let batch = PoseidonColumnBatch::from_domains_and_columns(
+                        &poseidon_domain_refs,
+                        coeffs,
+                    )
+                    .expect("gpu poseidon batch shape");
+                    hash_columns_gpu_batch(&batch)
+                },
+            )
         } else {
             None
         },

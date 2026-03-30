@@ -1699,9 +1699,12 @@ mod account {
                         iroha::data_model::isi::Register::account(Account::new(
                             account_id,
                         ));
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to register account")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to register account")
                 }
                 Unregister(args) => {
                     let account_id = resolve_account_id(context, &args.id)
@@ -1840,6 +1843,9 @@ mod account {
         /// Canonical global account identifier for registration (canonical I105 literal)
         #[arg(short, long)]
         id: String,
+        /// Submit without waiting for confirmation.
+        #[arg(long)]
+        no_wait: bool,
     }
 
     #[derive(clap::Args, Debug)]
@@ -7170,6 +7176,22 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     {
         eyre::bail!("account literal must be canonical I105; canonical hex is not accepted");
     }
+
+    if let Some(raw_discriminant) = std::env::var_os("IROHA_ACCOUNT_CHAIN_DISCRIMINANT") {
+        let raw_discriminant = raw_discriminant.to_string_lossy();
+        let discriminant = raw_discriminant.parse::<u16>().map_err(|_| {
+            eyre!(
+                "IROHA_ACCOUNT_CHAIN_DISCRIMINANT must be a valid u16, got `{raw_discriminant}`"
+            )
+        })?;
+        let parsed = iroha::account_address::parse_account_address(trimmed, Some(discriminant))
+            .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
+        return parsed
+            .address
+            .to_account_id()
+            .map_err(|err| eyre!("account literal must be canonical I105: {err}"));
+    }
+
     let parsed = AccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
     Ok(parsed.into_account_id())
@@ -7276,6 +7298,23 @@ fn parse_register_account_id(literal: &str) -> Result<AccountId> {
             "`ledger account register --id` must be canonical I105; canonical hex is not accepted"
         );
     }
+
+    if let Some(raw_discriminant) = std::env::var_os("IROHA_ACCOUNT_CHAIN_DISCRIMINANT") {
+        let raw_discriminant = raw_discriminant.to_string_lossy();
+        let discriminant = raw_discriminant.parse::<u16>().map_err(|_| {
+            eyre!(
+                "IROHA_ACCOUNT_CHAIN_DISCRIMINANT must be a valid u16, got `{raw_discriminant}`"
+            )
+        })?;
+        let parsed = iroha::account_address::parse_account_address(trimmed, Some(discriminant))
+            .map_err(|err| {
+                eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
+            })?;
+        return parsed.address.to_account_id().map_err(|err| {
+            eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
+        });
+    }
+
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
         eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
     })?;
