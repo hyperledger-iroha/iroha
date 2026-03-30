@@ -269,33 +269,6 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
         }
     }
 
-    private class DomainIdAdapter : TypeAdapter<String> {
-        override fun encode(encoder: NoritoEncoder, value: String) {
-            encodeSizedField(encoder, STRING_ADAPTER, value)
-        }
-
-        override fun decode(decoder: NoritoDecoder): String {
-            val payload = decoder.readBytes(decoder.remaining())
-            return decodeDomainPayload(payload, decoder.flags, decoder.flagsHint)
-        }
-
-        companion object {
-            fun decodeDomainPayload(payload: ByteArray, flags: Int, flagsHint: Int): String {
-                try {
-                    val child = NoritoDecoder(payload, flags, flagsHint)
-                    val domain = decodeSizedField(child, STRING_ADAPTER)
-                    require(child.remaining() == 0) { "Trailing bytes after DomainId payload" }
-                    return domain
-                } catch (_: IllegalArgumentException) {
-                    val child = NoritoDecoder(payload, flags, flagsHint)
-                    val domain = STRING_ADAPTER.decode(child)
-                    require(child.remaining() == 0) { "Trailing bytes after DomainId payload" }
-                    return domain
-                }
-            }
-        }
-    }
-
     private class ChainIdAdapter : TypeAdapter<String> {
         override fun encode(encoder: NoritoEncoder, value: String) {
             encodeSizedField(encoder, STRING_ADAPTER, value)
@@ -390,7 +363,6 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
 
     companion object {
         private val STRING_ADAPTER: TypeAdapter<String> = NoritoAdapters.stringAdapter()
-        private val DOMAIN_ID_ADAPTER: TypeAdapter<String> = DomainIdAdapter()
         private val ACCOUNT_ID_ADAPTER: TypeAdapter<String> = AccountIdAdapter()
         private val CHAIN_ID_ADAPTER: TypeAdapter<String> = ChainIdAdapter()
         private val JSON_STRING_ADAPTER: TypeAdapter<String> = JsonStringAdapter()
