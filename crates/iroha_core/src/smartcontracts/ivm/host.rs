@@ -20,7 +20,7 @@ use std::{
 use iroha_crypto::{Hash, streaming::TransportCapabilityResolutionSnapshot};
 use iroha_data_model::{
     DataSpaceId, ValidationFail,
-    account::rekey::AccountLabel,
+    account::rekey::{AccountAlias, AccountAliasDomain},
     errors::{AmxStage, AmxTimeout, CanonicalErrorKind},
     events::time::Schedule,
     isi::{
@@ -4555,7 +4555,7 @@ impl<QS> CoreHostImpl<QS> {
         authority: &AccountId,
         alias: &str,
     ) -> Result<AccountId, ivm::VMError> {
-        let alias_label = AccountLabel::from_literal(alias, &state.nexus().dataspace_catalog)
+        let alias_label = AccountAlias::from_literal(alias, &state.nexus().dataspace_catalog)
             .map_err(|_| ivm::VMError::DecodeError)?;
         if !crate::alias::authority_can_resolve_account_alias(
             state.world(),
@@ -4735,8 +4735,8 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // ----------------- Account ISIs via pointer-ABI -----------------
             ivm::syscalls::SYSCALL_REGISTER_ACCOUNT => {
                 let ptr = vm.register(10);
-                let id: ScopedAccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
-                let isi = Register::account(Account::new_in_domain(id.account, id.domain));
+                let id: AccountId = Self::decode_tlv_typed(vm, ptr, PointerType::AccountId)?;
+                let isi = Register::account(Account::new(id));
                 let instr = InstructionBox::from(RegisterBox::from(isi));
                 Ok(self.queue_instruction(instr))
             }
@@ -7589,20 +7589,13 @@ mod pointer_abi_tests {
         let mut host = CoreHost::new(authority);
 
         let account: AccountId = fixture_account("bob");
-        let scoped_account = account
-            .clone()
-            .to_account_id("wonderland".parse().expect("domain"));
-        let payload = norito_blob(&scoped_account);
-        let expected_scoped_account: ScopedAccountId =
-            norito::decode_from_bytes(&payload).expect("decode scoped account");
+        let payload = norito_blob(&account);
+        let expected_account: AccountId = norito::decode_from_bytes(&payload).expect("decode account");
         let ptr = store_tlv(&mut vm, PointerType::AccountId, &payload);
         vm.set_register(10, ptr);
 
         let res = host.syscall(ivm::syscalls::SYSCALL_REGISTER_ACCOUNT, &mut vm);
-        let expected = InstructionBox::from(Register::account(Account::new_in_domain(
-            expected_scoped_account.account,
-            expected_scoped_account.domain,
-        )));
+        let expected = InstructionBox::from(Register::account(Account::new(expected_account)));
         let expected_gas = crate::gas::meter_instruction(&expected);
         assert_eq!(res, Ok(expected_gas));
         assert_eq!(host.queued, vec![expected]);
@@ -8499,7 +8492,7 @@ mod tests {
     }
 
     fn build_fixture_account(id: &AccountId, authority: &AccountId) -> Account {
-        Account::new_in_domain(id.clone(), fixture_domain_id()).build(authority)
+        Account::new(id.clone()).build(authority)
     }
 
     #[test]
@@ -9718,13 +9711,17 @@ mod tests {
         let alias_label: Name = "banking".parse().expect("alias label");
         let alias_account_id: AccountId = fixture_account_in_domain("banking", &alias_domain_label);
         let domain = Domain::new(alias_domain.clone()).build(&authority);
-        let authority_account =
-            Account::new_in_domain(authority.clone(), alias_domain.clone()).build(&authority);
+        let authority_account = Account::new(authority.clone()).build(&authority);
         let aliased_account =
-            Account::new_in_domain(alias_account_id.clone(), alias_domain.clone())
-                .with_label(Some(AccountLabel::new(
-                    alias_domain.clone(),
+            Account::new(alias_account_id.clone())
+                .with_label(Some(AccountAlias::new(
                     alias_label.clone(),
+                    Some(AccountAliasDomain::new(
+                        alias_domain
+                            .name()
+                            .clone(),
+                    )),
+                    DataSpaceId::GLOBAL,
                 )))
                 .build(&authority);
         let kura = Kura::blank_kura_for_testing();

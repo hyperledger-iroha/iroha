@@ -515,7 +515,7 @@ mod tests {
             dm_isi::register::Register::domain(Domain::new(bench_domain.clone())).into();
 
         let register_account: InstructionBox = dm_isi::register::Register::account(
-            Account::new_in_domain(authority.clone(), bench_domain),
+            Account::new(authority.clone()),
         )
         .into();
 

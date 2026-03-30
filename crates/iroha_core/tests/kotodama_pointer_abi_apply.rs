@@ -77,10 +77,10 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     let asset_domain_id = asset_def.domain().clone();
     let reg_asset_domain = RegisterBox::from(Register::domain(Domain::new(asset_domain_id)));
     let reg_from = RegisterBox::from(Register::account(
-        NewAccount::new(from.clone()).with_linked_domain(account_domain_id.clone()),
+        NewAccount::new(from.clone()),
     ));
     let reg_to = RegisterBox::from(Register::account(
-        NewAccount::new(to.clone()).with_linked_domain(account_domain_id.clone()),
+        NewAccount::new(to.clone()),
     ));
     let reg_asset_def = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
@@ -201,7 +201,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let reg_asset_domain =
         RegisterBox::from(Register::domain(Domain::new(asset_def.domain().clone())));
     let reg_authority = RegisterBox::from(Register::account(
-        NewAccount::new(authority.clone()).with_linked_domain(account_domain_id),
+        NewAccount::new(authority.clone()),
     ));
     let reg_asset_def = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),

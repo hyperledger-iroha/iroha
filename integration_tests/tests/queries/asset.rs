@@ -56,7 +56,7 @@ fn find_asset_total_quantity() -> Result<()> {
                 } else {
                     wonderland_domain.clone()
                 };
-                Register::account(Account::new_in_domain(account_id.clone(), domain))
+                Register::account(Account::new(account_id.clone()))
             })
             .collect::<Vec<_>>();
         test_client.submit_all_blocking(register_accounts)?;

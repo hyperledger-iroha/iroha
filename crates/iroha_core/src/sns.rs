@@ -8,7 +8,7 @@
 use std::{str::FromStr, time::SystemTime};
 
 use iroha_data_model::{
-    account::{AccountAddress, AccountId, rekey::AccountLabel},
+    account::{AccountAddress, AccountId, rekey::AccountAlias},
     block::BlockHeader,
     domain::DomainId,
     isi::{
@@ -169,7 +169,7 @@ pub fn policy_storage_key(suffix_id: SuffixId) -> Name {
 
 /// Build the selector used for a full account-alias lease record.
 pub fn selector_for_account_alias(
-    alias: &AccountLabel,
+    alias: &AccountAlias,
     catalog: &DataSpaceCatalog,
 ) -> Result<NameSelectorV1, iroha_data_model::error::ParseError> {
     Ok(NameSelectorV1 {
@@ -193,7 +193,7 @@ fn selector_for_account_alias_literal(
     literal: &str,
     catalog: &DataSpaceCatalog,
 ) -> Result<NameSelectorV1, SnsError> {
-    let alias = AccountLabel::from_literal(literal, catalog)
+    let alias = AccountAlias::from_literal(literal, catalog)
         .map_err(|err| SnsError::BadRequest(err.to_string()))?;
     selector_for_account_alias(&alias, catalog).map_err(|err| SnsError::BadRequest(err.to_string()))
 }
@@ -283,7 +283,7 @@ fn seed_name_record_if_missing(world: &mut World, owner: &AccountId, selector: N
 fn seed_alias_manage_permissions_if_missing(
     world: &mut World,
     authority: &AccountId,
-    label: &AccountLabel,
+    label: &AccountAlias,
 ) {
     let mut permissions = world
         .account_permissions
@@ -1130,7 +1130,7 @@ pub fn active_owner_by_selector(
 pub fn active_account_alias_owner(
     world: &impl WorldReadOnly,
     catalog: &DataSpaceCatalog,
-    alias: &AccountLabel,
+    alias: &AccountAlias,
     now_ms: u64,
 ) -> Option<AccountId> {
     let selector = selector_for_account_alias(alias, catalog).ok()?;
@@ -1175,7 +1175,7 @@ pub fn active_dataspace_owner_by_id(
 mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        account::{Account, AccountAddress, AccountId, rekey::AccountLabel},
+        account::{Account, AccountAddress, AccountId, rekey::AccountAlias},
         block::SignedBlock,
         domain::Domain,
         isi::{InstructionBox, Register, domain_link::SetPrimaryAccountAlias},
@@ -1244,7 +1244,7 @@ mod tests {
     fn account_alias_selector_uses_canonical_literal() {
         let catalog = dataspace_catalog();
         let alias =
-            AccountLabel::domainless("treasury".parse().expect("label"), DataSpaceId::new(7));
+            AccountAlias::domainless("treasury".parse().expect("label"), DataSpaceId::new(7));
 
         let selector = selector_for_account_alias(&alias, &catalog).expect("selector");
 
@@ -1301,17 +1301,17 @@ mod tests {
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
         let domain_id: DomainId = "ivm".parse().expect("domain");
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
-        let label = AccountLabel::new(domain_id.clone(), "gas".parse().expect("label"));
+        let label = AccountAlias::new(domain_id.clone(), "gas".parse().expect("label"));
         let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
             .with_instructions([
                 InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
                 InstructionBox::from(Register::account(
-                    Account::new_in_domain(account_id.clone(), domain_id.clone())
+                    Account::new(account_id.clone())
                         .with_label(Some(label.clone())),
                 )),
                 InstructionBox::from(SetPrimaryAccountAlias {
                     account: genesis_account.clone(),
-                    alias: Some(AccountLabel::new(
+                    alias: Some(AccountAlias::new(
                         domain_id.clone(),
                         "ops".parse().expect("label"),
                     )),
@@ -1335,7 +1335,7 @@ mod tests {
         let label_selector =
             selector_for_account_alias(&label, &DataSpaceCatalog::default()).expect("selector");
         let relabel_selector = selector_for_account_alias(
-            &AccountLabel::new(domain_id.clone(), "ops".parse().expect("label")),
+            &AccountAlias::new(domain_id.clone(), "ops".parse().expect("label")),
             &DataSpaceCatalog::default(),
         )
         .expect("selector");

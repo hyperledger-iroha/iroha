@@ -48,7 +48,7 @@ fn executor_upgrade_should_work() -> Result<()> {
     let register_admin_domain = Register::domain(Domain::new(admin_domain.clone()));
     client.submit_blocking(register_admin_domain)?;
 
-    let admin_account = Account::new_in_domain(admin_id.clone(), admin_domain.clone());
+    let admin_account = Account::new(admin_id.clone());
     let register_admin_account = Register::account(admin_account);
     client.submit_blocking(register_admin_account)?;
 

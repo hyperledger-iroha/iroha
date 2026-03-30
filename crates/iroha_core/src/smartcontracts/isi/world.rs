@@ -11284,7 +11284,7 @@ pub mod isi {
             zk::BackendTag,
         };
         use iroha_data_model::{
-            account::{NewAccount, rekey::AccountLabel},
+            account::{NewAccount, rekey::AccountAlias},
             asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
             nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
             nft::{Nft, NftId},
@@ -11370,7 +11370,7 @@ pub mod isi {
         }
 
         fn new_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> NewAccount {
-            NewAccount::new(account_id.clone()).with_linked_domain(domain_id.clone())
+            NewAccount::new(account_id.clone())
         }
 
         fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
@@ -12050,7 +12050,7 @@ pub mod isi {
             let policy = MultisigPolicy::new(threshold, members).expect("multisig policy");
             let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
             let multisig_id = AccountId::new_multisig(policy);
-            Register::account(Account::new_in_domain(multisig_id.clone(), domain_id))
+            Register::account(Account::new(multisig_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register multisig authority");
             multisig_id
@@ -12064,7 +12064,7 @@ pub mod isi {
 
             let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
             let other_domain_id: DomainId = "other.world".parse().expect("domain id parses");
-            let account_label = AccountLabel::new(domain_id.clone(), "primary".parse().unwrap());
+            let account_label = AccountAlias::new(domain_id.clone(), "primary".parse().unwrap());
             let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::domain_unregister"));
             let dataspace = DataSpaceId::new(17);
 

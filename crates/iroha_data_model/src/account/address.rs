@@ -542,20 +542,6 @@ impl AccountAddress {
         Ok(AccountId { controller })
     }
 
-    /// Convert this address into a [`ScopedAccountId`] using an explicit domain.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountAddressError`] when the provided domain does not match the selector
-    /// embedded in the address or when the controller payload cannot be decoded.
-    pub fn to_scoped_account_id(
-        &self,
-        domain: &DomainId,
-    ) -> Result<super::ScopedAccountId, AccountAddressError> {
-        self.ensure_domain_matches(domain)?;
-        Ok(self.to_account_id()?.to_account_id(domain.clone()))
-    }
-
     /// Check that the provided domain matches the selector embedded in this address.
     ///
     /// # Errors
@@ -1999,13 +1985,6 @@ mod tests {
         let address = AccountAddress::from_account_id(&account).expect("encode account id");
         let roundtrip = address.to_account_id().expect("decode account id");
         assert_eq!(roundtrip, account);
-
-        let other_domain = domain("garden");
-        let projected = address
-            .to_scoped_account_id(&other_domain)
-            .expect("global selector should project to arbitrary domain");
-        assert_eq!(projected.domain(), &other_domain);
-        assert_eq!(projected.signatory(), account.signatory());
     }
 
     #[test]

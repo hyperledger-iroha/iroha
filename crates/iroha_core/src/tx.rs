@@ -4309,7 +4309,7 @@ pub mod tests {
         account_id: &AccountId,
         domain_id: &DomainId,
     ) -> iroha_data_model::account::NewAccount {
-        Account::new_in_domain(account_id.clone(), domain_id.clone())
+        Account::new(account_id.clone())
     }
 
     fn world_with_authority(domain: &str) -> (World, AccountId, KeyPair) {
@@ -8439,7 +8439,7 @@ pub mod tests {
                     .into_iter()
                     .chain([("genesis", GENESIS_ACCOUNT.clone())])
                     .map(|(_name, cred)| {
-                        Account::new_in_domain(cred.id.clone(), DOMAIN.clone())
+                        Account::new(cred.id.clone())
                             .build(&GENESIS_ACCOUNT.id)
                     });
                 let assets = INIT_BALANCE

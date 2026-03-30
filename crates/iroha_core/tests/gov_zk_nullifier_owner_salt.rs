@@ -46,9 +46,9 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     let query_handle = LiveQueryStore::start_test();
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-    let acc = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
-    let escrow_acc = Account::new_in_domain(escrow_id.clone(), domain_id.clone()).build(&alice_id);
-    let receiver_acc = Account::new_in_domain(receiver_id.clone(), domain_id).build(&alice_id);
+    let acc = Account::new(alice_id.clone()).build(&alice_id);
+    let escrow_acc = Account::new(escrow_id.clone()).build(&alice_id);
+    let receiver_acc = Account::new(receiver_id.clone()).build(&alice_id);
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),
         "xor".parse().unwrap(),

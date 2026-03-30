@@ -118,7 +118,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
     // Bootstrap domain/account/asset and mint, then enable ZK (Hybrid)
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(alice.clone()).with_linked_domain(domain_id.clone()))
+        Register::account(NewAccount::new(alice.clone()))
             .into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())

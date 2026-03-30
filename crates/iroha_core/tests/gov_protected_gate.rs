@@ -83,7 +83,7 @@ fn protected_namespace_requires_enacted_proposal() {
     let domain_id: DomainId = "apps".parse().unwrap();
     let authority = AccountId::of(pk);
     let domain = Domain::new(domain_id.clone()).build(&authority);
-    let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
+    let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
 

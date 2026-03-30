@@ -222,7 +222,7 @@ fn nexus_fee_seed_amount() -> Numeric {
 }
 
 fn account_from_record(record: &AccountRecord, domain: &DomainId) -> NewAccount {
-    let builder = Account::new_in_domain(record.id.clone(), domain.clone());
+    let builder = Account::new(record.id.clone());
     if let Some(uaid) = record.uaid {
         builder.with_uaid(Some(uaid))
     } else {
@@ -393,7 +393,7 @@ pub fn prepare_state(
         let gas_label: Name = "gas"
             .parse()
             .map_err(|_| eyre!("failed to parse gas account label"))?;
-        let gas_account = Account::new_in_domain(gas_account_id.clone(), ivm_domain.clone())
+        let gas_account = Account::new(gas_account_id.clone())
             .with_label(Some(AccountLabel::new(ivm_domain.clone(), gas_label)));
 
         let stake_asset: AssetDefinitionId = config_defaults::nexus::staking::stake_asset_id()
@@ -437,7 +437,7 @@ pub fn prepare_state(
                 uaid: None,
             });
             nexus_genesis.push(InstructionBox::from(Register::account(
-                Account::new_in_domain(account_id.clone(), nexus_domain.clone()),
+                Account::new(account_id.clone()),
             )));
         }
 
@@ -1208,7 +1208,7 @@ impl ChaosState {
             uaid: None,
         };
         let mut instructions = vec![InstructionBox::from(Register::account(
-            Account::new_in_domain(account_id.clone(), self.base_domain.clone()),
+            Account::new(account_id.clone()),
         ))];
         instructions.extend(self.maybe_prefund_nexus_fee_asset(&record.id));
         TransactionPlan {
@@ -1226,7 +1226,7 @@ impl ChaosState {
             state_updates: Vec::new(),
             label: "duplicate_account",
             instructions: vec![InstructionBox::from(Register::account(
-                Account::new_in_domain(candidate.id.clone(), self.base_domain.clone()),
+                Account::new(candidate.id.clone()),
             ))],
             signer: self.treasury.clone(),
             expect_success: false,

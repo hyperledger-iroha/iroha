@@ -144,7 +144,7 @@ fn world_with_providers(providers: &[AccountId]) -> World {
         .build(providers.first().expect("at least one provider"));
     let accounts = providers
         .iter()
-        .map(|id| Account::new_in_domain(id.clone(), validator_domain_id.clone()).build(id));
+        .map(|id| Account::new(id.clone()).build(id));
     World::with([domain], accounts, [])
 }
 
@@ -184,15 +184,15 @@ fn oracle_state_with_accounts(
                 AssetId::new(asset_def_id.clone(), id.clone()),
                 Numeric::from_str("5").expect("provider balance"),
             ));
-            Account::new_in_domain(id.clone(), validator_domain_id.clone()).build(id)
+            Account::new(id.clone()).build(id)
         })
         .collect();
 
     let world = World::with_assets(
         [validator_domain, sora_domain],
         accounts.into_iter().chain([
-            Account::new_in_domain(reward_pool.clone(), sora_domain_id.clone()).build(&reward_pool),
-            Account::new_in_domain(slash_receiver.clone(), sora_domain_id).build(&slash_receiver),
+            Account::new(reward_pool.clone()).build(&reward_pool),
+            Account::new(slash_receiver.clone()).build(&slash_receiver),
         ]),
         [asset_def],
         assets,

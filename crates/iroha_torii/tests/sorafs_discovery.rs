@@ -1504,7 +1504,7 @@ fn ensure_authority_registered(
     let mut tx = block.transaction();
 
     if !account_exists {
-        let account = dm::Account::new_in_domain(authority.account.clone(), domain_id)
+        let account = dm::Account::new(authority.account.clone())
             .build(&authority.account);
         let (account_id, account_value) = account.into_key_value();
         tx.world_mut_for_testing()

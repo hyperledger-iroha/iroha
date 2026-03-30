@@ -4141,7 +4141,7 @@ mod multisig {
             let domain: DomainId = "wonderland".parse().unwrap();
             let account_id = account_from_seed(9, &domain);
             let account =
-                Account::new_in_domain(account_id.clone(), domain.clone()).build(&account_id);
+                Account::new(account_id.clone()).build(&account_id);
 
             let mut accounts = BTreeMap::new();
             accounts.insert(account_id.clone(), account);
@@ -8788,11 +8788,11 @@ mod tests {
 
             // Build accounts; builder API needs an authority, use id1 for simplicity
             let mut a1 =
-                Account::new_in_domain(id1.account().clone(), id1.domain().clone()).build(id1.account());
+                Account::new(id1.account().clone()).build(id1.account());
             let mut a2 =
-                Account::new_in_domain(id2.account().clone(), id2.domain().clone()).build(id1.account());
+                Account::new(id2.account().clone()).build(id1.account());
             let mut a3 =
-                Account::new_in_domain(id3.account().clone(), id3.domain().clone()).build(id1.account());
+                Account::new(id3.account().clone()).build(id1.account());
 
             // Insert ranks: a2=1, a1=2, a3=None
             a1.metadata
@@ -9538,7 +9538,7 @@ mod tests {
                     let kp = KeyPair::random();
                     let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
                     // owner for builder is arbitrary for this harness
-                    Account::new_in_domain(id.account().clone(), id.domain().clone())
+                    Account::new(id.account().clone())
                         .build(id.account())
                 })
                 .collect();
@@ -9664,7 +9664,7 @@ mod tests {
                 .map(|_| {
                     let kp = KeyPair::random();
                     let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
-                    Account::new_in_domain(id.account().clone(), id.domain().clone())
+                    Account::new(id.account().clone())
                         .build(id.account())
                 })
                 .collect();
@@ -10705,7 +10705,7 @@ mod tests {
                 let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
                 // owner is arbitrary in builder path
                 let mut a =
-                    Account::new_in_domain(id.account().clone(), id.domain().clone()).build(id.account());
+                    Account::new(id.account().clone()).build(id.account());
                 a.metadata
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
                 accounts.push(a);
@@ -11582,8 +11582,8 @@ mod cli_integration_harness {
         let bob = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
         server.accounts = vec![
-            Account::new_in_domain(alice.account().clone(), alice.domain().clone()).build(alice.account()),
-            Account::new_in_domain(bob.account().clone(), bob.domain().clone()).build(bob.account()),
+            Account::new(alice.account().clone()).build(alice.account()),
+            Account::new(bob.account().clone()).build(bob.account()),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
@@ -11736,9 +11736,9 @@ mod cli_integration_harness {
         let carol = sample_account_id("w", 5);
         let mut server = MockQueryServer::default();
         server.accounts = vec![
-            Account::new_in_domain(alice.account().clone(), alice.domain().clone()).build(alice.account()),
-            Account::new_in_domain(bob.account().clone(), bob.domain().clone()).build(bob.account()),
-            Account::new_in_domain(carol.account().clone(), carol.domain().clone()).build(carol.account()),
+            Account::new(alice.account().clone()).build(alice.account()),
+            Account::new(bob.account().clone()).build(bob.account()),
+            Account::new(carol.account().clone()).build(carol.account()),
         ];
 
         let with_filter: QueryWithFilter<_> = QueryWithFilter::new(

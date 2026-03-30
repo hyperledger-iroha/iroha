@@ -915,10 +915,10 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(BOB_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -993,10 +993,10 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register alice");
-        Register::account(Account::new_in_domain(BOB_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register bob");
         let bob_id = (*BOB_ID).clone();
@@ -1094,7 +1094,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -1142,10 +1142,10 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(BOB_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -1194,10 +1194,10 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(BOB_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(BOB_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -1245,7 +1245,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -1315,7 +1315,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -1385,7 +1385,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 
@@ -1432,7 +1432,7 @@ mod tests {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 

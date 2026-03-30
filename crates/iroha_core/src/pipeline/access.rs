@@ -1028,12 +1028,7 @@ where
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(&mut set, &r.object.id().clone()),
-            RegisterBox::Account(r) => {
-                for domain_id in r.object.linked_domains() {
-                    add_domain_r(&mut set, domain_id);
-                }
-                add_account_rw(&mut set, r.object.id());
-            }
+            RegisterBox::Account(r) => add_account_rw(&mut set, r.object.id()),
             RegisterBox::AssetDefinition(r) => {
                 add_asset_def_rw(&mut set, &r.object.id().clone());
             }
@@ -1490,7 +1485,7 @@ mod tests {
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new_in_domain(account_id.clone(), wonderland_domain_id())
+        Account::new(account_id.clone())
     }
 
     fn build_wonderland_account(account_id: &AccountId) -> Account {

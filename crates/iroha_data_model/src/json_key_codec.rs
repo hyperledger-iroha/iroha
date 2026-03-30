@@ -79,7 +79,7 @@ impl JsonKeyCodec for crate::runtime::RuntimeUpgradeId {
     }
 }
 
-impl JsonKeyCodec for crate::account::rekey::AccountLabel {
+impl JsonKeyCodec for crate::account::rekey::AccountAlias {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::new();
         norito::json::JsonSerialize::json_serialize(self, &mut buf);

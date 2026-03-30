@@ -1697,7 +1697,7 @@ mod tests {
             metadata: Metadata::default(),
             owned_by: domain_owner_id,
         };
-        let account = Account::new_in_domain(account_id.clone(), domain_id.clone()).into_account();
+        let account = Account::new(account_id.clone()).into_account();
         let asset = Asset::new(asset_id.clone(), 0_u32);
 
         // Create three events with three levels of nesting

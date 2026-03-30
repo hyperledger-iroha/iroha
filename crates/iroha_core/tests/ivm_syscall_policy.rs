@@ -95,7 +95,7 @@ fn unknown_syscall_is_rejected_at_admission() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new_in_domain(account_id.clone(), domain_id).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world =
         iroha_core::state::World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);

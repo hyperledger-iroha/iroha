@@ -28,8 +28,8 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
     let domain_id: DomainId = "wonderland".parse().expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account: Account =
-        Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()).build(&ALICE_ID);
-    let bob_account: Account = Account::new_in_domain(BOB_ID.clone(), domain_id).build(&ALICE_ID);
+        Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let bob_account: Account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [alice_account, bob_account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();

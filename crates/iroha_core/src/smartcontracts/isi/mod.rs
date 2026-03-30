@@ -521,7 +521,7 @@ mod tests {
         let wonderland: DomainId = "wonderland".parse()?;
         Register::domain(Domain::new(wonderland.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), wonderland))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         let trigger_perm: permission::Permission = CanRegisterTrigger {
             authority: ALICE_ID.clone(),
@@ -1030,7 +1030,7 @@ mod tests {
 
         // register fake account
         let register_account =
-            Register::account(Account::new_in_domain(fake_account_id.clone(), wonderland));
+            Register::account(Account::new(fake_account_id.clone()));
         register_account.execute(&account_id, &mut state_transaction)?;
 
         // register the trigger
@@ -1123,10 +1123,7 @@ mod tests {
             Error::InvariantViolation(_)
         ));
         let wonderland: DomainId = "wonderland".parse()?;
-        Register::account(Account::new_in_domain(
-            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
-            wonderland.clone(),
-        ))
+        Register::account(Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()))
         .execute(&account_id, &mut state_transaction)?;
         let genesis_account = state_transaction
             .world

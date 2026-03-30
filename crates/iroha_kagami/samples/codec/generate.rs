@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03".parse()?;
     let account_id = AccountId::new(public_key);
     let mut account = Account::new(account_id.clone())
-        .with_linked_domain(domain.clone())
+        
         .build(&account_id);
     account
         .metadata

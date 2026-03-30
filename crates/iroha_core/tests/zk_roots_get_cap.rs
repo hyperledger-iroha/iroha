@@ -126,7 +126,7 @@ fn zk_roots_get_respects_cap_and_max() {
     let owner = AccountId::new(KeyPair::random().public_key().clone());
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone()).with_linked_domain(domain_id.clone()))
+        Register::account(NewAccount::new(owner.clone()))
             .into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())

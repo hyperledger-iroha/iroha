@@ -85,7 +85,7 @@ fn prepare_state() -> (
                     &mut stx,
                     &owner,
                     Register::account(
-                        NewAccount::new(owner.clone()).with_linked_domain(domain_id.clone()),
+                        NewAccount::new(owner.clone()),
                     )
                     .into(),
                 )

@@ -35,7 +35,7 @@ async fn account_query_subrouter_exposes_endpoints() {
     let account_id = ALICE_ID.clone();
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new_in_domain(account_id.clone(), domain_id).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let mut world = World::with([domain], [account], []);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));

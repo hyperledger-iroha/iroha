@@ -40,11 +40,11 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
     let domain_id: DomainId = "kaigi".parse().expect("domain id");
     let owner_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let owner_id = AccountId::new(owner_kp.public_key().clone());
-    let owner = Account::new_in_domain(owner_id.clone(), domain_id.clone()).build(&owner_id);
+    let owner = Account::new(owner_id.clone()).build(&owner_id);
 
     let relay_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let relay_id = AccountId::new(relay_kp.public_key().clone());
-    let relay = Account::new_in_domain(relay_id.clone(), domain_id.clone()).build(&owner_id);
+    let relay = Account::new(relay_id.clone()).build(&owner_id);
 
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),

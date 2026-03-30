@@ -1950,7 +1950,7 @@ pub mod query {
         };
 
         fn build_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> Account {
-            Account::new_in_domain(account_id.clone(), domain_id.clone()).build(account_id)
+            Account::new(account_id.clone()).build(account_id)
         }
 
         fn build_numeric_asset_definition(
@@ -3097,11 +3097,11 @@ pub mod query {
 
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = NewAccount::new(ALICE_ID.clone())
-                .with_linked_domain(domain_id.clone())
+                
                 .with_uaid(Some(uaid_alice))
                 .build(&ALICE_ID);
             let bob_account = NewAccount::new(BOB_ID.clone())
-                .with_linked_domain(domain_id.clone())
+                
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 
@@ -3430,11 +3430,11 @@ pub mod query {
             );
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = NewAccount::new(ALICE_ID.clone())
-                .with_linked_domain(domain_id.clone())
+                
                 .with_uaid(Some(uaid_alice))
                 .build(&ALICE_ID);
             let bob_account = NewAccount::new(BOB_ID.clone())
-                .with_linked_domain(domain_id.clone())
+                
                 .with_uaid(Some(uaid_bob))
                 .build(&BOB_ID);
 

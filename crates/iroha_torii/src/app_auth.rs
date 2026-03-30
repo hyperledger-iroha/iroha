@@ -702,7 +702,7 @@ mod tests {
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(account);
-        let account_value = Account::new_in_domain(account.clone(), domain_id).build(account);
+        let account_value = Account::new(account.clone()).build(account);
         Arc::new(State::new_for_testing(
             World::with([domain], [account_value], []),
             Kura::blank_kura_for_testing(),

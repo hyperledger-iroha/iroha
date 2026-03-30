@@ -119,7 +119,7 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
     // Generate a new account
     let account_domain: DomainId = "wonderland".parse().expect("valid domain id");
     let create_account =
-        Register::account(Account::new_in_domain(account_id.clone(), account_domain));
+        Register::account(Account::new(account_id.clone()));
     // #endregion register_account_generate
 
     // #region register_account_prepare_tx

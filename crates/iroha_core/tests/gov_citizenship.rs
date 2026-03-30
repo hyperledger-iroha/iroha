@@ -26,10 +26,10 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
     let domain_id: DomainId = "wonderland".parse().expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account =
-        iroha_data_model::account::Account::new_in_domain(ALICE_ID.clone(), domain_id.clone())
+        iroha_data_model::account::Account::new(ALICE_ID.clone())
             .build(&ALICE_ID);
     let escrow_account =
-        iroha_data_model::account::Account::new_in_domain(BOB_ID.clone(), domain_id).build(&BOB_ID);
+        iroha_data_model::account::Account::new(BOB_ID.clone()).build(&BOB_ID);
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&ALICE_ID);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),

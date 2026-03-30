@@ -15,7 +15,7 @@ use iroha_crypto::{
     blake2::{Blake2b512, Digest as _},
 };
 use iroha_data_model::{
-    account::{AccountId, rekey::AccountLabel},
+    account::{AccountId, rekey::AccountAlias},
     alias::{
         AliasAttestation, AliasEvent, AliasIndex, AliasRecord, AliasRecordedEvent, AliasTarget,
     },
@@ -100,7 +100,7 @@ fn authority_has_permission(
 pub fn authority_can_resolve_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
-    alias: &AccountLabel,
+    alias: &AccountAlias,
 ) -> bool {
     let dataspace_permission: Permission = CanResolveAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
@@ -123,7 +123,7 @@ pub fn authority_can_resolve_account_alias(
 pub fn authority_can_manage_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
-    alias: &AccountLabel,
+    alias: &AccountAlias,
 ) -> bool {
     let dataspace_permission: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),

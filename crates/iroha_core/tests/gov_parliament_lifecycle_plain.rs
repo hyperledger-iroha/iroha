@@ -99,13 +99,13 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     );
 
     let proposer_account =
-        Account::new_in_domain(proposer_id.clone(), domain_id.clone()).build(&proposer_id);
+        Account::new(proposer_id.clone()).build(&proposer_id);
     let escrow_account =
-        Account::new_in_domain(escrow_id.clone(), domain_id.clone()).build(&proposer_id);
+        Account::new(escrow_id.clone()).build(&proposer_id);
     let citizen_accounts = citizens
         .iter()
         .cloned()
-        .map(|id| Account::new_in_domain(id.clone(), domain_id.clone()).build(&proposer_id));
+        .map(|id| Account::new(id.clone()).build(&proposer_id));
 
     let world = World::with_assets(
         [domain],

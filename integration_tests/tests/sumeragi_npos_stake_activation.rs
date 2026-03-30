@@ -103,10 +103,7 @@ fn stake_genesis_post_topology_transactions(
         let (stake, _) = profile_for_index(index, profile);
         if validator_id != genesis_account_id {
             bootstrap_tx.push(
-                Register::account(Account::new_in_domain(
-                    validator_id.clone(),
-                    stake_domain.clone(),
-                ))
+                Register::account(Account::new(validator_id.clone()))
                 .into(),
             );
         }

@@ -226,7 +226,7 @@ fn append_bootstrap_authority_overlay(
     }
     .into();
     let authority_account = Account::new(authority.account_id.clone())
-        .with_linked_domain(authority.linked_domain.clone());
+        ;
     let authority_fee_asset =
         AssetId::new(authority.fee_asset_id.clone(), authority.account_id.clone());
 

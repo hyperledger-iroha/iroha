@@ -77,7 +77,7 @@ fn setup_state(authority: &AccountId, asset_def: &AssetDefinitionId) -> State {
         let executor = tx.world.executor().clone();
         let reg_domain = Register::domain(Domain::new(domain_id.clone()));
         let reg_account =
-            Register::account(NewAccount::new(authority.clone()).with_linked_domain(domain_id));
+            Register::account(NewAccount::new(authority.clone()));
         let reg_asset = Register::asset_definition(
             AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
         );

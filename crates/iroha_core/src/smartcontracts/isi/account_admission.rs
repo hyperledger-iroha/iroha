@@ -212,7 +212,6 @@ fn create_implicit_account(
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
-        linked_domains: BTreeSet::new(),
     };
     let (account_id, account_value) = account.clone().into_key_value();
     state_transaction
@@ -413,7 +412,7 @@ mod tests {
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
         iroha_data_model::account::NewAccount::new(account_id.clone())
-            .with_linked_domain(domain_id)
+            
             .build(authority)
     }
 

@@ -26,7 +26,7 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
     let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
     let domain_id: dm::DomainId = "wonderland".parse().expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
-    let account = dm::Account::new_in_domain(authority.clone(), domain_id).build(&authority);
+    let account = dm::Account::new(authority.clone()).build(&authority);
 
     let pkr_id = dm::AssetDefinitionId::new(
         "wonderland".parse().expect("domain id"),
@@ -228,7 +228,7 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
     let domain_id: dm::DomainId = "wonderland".parse().expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account =
-        dm::Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
+        dm::Account::new(authority.clone()).build(&authority);
 
     let pkr_id = dm::AssetDefinitionId::new(domain_id.clone(), "pkr".parse().expect("asset name"));
     let pkr = dm::AssetDefinition::numeric(pkr_id.clone())

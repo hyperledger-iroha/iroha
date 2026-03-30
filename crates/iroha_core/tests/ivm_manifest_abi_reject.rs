@@ -83,7 +83,7 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new_in_domain(account_id.clone(), domain_id.clone()).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -171,7 +171,7 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new_in_domain(account_id.clone(), domain_id.clone()).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -250,7 +250,7 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new_in_domain(account_id.clone(), domain_id.clone()).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -326,7 +326,7 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new_in_domain(account_id.clone(), domain_id.clone()).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -399,7 +399,7 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new_in_domain(account_id.clone(), domain_id.clone()).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 

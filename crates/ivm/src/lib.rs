@@ -165,8 +165,7 @@ pub use ivm_abi::SyscallPolicy;
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
 pub use crate::{
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken,
-        ScopedAccountId, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
     },
     registers::Registers,
     segmented_memory::{Memory as SegmentedMemory, Segment},

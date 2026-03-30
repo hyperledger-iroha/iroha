@@ -767,8 +767,8 @@ mod tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
-        let alice = Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()).build(&ALICE_ID);
-        let bob = Account::new_in_domain(BOB_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+        let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
         let delivery_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
@@ -812,8 +812,8 @@ mod tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
-        let alice = Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()).build(&ALICE_ID);
-        let bob = Account::new_in_domain(BOB_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+        let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
         let delivery_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),

@@ -712,9 +712,9 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
         let alice_account =
-            Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account =
-            Account::new_in_domain(BOB_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+            Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
         let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
@@ -774,9 +774,9 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
         let alice_account =
-            Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account =
-            Account::new_in_domain(BOB_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+            Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
         let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
@@ -858,12 +858,12 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
         let alice_account =
-            Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+            Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account =
-            Account::new_in_domain(BOB_ID.clone(), domain_id.clone()).build(&ALICE_ID);
+            Account::new(BOB_ID.clone()).build(&ALICE_ID);
         let custodian_id = AccountId::new(KeyPair::random().public_key().clone());
         let custodian_account =
-            Account::new_in_domain(custodian_id.clone(), domain_id.clone()).build(&ALICE_ID);
+            Account::new(custodian_id.clone()).build(&ALICE_ID);
 
         let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             "wonderland".parse().unwrap(),

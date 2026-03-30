@@ -51,8 +51,8 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let acc_a = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
-    let acc_b = Account::new_in_domain(bob_id.clone(), domain_id.clone()).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     #[cfg(feature = "telemetry")]
     let state = State::new(
@@ -178,8 +178,8 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let acc_a = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
-    let acc_b = Account::new_in_domain(bob_id.clone(), domain_id.clone()).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     #[cfg(feature = "telemetry")]
     let state = State::new(

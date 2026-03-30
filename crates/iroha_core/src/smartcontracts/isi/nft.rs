@@ -404,7 +404,7 @@ pub mod isi {
                 .expect("register domain");
 
             let holder_id = AccountId::new(KeyPair::random().public_key().clone());
-            Register::account(Account::new_in_domain(holder_id.clone(), domain_id.clone()))
+            Register::account(Account::new(holder_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -483,17 +483,17 @@ pub mod isi {
             Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
-            Register::account(Account::new_in_domain(ALICE_ID.clone(), alice_domain))
+            Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice account");
 
             Register::domain(Domain::new(users_domain.clone()))
                 .execute(&user1, &mut stx)
                 .expect("register users domain");
-            Register::account(Account::new_in_domain(user1.clone(), users_domain.clone()))
+            Register::account(Account::new(user1.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register user1 account");
-            Register::account(Account::new_in_domain(user2.clone(), users_domain.clone()))
+            Register::account(Account::new(user2.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register user2 account");
 
@@ -530,17 +530,17 @@ pub mod isi {
             Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
-            Register::account(Account::new_in_domain(ALICE_ID.clone(), alice_domain))
+            Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice account");
 
             Register::domain(Domain::new(users_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register users domain");
-            Register::account(Account::new_in_domain(user1.clone(), users_domain.clone()))
+            Register::account(Account::new(user1.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register user1 account");
-            Register::account(Account::new_in_domain(user2.clone(), users_domain.clone()))
+            Register::account(Account::new(user2.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register user2 account");
 

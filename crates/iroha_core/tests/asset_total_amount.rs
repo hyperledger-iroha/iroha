@@ -60,7 +60,7 @@ fn asset_totals_track_multi_account_mint_and_burn() {
         (holder_looking_glass.clone(), looking_glass.clone()),
         (burn_to_zero.clone(), looking_glass.clone()),
     ] {
-        Register::account(Account::new_in_domain(account_id.clone(), domain_id))
+        Register::account(Account::new(account_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
     }
@@ -170,7 +170,7 @@ fn asset_totals_drop_when_unregistering_account() {
         .expect("register domain");
 
     let (holder, _holder_key) = gen_account_in("wonderland");
-    Register::account(Account::new_in_domain(holder.clone(), domain_id.clone()))
+    Register::account(Account::new(holder.clone()))
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register holder");
 
@@ -262,16 +262,10 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
 
     let (source_holder, _source_key) = gen_account_in("source");
     let (foreign_holder, _foreign_key) = gen_account_in("foreign");
-    Register::account(Account::new_in_domain(
-        source_holder.clone(),
-        source_domain.clone(),
-    ))
+    Register::account(Account::new(source_holder.clone()))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source holder");
-    Register::account(Account::new_in_domain(
-        foreign_holder.clone(),
-        foreign_domain.clone(),
-    ))
+    Register::account(Account::new(foreign_holder.clone()))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register foreign holder");
 
@@ -380,16 +374,10 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
 
     let (source_holder, _source_key) = gen_account_in("source");
     let (foreign_holder, _foreign_key) = gen_account_in("foreign");
-    Register::account(Account::new_in_domain(
-        source_holder.clone(),
-        source_domain.clone(),
-    ))
+    Register::account(Account::new(source_holder.clone()))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register source holder");
-    Register::account(Account::new_in_domain(
-        foreign_holder.clone(),
-        foreign_domain.clone(),
-    ))
+    Register::account(Account::new(foreign_holder.clone()))
     .execute(&ALICE_ID, &mut stx_1)
     .expect("register foreign holder");
 

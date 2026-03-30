@@ -40,10 +40,7 @@ async fn set_up_trigger(
     let create_failand = Register::domain(Domain::new(failand.clone()));
 
     let (the_one_who_fails, account_keypair) = gen_account_in(failand.name());
-    let create_the_one_who_fails = Register::account(Account::new_in_domain(
-        the_one_who_fails.clone(),
-        failand.clone(),
-    ));
+    let create_the_one_who_fails = Register::account(Account::new(the_one_who_fails.clone()));
 
     let fail_on_account_events = "fail".parse::<TriggerId>()?;
     let fail_isi = Unregister::domain("dummy".parse().unwrap());

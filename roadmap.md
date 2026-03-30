@@ -3,6 +3,68 @@
 Last updated: 2026-03-30
 
 Latest sync (2026-03-30 fresh full preserved-peer reruns on the current worktree):
+the exact-slot proposal-evidence patch did not restore full-envelope liveness:
+permissioned now gets past the prior `260/266` band but still dies in a shared
+`lagging_peers=0` stall at `286/287`, while NPoS regressed much earlier to a
+new `107/109` stall.
+
+- permissioned rerun:
+  `/tmp/izanami_permissioned_current_20260330T135430Z.log`
+  with peer artifacts in
+  `/tmp/iroha-soak-permissioned-current_20260330T135430Z/irohad_test_network_9FyJDa`
+  reached `strict_min_height=286` / `quorum_min_height=286` with
+  `strict_reference_height=287`, then failed the 600s strict-progress watchdog;
+  peer logs show repeated `missing_qc`-driven view changes,
+  `no proposal observed for view before changing view`, retained stale pending
+  state, and saturated queues at the stalled height;
+- NPoS rerun:
+  `/tmp/izanami_npos_current_20260330T140908Z.log`
+  with peer artifacts in
+  `/tmp/iroha-soak-npos-current_20260330T140908Z/irohad_test_network_kN37aT`
+  reached only `strict_min_height=107` / `quorum_min_height=107` with
+  `strict_reference_height=109`, then failed the same 600s watchdog;
+  peer logs show earlier `stake quorum observed but block payload missing`
+  warnings, a received/observed proposal at height `108`, then a stuck
+  `108/109` round with repeated unified-recovery backlog churn and query
+  timeouts across all four Torii ports; and
+- the old transport/proposer regression signatures remained absent in both
+  reruns (`LengthMismatch=0`, `Failed to decode peer message=0`,
+  `deferring proposal: insufficient online peers for commit quorum=0`), so the
+  current blocker is still consensus-side liveness rather than a return of the
+  peer-frame decoding failure.
+
+- open work for this slice now remains:
+  - explain and fix the permissioned `287` same-height `missing_qc` churn that
+    still survives the exact-slot proposal-evidence patch;
+  - explain the new NPoS regression from the earlier `571/572` plateau down to
+    `107/109`, especially the `stake quorum observed but block payload missing`
+    precursor and the later `active pending block stalled past quorum timeout`
+    loop; and
+  - rerun the full preserved-peer permissioned and NPoS stable envelopes only
+    after both of those consensus-liveness surfaces are addressed.
+
+Latest sync (2026-03-30 exact-slot proposal-evidence regression coverage):
+the targeted `iroha_core` frontier-owner regressions now reflect the intended
+exact-slot policy: stale same-height frontier ownership is no longer treated as
+later-view proposal evidence in the focused coverage, and the pacemaker stale-
+owner regression confirms a fresh proposal can be assembled after `MissingQc`
+view advance when only old-view frontier ownership remains.
+
+- targeted verification completed on the current worktree:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core slot_has_proposal_evidence -- --nocapture`
+  - `cargo test -p iroha_core pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_stale_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum_timeout_owner -- --nocapture`
+- open work for this slice now remains:
+  - reconcile the broader `cargo test -p iroha_core --lib missing_qc -- --nocapture`
+    failure surface on the current branch, which is still red across existing
+    stall-window / range-pull / frontier-reanchor tests outside this surgical
+    exact-slot evidence patch; and
+  - only after that broader `missing_qc` recovery surface is green, rerun the
+    full `iroha_core` / release-build / workspace verification chain and then
+    the preserved-peer permissioned and NPoS soak matrix on this cut.
+
+Latest sync (2026-03-30 fresh full preserved-peer reruns on the current worktree):
 the fixed transport signatures remain gone, but the current-tree 4-peer stable
 envelopes now fail on a shared synchronized `no lagging peers` stall instead
 of the earlier transport-induced failure chain.

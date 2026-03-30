@@ -8552,11 +8552,11 @@ mod tests {
         let genesis_domain_id = DomainId::from_str("genesis").expect("Valid");
         let genesis_domain = Domain::new(genesis_domain_id.clone()).build(&genesis_id);
         let genesis_account =
-            Account::new_in_domain(genesis_id.clone(), genesis_domain_id).build(&genesis_id);
+            Account::new(genesis_id.clone()).build(&genesis_id);
         let (account_id, account_keypair) = gen_account_in("wonderland");
         let domain_id = DomainId::from_str("wonderland").expect("Valid");
         let domain = Domain::new(domain_id.clone()).build(&genesis_id);
-        let account = Account::new_in_domain(account_id.clone(), domain_id).build(&genesis_id);
+        let account = Account::new(account_id.clone()).build(&genesis_id);
 
         let live_query_store = {
             let _rt_guard = rt.enter();

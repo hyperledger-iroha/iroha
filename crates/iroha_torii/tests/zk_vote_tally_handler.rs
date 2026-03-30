@@ -53,7 +53,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
             &mut stx,
             &owner,
             InstructionBox::from(Register::account(
-                NewAccount::new(owner.clone()).with_linked_domain(owner_domain.clone()),
+                NewAccount::new(owner.clone()),
             )),
         )
         .expect("register owner account");

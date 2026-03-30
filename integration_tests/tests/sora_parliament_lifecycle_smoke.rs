@@ -1024,10 +1024,7 @@ async fn setup_hostile_fixture(
                 .iter()
                 .chain(honest.iter())
                 .map(|(account_id, _)| {
-                    Register::account(Account::new_in_domain(
-                        account_id.clone(),
-                        "wonderland".parse().expect("wonderland domain"),
-                    ))
+                    Register::account(Account::new(account_id.clone()))
                 }),
         )
         .wrap_err("register hostile-fixture accounts")?;
@@ -1255,10 +1252,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
 
     alice
         .submit_all(citizens.iter().map(|(account_id, _)| {
-            Register::account(Account::new_in_domain(
-                account_id.clone(),
-                wonderland_domain.clone(),
-            ))
+            Register::account(Account::new(account_id.clone()))
         }))
         .wrap_err("register citizen accounts")?;
     for (account_id, _) in &citizens {
@@ -1267,10 +1261,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
             .wrap_err_with(|| format!("wait for account registration `{account_id}`"))?;
     }
     alice
-        .submit(Register::account(Account::new_in_domain(
-            outsider_id.clone(),
-            wonderland_domain.clone(),
-        )))
+        .submit(Register::account(Account::new(outsider_id.clone())))
         .wrap_err("register outsider account for negative authorization tests")?;
     wait_for_account_registration(&alice, &outsider_id, Duration::from_secs(180))
         .await

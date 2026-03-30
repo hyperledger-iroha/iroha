@@ -1,6 +1,6 @@
 //! Structures, traits and impls related to `Account`s.
 use core::fmt;
-use std::{collections::BTreeSet, format, io::Write, str::FromStr, string::String, vec::Vec};
+use std::{format, io::Write, str::FromStr, string::String, vec::Vec};
 
 pub use admission::{
     ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
@@ -14,7 +14,7 @@ use norito::codec::{Decode, Encode};
 
 pub use self::{
     model::*,
-    rekey::{AccountAlias, AccountLabel, AccountRekeyRecord},
+    rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
 };
 pub mod address;
 pub mod admission;
@@ -29,7 +29,6 @@ pub use controller::{AccountController, MultisigMember, MultisigPolicy, Multisig
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered, Registrable,
     common::{Owned, Ref},
-    domain::prelude::*,
     error::ParseError,
     metadata::Metadata,
     name::Name,
@@ -39,10 +38,7 @@ use crate::{
 #[model]
 mod model {
     use super::*;
-    use std::collections::BTreeSet;
-
-    use crate::account::rekey::AccountLabel;
-    use crate::domain::DomainId;
+    use crate::account::rekey::AccountAlias;
 
     /// Canonical domainless account identity keyed only by the authorization controller.
     ///
@@ -62,24 +58,6 @@ mod model {
         pub controller: AccountController,
     }
 
-    /// Explicit domain-scoped account identity used only where domain context is required.
-    #[derive(
-        derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
-    )]
-    #[debug("{account}@{domain}")]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
-    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-    pub struct ScopedAccountId {
-        /// Domainless account subject.
-        pub account: AccountId,
-        /// Explicit domain context for the subject.
-        pub domain: DomainId,
-    }
-
     /// Account entity is an authority which is used to execute `Iroha Special Instructions`.
     #[derive(derive_more::Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
@@ -94,21 +72,18 @@ mod model {
         pub id: AccountId,
         /// Metadata of this account as a key-value store.
         pub metadata: Metadata,
-        /// Stable label under which the account is addressed (if provided).
+        /// Stable alias under which the account is addressed (if provided).
         #[norito(default)]
-        pub label: Option<AccountLabel>,
+        pub label: Option<AccountAlias>,
         /// Universal account identifier bound to this account (if registered in Nexus).
         #[norito(default)]
         pub uaid: Option<crate::nexus::UniversalAccountId>,
         /// Opaque identifiers bound to this account's UAID.
         #[norito(default)]
         pub opaque_ids: Vec<OpaqueAccountId>,
-        /// Domains currently linked to this account subject in state indexes.
-        #[norito(default)]
-        pub linked_domains: BTreeSet<DomainId>,
     }
 
-    /// Builder submitted in a transaction to register an account, optionally linking it to a domain.
+    /// Builder submitted in a transaction to register a canonical domainless account.
     #[derive(derive_more::Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
     #[cfg_attr(
@@ -120,14 +95,11 @@ mod model {
     pub struct NewAccount {
         /// Canonical domainless account identity.
         pub id: AccountId,
-        /// Explicit domains linked by this registration.
-        #[norito(default)]
-        pub linked_domains: BTreeSet<DomainId>,
         /// Metadata supplied during registration.
         pub metadata: Metadata,
-        /// Stable label under which the account is addressed (if provided).
+        /// Stable alias under which the account is addressed (if provided).
         #[norito(default)]
-        pub label: Option<AccountLabel>,
+        pub label: Option<AccountAlias>,
         /// Universal account identifier bound to this account (if registered in Nexus).
         #[norito(default)]
         pub uaid: Option<crate::nexus::UniversalAccountId>,
@@ -339,18 +311,15 @@ pub struct AccountDetails {
     /// Arbitrary metadata attached to the account.
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     pub metadata: Metadata,
-    /// Stable label referenced by rekey records.
+    /// Stable alias referenced by rekey records.
     #[norito(default)]
-    pub label: Option<rekey::AccountLabel>,
+    pub label: Option<rekey::AccountAlias>,
     /// Universal account identifier bound to this account, when applicable.
     #[norito(default)]
     pub uaid: Option<UniversalAccountId>,
     /// Opaque identifiers mapped to this account's UAID.
     #[norito(default)]
     pub opaque_ids: Vec<OpaqueAccountId>,
-    /// Domains currently linked to this account subject in state indexes.
-    #[norito(default)]
-    pub linked_domains: BTreeSet<DomainId>,
 }
 
 impl AccountDetails {
@@ -358,7 +327,7 @@ impl AccountDetails {
     #[must_use]
     pub fn new(
         metadata: Metadata,
-        label: Option<rekey::AccountLabel>,
+        label: Option<rekey::AccountAlias>,
         uaid: Option<UniversalAccountId>,
         opaque_ids: Vec<OpaqueAccountId>,
     ) -> Self {
@@ -367,7 +336,6 @@ impl AccountDetails {
             label,
             uaid,
             opaque_ids,
-            linked_domains: BTreeSet::new(),
         }
     }
 
@@ -394,14 +362,14 @@ impl AccountDetails {
         self.metadata.remove(key)
     }
 
-    /// Borrow the stable account label, if assigned.
+    /// Borrow the stable account alias, if assigned.
     #[must_use]
-    pub fn label(&self) -> Option<&rekey::AccountLabel> {
+    pub fn label(&self) -> Option<&rekey::AccountAlias> {
         self.label.as_ref()
     }
 
-    /// Set or clear the stable account label.
-    pub fn set_label(&mut self, label: Option<rekey::AccountLabel>) {
+    /// Set or clear the stable account alias.
+    pub fn set_label(&mut self, label: Option<rekey::AccountAlias>) {
         self.label = label;
     }
 
@@ -427,16 +395,6 @@ impl AccountDetails {
         self.opaque_ids = opaque_ids;
     }
 
-    /// Borrow the domains linked to this account subject.
-    #[must_use]
-    pub fn linked_domains(&self) -> &BTreeSet<DomainId> {
-        &self.linked_domains
-    }
-
-    /// Replace the linked domain set for this account subject.
-    pub fn set_linked_domains(&mut self, linked_domains: BTreeSet<DomainId>) {
-        self.linked_domains = linked_domains;
-    }
 }
 
 impl Default for AccountDetails {
@@ -483,13 +441,6 @@ impl AccountId {
     #[must_use]
     pub fn controller(&self) -> &AccountController {
         &self.controller
-    }
-
-    /// Materialize this account in an explicit domain scope.
-    #[inline]
-    #[must_use]
-    pub fn to_account_id(&self, domain: DomainId) -> ScopedAccountId {
-        ScopedAccountId::from_account_id(self.clone(), domain)
     }
 
     /// Return the canonical subject identity for this account.
@@ -674,136 +625,6 @@ impl AccountId {
     }
 }
 
-impl ScopedAccountId {
-    /// Construct a single-signature scoped account identifier.
-    #[inline]
-    #[must_use]
-    pub fn new(domain: DomainId, signatory: PublicKey) -> Self {
-        Self {
-            account: AccountId::new(signatory),
-            domain,
-        }
-    }
-
-    /// Construct a multisignature scoped account identifier.
-    #[inline]
-    #[must_use]
-    pub fn new_multisig(domain: DomainId, policy: MultisigPolicy) -> Self {
-        Self {
-            account: AccountId::new_multisig(policy),
-            domain,
-        }
-    }
-
-    /// Construct a scoped identity from a domainless account and explicit domain.
-    #[inline]
-    #[must_use]
-    pub fn from_account_id(account: AccountId, domain: DomainId) -> Self {
-        Self { account, domain }
-    }
-
-    /// Borrow the canonical domainless account identity.
-    #[inline]
-    #[must_use]
-    pub fn account(&self) -> &AccountId {
-        &self.account
-    }
-
-    /// Borrow the explicit domain scope.
-    #[inline]
-    #[must_use]
-    pub fn domain(&self) -> &DomainId {
-        &self.domain
-    }
-
-    /// Borrow the controller governing this scoped account.
-    #[inline]
-    #[must_use]
-    pub fn controller(&self) -> &AccountController {
-        self.account.controller()
-    }
-
-    /// Borrow the single-signature public key, panicking when the controller is not single-key.
-    #[inline]
-    #[must_use]
-    pub fn signatory(&self) -> &PublicKey {
-        self.account.signatory()
-    }
-
-    /// Borrow the single-signature public key when present.
-    #[inline]
-    #[must_use]
-    pub fn try_signatory(&self) -> Option<&PublicKey> {
-        self.account.try_signatory()
-    }
-
-    /// Return the domainless subject identity associated with this scope.
-    #[inline]
-    #[must_use]
-    pub fn subject_id(&self) -> AccountId {
-        self.account.clone()
-    }
-
-    /// Encode the scoped identity as `<account>@<domain>`.
-    #[must_use]
-    pub fn canonical_encoded(&self) -> String {
-        format!("{}@{}", self.account, self.domain)
-    }
-
-    /// Parse an explicitly scoped account identifier from `<account>@<domain>`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParseError`] when the account or domain parts are invalid, or when the scope is
-    /// omitted.
-    pub fn parse_encoded(input: &str) -> Result<Self, ParseError> {
-        let trimmed = input.trim();
-        let (account, domain) = trimmed
-            .rsplit_once('@')
-            .ok_or_else(|| ParseError::new("ScopedAccountId must use `<account>@<domain>`"))?;
-        let account = AccountId::parse_encoded(account)?.into_account_id();
-        let domain = domain
-            .parse()
-            .map_err(|_| ParseError::new("ScopedAccountId domain must be a valid DomainId"))?;
-        Ok(Self { account, domain })
-    }
-
-    /// Canonicalize a scoped account identifier into `<canonical-account>@<canonical-domain>`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ParseError`] when the input is invalid.
-    pub fn canonicalize(input: &str) -> Result<String, ParseError> {
-        Self::parse_encoded(input).map(|account| account.canonical_encoded())
-    }
-}
-
-impl From<ScopedAccountId> for AccountId {
-    fn from(account: ScopedAccountId) -> Self {
-        account.account
-    }
-}
-
-impl From<&ScopedAccountId> for AccountId {
-    fn from(account: &ScopedAccountId) -> Self {
-        account.account.clone()
-    }
-}
-
-impl fmt::Display for ScopedAccountId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.canonical_encoded())
-    }
-}
-
-impl FromStr for ScopedAccountId {
-    type Err = ParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse_encoded(s)
-    }
-}
-
 impl fmt::Display for AccountId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let i105 = self.canonical_i105().map_err(|_| fmt::Error)?;
@@ -833,13 +654,6 @@ impl Account {
         <Self as Registered>::With::new(id)
     }
 
-    /// Construct a registration builder for an account linked to one explicit domain.
-    #[inline]
-    #[must_use]
-    pub fn new_in_domain(id: AccountId, domain: DomainId) -> <Self as Registered>::With {
-        <Self as Registered>::With::new(id).with_linked_domain(domain)
-    }
-
     /// Return a reference to the account signatory, panicking if the controller is not single-key.
     #[inline]
     #[must_use]
@@ -861,10 +675,10 @@ impl Account {
         self.id.controller()
     }
 
-    /// Borrow the canonical account label, if one is assigned.
+    /// Borrow the canonical account alias, if one is assigned.
     #[inline]
     #[must_use]
-    pub fn label(&self) -> Option<&rekey::AccountLabel> {
+    pub fn label(&self) -> Option<&rekey::AccountAlias> {
         self.label.as_ref()
     }
 
@@ -893,7 +707,6 @@ impl NewAccount {
             label: self.label,
             uaid: self.uaid,
             opaque_ids: self.opaque_ids,
-            linked_domains: self.linked_domains,
         }
     }
 }
@@ -904,46 +717,11 @@ impl NewAccount {
     pub fn new(id: AccountId) -> Self {
         Self {
             id,
-            linked_domains: BTreeSet::new(),
             metadata: Metadata::default(),
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
         }
-    }
-
-    /// Create a registration builder from an explicit account/domain pair.
-    #[must_use]
-    pub fn new_in_domain(id: AccountId, domain: DomainId) -> Self {
-        Self::new(id).with_linked_domain(domain)
-    }
-
-    /// Borrow the linked domains targeted by this registration.
-    #[must_use]
-    pub fn linked_domains(&self) -> &BTreeSet<DomainId> {
-        &self.linked_domains
-    }
-
-    /// Borrow the targeted domain when exactly one linked domain exists.
-    #[must_use]
-    pub fn domain(&self) -> Option<&DomainId> {
-        (self.linked_domains.len() == 1)
-            .then(|| self.linked_domains.iter().next())
-            .flatten()
-    }
-
-    /// Replace the linked domain set on this builder.
-    #[must_use]
-    pub fn with_linked_domains(mut self, linked_domains: BTreeSet<DomainId>) -> Self {
-        self.linked_domains = linked_domains;
-        self
-    }
-
-    /// Add a single linked domain to this builder.
-    #[must_use]
-    pub fn with_linked_domain(mut self, linked_domain: DomainId) -> Self {
-        self.linked_domains.insert(linked_domain);
-        self
     }
 
     /// Replace metadata on this builder.
@@ -953,9 +731,9 @@ impl NewAccount {
         self
     }
 
-    /// Assign or replace the stable label on this builder.
+    /// Assign or replace the stable alias on this builder.
     #[must_use]
-    pub fn with_label(mut self, label: Option<rekey::AccountLabel>) -> Self {
+    pub fn with_label(mut self, label: Option<rekey::AccountAlias>) -> Self {
         self.label = label;
         self
     }
@@ -981,9 +759,9 @@ impl NewAccount {
         self
     }
 
-    /// Borrow the currently assigned label on the builder.
+    /// Borrow the currently assigned alias on the builder.
     #[must_use]
-    pub fn label(&self) -> Option<&rekey::AccountLabel> {
+    pub fn label(&self) -> Option<&rekey::AccountAlias> {
         self.label.as_ref()
     }
 }
@@ -1014,7 +792,6 @@ impl Registrable for NewAccount {
             label: self.label,
             uaid: self.uaid,
             opaque_ids: self.opaque_ids,
-            linked_domains: self.linked_domains,
         }
     }
 }
@@ -1039,13 +816,7 @@ impl fmt::Display for Account {
 
 impl fmt::Display for NewAccount {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.linked_domains.len() == 1
-            && let Some(domain) = self.linked_domains.iter().next()
-        {
-            write!(f, "{}@{}", self.id, domain)
-        } else {
-            write!(f, "{}", self.id)
-        }
+        write!(f, "{}", self.id)
     }
 }
 
@@ -1368,9 +1139,7 @@ impl IntoKeyValue for Account {
     type Key = AccountId;
     type Value = AccountValue;
     fn into_key_value(self) -> (Self::Key, Self::Value) {
-        let mut details =
-            AccountDetails::new(self.metadata, self.label, self.uaid, self.opaque_ids);
-        details.set_linked_domains(self.linked_domains);
+        let details = AccountDetails::new(self.metadata, self.label, self.uaid, self.opaque_ids);
         (self.id, Owned::new(details))
     }
 }
@@ -1380,8 +1149,9 @@ pub mod prelude {
     pub use super::{
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAddress, AccountAddressSource,
         AccountAdmissionMode, AccountAdmissionPolicy, AccountController, AccountDomainSelector,
-        AccountEntry, AccountId, AccountLabel, AccountRekeyRecord, AccountValue, MultisigMember,
-        MultisigPolicy, NewAccount, OpaqueAccountId, ParsedAccountId, ScopedAccountId,
+        AccountEntry, AccountId, AccountAlias, AccountAliasDomain, AccountRekeyRecord,
+        AccountValue, MultisigMember, MultisigPolicy, NewAccount, OpaqueAccountId,
+        ParsedAccountId,
     };
 }
 
@@ -1391,7 +1161,7 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair};
 
     use super::*;
-    use crate::{domain::DomainId, name::Name};
+    use crate::{name::Name, nexus::DataSpaceId};
 
     #[test]
     fn parse_account_id() {
@@ -1416,9 +1186,8 @@ mod tests {
     fn account_signatory_exposed() {
         let key_pair = KeyPair::random();
         let public_key = key_pair.public_key().clone();
-        let domain_id = "wonderland".parse().expect("valid domain name");
         let account_id = AccountId::new(public_key.clone());
-        let account = Account::new_in_domain(account_id.clone(), domain_id).build(&account_id);
+        let account = Account::new(account_id.clone()).build(&account_id);
         assert_eq!(account.signatory(), &public_key);
     }
 
@@ -1435,14 +1204,16 @@ mod tests {
     }
 
     #[test]
-    fn rekey_record_uses_account_label() {
+    fn rekey_record_uses_account_alias() {
         let key_pair = KeyPair::random();
-        let domain: DomainId = "wonderland".parse().expect("domain id");
         let signatory = key_pair.public_key().clone();
         let account_id = AccountId::new(signatory.clone());
-        let label = rekey::AccountLabel::new(
-            domain.clone(),
+        let label = rekey::AccountAlias::new(
             "alice".parse::<Name>().expect("valid label"),
+            Some(rekey::AccountAliasDomain::new(
+                "wonderland".parse::<Name>().expect("alias domain"),
+            )),
+            DataSpaceId::GLOBAL,
         );
         let account = Account {
             id: account_id.clone(),
@@ -1450,7 +1221,6 @@ mod tests {
             label: Some(label.clone()),
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
         };
 
         let record =
@@ -1472,7 +1242,6 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
         };
 
         assert!(rekey::AccountRekeyRecord::from_account(&account).is_none());
@@ -1491,13 +1260,15 @@ mod tests {
         let account = Account {
             id: account_id.clone(),
             metadata: Metadata::default(),
-            label: Some(rekey::AccountLabel::new(
-                "wonderland".parse().expect("domain id"),
+            label: Some(rekey::AccountAlias::new(
                 "vault".parse::<Name>().expect("label"),
+                Some(rekey::AccountAliasDomain::new(
+                    "wonderland".parse::<Name>().expect("alias domain"),
+                )),
+                DataSpaceId::GLOBAL,
             )),
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
         };
         assert!(account.try_signatory().is_none());
         let record = rekey::AccountRekeyRecord::from_account(&account).expect("record");
@@ -1529,21 +1300,11 @@ mod tests {
     }
 
     #[test]
-    fn account_subject_id_maps_one_subject_to_many_domains() {
+    fn account_subject_id_is_domainless() {
         let key_pair = KeyPair::random();
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let acme: DomainId = "acme".parse().expect("domain id");
-        let scoped = AccountId::new(key_pair.public_key().clone());
-        let subject = scoped.subject_id();
+        let account = AccountId::new(key_pair.public_key().clone());
 
-        let wonderland_scoped = subject.to_account_id(wonderland.clone());
-        let acme_scoped = subject.to_account_id(acme.clone());
-
-        assert_eq!(wonderland_scoped.controller(), scoped.controller());
-        assert_eq!(acme_scoped.controller(), scoped.controller());
-        assert_eq!(wonderland_scoped.domain(), &wonderland);
-        assert_eq!(acme_scoped.domain(), &acme);
-        assert_eq!(AccountId::from(&wonderland_scoped), subject);
+        assert_eq!(account.subject_id(), account);
     }
 
     #[test]
@@ -1560,11 +1321,10 @@ mod tests {
     #[test]
     fn account_builder_carries_uaid_into_details() {
         let key_pair = KeyPair::random();
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
         let account_id = AccountId::new(key_pair.public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::builder"));
 
-        let account = Account::new_in_domain(account_id.clone(), domain)
+        let account = Account::new(account_id.clone())
             .with_uaid(Some(uaid))
             .build(&account_id);
         assert_eq!(account.uaid(), Some(&uaid));
@@ -1580,35 +1340,16 @@ mod tests {
     }
 
     #[test]
-    fn domainless_account_builder_keeps_empty_linked_domains() {
+    fn domainless_account_builder_roundtrips_without_domain_state() {
         let key_pair = KeyPair::random();
         let account_id = AccountId::new(key_pair.public_key().clone());
 
         let account = Account::new(account_id.clone()).build(&account_id);
-        assert!(account.linked_domains.is_empty());
+        assert_eq!(account.id, account_id);
 
         let new_account = NewAccount::new(account_id.clone());
-        assert!(new_account.linked_domains().is_empty());
         assert_eq!(new_account.to_string(), account_id.to_string());
-    }
-
-    #[test]
-    fn multi_linked_account_builder_has_no_singular_domain_view() {
-        let key_pair = KeyPair::random();
-        let account_id = AccountId::new(key_pair.public_key().clone());
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let acme: DomainId = "acme".parse().expect("domain id");
-
-        let new_account = NewAccount::new(account_id.clone())
-            .with_linked_domains(BTreeSet::from([wonderland.clone(), acme.clone()]));
-        let account = new_account.clone().build(&account_id);
-
-        assert_eq!(
-            new_account.linked_domains(),
-            &BTreeSet::from([acme, wonderland])
-        );
-        assert_eq!(&account.linked_domains, new_account.linked_domains());
-        assert_eq!(new_account.to_string(), account_id.to_string());
+        assert_eq!(new_account.build(&account_id).id, account_id);
     }
 }
 
@@ -1619,7 +1360,8 @@ mod json_tests {
 
     use super::*;
     use crate::{
-        account::address, metadata::Metadata, name::Name, nexus::UniversalAccountId,
+        account::address, metadata::Metadata, name::Name,
+        nexus::{DataSpaceId, UniversalAccountId},
         prelude::Register,
     };
 
@@ -1638,7 +1380,6 @@ mod json_tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
         };
 
         let json = norito::json::to_json(&account).expect("serialize account");
@@ -1703,10 +1444,9 @@ mod json_tests {
     #[test]
     fn new_account_json_roundtrip_defaults() {
         let _guard = guard_chain_discriminant();
-        let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
         let id = AccountId::new(keypair.public_key().clone());
-        let new_account = NewAccount::new(id.clone()).with_linked_domain(domain.clone());
+        let new_account = NewAccount::new(id.clone());
 
         let json = norito::json::to_json(&new_account).expect("serialize new account");
         let decoded: NewAccount = norito::json::from_json(&json).expect("deserialize new account");
@@ -1714,8 +1454,11 @@ mod json_tests {
         assert_eq!(decoded, new_account);
         assert!(decoded.label.is_none());
         assert!(decoded.uaid.is_none());
-        assert_eq!(decoded.linked_domains(), &BTreeSet::from([domain]));
         assert_eq!(decoded.metadata, Metadata::default());
+        assert!(
+            !json.contains("linked_domains"),
+            "domainless registration payloads must not serialize linked_domains"
+        );
     }
 
     #[test]
@@ -1729,27 +1472,29 @@ mod json_tests {
         let decoded: NewAccount = norito::json::from_json(&json).expect("deserialize new account");
 
         assert_eq!(decoded, new_account);
-        assert!(decoded.linked_domains().is_empty());
         assert!(decoded.label.is_none());
         assert!(decoded.uaid.is_none());
         assert_eq!(decoded.metadata, Metadata::default());
     }
 
     #[test]
-    fn new_account_json_roundtrip_with_label_and_uaid() {
+    fn new_account_json_roundtrip_with_alias_and_uaid() {
         let _guard = guard_chain_discriminant();
-        let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
         let id = AccountId::new(keypair.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert("title".parse().expect("key"), "queen");
-        let label =
-            rekey::AccountLabel::new(domain.clone(), "alice".parse::<Name>().expect("label name"));
+        let label = rekey::AccountAlias::new(
+            "alice".parse::<Name>().expect("label name"),
+            Some(rekey::AccountAliasDomain::new(
+                "wonderland".parse::<Name>().expect("alias domain"),
+            )),
+            DataSpaceId::GLOBAL,
+        );
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0xAB; 32]));
 
         let new_account = NewAccount {
             id: id.clone(),
-            linked_domains: BTreeSet::from([domain]),
             metadata: metadata.clone(),
             label: Some(label.clone()),
             uaid: Some(uaid),
@@ -1776,7 +1521,6 @@ mod json_tests {
         let decoded =
             norito::json::from_json::<NewAccount>(&payload).expect("domainless account payload");
         assert_eq!(decoded.id, id);
-        assert!(decoded.linked_domains().is_empty());
         assert!(decoded.label.is_none());
         assert!(decoded.uaid.is_none());
         assert_eq!(decoded.metadata, Metadata::default());
@@ -1785,17 +1529,21 @@ mod json_tests {
     #[test]
     fn new_account_norito_roundtrip_preserves_packed_self_delimiting_fields() {
         let _guard = guard_chain_discriminant();
-        let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
         let id = AccountId::new(keypair.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert("title".parse().expect("metadata key"), "queen");
-        let label =
-            rekey::AccountLabel::new(domain.clone(), "alice".parse::<Name>().expect("label"));
+        let label = rekey::AccountAlias::new(
+            "alice".parse::<Name>().expect("label"),
+            Some(rekey::AccountAliasDomain::new(
+                "wonderland".parse::<Name>().expect("alias domain"),
+            )),
+            DataSpaceId::GLOBAL,
+        );
         let uaid = UniversalAccountId::from_hash(Hash::prehashed([0xAB; 32]));
         let opaque_id = OpaqueAccountId::from_hash(Hash::prehashed([0xCD; 32]));
 
-        let new_account = NewAccount::new_in_domain(id, domain)
+        let new_account = NewAccount::new(id)
             .with_metadata(metadata)
             .with_label(Some(label))
             .with_uaid(Some(uaid))
@@ -1810,10 +1558,9 @@ mod json_tests {
     #[test]
     fn register_account_norito_roundtrip_matches_kagami_genesis_shape() {
         let _guard = guard_chain_discriminant();
-        let domain: DomainId = "wonderland".parse().expect("domain id");
         let keypair = KeyPair::random();
         let id = AccountId::new(keypair.public_key().clone());
-        let register = Register::account(NewAccount::new_in_domain(id, domain));
+        let register = Register::account(NewAccount::new(id));
 
         let bytes = encode_adaptive(&register);
         let decoded: Register<Account> = decode_adaptive(&bytes).expect("decode register account");

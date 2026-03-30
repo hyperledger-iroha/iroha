@@ -64,7 +64,7 @@ use iroha_crypto::{HashOf, KeyPair, MerkleTree, PublicKey};
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
     ChainId,
-    account::{AccountController, AccountId, rekey::AccountLabel},
+    account::{AccountController, AccountId, rekey::AccountAlias},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::{
         consensus::{LaneBlockCommitment, LaneSettlementReceipt},
@@ -792,14 +792,14 @@ pub(crate) fn parse_account_literal_with_world(
         .ok()
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .or_else(|| {
-            let alias = AccountLabel::from_literal(literal, dataspace_catalog).ok()?;
+            let alias = AccountAlias::from_literal(literal, dataspace_catalog).ok()?;
             resolve_account_alias_in_world(world, &alias)
         })
 }
 
 pub(crate) fn resolve_account_alias_in_world(
     world: &impl WorldReadOnly,
-    alias: &AccountLabel,
+    alias: &AccountAlias,
 ) -> Option<AccountId> {
     if let Some(account_id) = world.account_aliases().get(alias).cloned() {
         return Some(account_id);
@@ -907,8 +907,8 @@ mod prefetch_tests {
     use iroha_data_model::{
         Registrable,
         account::{
-            Account, AccountDetails, AccountDomainSelector, AccountLabel, AccountValue,
-            ScopedAccountId,
+            Account, AccountAlias, AccountAliasDomain, AccountDetails, AccountDomainSelector,
+            AccountValue,
         },
         asset::AssetDefinitionId,
         block::BlockHeader,
@@ -969,13 +969,8 @@ mod prefetch_tests {
     fn parse_account_literal_rejects_i105_with_domain_suffix() {
         let alice = (*ALICE_ID).clone();
         let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
-        let alice_scoped = alice.to_account_id(wonderland.clone());
         let domain = Domain::new(wonderland.clone()).build(&alice);
-        let account = Account::new_in_domain(
-            alice_scoped.account().clone(),
-            alice_scoped.domain().clone(),
-        )
-        .build(&alice);
+        let account = Account::new(alice.clone()).build(&alice);
         let world = World::with([domain], [account], []);
         let world_view = world.view();
 
@@ -992,7 +987,7 @@ mod prefetch_tests {
         let alice = (*ALICE_ID).clone();
         let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
         let domain = Domain::new(wonderland.clone()).build(&alice);
-        let account = Account::new_in_domain(alice.clone(), wonderland).build(&alice);
+        let account = Account::new(alice.clone()).build(&alice);
         let mut world = World::with([domain], [account], []);
         // Parsing should not depend on selector-index state.
         world.domain_selectors = Default::default();
@@ -1006,57 +1001,43 @@ mod prefetch_tests {
     }
 
     #[test]
-    fn parse_account_literal_accepts_canonical_i105_even_for_multi_domain_subject() {
-        let signatory = ALICE_ID.signatory().clone();
+    fn parse_account_literal_accepts_canonical_i105_without_domain_materialization() {
+        let account = (*ALICE_ID).clone();
         let alpha: DomainId = "alpha".parse().expect("alpha domain");
-        let beta: DomainId = "beta".parse().expect("beta domain");
-        let alpha_account = ScopedAccountId::new(alpha.clone(), signatory.clone());
-        let beta_account = ScopedAccountId::new(beta.clone(), signatory);
-        let alpha_domain = Domain::new(alpha).build(alpha_account.account());
-        let beta_domain = Domain::new(beta).build(alpha_account.account());
         let world = World::with(
-            [alpha_domain, beta_domain],
-            [
-                Account::new_in_domain(
-                    alpha_account.account().clone(),
-                    alpha_account.domain().clone(),
-                )
-                .build(alpha_account.account()),
-                Account::new_in_domain(
-                    beta_account.account().clone(),
-                    beta_account.domain().clone(),
-                )
-                .build(alpha_account.account()),
-            ],
+            [Domain::new(alpha).build(&account)],
+            [Account::new(account.clone()).build(&account)],
             [],
         );
         let world_view = world.view();
 
-        let encoded = alpha_account
-            .account()
+        let encoded = account
             .canonical_i105()
             .expect("canonical I105 account literal");
         assert_eq!(
             parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &encoded),
-            Some(alpha_account.account().clone()),
-            "canonical I105 account ids must remain valid even when the subject is linked across domains"
+            Some(account),
+            "canonical I105 account ids must remain valid without domain-linked account materialization"
         );
     }
 
     #[test]
     fn parse_account_literal_resolves_on_chain_alias_literals() {
         let domain_id: DomainId = "ivm".parse().expect("domain");
-        let account_id = ScopedAccountId::new(domain_id.clone(), ALICE_ID.signatory().clone());
-        let alias = AccountLabel::new(
-            domain_id.clone(),
+        let account_id = (*ALICE_ID).clone();
+        let alias = AccountAlias::new(
             Name::from_str("gas").expect("alias name"),
+            Some(AccountAliasDomain::new(
+                domain_id.name().clone(),
+            )),
+            DataSpaceId::GLOBAL,
         );
         let world = World::with(
-            [Domain::new(domain_id.clone()).build(account_id.account())],
+            [Domain::new(domain_id.clone()).build(&account_id)],
             [
-                Account::new_in_domain(account_id.account().clone(), account_id.domain().clone())
+                Account::new(account_id.clone())
                     .with_label(Some(alias))
-                    .build(account_id.account()),
+                    .build(&account_id),
             ],
             [],
         );
@@ -1068,7 +1049,7 @@ mod prefetch_tests {
                 &DataSpaceCatalog::default(),
                 "gas@ivm.universal",
             ),
-            Some(account_id.account().clone()),
+            Some(account_id),
             "account selectors must resolve active on-chain aliases to canonical account ids"
         );
     }
@@ -1076,16 +1057,16 @@ mod prefetch_tests {
     #[test]
     fn parse_account_literal_resolves_aliases_in_non_default_dataspaces() {
         let domain_id: DomainId = "ops".parse().expect("domain");
-        let account_id = ScopedAccountId::new(domain_id, ALICE_ID.signatory().clone());
-        let alias = AccountLabel::domainless(
+        let account_id = (*ALICE_ID).clone();
+        let alias = AccountAlias::domainless(
             Name::from_str("treasury").expect("alias name"),
             DataSpaceId::new(7),
         );
         let world = World::with(
             [],
-            [Account::new(account_id.account().clone())
+            [Account::new(account_id.clone())
                 .with_label(Some(alias))
-                .build(account_id.account())],
+                .build(&account_id)],
             [],
         );
         let kura = Kura::blank_kura_for_testing();
@@ -11232,7 +11213,7 @@ pub(crate) mod valid {
             let (alice_id, alice_keypair) = gen_account_in("wonderland");
             let domain_id: DomainId = "wonderland".parse().expect("valid domain");
             let account =
-                Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
+                Account::new(alice_id.clone()).build(&alice_id);
             let domain = Domain::new(domain_id).build(&alice_id);
             let world = World::with([domain], [account], []);
             let kura = Kura::blank_kura_for_testing();
@@ -12528,7 +12509,7 @@ pub(crate) mod valid {
             let (authority, signer) = gen_account_in("fraud-cache-test");
             let domain_id: DomainId = "fraud-cache-test".parse().expect("fraud-cache-test domain");
             let domain = Domain::new(domain_id.clone()).build(&authority);
-            let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
+            let account = Account::new(authority.clone()).build(&authority);
             let world = World::with([domain], [account], iter::empty::<AssetDefinition>());
             let mut state = State::new(world, Arc::clone(&kura), query);
 
@@ -15557,8 +15538,8 @@ mod tests {
                 .with_name(__asset_definition_id.name().to_string())
         }
         .build(&alice_id);
-        let acc_a = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
-        let acc_b = Account::new_in_domain(bob_id.clone(), domain_id).build(&alice_id);
+        let acc_a = Account::new(alice_id.clone()).build(&alice_id);
+        let acc_b = Account::new(bob_id.clone()).build(&alice_id);
         let world = crate::state::World::with([domain], [acc_a, acc_b], [ad]);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -15613,7 +15594,7 @@ mod tests {
         // Predefined world state
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("Valid");
-        let account = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
+        let account = Account::new(alice_id.clone()).build(&alice_id);
         let domain = Domain::new(domain_id).build(&alice_id);
         let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -15671,7 +15652,7 @@ mod tests {
         // Predefined world state
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("Valid");
-        let account = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
+        let account = Account::new(alice_id.clone()).build(&alice_id);
         let domain = Domain::new(domain_id).build(&alice_id);
         let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -15772,7 +15753,7 @@ mod tests {
         // Predefined world state
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("Valid");
-        let account = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
+        let account = Account::new(alice_id.clone()).build(&alice_id);
         let domain = Domain::new(domain_id).build(&alice_id);
         let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -15921,7 +15902,7 @@ mod tests {
         let genesis_domain =
             Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_correct_account_id);
         let genesis_wrong_account =
-            Account::new_in_domain(genesis_wrong_account_id.clone(), GENESIS_DOMAIN_ID.clone())
+            Account::new(genesis_wrong_account_id.clone())
                 .build(&genesis_wrong_account_id);
         let world = World::with([genesis_domain], [genesis_wrong_account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -15993,9 +15974,9 @@ mod tests {
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let wonderland_domain = Domain::new(wonderland_domain_id.clone()).build(&alice_account_id);
         let genesis_account =
-            Account::new_in_domain(genesis_account_id.clone(), GENESIS_DOMAIN_ID.clone())
+            Account::new(genesis_account_id.clone())
                 .build(&genesis_account_id);
-        let alice_account = Account::new_in_domain(alice_account_id.clone(), wonderland_domain_id)
+        let alice_account = Account::new(alice_account_id.clone())
             .build(&alice_account_id);
 
         let world = World::with(
@@ -16048,7 +16029,7 @@ mod tests {
 
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account =
-            Account::new_in_domain(genesis_account_id.clone(), GENESIS_DOMAIN_ID.clone())
+            Account::new(genesis_account_id.clone())
                 .build(&genesis_account_id);
 
         let world = World::with([genesis_domain], [genesis_account], []);

@@ -2440,10 +2440,7 @@ mod sorafs_tests {
                 .expect("register domain for account");
         }
         if stx.world.accounts.get(account_id).is_none() {
-            Register::account(iroha_data_model::account::Account::new_in_domain(
-                account_id.clone(),
-                domain_id.clone(),
-            ))
+            Register::account(iroha_data_model::account::Account::new(account_id.clone()))
             .execute(&alice(), stx)
             .expect("register account");
         }

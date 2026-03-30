@@ -863,7 +863,7 @@ mod tests {
             return;
         };
         let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let account = AccountBuilder::new_in_domain(ALICE_ID.clone(), wonderland).build(&ALICE_ID);
+        let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);
         let output = QueryOutput::new(
             QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::Account(vec![account])]),
             0,
@@ -946,7 +946,7 @@ mod tests {
     #[test]
     fn state_entry_account_exposes_norito_payload() {
         let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let account = AccountBuilder::new_in_domain(ALICE_ID.clone(), wonderland).build(&ALICE_ID);
+        let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);
         let entry = StateEntry::from_account(account);
         let json = entry.json.expect("account json");
         let account_label = ALICE_ID.to_string();

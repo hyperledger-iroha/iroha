@@ -333,10 +333,7 @@ fn npos_multilane_genesis_post_topology_transactions(
     for peer in topology {
         let validator_id = AccountId::new(peer.public_key().clone());
         bootstrap_tx.push(
-            Register::account(Account::new_in_domain(
-                validator_id.clone(),
-                nexus_domain.clone(),
-            ))
+            Register::account(Account::new(validator_id.clone()))
             .into(),
         );
         bootstrap_tx.push(

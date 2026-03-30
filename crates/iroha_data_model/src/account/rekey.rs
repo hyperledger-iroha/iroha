@@ -7,7 +7,7 @@ use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use super::{Account, AccountId, DomainId, Name};
+use super::{Account, AccountId, Name};
 use crate::{
     error::ParseError,
     nexus::{DataSpaceCatalog, DataSpaceId},
@@ -24,6 +24,12 @@ use crate::{
 pub struct AccountAliasDomain(pub Name);
 
 impl AccountAliasDomain {
+    /// Construct an alias-domain segment from its canonical name.
+    #[must_use]
+    pub fn new(name: Name) -> Self {
+        Self(name)
+    }
+
     /// Borrow the underlying alias-domain segment name.
     #[must_use]
     pub fn name(&self) -> &Name {
@@ -43,12 +49,6 @@ impl From<Name> for AccountAliasDomain {
     }
 }
 
-impl From<DomainId> for AccountAliasDomain {
-    fn from(value: DomainId) -> Self {
-        Self(value.name().clone())
-    }
-}
-
 impl From<AccountAliasDomain> for Name {
     fn from(value: AccountAliasDomain) -> Self {
         value.0
@@ -62,18 +62,6 @@ impl FromStr for AccountAliasDomain {
         s.parse::<Name>()
             .map(Self)
             .map_err(|_| ParseError::new("account alias domain segment is invalid"))
-    }
-}
-
-impl PartialEq<DomainId> for AccountAliasDomain {
-    fn eq(&self, other: &DomainId) -> bool {
-        self.name() == other.name()
-    }
-}
-
-impl PartialEq<AccountAliasDomain> for DomainId {
-    fn eq(&self, other: &AccountAliasDomain) -> bool {
-        self.name() == other.name()
     }
 }
 
@@ -95,33 +83,31 @@ pub struct AccountAlias {
     pub dataspace: DataSpaceId,
 }
 
-/// Back-compat alias for older "label" terminology.
-pub type AccountLabel = AccountAlias;
-
 impl AccountAlias {
-    /// Create a new account label in the default `universal` dataspace.
-    pub fn new(domain: DomainId, label: Name) -> Self {
-        Self::new_in_dataspace(label, Some(domain.into()), DataSpaceId::GLOBAL)
+    /// Create a new account alias from explicit alias components.
+    #[must_use]
+    pub fn new(label: Name, domain: Option<AccountAliasDomain>, dataspace: DataSpaceId) -> Self {
+        Self {
+            label,
+            domain,
+            dataspace,
+        }
     }
 
-    /// Create a new domainless account label in the provided dataspace.
+    /// Create a new domainless account alias in the provided dataspace.
     #[must_use]
     pub fn domainless(label: Name, dataspace: DataSpaceId) -> Self {
-        Self::new_in_dataspace(label, None, dataspace)
+        Self::new(label, None, dataspace)
     }
 
-    /// Create a new account label from explicit alias components.
+    /// Create a new account alias from explicit alias components.
     #[must_use]
     pub fn new_in_dataspace(
         label: Name,
         domain: Option<AccountAliasDomain>,
         dataspace: DataSpaceId,
     ) -> Self {
-        Self {
-            label,
-            domain,
-            dataspace,
-        }
+        Self::new(label, domain, dataspace)
     }
 
     /// Parse a canonical account alias literal.
@@ -341,8 +327,8 @@ mod tests {
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct AccountRekeyRecord {
-    /// Stable label under which the account is addressed.
-    pub label: AccountLabel,
+    /// Stable alias under which the account is addressed.
+    pub label: AccountAlias,
     /// Current concrete account id behind the stable label.
     pub active_account_id: AccountId,
     /// Historical concrete account ids retained for continuity and audit trails.
@@ -372,7 +358,7 @@ impl AccountRekeyRecord {
 
     /// Bootstrap a rekey record for an arbitrary alias binding.
     #[must_use]
-    pub fn new(label: AccountLabel, active_account_id: AccountId) -> Self {
+    pub fn new(label: AccountAlias, active_account_id: AccountId) -> Self {
         Self {
             label,
             active_signatory: active_account_id.try_signatory().cloned(),

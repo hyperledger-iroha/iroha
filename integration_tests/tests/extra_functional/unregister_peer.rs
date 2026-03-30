@@ -116,7 +116,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
                 client
                     .submit_all::<InstructionBox>([
                         Register::domain(Domain::new(domain_id.clone())).into(),
-                        Register::account(Account::new_in_domain(account.clone(), domain_id))
+                        Register::account(Account::new(account.clone()))
                             .into(),
                         Register::asset_definition({
                             let __asset_definition_id = asset_def;

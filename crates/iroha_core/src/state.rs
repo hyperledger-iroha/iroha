@@ -28,7 +28,7 @@ use iroha_data_model::{
     IntoKeyValue,
     account::{
         AccountDomainSelector, AccountEntry, AccountId, AccountValue, OpaqueAccountId,
-        rekey::{AccountLabel, AccountRekeyRecord},
+        rekey::{AccountAlias, AccountRekeyRecord},
     },
     asset::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetEntry, AssetValue,
@@ -225,7 +225,7 @@ const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
 const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
 const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
 
-pub(crate) fn account_label_is_pii(label: &AccountLabel) -> bool {
+pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
     let raw = label.label.as_ref();
     if raw.is_empty() {
         return false;
@@ -1419,10 +1419,10 @@ pub struct World {
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
     #[norito(skip)]
-    pub(crate) account_aliases: Storage<AccountLabel, AccountId>,
+    pub(crate) account_aliases: Storage<AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     #[norito(skip)]
-    pub(crate) account_aliases_by_account: Storage<AccountId, BTreeSet<AccountLabel>>,
+    pub(crate) account_aliases_by_account: Storage<AccountId, BTreeSet<AccountAlias>>,
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
@@ -1433,7 +1433,7 @@ pub struct World {
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: Storage<OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
-    pub(crate) account_rekey_records: Storage<AccountLabel, AccountRekeyRecord>,
+    pub(crate) account_rekey_records: Storage<AccountAlias, AccountRekeyRecord>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: Storage<AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
@@ -1835,9 +1835,9 @@ pub struct WorldBlock<'world> {
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
-    pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
+    pub(crate) account_aliases: StorageBlock<'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
-    pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountLabel>>,
+    pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountAlias>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -1847,7 +1847,7 @@ pub struct WorldBlock<'world> {
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: StorageBlock<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
-    pub(crate) account_rekey_records: StorageBlock<'world, AccountLabel, AccountRekeyRecord>,
+    pub(crate) account_rekey_records: StorageBlock<'world, AccountAlias, AccountRekeyRecord>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageBlock<'world, AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
@@ -2385,10 +2385,10 @@ pub struct WorldTransaction<'block, 'world> {
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
-    pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountLabel, AccountId>,
+    pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountLabel>>,
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountAlias>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
@@ -2403,7 +2403,7 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records:
-        StorageTransaction<'block, 'world, AccountLabel, AccountRekeyRecord>,
+        StorageTransaction<'block, 'world, AccountAlias, AccountRekeyRecord>,
     /// Registered asset definitions.
     pub(crate) asset_definitions:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinition>,
@@ -2836,7 +2836,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> &mut StorageTransaction<
         'block,
         'world,
-        iroha_data_model::account::rekey::AccountLabel,
+        iroha_data_model::account::rekey::AccountAlias,
         iroha_data_model::account::AccountId,
     > {
         &mut self.account_aliases
@@ -2850,7 +2850,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         'block,
         'world,
         iroha_data_model::account::AccountId,
-        BTreeSet<iroha_data_model::account::rekey::AccountLabel>,
+        BTreeSet<iroha_data_model::account::rekey::AccountAlias>,
     > {
         &mut self.account_aliases_by_account
     }
@@ -2862,7 +2862,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> &mut StorageTransaction<
         'block,
         'world,
-        iroha_data_model::account::rekey::AccountLabel,
+        iroha_data_model::account::rekey::AccountAlias,
         iroha_data_model::account::rekey::AccountRekeyRecord,
     > {
         &mut self.account_rekey_records
@@ -3160,9 +3160,9 @@ pub struct WorldView<'world> {
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
     /// Index from account alias to canonical I105 account id.
-    pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
+    pub(crate) account_aliases: StorageView<'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
-    pub(crate) account_aliases_by_account: StorageView<'world, AccountId, BTreeSet<AccountLabel>>,
+    pub(crate) account_aliases_by_account: StorageView<'world, AccountId, BTreeSet<AccountAlias>>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -3172,7 +3172,7 @@ pub struct WorldView<'world> {
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: StorageView<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
-    pub(crate) account_rekey_records: StorageView<'world, AccountLabel, AccountRekeyRecord>,
+    pub(crate) account_rekey_records: StorageView<'world, AccountAlias, AccountRekeyRecord>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageView<'world, AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
@@ -8310,7 +8310,7 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountLabel::new(
+        let label = AccountAlias::new(
             domain_id.clone(),
             "primary".parse::<Name>().expect("label name"),
         );
@@ -8344,7 +8344,7 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountLabel::new(
+        let label = AccountAlias::new(
             domain_id.clone(),
             "+819398553445".parse::<Name>().expect("label name"),
         );
@@ -8370,11 +8370,11 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let primary_label = AccountLabel::new(
+        let primary_label = AccountAlias::new(
             domain_id.clone(),
             "banking".parse::<Name>().expect("primary label name"),
         );
-        let bound_label = AccountLabel::new(
+        let bound_label = AccountAlias::new(
             domain_id.clone(),
             "issuance".parse::<Name>().expect("bound label name"),
         );
@@ -8426,7 +8426,7 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountLabel::new(
+        let label = AccountAlias::new(
             domain_id.clone(),
             "cbdc".parse::<Name>().expect("label name"),
         );
@@ -8472,7 +8472,7 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountLabel::new(
+        let label = AccountAlias::new(
             domain_id.clone(),
             "treasury".parse::<Name>().expect("label name"),
         );
@@ -11000,7 +11000,7 @@ impl World {
 
     fn rebuild_account_alias_index(&mut self) -> Result<(), String> {
         let mut index = BTreeMap::new();
-        let mut reverse = BTreeMap::<AccountId, BTreeSet<AccountLabel>>::new();
+        let mut reverse = BTreeMap::<AccountId, BTreeSet<AccountAlias>>::new();
         let existing_bindings: Vec<_> = self
             .account_aliases
             .view()
@@ -11632,11 +11632,11 @@ pub trait WorldReadOnly {
     /// UAID to account index (read-only).
     fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId>;
     /// Account alias index (read-only).
-    fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId>;
+    fn account_aliases(&self) -> &impl StorageReadOnly<AccountAlias, AccountId>;
     /// Reverse account alias index (read-only).
     fn account_aliases_by_account(
         &self,
-    ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountLabel>>;
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
     /// Global RAM-LFE program policy registry (read-only).
@@ -11684,7 +11684,7 @@ pub trait WorldReadOnly {
             .find_map(|(_, claim)| (claim.receipt_hash == *receipt_hash).then(|| claim.clone()))
     }
     /// Account label/signatory registry (read-only).
-    fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord>;
+    fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountAlias, AccountRekeyRecord>;
     /// Asset definition storage (read-only).
     fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
     /// Alias index mapping `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` to canonical
@@ -12618,12 +12618,12 @@ macro_rules! impl_world_ro {
             fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId> {
                 &self.uaid_accounts
             }
-            fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId> {
+            fn account_aliases(&self) -> &impl StorageReadOnly<AccountAlias, AccountId> {
                 &self.account_aliases
             }
             fn account_aliases_by_account(
                 &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountLabel>> {
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>> {
                 &self.account_aliases_by_account
             }
             fn opaque_uaids(
@@ -12648,7 +12648,7 @@ macro_rules! impl_world_ro {
             }
             fn account_rekey_records(
                 &self,
-            ) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord> {
+            ) -> &impl StorageReadOnly<AccountAlias, AccountRekeyRecord> {
                 &self.account_rekey_records
             }
             fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition> {
@@ -13700,7 +13700,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.runtime_upgrades
     }
 
-    fn add_account_alias_to_reverse_index(&mut self, account_id: &AccountId, label: &AccountLabel) {
+    fn add_account_alias_to_reverse_index(&mut self, account_id: &AccountId, label: &AccountAlias) {
         if self.account_aliases_by_account.get(account_id).is_none() {
             self.account_aliases_by_account
                 .insert(account_id.clone(), BTreeSet::new());
@@ -13713,7 +13713,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     fn remove_account_alias_from_reverse_index(
         &mut self,
         account_id: &AccountId,
-        label: &AccountLabel,
+        label: &AccountAlias,
     ) {
         let mut remove_entry = false;
         if let Some(labels) = self.account_aliases_by_account.get_mut(account_id) {
@@ -13727,7 +13727,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
     pub(crate) fn insert_account_alias_binding(
         &mut self,
-        label: AccountLabel,
+        label: AccountAlias,
         account_id: AccountId,
     ) -> Option<AccountId> {
         let previous = self
@@ -13742,7 +13742,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
     pub(crate) fn remove_account_alias_binding(
         &mut self,
-        label: &AccountLabel,
+        label: &AccountAlias,
     ) -> Option<AccountId> {
         let removed = self.account_aliases.remove(label.clone());
         if let Some(account_id) = removed.as_ref() {
@@ -13754,7 +13754,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     pub(crate) fn remove_account_alias_bindings_for_account(
         &mut self,
         account_id: &AccountId,
-    ) -> BTreeSet<AccountLabel> {
+    ) -> BTreeSet<AccountAlias> {
         let labels = self
             .account_aliases_by_account
             .remove(account_id.clone())
@@ -22916,7 +22916,7 @@ mod fastpq_tx_set_hash_tests {
         let (authority, keypair) = gen_account_in("wonderland");
         let domain_id: DomainId = "wonderland".parse().expect("valid domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -23644,7 +23644,7 @@ mod replay_validation_tests {
     fn new_genesis_account(
         account_id: &iroha_data_model::account::AccountId,
     ) -> iroha_data_model::account::NewAccount {
-        Account::new_in_domain(account_id.clone(), iroha_genesis::GENESIS_DOMAIN_ID.clone())
+        Account::new(account_id.clone())
     }
 
     #[test]
@@ -23753,7 +23753,7 @@ mod replay_validation_tests {
             ],
             [
                 new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new_in_domain(user_id.clone(), user_domain_id).build(&genesis_id),
+                Account::new(user_id.clone()).build(&genesis_id),
             ],
             [],
         );
@@ -24161,7 +24161,7 @@ mod replay_validation_tests {
             ],
             [
                 new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new_in_domain(user_id.clone(), user_domain.clone()).build(&genesis_id),
+                Account::new(user_id.clone()).build(&genesis_id),
             ],
             [],
         );
@@ -24226,7 +24226,7 @@ mod replay_validation_tests {
             ],
             [
                 new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new_in_domain(user_id.clone(), user_domain).build(&genesis_id),
+                Account::new(user_id.clone()).build(&genesis_id),
             ],
             [],
         );
@@ -24292,11 +24292,11 @@ mod permission_cache_tests {
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new_in_domain(account_id.clone(), wonderland_domain_id())
+        Account::new(account_id.clone())
     }
 
     fn new_genesis_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new_in_domain(account_id.clone(), iroha_genesis::GENESIS_DOMAIN_ID.clone())
+        Account::new(account_id.clone())
     }
 
     #[test]
@@ -28049,7 +28049,7 @@ mod tests {
             .build(&authority);
 
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new_in_domain(authority.clone(), domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         (
             World::with([domain], [account], [definition]),
             definition_id,
@@ -28062,7 +28062,7 @@ mod tests {
         let genesis_domain =
             Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
         let genesis_account =
-            Account::new_in_domain(genesis_id.clone(), iroha_genesis::GENESIS_DOMAIN_ID.clone())
+            Account::new(genesis_id.clone())
                 .build(&genesis_id);
         let state = State::new_for_testing(
             World::with([genesis_domain], [genesis_account], []),
@@ -28345,7 +28345,7 @@ mod tests {
         account_id: &AccountId,
         domain_id: &DomainId,
     ) -> iroha_data_model::account::NewAccount {
-        Account::new_in_domain(account_id.clone(), domain_id.clone())
+        Account::new(account_id.clone())
     }
 
     fn new_sample_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
@@ -28394,10 +28394,7 @@ mod tests {
         Register::domain(Domain::new(recipient_domain.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new_in_domain(
-            recipient.account().clone(),
-            recipient.domain().clone(),
-        ))
+        Register::account(Account::new(recipient.account().clone()))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
 
@@ -28428,7 +28425,7 @@ mod tests {
         let recipient_domain: DomainId = "sbp".parse().unwrap();
         let asset_domain: DomainId = "cbuae".parse().unwrap();
         let (subject, _) = gen_account_in("ghost");
-        let account_label = AccountLabel::new(
+        let account_label = AccountAlias::new(
             recipient_domain.clone(),
             "admin1".parse().expect("valid label"),
         );
@@ -29133,7 +29130,7 @@ mod tests {
         };
         world.domains.insert(domain_id.clone(), domain);
 
-        let label = AccountLabel::new(domain_id.clone(), "alice".parse().expect("label"));
+        let label = AccountAlias::new(domain_id.clone(), "alice".parse().expect("label"));
         let uaid = UniversalAccountId::from_hash(Hash::new("uaid-index"));
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque-index"));
         let details = iroha_data_model::account::AccountDetails::new(
@@ -39243,7 +39240,7 @@ mod tests {
     #[test]
     fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
         use iroha_data_model::{
-            account::rekey::AccountLabel,
+            account::rekey::AccountAlias,
             events::data::prelude as data_pre,
             permission::Permission,
             transaction::{Executable, IvmBytecode},
@@ -39275,7 +39272,7 @@ mod tests {
         let rose_target = AssetId::new(rose_def_id.clone(), BOB_ID.clone());
         let trigger_id: TriggerId = "alias_json_transfer".parse().unwrap();
         let banking_label =
-            AccountLabel::new(domain_id.clone(), "banking".parse().expect("banking label"));
+            AccountAlias::new(domain_id.clone(), "banking".parse().expect("banking label"));
 
         let src = r#"
             seiyaku AliasTransfer {

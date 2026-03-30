@@ -4885,8 +4885,7 @@ impl GenesisDomainBuilder {
     pub fn account_with_metadata(mut self, signatory: PublicKey, metadata: Metadata) -> Self {
         let account_id = AccountId::new(signatory);
         let register = Register::account(
-            Account::new_in_domain(account_id.clone(), self.domain_id.clone())
-                .with_metadata(metadata),
+            Account::new(account_id.clone()).with_metadata(metadata),
         );
         self.current_tx_mut().instructions.push(register.into());
         self
@@ -5922,18 +5921,12 @@ mod tests {
             );
             assert_eq!(
                 instructions[1],
-                Register::account(Account::new_in_domain(
-                    AccountId::new(public_key["alice"].clone()).clone(),
-                    domain_id.clone()
-                ))
+                Register::account(Account::new(AccountId::new(public_key["alice"].clone()).clone()))
                 .into()
             );
             assert_eq!(
                 instructions[2],
-                Register::account(Account::new_in_domain(
-                    AccountId::new(public_key["bob"].clone()).clone(),
-                    domain_id.clone()
-                ))
+                Register::account(Account::new(AccountId::new(public_key["bob"].clone()).clone()))
                 .into()
             );
         }
@@ -5945,10 +5938,7 @@ mod tests {
             );
             assert_eq!(
                 instructions[4],
-                Register::account(Account::new_in_domain(
-                    AccountId::new(public_key["cheshire_cat"].clone()).clone(),
-                    domain_id.clone()
-                ))
+                Register::account(Account::new(AccountId::new(public_key["cheshire_cat"].clone()).clone()))
                 .into()
             );
         }
@@ -5960,10 +5950,7 @@ mod tests {
             );
             assert_eq!(
                 instructions[6],
-                Register::account(Account::new_in_domain(
-                    AccountId::new(public_key["mad_hatter"].clone()).clone(),
-                    domain_id.clone()
-                ))
+                Register::account(Account::new(AccountId::new(public_key["mad_hatter"].clone()).clone()))
                 .into()
             );
             assert_eq!(

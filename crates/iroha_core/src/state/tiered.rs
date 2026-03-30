@@ -2451,7 +2451,7 @@ mod measured_bytes_impls {
     };
     use iroha_data_model::{
         account::{
-            AccountController, AccountDetails, AccountId, AccountLabel, AccountRekeyRecord,
+            AccountController, AccountDetails, AccountId, AccountAlias, AccountRekeyRecord,
             MultisigMember, MultisigPolicy, OpaqueAccountId, rekey::AccountAliasDomain,
         },
         asset::{
@@ -2833,9 +2833,9 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for AccountLabel {
+    impl MeasuredBytes for AccountAlias {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<AccountLabel>();
+            let mut total = size_of::<AccountAlias>();
             total = total.saturating_add(self.label.measured_bytes_extra());
             total = total.saturating_add(self.domain.measured_bytes_extra());
             total
@@ -4320,7 +4320,7 @@ impl EntryScore {
 pub(crate) enum TieredKeyHandle {
     Domain(iroha_data_model::domain::DomainId),
     Account(iroha_data_model::account::AccountId),
-    AccountRekey(iroha_data_model::account::rekey::AccountLabel),
+    AccountRekey(iroha_data_model::account::rekey::AccountAlias),
     AssetDefinition(iroha_data_model::asset::AssetDefinitionId),
     Asset(iroha_data_model::asset::AssetId),
     AssetMetadata(iroha_data_model::asset::AssetId),

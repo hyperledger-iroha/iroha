@@ -1288,12 +1288,7 @@ fn execute_register(
         )));
     }
 
-    let register_account = if let Some(home_domain) = home_domain.clone() {
-        iroha_data_model::account::NewAccount::new(multisig_account_id.clone())
-            .with_linked_domain(home_domain)
-    } else {
-        iroha_data_model::account::NewAccount::new(multisig_account_id.clone())
-    };
+    let register_account = iroha_data_model::account::NewAccount::new(multisig_account_id.clone());
     Register::account(register_account)
         .execute(authority, state_transaction)
         .map_err(ValidationFail::InstructionFailed)?;
@@ -1824,12 +1819,7 @@ fn ensure_signatory_account_exists(
         | Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::Account(_)))) => {
             let mut metadata = Metadata::default();
             metadata.insert((*MULTISIG_CREATED_VIA_KEY).clone(), Json::new("multisig"));
-            let register_account = if let Some(home_domain) = home_domain.cloned() {
-                iroha_data_model::account::NewAccount::new(signatory.clone())
-                    .with_linked_domain(home_domain)
-            } else {
-                iroha_data_model::account::NewAccount::new(signatory.clone())
-            };
+            let register_account = iroha_data_model::account::NewAccount::new(signatory.clone());
             Register::account(register_account.with_metadata(metadata))
                 .execute(authority, state_transaction)
                 .map_err(ValidationFail::InstructionFailed)
@@ -2254,8 +2244,6 @@ fn reconstruct_multisig_account_state(
                 )))
             },
         )?
-    } else if account.linked_domains().len() == 1 {
-        account.linked_domains().iter().next().cloned()
     } else {
         None
     };
@@ -2524,7 +2512,7 @@ mod tests {
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
         ChainId, IntoKeyValue,
-        account::{AccountId, rekey::AccountLabel},
+        account::{AccountId, rekey::AccountAlias},
         block::BlockHeader,
         isi::{AddSignatory, RemoveSignatory, SetAccountQuorum, SetPrimaryAccountAlias},
         prelude::{Domain, InstructionBox, Register},
@@ -2556,7 +2544,7 @@ mod tests {
     ) {
         Register::account(
             iroha_data_model::account::NewAccount::new(account_id.clone())
-                .with_linked_domain(domain_id.clone()),
+                ,
         )
         .execute(authority, state_transaction)
         .expect(label);
@@ -2579,7 +2567,7 @@ mod tests {
         );
         Register::account(
             iroha_data_model::account::NewAccount::new(multisig_id.clone())
-                .with_linked_domain(domain_id.clone())
+                
                 .with_metadata(metadata),
         )
         .execute(owner_id, state_transaction)
@@ -2617,8 +2605,8 @@ mod tests {
         account_id: &AccountId,
         domain_id: &iroha_data_model::domain::DomainId,
         label: &str,
-    ) -> AccountLabel {
-        let label = AccountLabel::new(
+    ) -> AccountAlias {
+        let label = AccountAlias::new(
             domain_id.clone(),
             label.parse().expect("account label name"),
         );

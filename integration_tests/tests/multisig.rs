@@ -377,10 +377,7 @@ fn multisig_register_materializes_missing_signatory_account() -> Result<()> {
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
-        Register::account(Account::new_in_domain(
-            existing_signer.0.clone(),
-            domain.clone(),
-        )),
+        Register::account(Account::new(existing_signer.0.clone())),
     )?;
 
     let missing_signer = gen_account_in(&domain);
@@ -441,15 +438,9 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -
     let existing_signer = gen_account_in(&domain);
     let non_signatory = gen_account_in(&domain);
     let register_accounts: [InstructionBox; 2] = [
-        Register::account(Account::new_in_domain(
-            existing_signer.0.clone(),
-            domain.clone(),
-        ))
+        Register::account(Account::new(existing_signer.0.clone()))
         .into(),
-        Register::account(Account::new_in_domain(
-            non_signatory.0.clone(),
-            domain.clone(),
-        ))
+        Register::account(Account::new(non_signatory.0.clone()))
         .into(),
     ];
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -511,10 +502,7 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
-        Register::account(Account::new_in_domain(
-            existing_signer.0.clone(),
-            domain.clone(),
-        )),
+        Register::account(Account::new(existing_signer.0.clone())),
     )?;
 
     let missing_signer = gen_account_in(&domain);
@@ -576,15 +564,9 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
     let existing_signer = gen_account_in(&domain);
     let non_signatory = gen_account_in(&domain);
     let register_accounts: [InstructionBox; 2] = [
-        Register::account(Account::new_in_domain(
-            existing_signer.0.clone(),
-            domain.clone(),
-        ))
+        Register::account(Account::new(existing_signer.0.clone()))
         .into(),
-        Register::account(Account::new_in_domain(
-            non_signatory.0.clone(),
-            domain.clone(),
-        ))
+        Register::account(Account::new(non_signatory.0.clone()))
         .into(),
     ];
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -643,10 +625,7 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
-        Register::account(Account::new_in_domain(
-            existing_signer.0.clone(),
-            domain.clone(),
-        )),
+        Register::account(Account::new(existing_signer.0.clone())),
     )?;
 
     let spec = MultisigSpec::new(
@@ -715,10 +694,7 @@ fn multisig_add_signatory_rejected_does_not_materialize_missing_account() -> Res
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit_blocking(
-        Register::account(Account::new_in_domain(
-            existing_signer.0.clone(),
-            domain.clone(),
-        )),
+        Register::account(Account::new(existing_signer.0.clone())),
     )?;
 
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
@@ -856,7 +832,7 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
             residents
                 .keys()
                 .cloned()
-                .map(|id| Account::new_in_domain(id.clone(), domain.clone()))
+                .map(|id| Account::new(id.clone()))
                 .map(Register::account),
         )
         .wrap_err("register multisig test residents")?;
@@ -1089,7 +1065,7 @@ fn multisig_recursion_base(suite: TestSuite, context: &'static str) -> Result<()
         signatories
             .keys()
             .cloned()
-            .map(|id| Account::new_in_domain(id.clone(), wonderland_domain.clone()))
+            .map(|id| Account::new(id.clone()))
             .map(Register::account),
     )?;
 

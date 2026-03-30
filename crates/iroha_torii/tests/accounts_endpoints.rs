@@ -32,7 +32,7 @@ async fn accounts_endpoints_exist() {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account = Account::new_in_domain(ALICE_ID.clone(), domain_id).build(&ALICE_ID);
+    let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let mut world = World::with_assets([domain], [account], [], [], []);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));

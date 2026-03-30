@@ -21,7 +21,7 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
     let domain_id: DomainId = "domain".parse()?;
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _account_keypair) = gen_account_in("domain");
-    let create_account = Register::account(Account::new_in_domain(account_id.clone(), domain_id));
+    let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id = AssetDefinitionId::new("domain".parse()?, "xor".parse()?);
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();

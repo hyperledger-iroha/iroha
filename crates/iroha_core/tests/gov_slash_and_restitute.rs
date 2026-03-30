@@ -32,14 +32,11 @@ fn governance_state_with_accounts(
     let domain_id: DomainId = "wonderland".parse().expect("domain");
     let domain = Domain::new(domain_id.clone()).build(escrow_account);
     let alice_account =
-        iroha_data_model::account::Account::new_in_domain(ALICE_ID.clone(), domain_id.clone())
+        iroha_data_model::account::Account::new(ALICE_ID.clone())
             .build(escrow_account);
-    let escrow = iroha_data_model::account::Account::new_in_domain(
-        escrow_account.clone(),
-        domain_id.clone(),
-    )
+    let escrow = iroha_data_model::account::Account::new(escrow_account.clone())
     .build(escrow_account);
-    let slash = iroha_data_model::account::Account::new_in_domain(slash_account.clone(), domain_id)
+    let slash = iroha_data_model::account::Account::new(slash_account.clone())
         .build(escrow_account);
     let asset_def = AssetDefinition::numeric(voting_asset_id.clone()).build(escrow_account);
     // Seed balances: Alice 1_000, escrow 0, slash 0.

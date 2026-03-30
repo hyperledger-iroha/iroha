@@ -36,7 +36,7 @@ fn referendum_open_and_close_by_height() {
     let query_handle = LiveQueryStore::start_test();
     let domain_id: DomainId = "wonderland".parse().expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&iroha_test_samples::ALICE_ID);
-    let account: Account = Account::new_in_domain(iroha_test_samples::ALICE_ID.clone(), domain_id)
+    let account: Account = Account::new(iroha_test_samples::ALICE_ID.clone())
         .build(&iroha_test_samples::ALICE_ID);
     let world = World::with([domain], [account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);

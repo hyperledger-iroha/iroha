@@ -1860,7 +1860,7 @@ fn extend_genesis(
             .parse()
             .expect("default genesis must include wonderland domain");
         builder = builder.append_instruction(Register::account(
-            Account::new(AccountId::new(pk.clone())).with_linked_domain(domain_id),
+            Account::new(AccountId::new(pk.clone())),
         ));
     }
 
@@ -2164,7 +2164,7 @@ fn append_localnet_npos_bootstrap(
     }
     if !registrations.accounts.contains(gas_account_id) {
         builder = builder.append_instruction(Register::account(
-            Account::new(gas_account_id.clone()).with_linked_domain(ivm_domain.clone()),
+            Account::new(gas_account_id.clone()),
         ));
         registrations.accounts.insert(gas_account_id.clone());
     }
@@ -2188,7 +2188,7 @@ fn append_localnet_npos_bootstrap(
         let validator_id = AccountId::new(peer.public_key.clone());
         if !registrations.accounts.contains(&validator_id) {
             builder = builder.append_instruction(Register::account(
-                Account::new(validator_id.clone()).with_linked_domain(nexus_domain.clone()),
+                Account::new(validator_id.clone()),
             ));
             registrations.accounts.insert(validator_id.clone());
         }

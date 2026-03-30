@@ -1410,7 +1410,7 @@ mod tests {
         let seeded_accounts = accounts
             .iter()
             .cloned()
-            .map(|account| Account::new_in_domain(account, domain.clone()).build(&ALICE_ID));
+            .map(|account| Account::new(account).build(&ALICE_ID));
         let state = State::new(
             World::with(
                 [seeded_domain],
@@ -1605,7 +1605,7 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
             stx.world.take_external_events();
@@ -1735,7 +1735,7 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             stx.world.take_external_events();
@@ -1759,10 +1759,7 @@ mod tests {
                         .execute(&ALICE_ID, stx)
                         .expect("register relay domain");
                 }
-                Register::account(Account::new_in_domain(
-                    hop.relay_id.clone(),
-                    relay_domain.clone(),
-                ))
+                Register::account(Account::new(hop.relay_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register relay account");
                 add_relay_to_allowlist(stx, &relay_domain, &hop.relay_id);
@@ -1822,10 +1819,10 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            Register::account(Account::new_in_domain(participant.clone(), domain.clone()))
+            Register::account(Account::new(participant.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register participant");
             stx.world.take_external_events();
@@ -1865,10 +1862,10 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            Register::account(Account::new_in_domain(relay_id.clone(), domain.clone()))
+            Register::account(Account::new(relay_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register relay account");
             stx.world.take_external_events();
@@ -1909,11 +1906,11 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             for relay in [&relay_a, &relay_b, &relay_c] {
-                Register::account(Account::new_in_domain(relay.clone(), domain.clone()))
+                Register::account(Account::new(relay.clone()))
                     .execute(&ALICE_ID, stx)
                     .expect("register relay account");
             }
@@ -2016,7 +2013,7 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             stx.world.take_external_events();
@@ -2074,7 +2071,7 @@ mod tests {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(relay_id.clone(), domain_id.clone()))
+            Register::account(Account::new(relay_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register relay account");
             stx.world.take_external_events();
@@ -2119,7 +2116,7 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
             stx.world.take_external_events();
@@ -2164,10 +2161,7 @@ mod tests {
                         .execute(&ALICE_ID, stx)
                         .expect("register relay domain");
                 }
-                Register::account(Account::new_in_domain(
-                    hop.relay_id.clone(),
-                    relay_domain.clone(),
-                ))
+                Register::account(Account::new(hop.relay_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register relay account");
                 stx.world.take_external_events();
@@ -2211,7 +2205,7 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
             stx.world.take_external_events();
@@ -2276,10 +2270,10 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            Register::account(Account::new_in_domain(participant.clone(), domain.clone()))
+            Register::account(Account::new(participant.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register participant");
             stx.world.take_external_events();
@@ -2335,7 +2329,7 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new_in_domain(host.clone(), domain.clone()))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             stx.world.take_external_events();

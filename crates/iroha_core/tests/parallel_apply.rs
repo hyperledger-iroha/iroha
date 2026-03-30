@@ -47,8 +47,8 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
             NumericSpec::default(),
         )
         .build(&alice_id);
-        let acc_a = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
-        let acc_b = Account::new_in_domain(bob_id.clone(), domain_id).build(&alice_id);
+        let acc_a = Account::new(alice_id.clone()).build(&alice_id);
+        let acc_b = Account::new(bob_id.clone()).build(&alice_id);
         let a_coin = AssetId::of(ad.id().clone(), alice_id.clone());
         let b_coin = AssetId::of(ad.id().clone(), bob_id.clone());
         let a0 = Asset::new(a_coin, Numeric::new(0, 0));
@@ -332,7 +332,7 @@ fn run_block_and_events(
     let mut assets: Vec<Asset> = Vec::new();
     for acc_id in &accounts {
         world_accounts
-            .push(Account::new_in_domain(acc_id.clone(), domain_id.clone()).build(&first_auth));
+            .push(Account::new(acc_id.clone()).build(&first_auth));
         let asset_id = AssetId::new(ad.id().clone(), acc_id.clone());
         // Ensure the first bootstrap account has a larger balance so that
         // ordering differences in the scheduler don't affect validity.

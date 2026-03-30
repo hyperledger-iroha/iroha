@@ -25,14 +25,8 @@ fn send_tx_with_different_chain_id() {
         AssetDefinitionId::new("wonderland".parse().unwrap(), "test_asset".parse().unwrap());
     let to_transfer = numeric!(1);
 
-    let create_sender_account = Register::account(Account::new_in_domain(
-        sender_id.clone(),
-        wonderland_domain.clone(),
-    ));
-    let create_receiver_account = Register::account(Account::new_in_domain(
-        receiver_id.clone(),
-        wonderland_domain.clone(),
-    ));
+    let create_sender_account = Register::account(Account::new(sender_id.clone()));
+    let create_receiver_account = Register::account(Account::new(receiver_id.clone()));
     let register_asset_definition = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
         AssetDefinition::numeric(__asset_definition_id.clone())

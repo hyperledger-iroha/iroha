@@ -31,10 +31,10 @@ fn build_world() -> (
         NumericSpec::default(),
     )
     .build(&a1);
-    let acc1 = Account::new_in_domain(a1.clone(), domain_id.clone()).build(&a1);
-    let acc2 = Account::new_in_domain(a2.clone(), domain_id.clone()).build(&a1);
-    let acc3 = Account::new_in_domain(a3.clone(), domain_id.clone()).build(&a1);
-    let acc4 = Account::new_in_domain(a4.clone(), domain_id).build(&a1);
+    let acc1 = Account::new(a1.clone()).build(&a1);
+    let acc2 = Account::new(a2.clone()).build(&a1);
+    let acc3 = Account::new(a3.clone()).build(&a1);
+    let acc4 = Account::new(a4.clone()).build(&a1);
     // Initialize zero balances for determinism
     let a1_coin = AssetId::of(ad.id().clone(), a1.clone());
     let a2_coin = AssetId::of(ad.id().clone(), a2.clone());

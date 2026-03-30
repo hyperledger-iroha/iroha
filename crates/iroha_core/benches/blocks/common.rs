@@ -117,7 +117,7 @@ pub fn populate_state(
         let domain_id = domain_for_index(domains, accounts.len(), index)
             .cloned()
             .unwrap_or_else(|| "bench".parse().expect("valid bench domain id"));
-        let account = Account::new_in_domain(account_id.clone(), domain_id);
+        let account = Account::new(account_id.clone());
         instructions.push(Register::account(account).into());
         let can_unregister_account = Grant::account_permission(
             CanUnregisterAccount {
@@ -229,7 +229,7 @@ pub fn restore_every_nth(
             .enumerate()
         {
             if j % nth == 0 || i % nth == 0 {
-                let account = Account::new_in_domain(account_id.clone(), domain_id.clone());
+                let account = Account::new(account_id.clone());
                 instructions.push(Register::account(account).into());
             }
         }
@@ -262,7 +262,7 @@ pub fn build_state(
     let state = State::new(
         World::with(
             [domain],
-            [Account::new_in_domain(account_id.clone(), domain_id).build(account_id)],
+            [Account::new(account_id.clone()).build(account_id)],
             [],
         ),
         Arc::clone(&kura),

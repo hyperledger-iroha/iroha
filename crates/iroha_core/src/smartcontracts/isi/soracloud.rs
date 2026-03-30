@@ -10334,7 +10334,7 @@ mod tests {
         let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
         Register::domain(Domain::new(wonderland.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), wonderland))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         Grant::account_permission(
             Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(())),
@@ -10389,7 +10389,7 @@ mod tests {
         escrow_balance: u64,
     ) -> Result<AssetDefinitionId, eyre::Report> {
         let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
-        Register::account(Account::new_in_domain(validator.clone(), wonderland))
+        Register::account(Account::new(validator.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
         let asset_definition_id = AssetDefinitionId::new(
             "wonderland".parse().expect("domain"),
@@ -12765,7 +12765,7 @@ mod tests {
             let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
             let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
 
-            Register::account(Account::new_in_domain(BOB_ID.clone(), wonderland))
+            Register::account(Account::new(BOB_ID.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Grant::account_permission(
                 Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(())),

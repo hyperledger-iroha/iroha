@@ -639,7 +639,7 @@ mod tests {
             .iter()
             .cloned()
             .map(|account_id| {
-                Account::new_in_domain(account_id.clone(), domain_id.clone()).build(&account_id)
+                Account::new(account_id.clone()).build(&account_id)
             })
             .collect::<Vec<_>>();
         World::with([domain], accounts, [])

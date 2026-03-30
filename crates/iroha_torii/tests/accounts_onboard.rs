@@ -72,7 +72,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account =
-        Account::new_in_domain(authority_id.clone(), domain_id.clone()).build(&authority_id);
+        Account::new(authority_id.clone()).build(&authority_id);
     let mut world = World::with([domain], [authority_account], []);
     seed_account_alias_lease(&mut world, &authority_id, "p2p-user@universal");
     fixtures::seed_peer(&mut world, local_peer_id.clone());
@@ -251,7 +251,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account =
-        Account::new_in_domain(authority_id.clone(), domain_id.clone()).build(&authority_id);
+        Account::new(authority_id.clone()).build(&authority_id);
     let mut world = World::with([domain], [authority_account], []);
     seed_account_alias_lease(&mut world, &authority_id, "multisig-company@universal");
     fixtures::seed_peer(&mut world, local_peer_id.clone());

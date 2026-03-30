@@ -62,7 +62,7 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     let instructions: [InstructionBox; 5] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
         Register::account(
-            NewAccount::new(account_id.clone()).with_linked_domain(domain_id.clone()),
+            NewAccount::new(account_id.clone()),
         )
         .into(),
         Register::asset_definition(

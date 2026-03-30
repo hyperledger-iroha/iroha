@@ -795,8 +795,8 @@ fn make_state() -> State {
     let alice = alice();
     let bob = iroha_test_samples::BOB_ID.clone();
     let domain = Domain::new(default_domain.clone()).build(&alice);
-    let alice_account = Account::new_in_domain(alice.clone(), default_domain.clone()).build(&alice);
-    let bob_account = Account::new_in_domain(bob.clone(), default_domain).build(&bob);
+    let alice_account = Account::new(alice.clone()).build(&alice);
+    let bob_account = Account::new(bob.clone()).build(&bob);
     let world = World::with(
         [domain],
         [alice_account, bob_account],
@@ -853,7 +853,7 @@ fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     }
     if tx.world().account(&alice).is_err() {
         Register::account(
-            NewAccount::new(alice.clone()).with_linked_domain(default_domain.clone()),
+            NewAccount::new(alice.clone()),
         )
         .execute(&alice, tx)
         .expect("register sorafs authority");

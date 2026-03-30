@@ -9,6 +9,90 @@ Last updated: 2026-03-30
   --workload-profile stable`) with:
   - `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`
   - permissioned:
+    `/tmp/izanami_permissioned_current_20260330T135430Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-permissioned-current_20260330T135430Z/irohad_test_network_9FyJDa`;
+  - NPoS:
+    `/tmp/izanami_npos_current_20260330T140908Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-npos-current_20260330T140908Z/irohad_test_network_kN37aT`.
+- The old transport/proposer signatures stayed absent in both fresh reruns:
+  - `LengthMismatch=0`;
+  - `Failed to decode peer message=0`; and
+  - `deferring proposal: insufficient online peers for commit quorum=0`.
+- Permissioned advanced past the prior `260/266` freeze band but still failed
+  the 600s strict-progress watchdog:
+  - the run reached `strict_min_height=286` / `quorum_min_height=286` with
+    `strict_reference_height=287`, then emitted the repeated
+    `strict block height is stalled with no lagging peers` signature until the
+    watchdog fired;
+  - final summary:
+    `successes=1153`, `failures=55`,
+    `izanami_ingress_failover_total=183`,
+    `izanami_ingress_endpoint_unhealthy_total=169`;
+  - ingress distress remained visible (`transaction queued for too long` and
+    `haven't got tx confirmation within 20s`), but peer logs point back to
+    consensus liveness:
+    repeated `missing_qc`-driven view changes at height `287`,
+    `no proposal observed for view before changing view`, retained stale
+    pending/frontier state, and growing `queue_saturated` heartbeats.
+- NPoS regressed sharply relative to the previous `571/572` freeze band and now
+  fails much earlier on the same global no-progress watchdog:
+  - the run stalled at `strict_min_height=107` / `quorum_min_height=107` with
+    `strict_reference_height=109`, then failed the same 600s watchdog with
+    `lagging_peers=0`;
+  - final summary:
+    `successes=646`, `failures=65`,
+    `izanami_ingress_failover_total=65`,
+    `izanami_ingress_endpoint_unhealthy_total=33`;
+  - workload distress was dominated by
+    `transaction confirmation timed out; fallback status check failed` and
+    local query timeouts on all four Torii ports; and
+  - peer logs show an earlier consensus precursor distinct from permissioned:
+    `stake quorum observed but block payload missing; deferring QC aggregation`,
+    then a received/observed proposal at height `108`, followed by a stuck
+    `108/109` round with `active pending block stalled past quorum timeout`
+    and growing queue saturation.
+- Acceptance status on the current worktree:
+  - no renewed transport regressions: pass;
+  - no infinite same-height `missing_qc` churn at the stalled edges: fail in
+    permissioned (`287`);
+  - permissioned grows past the prior `260/266` freeze band: pass;
+  - NPoS grows past the prior `571/572` freeze band: fail (new plateau
+    `107/109`);
+  - no 600s global no-progress watchdog failure with `lagging_peers=0`: fail
+    in both envelopes.
+
+## 2026-03-30 Sumeragi exact-slot proposal-evidence regression coverage
+- The current `iroha_core` tree now treats proposal suppression as exact-slot
+  scoped for the targeted frontier-owner regressions:
+  - later-view `slot_has_proposal_evidence(height, view)` coverage no longer
+    treats stale same-height frontier ownership as later-view proposal
+    evidence;
+  - the post-rotation pacemaker regression confirms a fresh proposal can be
+    assembled after `MissingQc` view advance when only stale old-view frontier
+    ownership remains; and
+  - the timeout-driven post-rotation stale-owner regression now asserts that
+    later-view proposal evidence is false before the round advances again.
+- Focused verification completed on the current worktree:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core slot_has_proposal_evidence -- --nocapture` (pass)
+  - `cargo test -p iroha_core pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_stale_frontier_owner -- --nocapture` (pass)
+  - `cargo test -p iroha_core force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum_timeout_owner -- --nocapture` (pass)
+- Broader verification boundary on this branch:
+  - `cargo test -p iroha_core --lib missing_qc -- --nocapture` is still red on
+    existing stall-window / range-pull / frontier-reanchor tests outside this
+    exact-slot proposal-evidence patch, so the full `missing_qc` filter and the
+    downstream soak reruns remain blocked on that separate recovery-window
+    failure surface.
+
+## 2026-03-30 Fresh full preserved-peer stable reruns on the current worktree still fail on synchronized no-lagging-peers stalls
+- Rebuilt the current-tree release binaries and reran the canonical 4-peer
+  preserved-peer stable envelopes (`--duration 3600s --target-blocks 2000
+  --progress-interval 10s --progress-timeout 600s --tps 5 --max-inflight 8
+  --workload-profile stable`) with:
+  - `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`
+  - permissioned:
     `/tmp/izanami_permissioned_post_txgossipfix_20260330T110147Z.log`;
     peer artifacts:
     `/tmp/iroha-soak-permissioned-post-txgossipfix_20260330T110147Z/irohad_test_network_uEh1mM`;

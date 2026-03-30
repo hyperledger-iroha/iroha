@@ -20,7 +20,7 @@ fn build_min_world() -> (
     let (authority_id, kp) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let account = Account::new_in_domain(authority_id.clone(), domain_id).build(&authority_id);
+    let account = Account::new(authority_id.clone()).build(&authority_id);
     let world = iroha_core::state::World::with([domain], [account], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();

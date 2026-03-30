@@ -2882,9 +2882,9 @@ mod tests {
             iroha_config::parameters::defaults::governance::bond_escrow_account_id();
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account =
-            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
+            Account::new(authority.clone()).build(&authority);
         let escrow_account =
-            Account::new_in_domain(escrow.clone(), domain_id.clone()).build(&escrow);
+            Account::new(escrow.clone()).build(&escrow);
         let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("vote").expect("asset definition name"),

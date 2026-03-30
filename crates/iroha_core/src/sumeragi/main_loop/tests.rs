@@ -2243,11 +2243,8 @@ async fn test_actor_harness_with_config_and_height_and_kura(
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
-        genesis_id.clone(),
-        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-    )
-    .build(&genesis_id);
+    let genesis_account = iroha_data_model::prelude::Account::new(genesis_id.clone())
+        .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     {
         let mut block = world.block();
@@ -3364,10 +3361,7 @@ fn effective_commit_topology_falls_back_to_genesis_roster_when_empty() {
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
-        genesis_id.clone(),
-        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-    )
+    let genesis_account = iroha_data_model::prelude::Account::new(genesis_id.clone())
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
@@ -34324,10 +34318,7 @@ async fn stale_pending_block_requeues_transactions() {
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
-        genesis_id.clone(),
-        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-    )
+    let genesis_account = iroha_data_model::prelude::Account::new(genesis_id.clone())
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     {
@@ -37812,7 +37803,7 @@ async fn frontier_recovery_suppresses_rotation_while_same_slot_ingress_remains_a
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn frontier_recovery_suppresses_cleanup_while_same_slot_missing_qc_request_remains_recent_without_backlog()
+async fn frontier_recovery_rotates_when_only_same_slot_missing_qc_request_remains_recent_without_backlog()
  {
     let _worker_guard = super::status::worker_queue_test_guard();
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -37856,25 +37847,20 @@ async fn frontier_recovery_suppresses_cleanup_while_same_slot_missing_qc_request
         actor.advance_frontier_recovery("quorum_timeout", height, view, false, true, true, now);
     assert_eq!(
         advance,
-        super::FrontierRecoveryAdvance::None,
-        "recent same-slot missing-QC recovery should defer quorum-timeout cleanup even after queue backlog drains"
+        super::FrontierRecoveryAdvance::Rotate,
+        "a recent same-slot missing-QC request without exact-slot ownership should not suppress quorum-timeout rotation"
     );
-    assert!(
-        actor.frontier_recovery.is_some_and(|state| {
-            state.frontier_height == height
-                && state.phase == super::FrontierRecoveryPhase::CatchUp
-                && !state.cleanup_done
-                && state.last_action_at.is_none()
-                && state.last_cause == "quorum_timeout"
-        }),
-        "cleanup suppression should preserve the active frontier owner state"
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view.saturating_add(1)),
+        "quorum-timeout recovery should advance the round once only a stale same-slot missing-QC request remains"
     );
     assert!(
         actor
             .pending
             .missing_block_requests
             .contains_key(&missing_hash),
-        "cleanup suppression must keep the active same-slot missing-QC request"
+        "rotation should preserve the active same-slot missing-QC request for follow-up recovery"
     );
 
     super::status::reset_worker_loop_snapshot_for_tests();
@@ -60071,8 +60057,7 @@ async fn force_view_change_if_idle_ignores_stale_quorum_timeout_owner_after_fron
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn force_view_change_if_idle_preserves_quorum_timeout_owner_across_post_rotation_empty_view()
-{
+async fn force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum_timeout_owner() {
     use std::borrow::Cow;
 
     let mut harness = test_actor_harness(4).await;
@@ -60130,6 +60115,10 @@ async fn force_view_change_if_idle_preserves_quorum_timeout_owner_across_post_ro
         last_rotation_view: Some(current_view.saturating_sub(1)),
         last_cause: "quorum_timeout",
     });
+    assert!(
+        !actor.slot_has_proposal_evidence(height, current_view),
+        "stale old-view frontier ownership must not count as proposal evidence for the post-rotation round"
+    );
 
     let before = super::status::snapshot();
     assert!(
@@ -60141,10 +60130,10 @@ async fn force_view_change_if_idle_preserves_quorum_timeout_owner_across_post_ro
         actor.phase_tracker.current_view(height),
         Some(current_view.saturating_add(1))
     );
-    assert_eq!(
-        after.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1),
-        "direct frontier rotation should count one MissingQc rotation"
+    assert_ne!(
+        after.view_change_causes.last_cause.as_deref(),
+        before.view_change_causes.last_cause.as_deref(),
+        "stale old-view ownership should not suppress the timeout-driven post-rotation advance"
     );
     assert!(
         actor
@@ -60153,131 +60142,6 @@ async fn force_view_change_if_idle_preserves_quorum_timeout_owner_across_post_ro
             .forced_view_after_timeout
             .is_some_and(|forced| forced == (height, current_view.saturating_add(1))),
         "direct frontier rotation should install the next forced-view marker"
-    );
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn force_view_change_if_idle_treats_post_rotation_stale_frontier_owner_as_no_proposal() {
-    use std::borrow::Cow;
-
-    let _guard = super::status::view_change_cause_test_guard();
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = false;
-    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let initial_view = 0_u64;
-    let now = Instant::now();
-    actor.phase_tracker.start_new_round(height, now);
-    let stale_block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD4; Hash::LENGTH]));
-    actor.frontier_slot = Some(super::FrontierSlot::new(
-        height,
-        initial_view,
-        stale_block_hash,
-        now,
-        Duration::from_secs(1),
-        None,
-        BTreeSet::new(),
-        true,
-        false,
-        true,
-        None,
-        None,
-    ));
-
-    actor.trigger_view_change_with_cause(height, initial_view, super::ViewChangeCause::MissingQc);
-
-    let current_view = initial_view.saturating_add(1);
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "setup should advance to the post-rotation view"
-    );
-    assert!(
-        actor
-            .frontier_slot
-            .as_ref()
-            .is_some_and(|slot| slot.height == height
-                && slot.view == initial_view
-                && slot.block_hash == stale_block_hash),
-        "stale frontier ownership should survive for repair after the view advances"
-    );
-    assert!(
-        !actor.slot_has_proposal_evidence(height, current_view),
-        "old-view frontier ownership must not count as proposal evidence for the post-rotation round"
-    );
-
-    let no_proposal_timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let proposal_seen_timeout = super::idle_view_timeout(
-        true,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    assert!(
-        no_proposal_timeout < proposal_seen_timeout,
-        "test requires the no-proposal timeout to be shorter so the stale-owner classification is observable"
-    );
-
-    let rotate_at = now
-        .checked_add(no_proposal_timeout.saturating_add(Duration::from_millis(1)))
-        .unwrap_or(now);
-    let round_started = rotate_at
-        .checked_sub(no_proposal_timeout.saturating_add(Duration::from_millis(1)))
-        .unwrap_or(rotate_at);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, round_started);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: round_started,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
-
-    let before = super::status::snapshot();
-    assert!(
-        actor.force_view_change_if_idle(rotate_at),
-        "post-rotation stale frontier ownership should follow the no-proposal MissingQc timeout path"
-    );
-    let after = super::status::snapshot();
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1)),
-        "idle MissingQc should rotate again once the shorter no-proposal timeout elapses"
-    );
-    assert_eq!(
-        after.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1),
-        "post-rotation idle timeout should count one additional MissingQc rotation"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -73386,27 +73250,58 @@ async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_s
         .expect("push tx");
 
     actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
-    actor.highest_qc = None;
+    let committed_height = actor.state.view().height() as u64;
+    let mut highest_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    highest_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(highest_qc);
 
-    let tracked_height = actor.state.view().height() as u64 + 1;
+    let tracked_height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
     let now = Instant::now();
     actor.phase_tracker.start_new_round(tracked_height, now);
-    let stale_block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC3; Hash::LENGTH]));
-    actor.frontier_slot = Some(super::FrontierSlot::new(
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
         tracked_height,
         0,
-        stale_block_hash,
-        now,
-        Duration::from_secs(1),
-        None,
-        BTreeSet::new(),
-        true,
-        false,
-        true,
-        None,
-        None,
-    ));
+        Some(genesis_hash),
+    );
+    let stale_block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        sample_qc_ref(tracked_height.saturating_sub(1), 0),
+        0,
+        0,
+        actor.epoch_for_height(tracked_height),
+    );
+    let created = actor
+        .frontier_block_created_from_proposal(&block, &proposal)
+        .expect("frontier BlockCreated");
+
+    actor
+        .handle_block_created(created, None)
+        .expect("handle BlockCreated");
+    actor.pending.pending_blocks.remove(&stale_block_hash);
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .pop_proposal(tracked_height, 0);
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .pop_hint(tracked_height, 0);
+    actor.subsystems.propose.proposals_seen.clear();
 
     actor.trigger_view_change_with_cause(tracked_height, 0, super::ViewChangeCause::MissingQc);
 
@@ -73414,15 +73309,6 @@ async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_s
         actor.phase_tracker.current_view(tracked_height),
         Some(1),
         "missing-QC recovery should advance the round to the next view"
-    );
-    assert!(
-        actor
-            .frontier_slot
-            .as_ref()
-            .is_some_and(|slot| slot.height == tracked_height
-                && slot.view == 0
-                && slot.block_hash == stale_block_hash),
-        "view advance should preserve the stale frontier candidate for repair"
     );
     assert!(
         !actor.slot_has_proposal_evidence(tracked_height, 1),
@@ -73435,13 +73321,8 @@ async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_s
         "pacemaker should assemble a fresh proposal once only stale old-view frontier ownership remains"
     );
     assert!(
-        actor
-            .subsystems
-            .propose
-            .proposal_cache
-            .get_proposal(tracked_height, 1)
-            .is_some(),
-        "new-view proposal should be cached for the post-rotation slot"
+        actor.subsystems.propose.last_successful_proposal.is_some(),
+        "successful pacemaker assembly should record a successful proposal attempt for the post-rotation slot"
     );
 
     harness.shutdown.send();
@@ -76864,7 +76745,7 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
             .expect("register account");
         let trigger = Trigger::new(
@@ -91190,10 +91071,7 @@ async fn proposal_assembly_defers_without_draining_queue_and_preserves_view_when
 
     let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
     let genesis_domain = Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
-    let genesis_account = iroha_data_model::prelude::Account::new_in_domain(
-        genesis_id.clone(),
-        iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-    )
+    let genesis_account = iroha_data_model::prelude::Account::new(genesis_id.clone())
     .build(&genesis_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     {
@@ -99890,7 +99768,7 @@ async fn state_commit_failure_after_kura_store_keeps_partial_head_hidden() {
     let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
     let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
     let genesis_account =
-        Account::new_in_domain(genesis_account_id.clone(), GENESIS_DOMAIN_ID.clone())
+        Account::new(genesis_account_id.clone())
             .build(&genesis_account_id);
     let world = World::with([genesis_domain], [genesis_account], []);
     let isolated_kura = Arc::new(Kura::blank_kura_for_testing());

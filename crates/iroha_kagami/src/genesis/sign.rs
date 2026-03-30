@@ -178,7 +178,7 @@ fn append_npos_bootstrap(
     }
     if !registrations.accounts.contains(escrow_account_id) {
         builder = builder.append_instruction(Register::account(
-            Account::new(escrow_account_id.clone()).with_linked_domain(escrow_domain_id.clone()),
+            Account::new(escrow_account_id.clone()),
         ));
         registrations.accounts.insert(escrow_account_id.clone());
     }
@@ -194,7 +194,7 @@ fn append_npos_bootstrap(
         let validator_id = AccountId::new(peer.public_key().clone());
         if !registrations.accounts.contains(&validator_id) {
             builder = builder.append_instruction(Register::account(
-                Account::new(validator_id.clone()).with_linked_domain(nexus_domain.clone()),
+                Account::new(validator_id.clone()),
             ));
             registrations.accounts.insert(validator_id.clone());
         }

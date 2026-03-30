@@ -53,9 +53,9 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let acc_a = Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
-    let acc_b = Account::new_in_domain(bob_id.clone(), domain_id.clone()).build(&alice_id);
-    let acc_c = Account::new_in_domain(carol_id.clone(), domain_id).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
+    let acc_c = Account::new(carol_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b, acc_c], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();

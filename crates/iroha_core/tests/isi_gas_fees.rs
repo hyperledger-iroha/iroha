@@ -41,7 +41,7 @@ fn new_state(
 }
 
 fn new_account_in_domain(account_id: &AccountId, domain: &str) -> Account {
-    Account::new_in_domain(account_id.clone(), domain.parse().expect("domain")).build(account_id)
+    Account::new(account_id.clone()).build(account_id)
 }
 
 #[test]

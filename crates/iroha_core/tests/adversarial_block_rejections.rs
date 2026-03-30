@@ -55,8 +55,8 @@ fn setup_world() -> AdversarialSetup {
     )
     .build(&alice_id);
     let alice_account =
-        Account::new_in_domain(alice_id.clone(), domain_id.clone()).build(&alice_id);
-    let bob_account = Account::new_in_domain(bob_id.clone(), domain_id).build(&alice_id);
+        Account::new(alice_id.clone()).build(&alice_id);
+    let bob_account = Account::new(bob_id.clone()).build(&alice_id);
 
     let alice_asset_id = AssetId::of(ad.id().clone(), alice_id.clone());
     let bob_asset_id = AssetId::of(ad.id().clone(), bob_id.clone());

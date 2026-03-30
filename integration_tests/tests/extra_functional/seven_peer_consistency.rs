@@ -99,10 +99,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     let domain_id = DomainId::new(domain_name.clone());
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _kp) = gen_account_in(&domain_name);
-    let create_account = Register::account(Account::new_in_domain(
-        account_id.clone(),
-        domain_id.clone(),
-    ));
+    let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id =
         iroha_data_model::asset::AssetDefinitionId::new(domain_id.clone(), "xor".parse()?);
     let create_asset_def = Register::asset_definition({

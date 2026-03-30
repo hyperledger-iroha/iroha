@@ -997,7 +997,7 @@ pub mod isi {
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
             for account in accounts {
-                Register::account(Account::new_in_domain(account.clone(), domain_id.clone()))
+                Register::account(Account::new(account.clone()))
                     .execute(&ALICE_ID, stx)
                     .expect("register account");
             }
@@ -1540,7 +1540,7 @@ pub mod query {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(Account::new_in_domain(ALICE_ID.clone(), domain_id.clone()))
+            Register::account(Account::new(ALICE_ID.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
 

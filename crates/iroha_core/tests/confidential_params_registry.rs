@@ -28,7 +28,7 @@ fn fresh_state() -> State {
     let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
     let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
     let account: Account =
-        Account::new_in_domain(ALICE_ID.clone(), "wonderland".parse().expect("domain"))
+        Account::new(ALICE_ID.clone())
             .build(&ALICE_ID);
     let world = World::with([domain], [account], []);
     let kura = Kura::blank_kura_for_testing();

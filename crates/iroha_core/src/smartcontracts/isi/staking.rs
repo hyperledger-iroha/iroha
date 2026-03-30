@@ -1844,10 +1844,10 @@ mod tests {
             .unwrap();
         let (sink, _) = gen_account_in("wonderland");
         let (validator, _) = gen_account_in("wonderland");
-        Register::account(Account::new_in_domain(sink.clone(), domain_id.clone()))
+        Register::account(Account::new(sink.clone()))
             .execute(&ALICE_ID, stx)
             .unwrap();
-        Register::account(Account::new_in_domain(validator.clone(), domain_id.clone()))
+        Register::account(Account::new(validator.clone()))
             .execute(&ALICE_ID, stx)
             .unwrap();
 
@@ -1923,19 +1923,19 @@ mod tests {
             alice_domain_id.clone(),
             Domain::new(alice_domain_id.clone()).build(&ALICE_ID),
         );
-        Register::account(Account::new_in_domain(ALICE_ID.clone(), alice_domain_id))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&ALICE_ID, stx)
             .unwrap();
         let (validator, _kp) = gen_account_in("nexus");
         let (delegator, _kp) = gen_account_in("nexus");
         let (escrow, _kp) = gen_account_in("nexus");
-        Register::account(Account::new_in_domain(validator.clone(), domain_id.clone()))
+        Register::account(Account::new(validator.clone()))
             .execute(&ALICE_ID, stx)
             .unwrap();
-        Register::account(Account::new_in_domain(delegator.clone(), domain_id.clone()))
+        Register::account(Account::new(delegator.clone()))
             .execute(&ALICE_ID, stx)
             .unwrap();
-        Register::account(Account::new_in_domain(escrow.clone(), domain_id.clone()))
+        Register::account(Account::new(escrow.clone()))
             .execute(&ALICE_ID, stx)
             .unwrap();
         register_peer_for_account(stx, &validator);
@@ -2409,7 +2409,7 @@ mod tests {
         )
         .expect("policy");
         let admin_id = AccountId::new_multisig(policy);
-        Register::account(Account::new_in_domain(admin_id.clone(), domain_id.clone()))
+        Register::account(Account::new(admin_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register multisig admin");
 
@@ -2859,10 +2859,7 @@ mod tests {
         let (validator, _, _escrow, asset_def_id) = prepare_accounts(&mut stx);
         let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _kp) = gen_account_in("nexus");
-        Register::account(Account::new_in_domain(
-            replacement.clone(),
-            domain_id.clone(),
-        ))
+        Register::account(Account::new(replacement.clone()))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         register_peer_for_account(&mut stx, &replacement);
@@ -2980,10 +2977,7 @@ mod tests {
 
         let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _kp) = gen_account_in("nexus");
-        Register::account(Account::new_in_domain(
-            replacement.clone(),
-            domain_id.clone(),
-        ))
+        Register::account(Account::new(replacement.clone()))
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
         let replacement_peer = register_peer_for_account(&mut stx, &replacement);
@@ -3180,10 +3174,7 @@ mod tests {
             let mut stx = state_block.transaction();
             let domain_id: DomainId = "nexus".parse().expect("domain id");
             let (replacement, _kp) = gen_account_in("nexus");
-            Register::account(Account::new_in_domain(
-                replacement.clone(),
-                domain_id.clone(),
-            ))
+            Register::account(Account::new(replacement.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
             let replacement_peer = register_peer_for_account(&mut stx, &replacement);
@@ -3879,10 +3870,7 @@ mod tests {
         setup_tx.nexus.staking.slash_sink_account_id = escrow.to_string();
         let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _replacement_kp) = gen_account_in("nexus");
-        Register::account(Account::new_in_domain(
-            replacement.clone(),
-            domain_id.clone(),
-        ))
+        Register::account(Account::new(replacement.clone()))
         .execute(&ALICE_ID, &mut setup_tx)
         .unwrap();
         let replacement_peer = register_peer_for_account(&mut setup_tx, &replacement);

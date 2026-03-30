@@ -57,7 +57,7 @@ fn seeded_account_in(seed: u8, domain_name: &str) -> AccountId {
 }
 
 fn new_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> NewAccount {
-    NewAccount::new(account_id.clone()).with_linked_domain(domain_id.clone())
+    NewAccount::new(account_id.clone())
 }
 
 fn built_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> Account {
