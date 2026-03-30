@@ -49,6 +49,8 @@ const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const MAX_NUMERIC_SCALE = 28;
 const MAX_NUMERIC_BITS = 512;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
+const RAW_UTF8_HEADERS_INIT_KEY = "__irohaRawUtf8Headers";
+const RAW_UTF8_HEADER_SUPPORT_FLAG = "__irohaSupportsRawUtf8Headers";
 const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
 const BFV_IDENTIFIER_SEED_BYTES = 32;
@@ -8188,6 +8190,18 @@ export class ToriiClient {
       for (const [key, value] of Object.entries(canonicalHeaders)) {
         setHeader(initHeaders, key, value);
       }
+      if (headerValueRequiresRawUtf8Transport(canonicalHeaders["X-Iroha-Account"])) {
+        if (!fetchSupportsRawUtf8Headers(this._fetch)) {
+          throw createValidationError(
+            ValidationErrorCode.INVALID_OBJECT,
+            "ToriiClient: canonicalAuth.accountId contains UTF-8 characters that require a fetch implementation with raw UTF-8 header support.",
+            "canonicalAuth.accountId",
+          );
+        }
+        init[RAW_UTF8_HEADERS_INIT_KEY] = {
+          "X-Iroha-Account": canonicalHeaders["X-Iroha-Account"],
+        };
+      }
     }
     const retryProfileName =
       typeof options.retryProfile === "string" && options.retryProfile
@@ -8243,6 +8257,9 @@ export class ToriiClient {
           // Give fetch a fresh header bag for each retry attempt. Reusing the
           // same object across retries can break native fetch implementations.
           headers: cloneHeadersForFetch(initHeaders),
+          [RAW_UTF8_HEADERS_INIT_KEY]: cloneRawUtf8Headers(
+            init[RAW_UTF8_HEADERS_INIT_KEY],
+          ),
           signal: signal ?? undefined,
         });
         if (timeoutId) {
@@ -15843,6 +15860,34 @@ function cloneHeadersForFetch(headers) {
     }
   }
   return clone;
+}
+
+function cloneRawUtf8Headers(headers) {
+  if (!headers || typeof headers !== "object") {
+    return undefined;
+  }
+  const clone = {};
+  for (const [key, value] of Object.entries(headers)) {
+    clone[key] = String(value);
+  }
+  return Object.keys(clone).length > 0 ? clone : undefined;
+}
+
+function headerValueRequiresRawUtf8Transport(value) {
+  if (value == null) {
+    return false;
+  }
+  const rendered = String(value);
+  for (let index = 0; index < rendered.length; index += 1) {
+    if (rendered.charCodeAt(index) > 0xff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function fetchSupportsRawUtf8Headers(fetchImpl) {
+  return Boolean(fetchImpl && fetchImpl[RAW_UTF8_HEADER_SUPPORT_FLAG] === true);
 }
 
 function headersContainCredentials(headers) {

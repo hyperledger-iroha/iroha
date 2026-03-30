@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   ToriiClient,
+  ValidationErrorCode,
   canonicalRequestSignatureMessage,
   generateKeyPair,
   verifyEd25519,
@@ -11,20 +12,19 @@ import { AccountAddress } from "../src/address.js";
 
 test("ToriiClient attaches canonical signing headers for app endpoints", async () => {
   const captured = [];
+  const fetchImpl = async (url, init) => {
+    captured.push({ url, init });
+    return new Response(JSON.stringify({ items: [], total: 0 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  fetchImpl.__irohaSupportsRawUtf8Headers = true;
   const client = new ToriiClient("https://localhost:8080", {
-    fetchImpl: async (url, init) => {
-      captured.push({ url, init });
-      return new Response(JSON.stringify({ items: [], total: 0 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    },
+    fetchImpl,
   });
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 9) });
-  const accountId = AccountAddress.fromAccount({
-    domain: "wonderland",
-    publicKey,
-  }).toI105();
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
 
   await client.listAccountAssets(accountId, {
     canonicalAuth: { accountId, privateKey },
@@ -34,6 +34,9 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
   assert.equal(captured.length, 1);
   const { url, init } = captured[0];
   assert.equal(init.headers["X-Iroha-Account"], accountId);
+  assert.deepEqual(init.__irohaRawUtf8Headers, {
+    "X-Iroha-Account": accountId,
+  });
   const signatureB64 = init.headers["X-Iroha-Signature"];
   assert.ok(typeof signatureB64 === "string" && signatureB64.length > 0);
   const timestampMs = Number(init.headers["X-Iroha-Timestamp-Ms"]);
@@ -54,22 +57,46 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
   assert.ok(verifyEd25519(message, signature, publicKey));
 });
 
+test("ToriiClient canonical auth rejects UTF-8 account headers on fetch implementations without raw-header support", async () => {
+  const client = new ToriiClient("https://localhost:8080", {
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ items: [], total: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 10) });
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+
+  await assert.rejects(
+    () =>
+      client.listAccountAssets(accountId, {
+        canonicalAuth: { accountId, privateKey },
+        limit: 1,
+      }),
+    (error) =>
+      error?.name === "ValidationError" &&
+      error?.code === ValidationErrorCode.INVALID_OBJECT &&
+      error?.path === "canonicalAuth.accountId" &&
+      /raw utf-8 header support/i.test(error.message),
+  );
+});
+
 test("ToriiClient canonical auth accepts byte-array private keys", async () => {
   const captured = [];
-  const client = new ToriiClient("https://localhost:8080", {
-    fetchImpl: async (url, init) => {
+  const fetchImpl = async (url, init) => {
       captured.push({ url, init });
       return new Response(JSON.stringify({ items: [], total: 0 }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
-    },
+    };
+  fetchImpl.__irohaSupportsRawUtf8Headers = true;
+  const client = new ToriiClient("https://localhost:8080", {
+    fetchImpl,
   });
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 3) });
-  const accountId = AccountAddress.fromAccount({
-    domain: "wonderland",
-    publicKey,
-  }).toI105();
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
 
   await client.listAccountAssets(accountId, {
     canonicalAuth: { accountId, privateKey: Array.from(privateKey) },
@@ -104,10 +131,7 @@ test("ToriiClient canonical auth rejects non-byte private key arrays", async () 
       }),
   });
   const { publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 7) });
-  const accountId = AccountAddress.fromAccount({
-    domain: "wonderland",
-    publicKey,
-  }).toI105();
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
 
   await assert.rejects(
     () =>
