@@ -2,6 +2,17 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 nexus lane-relay instruction compile fix):
+`iroha_data_model` now compiles cleanly again with the new Nexus lane-relay
+ISIs. `SetLaneRelayEmergencyValidators` stays on the standard `isi!` path,
+`RegisterVerifiedLaneRelay` now uses a manual instruction definition with
+canonical Norito-byte ordering instead of forcing `Ord` onto nested relay
+consensus data, and `LaneRelayEnvelopeRef` now derives `Copy` to satisfy the
+workspace lint policy.
+
+Open work for this slice now remains:
+- none.
+
 Latest sync (2026-03-30 peer-sync + light-DA follow-up):
 the remaining lease-sensitive peer-add/remove coverage is green again, and the
 1 KiB DA scenarios no longer fail by assuming that every DA-enabled commit must

@@ -2,6 +2,23 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Follow-up: nexus lane-relay instructions compile cleanly again in `iroha_data_model`
+- Fixed `crates/iroha_data_model/src/isi/nexus.rs` so the new Nexus
+  instructions match the crate’s macro expectations: the emergency-validator
+  instruction stays on `isi!`, while `RegisterVerifiedLaneRelay` is defined
+  manually to avoid forcing `Ord` onto `LaneRelayEnvelope` and other nested
+  consensus types.
+- Added a canonical bytewise `Ord`/`PartialOrd` implementation for
+  `RegisterVerifiedLaneRelay` and a focused unit test that pins the ordering
+  contract against the Norito encoding used by the instruction registry.
+- Added `Copy` to `LaneRelayEnvelopeRef` to satisfy the workspace
+  `missing-copy-implementations` lint once the crate check progressed past the
+  original parse/import failure.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_data_model --all-targets`
+  - `cargo test -p iroha_data_model register_verified_lane_relay_order_uses_canonical_encoding --lib`
+
 ## 2026-03-30 Follow-up: peer-sync and light-DA integration regressions now match the current runtime behavior
 - Fixed the frontier block-sync path so a joining peer still enqueues the
   attached commit-QC sidecar when the synced block is already known locally;

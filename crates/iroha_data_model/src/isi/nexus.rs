@@ -27,15 +27,107 @@ isi! {
     }
 }
 
-isi! {
-    /// Persist a verified private-source lane relay so contracts can consume it by reference.
-    pub struct RegisterVerifiedLaneRelay {
-        /// Canonical lane relay envelope being registered.
-        pub envelope: LaneRelayEnvelope,
-        /// FASTPQ/AXT proof blob used to verify the relay payload.
-        pub proof_blob: ProofBlob,
+/// Persist a verified private-source lane relay so contracts can consume it by reference.
+#[derive(
+    Debug, Clone, PartialEq, Eq, getset::Getters, Decode, Encode, iroha_schema::IntoSchema,
+)]
+#[getset(get = "pub")]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RegisterVerifiedLaneRelay {
+    /// Canonical lane relay envelope being registered.
+    pub envelope: LaneRelayEnvelope,
+    /// FASTPQ/AXT proof blob used to verify the relay payload.
+    pub proof_blob: ProofBlob,
+}
+
+impl PartialOrd for RegisterVerifiedLaneRelay {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RegisterVerifiedLaneRelay {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.encode().cmp(&other.encode())
     }
 }
 
 impl crate::seal::Instruction for SetLaneRelayEmergencyValidators {}
 impl crate::seal::Instruction for RegisterVerifiedLaneRelay {}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU64;
+
+    use norito::codec::Encode;
+
+    use super::*;
+    use crate::{
+        block::{BlockHeader, consensus::LaneBlockCommitment},
+        nexus::LaneId,
+    };
+
+    fn sample_commitment(height: u64) -> LaneBlockCommitment {
+        LaneBlockCommitment {
+            block_height: height,
+            lane_id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(2),
+            tx_count: 1,
+            total_local_micro: 10,
+            total_xor_due_micro: 5,
+            total_xor_after_haircut_micro: 4,
+            total_xor_variance_micro: 1,
+            swap_metadata: None,
+            receipts: Vec::new(),
+        }
+    }
+
+    fn sample_header(height: u64) -> BlockHeader {
+        BlockHeader::new(
+            NonZeroU64::new(height).expect("nonzero height"),
+            None,
+            None,
+            None,
+            1_700_000_000_000,
+            0,
+        )
+    }
+
+    fn sample_envelope(height: u64) -> LaneRelayEnvelope {
+        LaneRelayEnvelope::new(
+            sample_header(height),
+            None,
+            None,
+            sample_commitment(height),
+            0,
+        )
+        .expect("valid lane relay envelope")
+    }
+
+    #[test]
+    fn register_verified_lane_relay_order_uses_canonical_encoding() {
+        let left = RegisterVerifiedLaneRelay {
+            envelope: sample_envelope(5),
+            proof_blob: ProofBlob {
+                payload: vec![0x01],
+                expiry_slot: None,
+            },
+        };
+        let right = RegisterVerifiedLaneRelay {
+            envelope: sample_envelope(5),
+            proof_blob: ProofBlob {
+                payload: vec![0x02],
+                expiry_slot: None,
+            },
+        };
+
+        assert_eq!(
+            left.partial_cmp(&right),
+            Some(left.encode().cmp(&right.encode()))
+        );
+        assert_eq!(left.cmp(&right), left.encode().cmp(&right.encode()));
+    }
+}
