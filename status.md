@@ -2,6 +2,36 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Taira storage-pin quota is raised and the live limiter window is cleared
+- Closed the remaining live Taira publish blocker after manifest registration:
+  the public provider was still inheriting the generic
+  `sorafs.quota.storage_pin = 4 requests / 3600s` default, so earlier live
+  storage-pin probes exhausted the in-memory quota window before the real
+  Polkaswap upload retried.
+- Added an explicit Taira override of `storage_pin_max_events = 64` /
+  `storage_pin_window_secs = 3600` in
+  `configs/soranexus/taira/config.toml`, the generated Taira sample profile in
+  `defaults/kagami/iroha3-taira/config.toml`, and the Taira profile generator
+  in `xtask/src/kagami_profiles.rs`.
+- Extended `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` so future
+  local Taira resets patch the served `dist/taira-localnet/peer*.toml` bundle
+  with the same storage-pin quota override, then patched the currently served
+  `peer0.toml` .. `peer3.toml` files and restarted the detached `screen`
+  session `taira-localnet`.
+- Live verification on March 30, 2026 after the restart:
+  - `GET https://taira.sora.org/status` returned `200` with `blocks = 50`,
+    `txs_approved = 60`, `txs_rejected = 1`;
+  - six consecutive public `POST /v1/sorafs/storage/pin` quota probes all
+    returned the normal handler-level
+    `400 invalid base64 in manifest_b64` response instead of tripping the old
+    fifth-request `429`; and
+  - a publish-sized `24_000_037` byte public probe also returned the same
+    handler-level `400`, so the request reached Torii under the new quota.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh` (pass)
+  - `cargo test -p xtask taira_config_raises_storage_pin_quota -- --nocapture` (pass)
+
 ## 2026-03-30 Kagami now pins the runtime Torii body-cap default, and Iroha defaults to 64 MB
 - Raised the runtime Torii request-body default in
   `crates/iroha_config/src/parameters/defaults.rs` from the old 16 MiB value to

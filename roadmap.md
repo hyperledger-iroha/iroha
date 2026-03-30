@@ -2,6 +2,28 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 Taira storage-pin quota raised):
+the public Taira provider no longer inherits the generic
+`4 requests / 3600s` storage-pin quota, so failed upload probes should not
+exhaust the window before the real site publish retries.
+
+- `configs/soranexus/taira/config.toml` now overrides
+  `[sorafs.quota] storage_pin_max_events = 64`;
+- `defaults/kagami/iroha3-taira/config.toml` and
+  `xtask/src/kagami_profiles.rs` now keep the generated Taira sample aligned
+  with that override;
+- `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` now patches the served
+  `dist/taira-localnet/peer*.toml` files with the same quota override on local
+  resets; and
+- after restarting `taira-localnet`, six consecutive public storage-pin probes
+  and one publish-sized `24_000_037` byte probe all stayed handler-level `400`
+  instead of tripping `429`.
+
+Open work for this slice now remains:
+- rerun the real `yarn taira:publish` flow with the intended live
+  `SORAFS_AUTHORITY` / `SORAFS_PRIVATE_KEY` now that both the body-cap and the
+  blocking storage-pin quota window are cleared.
+
 Latest sync (2026-03-30 Torii body-cap default + Kagami emission):
 the Torii runtime default is now `64_000_000` bytes and Kagami now emits that
 resolved value explicitly across localnet and canned-profile configs, so deploy
