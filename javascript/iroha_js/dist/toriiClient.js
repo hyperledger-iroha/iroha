@@ -49,6 +49,8 @@ const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const MAX_NUMERIC_SCALE = 28;
 const MAX_NUMERIC_BITS = 512;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
+const RAW_UTF8_HEADERS_INIT_KEY = "__irohaRawUtf8Headers";
+const RAW_UTF8_HEADER_SUPPORT_FLAG = "__irohaSupportsRawUtf8Headers";
 const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
 const BFV_IDENTIFIER_SEED_BYTES = 32;
@@ -7362,120 +7364,141 @@ export class ToriiClient {
   }
 
   /**
-   * List offline allowances (`GET /v1/offline/allowances`).
-   * Accepts the standard iterable options plus convenience fields such as
-   * `assetId`, `certificateExpiresBeforeMs`, `certificateExpiresAfterMs`, `policyExpiresBeforeMs`,
-   * `policyExpiresAfterMs`, `verdictIdHex`, `requireVerdict`, and `onlyMissingVerdict`.
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<ToriiOfflineAllowanceListResponse>}
+   * Fetch offline cash feature readiness (`GET /v1/offline/cash/readiness`).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashReadinessResponse>}
    */
-  async listOfflineAllowances(options = {}) {
-    if (options && isPlainObject(options.filter)) {
-      ToriiClient._validateOfflineAllowanceFilter(options.filter, "options.filter");
+  async getOfflineCashReadiness(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getOfflineCashReadiness");
+    const response = await this._request("GET", "/v1/offline/cash/readiness", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("offline cash readiness response missing JSON body");
     }
-    return this._listIterable(
-      "/v1/offline/allowances",
-      options,
-      (payload) =>
-        normalizeOfflineAllowanceListResponse(payload, "offline allowances response"),
-      OFFLINE_ITERABLE_OPTION_KEYS,
+    return normalizeOfflineCashReadinessResponse(
+      body,
+      "offline cash readiness response",
     );
   }
 
   /**
-   * Query offline allowances (`POST /v1/offline/allowances/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<ToriiOfflineAllowanceListResponse>}
+   * Submit an offline cash setup request (`POST /v1/offline/cash/setup`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
    */
-  async queryOfflineAllowances(options = {}) {
-    return this._queryIterable(
-      "/v1/offline/allowances/query",
+  async setupOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/setup",
+      request,
+      "setupOfflineCash",
       options,
-      (payload) =>
-        normalizeOfflineAllowanceListResponse(payload, "offline allowances query response"),
-      (envelope) => {
-        if (envelope && envelope.filter && isPlainObject(envelope.filter)) {
-          ToriiClient._validateOfflineAllowanceFilter(envelope.filter, "filter");
-        }
-      },
-      OFFLINE_ITERABLE_OPTION_KEYS,
-      true,
     );
   }
 
   /**
-   * Iterate offline allowances with automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>}
+   * Submit an offline cash load request (`POST /v1/offline/cash/load`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
    */
-  iterateOfflineAllowances(options = {}) {
-    return this._iterateIterable(this.listOfflineAllowances, options);
+  async loadOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/load",
+      request,
+      "loadOfflineCash",
+      options,
+    );
   }
 
   /**
-   * Iterate offline allowances via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>}
+   * Submit an offline cash refresh request (`POST /v1/offline/cash/refresh`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
    */
-  iterateOfflineAllowancesQuery(options = {}) {
-    return this._iterateIterable(this.queryOfflineAllowances, options);
+  async refreshOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/refresh",
+      request,
+      "refreshOfflineCash",
+      options,
+    );
   }
 
   /**
-   * List offline counter summaries (`GET /v1/offline/summaries`).
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<ToriiOfflineSummaryListResponse>}
+   * Submit an offline cash sync request (`POST /v1/offline/cash/sync`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
    */
-  async listOfflineSummaries(options = {}) {
-    if (options && isPlainObject(options.filter)) {
-      ToriiClient._validateOfflineSummaryFilter(options.filter, "options.filter");
+  async syncOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/sync",
+      request,
+      "syncOfflineCash",
+      options,
+    );
+  }
+
+  /**
+   * Submit an offline cash redeem request (`POST /v1/offline/cash/redeem`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
+   */
+  async redeemOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/redeem",
+      request,
+      "redeemOfflineCash",
+      options,
+    );
+  }
+
+  /**
+   * Fetch the signed offline revocation bundle (`GET /v1/offline/revocations/bundle`).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineRevocationBundle>}
+   */
+  async getOfflineRevocationBundle(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getOfflineRevocationBundle");
+    const response = await this._request("GET", "/v1/offline/revocations/bundle", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("offline revocation bundle response missing JSON body");
     }
-    return this._listIterable(
-      "/v1/offline/summaries",
-      options,
-      (payload) =>
-        normalizeOfflineSummaryListResponse(payload, "offline summaries response"),
-      OFFLINE_ITERABLE_OPTION_KEYS,
+    return normalizeOfflineRevocationBundleResponse(
+      body,
+      "offline revocation bundle response",
     );
   }
 
-  /**
-   * Query offline counter summaries (`POST /v1/offline/summaries/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<ToriiOfflineSummaryListResponse>}
-   */
-  async queryOfflineSummaries(options = {}) {
-    return this._queryIterable(
-      "/v1/offline/summaries/query",
-      options,
-      (payload) =>
-        normalizeOfflineSummaryListResponse(payload, "offline summaries query response"),
-      (envelope) => {
-        if (envelope && envelope.filter && isPlainObject(envelope.filter)) {
-          ToriiClient._validateOfflineSummaryFilter(envelope.filter, "filter");
-        }
+  async _postOfflineCashRequest(path, request, context, options = {}) {
+    const payload = normalizeOfflineCashRequest(request, context);
+    const { signal } = normalizeSignalOnlyOption(options, context);
+    const response = await this._request("POST", path, {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
       },
-      OFFLINE_ITERABLE_OPTION_KEYS,
-      false,
-    );
-  }
-
-  /**
-   * Iterate offline counter summaries with automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineSummaryItem, void, unknown>}
-   */
-  iterateOfflineSummaries(options = {}) {
-    return this._iterateIterable(this.listOfflineSummaries, options);
-  }
-
-  /**
-   * Iterate offline counter summaries via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineSummaryItem, void, unknown>}
-   */
-  iterateOfflineSummariesQuery(options = {}) {
-    return this._iterateIterable(this.queryOfflineSummaries, options);
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error(`${context} response missing JSON body`);
+    }
+    return normalizeOfflineCashEnvelope(body, `${context} response`);
   }
 
   /**
@@ -7554,120 +7577,12 @@ export class ToriiClient {
   }
 
   /**
-   * Query offline verdict revocations (`POST /v1/offline/revocations/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<ToriiOfflineRevocationListResponse>}
-   */
-  async queryOfflineRevocations(options = {}) {
-    return this._queryIterable(
-      "/v1/offline/revocations/query",
-      options,
-      (payload) =>
-        normalizeOfflineRevocationListResponse(
-          payload,
-          "offline revocations query response",
-        ),
-      (envelope) => {
-        if (envelope && envelope.filter && isPlainObject(envelope.filter)) {
-          ToriiClient._validateOfflineRevocationFilter(envelope.filter, "filter");
-        }
-      },
-      OFFLINE_ITERABLE_OPTION_KEYS,
-      true,
-    );
-  }
-
-  /**
    * Iterate offline verdict revocations with automatic pagination.
    * @param {PaginationIteratorOptions} [options]
    * @returns {AsyncGenerator<ToriiOfflineRevocationItem, void, unknown>}
    */
   iterateOfflineRevocations(options = {}) {
     return this._iterateIterable(this.listOfflineRevocations, options);
-  }
-
-  /**
-   * Iterate offline verdict revocations via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineRevocationItem, void, unknown>}
-   */
-  iterateOfflineRevocationsQuery(options = {}) {
-    return this._iterateIterable(this.queryOfflineRevocations, options);
-  }
-
-  /**
-   * Submit an offline settlement bundle (`POST /v1/offline/settlements`).
-   * @param {ToriiOfflineSettlementSubmitRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineSettlementSubmitResponse>}
-   */
-  async submitOfflineSettlement(request, options = {}) {
-    const payload = normalizeOfflineSettlementSubmitRequest(
-      request,
-      "submitOfflineSettlement",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "submitOfflineSettlement");
-    const response = await this._request("POST", "/v1/offline/settlements", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("offline settlement submit response missing JSON body");
-    }
-    return normalizeOfflineSettlementSubmitResponse(
-      body,
-      "offline settlement submit response",
-    );
-  }
-
-  /**
-   * Submit an offline settlement bundle and wait for terminal pipeline status.
-   * @param {ToriiOfflineSettlementSubmitRequest} request
-   * @param {{
-   *   signal?: AbortSignal,
-   *   intervalMs?: number,
-   *   timeoutMs?: number | null,
-   *   maxAttempts?: number | null,
-   *   successStatuses?: Iterable<string>,
-   *   failureStatuses?: Iterable<string>,
-   *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
-   * }} [options]
-   * @returns {Promise<ToriiOfflineSettlementSubmitResponse>}
-   */
-  async submitOfflineSettlementAndWait(request, options = {}) {
-    const record = requirePlainObjectOption(
-      options,
-      "submitOfflineSettlementAndWait options",
-    );
-    assertSupportedOptionKeys(
-      record,
-      OFFLINE_SETTLEMENT_AND_WAIT_OPTION_KEYS,
-      "submitOfflineSettlementAndWait options",
-    );
-    const { signal } = normalizeSignalOption(record, "submitOfflineSettlementAndWait");
-    const settlement = await this.submitOfflineSettlement(request, { signal });
-    const txHashHex = settlement?.transaction_hash_hex;
-    if (typeof txHashHex !== "string" || txHashHex.length === 0) {
-      throw new Error(
-        "offline settlement submit response missing transaction_hash_hex; cannot poll transaction status",
-      );
-    }
-    await this.waitForTransactionStatus(txHashHex, {
-      signal,
-      intervalMs: record.intervalMs,
-      timeoutMs: record.timeoutMs,
-      maxAttempts: record.maxAttempts,
-      successStatuses: record.successStatuses,
-      failureStatuses: record.failureStatuses,
-      onStatus: record.onStatus,
-    });
-    return settlement;
   }
 
   /**
@@ -7699,214 +7614,6 @@ export class ToriiClient {
       body,
       "offline build claim issue response",
     );
-  }
-
-  /**
-   * Issue a signed offline certificate (`POST /v1/offline/certificates/issue`).
-   * @param {ToriiOfflineWalletCertificateDraft} certificateDraft
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineCertificateIssueResponse>}
-   */
-  async issueOfflineCertificate(certificateDraft, options = {}) {
-    const normalizedDraft = normalizeOfflineCertificateDraft(
-      certificateDraft,
-      "issueOfflineCertificate.certificate",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "issueOfflineCertificate");
-    const response = await this._request("POST", "/v1/offline/certificates/issue", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ certificate: normalizedDraft }),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("offline certificate issue response missing JSON body");
-    }
-    return normalizeOfflineCertificateIssueResponse(payload, "offline certificate issue response");
-  }
-
-  /**
-   * Issue a renewal certificate (`POST /v1/offline/certificates/{certificate_id_hex}/renew/issue`).
-   * @param {string} certificateIdHex
-   * @param {ToriiOfflineWalletCertificateDraft} certificateDraft
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineCertificateIssueResponse>}
-   */
-  async issueOfflineCertificateRenewal(certificateIdHex, certificateDraft, options = {}) {
-    const normalizedId = normalizeHex32String(
-      certificateIdHex,
-      "issueOfflineCertificateRenewal.certificateIdHex",
-    );
-    const normalizedDraft = normalizeOfflineCertificateDraft(
-      certificateDraft,
-      "issueOfflineCertificateRenewal.certificate",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "issueOfflineCertificateRenewal");
-    const response = await this._request(
-      "POST",
-      `/v1/offline/certificates/${encodeURIComponent(normalizedId)}/renew/issue`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({ certificate: normalizedDraft }),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("offline certificate renew issue response missing JSON body");
-    }
-    return normalizeOfflineCertificateIssueResponse(
-      payload,
-      "offline certificate renew issue response",
-    );
-  }
-
-  /**
-   * Register a signed offline allowance (`POST /v1/offline/allowances`).
-   * @param {ToriiOfflineAllowanceRegisterRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineAllowanceRegisterResponse>}
-   */
-  async registerOfflineAllowance(request, options = {}) {
-    const payload = normalizeOfflineAllowanceRegisterRequest(
-      request,
-      "registerOfflineAllowance",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "registerOfflineAllowance");
-    const response = await this._request("POST", "/v1/offline/allowances", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("offline allowance register response missing JSON body");
-    }
-    return normalizeOfflineAllowanceRegisterResponse(
-      body,
-      "offline allowance register response",
-    );
-  }
-
-  /**
-   * Renew a signed offline allowance (`POST /v1/offline/allowances/{certificate_id_hex}/renew`).
-   * @param {string} certificateIdHex
-   * @param {ToriiOfflineAllowanceRegisterRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineAllowanceRegisterResponse>}
-   */
-  async renewOfflineAllowance(certificateIdHex, request, options = {}) {
-    const normalizedId = normalizeHex32String(
-      certificateIdHex,
-      "renewOfflineAllowance.certificateIdHex",
-    );
-    const payload = normalizeOfflineAllowanceRegisterRequest(
-      request,
-      "renewOfflineAllowance",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "renewOfflineAllowance");
-    const response = await this._request(
-      "POST",
-      `/v1/offline/allowances/${encodeURIComponent(normalizedId)}/renew`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("offline allowance renew response missing JSON body");
-    }
-    return normalizeOfflineAllowanceRegisterResponse(
-      body,
-      "offline allowance renew response",
-    );
-  }
-
-  /**
-   * Issue and register an offline allowance in one call.
-   * @param {ToriiOfflineTopUpRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineTopUpResponse>}
-   */
-  async topUpOfflineAllowance(request, options = {}) {
-    const normalized = normalizeOfflineTopUpRequest(
-      request,
-      "topUpOfflineAllowance",
-    );
-    const issued = await this.issueOfflineCertificate(
-      normalized.certificate,
-      options,
-    );
-    const registration = await this.registerOfflineAllowance(
-      {
-        authority: normalized.authority,
-        private_key: normalized.private_key,
-        certificate: issued.certificate,
-      },
-      options,
-    );
-    ensureTopUpCertificateIdsMatch(
-      issued.certificate_id_hex,
-      registration.certificate_id_hex,
-      "topUpOfflineAllowance",
-    );
-    return { certificate: issued, registration };
-  }
-
-  /**
-   * Issue and register an offline allowance renewal in one call.
-   * @param {string} certificateIdHex
-   * @param {ToriiOfflineTopUpRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineTopUpResponse>}
-   */
-  async topUpOfflineAllowanceRenewal(certificateIdHex, request, options = {}) {
-    const normalizedId = normalizeHex32String(
-      certificateIdHex,
-      "topUpOfflineAllowanceRenewal.certificateIdHex",
-    );
-    const normalized = normalizeOfflineTopUpRequest(
-      request,
-      "topUpOfflineAllowanceRenewal",
-    );
-    const issued = await this.issueOfflineCertificateRenewal(
-      normalizedId,
-      normalized.certificate,
-      options,
-    );
-    const registration = await this.renewOfflineAllowance(
-      normalizedId,
-      {
-        authority: normalized.authority,
-        private_key: normalized.private_key,
-        certificate: issued.certificate,
-      },
-      options,
-    );
-    ensureTopUpCertificateIdsMatch(
-      issued.certificate_id_hex,
-      registration.certificate_id_hex,
-      "topUpOfflineAllowanceRenewal",
-    );
-    return { certificate: issued, registration };
   }
 
   /**
@@ -8483,6 +8190,18 @@ export class ToriiClient {
       for (const [key, value] of Object.entries(canonicalHeaders)) {
         setHeader(initHeaders, key, value);
       }
+      if (headerValueRequiresRawUtf8Transport(canonicalHeaders["X-Iroha-Account"])) {
+        if (!fetchSupportsRawUtf8Headers(this._fetch)) {
+          throw createValidationError(
+            ValidationErrorCode.INVALID_OBJECT,
+            "ToriiClient: canonicalAuth.accountId contains UTF-8 characters that require a fetch implementation with raw UTF-8 header support.",
+            "canonicalAuth.accountId",
+          );
+        }
+        init[RAW_UTF8_HEADERS_INIT_KEY] = {
+          "X-Iroha-Account": canonicalHeaders["X-Iroha-Account"],
+        };
+      }
     }
     const retryProfileName =
       typeof options.retryProfile === "string" && options.retryProfile
@@ -8538,6 +8257,9 @@ export class ToriiClient {
           // Give fetch a fresh header bag for each retry attempt. Reusing the
           // same object across retries can break native fetch implementations.
           headers: cloneHeadersForFetch(initHeaders),
+          [RAW_UTF8_HEADERS_INIT_KEY]: cloneRawUtf8Headers(
+            init[RAW_UTF8_HEADERS_INIT_KEY],
+          ),
           signal: signal ?? undefined,
         });
         if (timeoutId) {
@@ -16140,6 +15862,34 @@ function cloneHeadersForFetch(headers) {
   return clone;
 }
 
+function cloneRawUtf8Headers(headers) {
+  if (!headers || typeof headers !== "object") {
+    return undefined;
+  }
+  const clone = {};
+  for (const [key, value] of Object.entries(headers)) {
+    clone[key] = String(value);
+  }
+  return Object.keys(clone).length > 0 ? clone : undefined;
+}
+
+function headerValueRequiresRawUtf8Transport(value) {
+  if (value == null) {
+    return false;
+  }
+  const rendered = String(value);
+  for (let index = 0; index < rendered.length; index += 1) {
+    if (rendered.charCodeAt(index) > 0xff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function fetchSupportsRawUtf8Headers(fetchImpl) {
+  return Boolean(fetchImpl && fetchImpl[RAW_UTF8_HEADER_SUPPORT_FLAG] === true);
+}
+
 function headersContainCredentials(headers) {
   if (!headers || typeof headers !== "object") {
     return false;
@@ -23614,6 +23364,33 @@ function normalizeSubscriptionListItem(value, context) {
 function normalizeSubscriptionGetResponse(payload) {
   const record = ensureRecord(payload, "subscription get response");
   return normalizeSubscriptionListItem(record, "subscription get response");
+}
+
+function normalizeOfflineCashRequest(input, context) {
+  return ensureRecord(input, `${context} request`);
+}
+
+function normalizeOfflineCashReadinessResponse(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    ...record,
+    offline_recursive_stark: coerceBoolean(
+      record.offline_recursive_stark,
+      `${context}.offline_recursive_stark`,
+    ),
+  };
+}
+
+function normalizeOfflineCashEnvelope(payload, context) {
+  const record = ensureRecord(payload, context);
+  return {
+    ...record,
+    lineage_state: ensureRecord(record.lineage_state, `${context}.lineage_state`),
+  };
+}
+
+function normalizeOfflineRevocationBundleResponse(payload, context) {
+  return ensureRecord(payload, context);
 }
 
 function normalizeOfflineAllowanceListResponse(payload, context) {
