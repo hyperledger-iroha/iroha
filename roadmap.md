@@ -2,6 +2,30 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 Torii OpenAPI parity for maintained PK routes):
+the checked-in Torii OpenAPI now matches the current maintained browser/app
+route set required by the PK deploy contract gate, so route-doc drift for the
+live `aliases/by_account`, multisig approvals, control-state, transaction
+history, and offline policy surfaces is closed.
+
+- `crates/iroha_torii/src/openapi.rs` now documents:
+  - `POST /v1/aliases/by_account`
+  - `POST /v1/multisig/approvals/list`
+  - `POST /v1/multisig/approvals/get`
+  - `POST /v1/controls/asset-transfer/get`
+  - `GET /v1/transactions/history`
+  - `POST /v1/offline/policy`
+- `docs/portal/static/openapi/versions/current/torii.json` and
+  `docs/portal/static/openapi/torii.json` were regenerated from the updated
+  source, and the stale `/healthz` Torii route is no longer present in the
+  generated JSON.
+
+Open work for this slice now remains:
+- refresh the signed OpenAPI manifest with
+  `cargo xtask openapi --sign <key>` when the release signing key is available,
+  so `docs/portal/static/openapi/manifest.json` reflects the regenerated spec
+  hash and downstream signed-manifest checks are green again.
+
 Latest sync (2026-03-30 transport-induced consensus stall chain fix):
 the March 29 Torii public-ingress regression is already fixed separately; the
 remaining preserved-peer stable stall chain was transport-induced and is now

@@ -1074,9 +1074,7 @@ fn apply_excluded_routes(routes: &[String]) -> Result<Vec<ExcludedRouteSnapshot>
     Ok(snapshots)
 }
 
-fn capture_default_route(
-    family: IpFamily,
-) -> Result<Option<RouteViaDev>, ControllerError> {
+fn capture_default_route(family: IpFamily) -> Result<Option<RouteViaDev>, ControllerError> {
     let output = run_command(
         DEFAULT_ROUTE_CMD,
         vec![

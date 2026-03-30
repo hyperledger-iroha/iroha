@@ -504,6 +504,17 @@ fn alias_paths() -> Map {
         Value::Object(alias_resolve_index_operation()),
     );
     paths.insert(
+        "/v1/aliases/by_account".to_owned(),
+        Value::Object(json_post_operation(
+            "Aliases",
+            "List aliases bound to an account.",
+            "Resolve the aliases currently bound to a canonical account id.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/assets/aliases/resolve".to_owned(),
         Value::Object(asset_alias_resolve_operation()),
     );
@@ -659,6 +670,17 @@ fn offline_paths() -> Map {
     paths.insert(
         "/v1/offline/transfers/query".to_owned(),
         Value::Object(offline_transfers_query_operation()),
+    );
+    paths.insert(
+        "/v1/offline/policy".to_owned(),
+        Value::Object(json_post_operation(
+            "Offline",
+            "Set the offline policy snapshot.",
+            "Replace the active offline policy snapshot used by the app-facing offline controls.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
     );
     paths
 }
@@ -1566,6 +1588,16 @@ fn transaction_paths() -> Map {
         Value::Object(pipeline_status),
     );
     paths.insert(
+        "/v1/transactions/history".to_owned(),
+        Value::Object(json_get_operation(
+            "Transactions",
+            "List transaction history entries.",
+            "Return the app-facing transaction history view for the active query filters.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/iso20022/pacs008".to_owned(),
         Value::Object(json_post_operation(
             "ISO20022",
@@ -2098,6 +2130,42 @@ fn multisig_paths() -> Map {
             "#/components/schemas/MultisigProposalsGetRequest",
             "#/components/schemas/MultisigProposalGetResponse",
             "Multisig alias or proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/list".to_owned(),
+        Value::Object(multisig_post_operation(
+            "List multisig approvals.",
+            "Resolve a multisig selector and list approvals recorded for the active concrete multisig authority.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Multisig alias not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/get".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch a multisig approval.",
+            "Resolve a multisig selector and fetch a recorded approval by proposal selector.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Multisig alias or approval not found.",
+        )),
+    );
+    paths
+}
+
+fn controls_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/controls/asset-transfer/get".to_owned(),
+        Value::Object(json_post_operation(
+            "Controls",
+            "Fetch asset-transfer control state.",
+            "Resolve an asset-transfer control request and return the current control snapshot.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
         )),
     );
     paths
@@ -5721,6 +5789,7 @@ fn paths_section() -> Map {
     paths.extend(proof_paths());
     paths.extend(contracts_paths());
     paths.extend(multisig_paths());
+    paths.extend(controls_paths());
     paths.extend(zk_paths());
     paths.extend(governance_paths());
     paths.extend(runtime_paths());
@@ -9902,6 +9971,7 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/voprf/evaluate"));
         assert!(paths.contains_key("/v1/aliases/resolve"));
         assert!(paths.contains_key("/v1/aliases/resolve_index"));
+        assert!(paths.contains_key("/v1/aliases/by_account"));
         assert!(paths.contains_key("/v1/assets/aliases/resolve"));
         assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
         assert!(paths.contains_key("/v1/time/now"));
@@ -9947,11 +10017,16 @@ mod tests {
         assert!(paths.contains_key("/v1/multisig/spec"));
         assert!(paths.contains_key("/v1/multisig/proposals/list"));
         assert!(paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(paths.contains_key("/v1/multisig/approvals/list"));
+        assert!(paths.contains_key("/v1/multisig/approvals/get"));
+        assert!(paths.contains_key("/v1/controls/asset-transfer/get"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/gov/stream"));
         assert!(paths.contains_key("/v1/telemetry/live"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
+        assert!(paths.contains_key("/v1/transactions/history"));
+        assert!(paths.contains_key("/v1/offline/policy"));
         assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
         assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
         assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));

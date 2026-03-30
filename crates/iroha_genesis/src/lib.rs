@@ -1140,9 +1140,10 @@ pub mod genesis_instructions_json {
             );
             fields.insert(
                 "alias".to_string(),
-                set_asset_definition_alias.alias().as_ref().map_or(Value::Null, |alias| {
-                    Value::String(alias.to_string())
-                }),
+                set_asset_definition_alias
+                    .alias()
+                    .as_ref()
+                    .map_or(Value::Null, |alias| Value::String(alias.to_string())),
             );
             fields.insert(
                 "lease_expiry_ms".to_string(),

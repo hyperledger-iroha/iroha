@@ -4865,8 +4865,7 @@ fn submit_manifest_via_transaction_endpoint(
         sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
     };
 
-    let chain_id =
-        resolve_chain_id_from_sorafs_registry(request.client, request.torii_base_url)?;
+    let chain_id = resolve_chain_id_from_sorafs_registry(request.client, request.torii_base_url)?;
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
@@ -4930,10 +4929,10 @@ fn submit_manifest_via_transaction_endpoint(
         &tx_hash_hex,
     )
     .map_err(|err| {
-            format!(
-                "submitted fallback transaction `{tx_hash_hex}` but failed to confirm the result: {err}"
-            )
-        })?;
+        format!(
+            "submitted fallback transaction `{tx_hash_hex}` but failed to confirm the result: {err}"
+        )
+    })?;
 
     let mut map = Map::new();
     map.insert(

@@ -2,6 +2,28 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Torii OpenAPI now covers the maintained PK browser and app routes
+- Closed the maintained Torii route-doc drift in `crates/iroha_torii/src/openapi.rs`:
+  - added the currently mounted app/browser routes for `POST /v1/aliases/by_account`,
+    `POST /v1/multisig/approvals/list`,
+    `POST /v1/multisig/approvals/get`,
+    `POST /v1/controls/asset-transfer/get`,
+    `GET /v1/transactions/history`, and
+    `POST /v1/offline/policy`;
+  - kept `/health` as the canonical system health surface and confirmed the
+    generated spec no longer advertises a stale `/healthz` Torii route.
+- Refreshed the checked-in portal OpenAPI payloads:
+  - `docs/portal/static/openapi/versions/current/torii.json`
+  - `docs/portal/static/openapi/torii.json`
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii generated_spec_includes_documented_paths -- --nocapture` (pass)
+  - `node docs/portal/scripts/sync-openapi.mjs --version=current --latest --allow-unsigned` (pass; refreshed the JSON specs)
+- Remaining docs-release note:
+  - the existing signed OpenAPI manifest still carries the old SHA-256, so a
+    follow-up `cargo xtask openapi --sign <key>` refresh is still required when
+    the signing key is available.
+
 ## 2026-03-30 Full preserved-peer stable reruns cleared the old signatures but still failed on residual recovered-frame liveness loss
 - Completed the preserved-peer stable reruns on the transport-fix patch set:
   - permissioned log:

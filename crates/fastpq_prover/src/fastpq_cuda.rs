@@ -982,10 +982,7 @@ mod tests {
             Err(err) => panic!("BN254 CUDA LDE failed: {err}"),
         }
         let eval_extent = (1usize << (trace_log + blowup_log)) * BN254_LIMBS;
-        let gpu_eval: Vec<Vec<u64>> = out
-            .chunks_exact(eval_extent)
-            .map(<[u64]>::to_vec)
-            .collect();
+        let gpu_eval: Vec<Vec<u64>> = out.chunks_exact(eval_extent).map(<[u64]>::to_vec).collect();
         assert_eq!(gpu_eval, cpu_expected);
     }
 }

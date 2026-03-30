@@ -782,7 +782,10 @@ mod tests {
         ] {
             let encoded = payload.encode();
             assert_eq!(encoded.first(), Some(&discriminant));
-            assert_eq!(GovernancePayloadV1::decode(&mut &encoded[..]).unwrap(), payload);
+            assert_eq!(
+                GovernancePayloadV1::decode(&mut &encoded[..]).unwrap(),
+                payload
+            );
         }
     }
 
