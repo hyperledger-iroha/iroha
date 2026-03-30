@@ -46,15 +46,318 @@ const SCCP_PARLIAMENT_HASH_PREFIX_V1: &[u8] = b"sccp:parliament:v1";
 
 pub type H256 = [u8; 32];
 
+#[cfg(feature = "serde")]
+mod serde_utils {
+    use alloc::{format, string::String, vec::Vec};
+
+    use serde::{
+        Deserialize, Deserializer, Serializer,
+        de::{self, Visitor},
+        ser::SerializeSeq,
+    };
+
+    fn encode_hex(bytes: &[u8]) -> String {
+        const LUT: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(2 + bytes.len() * 2);
+        out.push_str("0x");
+        for byte in bytes {
+            out.push(LUT[usize::from(byte >> 4)] as char);
+            out.push(LUT[usize::from(byte & 0x0f)] as char);
+        }
+        out
+    }
+
+    fn strip_hex_prefix(value: &str) -> &str {
+        value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+            .unwrap_or(value)
+    }
+
+    fn decode_nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    fn decode_hex_vec(value: &str) -> Result<Vec<u8>, String> {
+        let raw = strip_hex_prefix(value).as_bytes();
+        if raw.len() % 2 != 0 {
+            return Err("hex value must have an even number of digits".to_owned());
+        }
+
+        let mut out = Vec::with_capacity(raw.len() / 2);
+        let mut idx = 0usize;
+        while idx < raw.len() {
+            let hi = decode_nibble(raw[idx])
+                .ok_or_else(|| format!("invalid hex digit at position {idx}"))?;
+            let lo = decode_nibble(raw[idx + 1])
+                .ok_or_else(|| format!("invalid hex digit at position {}", idx + 1))?;
+            out.push((hi << 4) | lo);
+            idx += 2;
+        }
+        Ok(out)
+    }
+
+    fn decode_hex_fixed<const N: usize>(value: &str) -> Result<[u8; N], String> {
+        let bytes = decode_hex_vec(value)?;
+        if bytes.len() != N {
+            return Err(format!("expected {N} bytes, got {}", bytes.len()));
+        }
+        let mut out = [0u8; N];
+        out.copy_from_slice(&bytes);
+        Ok(out)
+    }
+
+    struct DecimalStringVisitor<T> {
+        label: &'static str,
+        marker: core::marker::PhantomData<T>,
+    }
+
+    impl<T> DecimalStringVisitor<T> {
+        const fn new(label: &'static str) -> Self {
+            Self {
+                label,
+                marker: core::marker::PhantomData,
+            }
+        }
+    }
+
+    impl Visitor<'_> for DecimalStringVisitor<u64> {
+        type Value = u64;
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(
+                formatter,
+                "{} encoded as a decimal string or integer",
+                self.label
+            )
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            u64::try_from(value)
+                .map_err(|_| E::custom(format!("{} must not be negative", self.label)))
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            value.parse::<u64>().map_err(|err| {
+                E::custom(format!(
+                    "failed to parse {} decimal string: {err}",
+                    self.label
+                ))
+            })
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&value)
+        }
+    }
+
+    impl Visitor<'_> for DecimalStringVisitor<u128> {
+        type Value = u128;
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(
+                formatter,
+                "{} encoded as a decimal string or integer",
+                self.label
+            )
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(u128::from(value))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            u128::try_from(value)
+                .map_err(|_| E::custom(format!("{} must not be negative", self.label)))
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            value.parse::<u128>().map_err(|err| {
+                E::custom(format!(
+                    "failed to parse {} decimal string: {err}",
+                    self.label
+                ))
+            })
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            self.visit_str(&value)
+        }
+    }
+
+    pub mod hex32 {
+        use super::{Deserialize, Deserializer, Serializer, decode_hex_fixed, encode_hex};
+
+        pub fn serialize<S>(value: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(&encode_hex(value))
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let value = String::deserialize(deserializer)?;
+            decode_hex_fixed::<32>(&value).map_err(serde::de::Error::custom)
+        }
+    }
+
+    pub mod option_hex32 {
+        use super::{Deserialize, Deserializer, Serializer, decode_hex_fixed, encode_hex};
+
+        pub fn serialize<S>(value: &Option<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            match value {
+                Some(bytes) => serializer.serialize_some(&encode_hex(bytes)),
+                None => serializer.serialize_none(),
+            }
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<[u8; 32]>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let value = Option::<String>::deserialize(deserializer)?;
+            value
+                .map(|text| decode_hex_fixed::<32>(&text).map_err(serde::de::Error::custom))
+                .transpose()
+        }
+    }
+
+    pub mod bytes_hex {
+        use super::{Deserialize, Deserializer, Serializer, decode_hex_vec, encode_hex};
+
+        pub fn serialize<S>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(&encode_hex(value))
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let value = String::deserialize(deserializer)?;
+            decode_hex_vec(&value).map_err(serde::de::Error::custom)
+        }
+    }
+
+    pub mod vec_bytes_hex {
+        use super::{
+            Deserialize, Deserializer, SerializeSeq, Serializer, decode_hex_vec, encode_hex,
+        };
+
+        pub fn serialize<S>(value: &[Vec<u8>], serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let mut seq = serializer.serialize_seq(Some(value.len()))?;
+            for item in value {
+                seq.serialize_element(&encode_hex(item))?;
+            }
+            seq.end()
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let values = Vec::<String>::deserialize(deserializer)?;
+            values
+                .into_iter()
+                .map(|value| decode_hex_vec(&value).map_err(serde::de::Error::custom))
+                .collect()
+        }
+    }
+
+    pub mod u64_string {
+        use super::{DecimalStringVisitor, Deserializer, Serializer};
+
+        pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(&value.to_string())
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserializer.deserialize_any(DecimalStringVisitor::<u64>::new("u64"))
+        }
+    }
+
+    pub mod u128_string {
+        use super::{DecimalStringVisitor, Deserializer, Serializer};
+
+        pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(&value.to_string())
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserializer.deserialize_any(DecimalStringVisitor::<u128>::new("u128"))
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BurnPayloadV1 {
     pub version: u8,
     pub source_domain: u32,
     pub dest_domain: u32,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub nonce: u64,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub sora_asset_id: H256,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u128_string"))]
     pub amount: u128,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub recipient: H256,
 }
 
@@ -63,10 +366,14 @@ pub struct BurnPayloadV1 {
 pub struct TokenAddPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub nonce: u64,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub sora_asset_id: H256,
     pub decimals: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub name: [u8; 32],
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub symbol: [u8; 32],
 }
 
@@ -75,7 +382,9 @@ pub struct TokenAddPayloadV1 {
 pub struct TokenControlPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub nonce: u64,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub sora_asset_id: H256,
 }
 
@@ -148,14 +457,18 @@ pub struct SccpHubCommitmentV1 {
     pub version: u8,
     pub kind: SccpHubMessageKind,
     pub target_domain: u32,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub message_id: H256,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub payload_hash: H256,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::option_hex32"))]
     pub parliament_certificate_hash: Option<H256>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, TypeInfo)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SccpMerkleStepV1 {
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub sibling_hash: H256,
     pub sibling_is_left: bool,
 }
@@ -179,15 +492,22 @@ pub enum NexusConsensusPhaseV1 {
 pub struct NexusCommitQcV1 {
     pub version: u8,
     pub phase: NexusConsensusPhaseV1,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub height: u64,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub view: u64,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub epoch: u64,
     pub mode_tag: String,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub subject_block_hash: H256,
     pub validator_set_hash_version: u16,
     pub validator_public_keys: Vec<String>,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
     pub validator_set_pops: Vec<Vec<u8>>,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub signers_bitmap: Vec<u8>,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub bls_aggregate_signature: Vec<u8>,
 }
 
@@ -196,9 +516,13 @@ pub struct NexusCommitQcV1 {
 pub struct NexusBridgeFinalityProofV1 {
     pub version: u8,
     pub chain_id: String,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub height: u64,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub block_hash: H256,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub commitment_root: H256,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub block_header_bytes: Vec<u8>,
     pub commit_qc: NexusCommitQcV1,
 }
@@ -214,6 +538,7 @@ pub enum NexusParliamentSignatureSchemeV1 {
 pub struct NexusParliamentSignatureV1 {
     pub signer: String,
     pub public_key: String,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub signature: Vec<u8>,
 }
 
@@ -228,11 +553,16 @@ pub struct NexusParliamentRosterMemberV1 {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NexusParliamentCertificateV1 {
     pub version: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub preimage_hash: H256,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub enactment_window_start: u64,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub enactment_window_end: u64,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub payload_bytes: Vec<u8>,
     pub signature_scheme: NexusParliamentSignatureSchemeV1,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
     pub roster_epoch: u64,
     pub roster_members: Vec<NexusParliamentRosterMemberV1>,
     pub required_signatures: u16,
@@ -243,10 +573,12 @@ pub struct NexusParliamentCertificateV1 {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NexusSccpBurnProofV1 {
     pub version: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub commitment_root: H256,
     pub commitment: SccpHubCommitmentV1,
     pub merkle_proof: SccpMerkleProofV1,
     pub payload: BurnPayloadV1,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub finality_proof: Vec<u8>,
 }
 
@@ -254,11 +586,14 @@ pub struct NexusSccpBurnProofV1 {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NexusSccpGovernanceProofV1 {
     pub version: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub commitment_root: H256,
     pub commitment: SccpHubCommitmentV1,
     pub merkle_proof: SccpMerkleProofV1,
     pub payload: GovernancePayloadV1,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub parliament_certificate: Vec<u8>,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
     pub finality_proof: Vec<u8>,
 }
 

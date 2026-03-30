@@ -2079,7 +2079,6 @@ fn framed_payload_len(payload_len: usize, align: usize) -> Option<usize> {
 
 struct FramedPrefixInfo {
     consumed: usize,
-    flags: u8,
 }
 
 fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixInfo, ncore::Error> {
@@ -2134,10 +2133,10 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
     let consumed = framed_payload_len(payload_len, core::mem::align_of::<ncore::Archived<T>>())
         .filter(|size| *size <= bytes.len())
         .ok_or(ncore::Error::LengthMismatch)?;
-    let flags = *bytes
+    let _flags = *bytes
         .get(ncore::Header::SIZE - 1)
         .ok_or(ncore::Error::LengthMismatch)?;
-    Ok(FramedPrefixInfo { consumed, flags })
+    Ok(FramedPrefixInfo { consumed })
 }
 
 fn encode_signed_transaction(signed: &SignedTransaction) -> Vec<u8> {
@@ -2145,10 +2144,7 @@ fn encode_signed_transaction(signed: &SignedTransaction) -> Vec<u8> {
     ncore::to_bytes(signed).expect("encode signed transaction")
 }
 
-fn decode_framed_signed_transaction(
-    framed: &[u8],
-    _flags: u8,
-) -> Result<SignedTransaction, ncore::Error> {
+fn decode_framed_signed_transaction(framed: &[u8]) -> Result<SignedTransaction, ncore::Error> {
     norito::decode_from_bytes::<SignedTransaction>(framed)
 }
 
@@ -2189,7 +2185,7 @@ fn decode_gossip_transaction_payload(
     let framed = bytes
         .get(..prefix.consumed)
         .ok_or(ncore::Error::LengthMismatch)?;
-    let signed = decode_framed_signed_transaction(framed, prefix.flags)?;
+    let signed = decode_framed_signed_transaction(framed)?;
     let signed = Arc::new(signed);
     let tx_hash = signed.hash();
     let encoded = Arc::new(framed.to_vec());
@@ -2316,7 +2312,7 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
         let framed = bytes
             .get(..prefix.consumed)
             .ok_or(ncore::Error::LengthMismatch)?;
-        let signed = Arc::new(decode_framed_signed_transaction(framed, prefix.flags)?);
+        let signed = Arc::new(decode_framed_signed_transaction(framed)?);
         let encoded = Arc::new(framed.to_vec());
         let tx_hash = signed.hash();
         ncore::note_payload_access(bytes, prefix.consumed);

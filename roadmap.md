@@ -2,6 +2,18 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 transaction-gossip framed-cache implementation):
+the code now matches the intended transaction-gossip transport fix rather than
+only the soak-status narrative.
+
+- `crates/iroha_core/src/gossiper.rs` now canonicalizes send-side cached gossip
+  payloads to the stable full-frame `SignedTransaction` wire form, preserves
+  exact received framed bytes on decode, and decodes `TransactionGossip` with
+  an explicit len-prefixed field walker; and
+- the focused `iroha_core` regressions covering direct gossip roundtrips,
+  wrapped `NetworkMessage` roundtrips, queue-generated framed gossip payloads,
+  and queue cache acceptance all pass.
+
 Latest sync (2026-03-30 Torii OpenAPI parity for maintained PK routes):
 the checked-in Torii OpenAPI now matches the current maintained browser/app
 route set required by the PK deploy contract gate, so route-doc drift for the

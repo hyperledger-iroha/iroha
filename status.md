@@ -2,6 +2,24 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Transaction-gossip framed-cache implementation now matches the transport-fix design
+- Completed the in-tree follow-through for the transaction-gossip transport
+  root cause in `crates/iroha_core/src/gossiper.rs`:
+  - `GossipTransaction` now normalizes send-side cached payloads to the
+    canonical full-frame `SignedTransaction` wire form;
+  - decode preserves the exact framed bytes that were received so canonical
+    length checks still match the original field payload; and
+  - `TransactionGossip` now uses an explicit len-prefixed field decoder instead
+    of the derive-generated field walker around nested framed payloads.
+- Focused regression coverage completed:
+  - `cargo test -p iroha_core --lib transaction_gossip_roundtrip_cached_payload_is_context_free -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib gossip_network_message_roundtrip_cached_payload_is_context_free -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib network_message_roundtrip_cached_transaction_gossip -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib gossip_roundtrip_preserves_cached_payload -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib gossip_transaction_decode_rejects_trailing_bytes -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib queue_accepts_gossip_payload_cache -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib queue_generated_gossip_payload_uses_framed_signed_transaction_wire -- --nocapture` (pass)
+
 ## 2026-03-30 Torii OpenAPI now covers the maintained PK browser and app routes
 - Closed the maintained Torii route-doc drift in `crates/iroha_torii/src/openapi.rs`:
   - added the currently mounted app/browser routes for `POST /v1/aliases/by_account`,
