@@ -25,7 +25,9 @@ isi! {
         #[norito(default)]
         pub metadata: Metadata,
     }
+}
 
+isi! {
     /// Persist a verified private-source lane relay so contracts can consume it by reference.
     pub struct RegisterVerifiedLaneRelay {
         /// Canonical lane relay envelope being registered.

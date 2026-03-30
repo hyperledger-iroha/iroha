@@ -215,7 +215,7 @@ fn append_kaigi_overlay(
 fn append_bootstrap_authority_overlay(
     manifest: RawGenesisTransaction,
     authority: &BootstrapAuthority,
-) -> Result<RawGenesisTransaction> {
+) -> RawGenesisTransaction {
     let manage_soracloud = Permission::new("CanManageSoracloud".into(), Json::new(()));
     let manage_alias: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
@@ -230,7 +230,7 @@ fn append_bootstrap_authority_overlay(
     let authority_fee_asset =
         AssetId::new(authority.fee_asset_id.clone(), authority.account_id.clone());
 
-    Ok(manifest
+    manifest
         .into_builder()
         .next_transaction()
         .append_instruction(Register::account(authority_account))
@@ -250,7 +250,7 @@ fn append_bootstrap_authority_overlay(
             publish_manifest,
             authority.account_id.clone(),
         ))
-        .build_raw())
+        .build_raw()
 }
 
 fn run(args: &Args) -> Result<()> {
@@ -285,7 +285,7 @@ fn run(args: &Args) -> Result<()> {
         &args.notes,
     )?;
     let manifest = if let Some(bootstrap_authority) = bootstrap_authority.as_ref() {
-        append_bootstrap_authority_overlay(manifest, bootstrap_authority)?
+        append_bootstrap_authority_overlay(manifest, bootstrap_authority)
     } else {
         manifest
     };
@@ -400,8 +400,7 @@ mod tests {
             fee_amount: 25_000,
         };
 
-        let overlaid =
-            append_bootstrap_authority_overlay(manifest, &bootstrap).expect("authority overlay");
+        let overlaid = append_bootstrap_authority_overlay(manifest, &bootstrap);
         assert_eq!(
             bootstrap.account_id.to_string(),
             "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",

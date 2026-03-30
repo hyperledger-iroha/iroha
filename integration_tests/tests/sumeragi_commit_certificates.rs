@@ -562,6 +562,7 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
             RegisterPublicLaneValidator {
                 lane_id: LaneId::SINGLE,
                 validator: validator_id.clone(),
+                peer_id: PeerId::from(peer.public_key().clone()),
                 stake_account: validator_id.clone(),
                 initial_stake: Numeric::from(stake),
                 metadata: Metadata::default(),
