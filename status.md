@@ -2,6 +2,30 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 JS SDK canonical auth now falls back to raw Node HTTP/TLS for UTF-8 account headers
+- Fixed the JS Torii client canonical-auth transport in
+  `javascript/iroha_js/src/toriiClient.js` so requests that need a UTF-8
+  `X-Iroha-Account` header no longer hard-fail when the supplied fetch
+  implementation cannot emit raw UTF-8 header bytes.
+- Added a built-in Node socket fallback for `http:` and `https:` requests that
+  writes the HTTP/1.1 request directly over `node:net` / `node:tls`, preserves
+  the UTF-8 account literal on the wire, and parses fixed-length or chunked
+  responses back into a fetch-compatible response object.
+- Kept the previous validation error for unsupported transports such as
+  `wss:` so browser-like environments still fail fast instead of silently
+  downgrading behavior.
+- Added focused regression coverage in:
+  - `javascript/iroha_js/test/toriiCanonicalAuth.test.js` for the new raw
+    transport path and the unsupported-transport rejection; and
+  - `javascript/iroha_js/test/toriiClient.test.js` to keep the VPN canonical
+    auth unit tests on the explicit raw-header-capable mock path.
+- Verification:
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiCanonicalAuth.test.js test/toriiClient.test.js`
+  - `npm run build:dist`
+- `npx eslint src/toriiClient.js test/toriiCanonicalAuth.test.js test/toriiClient.test.js`
+  could not run in this checkout because the local `eslint` install is missing
+  the transitive `debug` module.
+
 ## 2026-03-30 Fresh full preserved-peer stable reruns on the current worktree still fail on synchronized no-lagging-peers stalls
 - Rebuilt the current-tree release binaries and reran the canonical 4-peer
   preserved-peer stable envelopes (`--duration 3600s --target-blocks 2000

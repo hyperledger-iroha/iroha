@@ -49,6 +49,8 @@ const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const MAX_NUMERIC_SCALE = 28;
 const MAX_NUMERIC_BITS = 512;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
+const RAW_UTF8_HEADERS_INIT_KEY = "__irohaRawUtf8Headers";
+const RAW_UTF8_HEADER_SUPPORT_FLAG = "__irohaSupportsRawUtf8Headers";
 const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
 const BFV_IDENTIFIER_SEED_BYTES = 32;
@@ -7362,120 +7364,141 @@ export class ToriiClient {
   }
 
   /**
-   * List offline allowances (`GET /v1/offline/allowances`).
-   * Accepts the standard iterable options plus convenience fields such as
-   * `assetId`, `certificateExpiresBeforeMs`, `certificateExpiresAfterMs`, `policyExpiresBeforeMs`,
-   * `policyExpiresAfterMs`, `verdictIdHex`, `requireVerdict`, and `onlyMissingVerdict`.
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<ToriiOfflineAllowanceListResponse>}
+   * Fetch offline cash feature readiness (`GET /v1/offline/cash/readiness`).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashReadinessResponse>}
    */
-  async listOfflineAllowances(options = {}) {
-    if (options && isPlainObject(options.filter)) {
-      ToriiClient._validateOfflineAllowanceFilter(options.filter, "options.filter");
+  async getOfflineCashReadiness(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getOfflineCashReadiness");
+    const response = await this._request("GET", "/v1/offline/cash/readiness", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("offline cash readiness response missing JSON body");
     }
-    return this._listIterable(
-      "/v1/offline/allowances",
-      options,
-      (payload) =>
-        normalizeOfflineAllowanceListResponse(payload, "offline allowances response"),
-      OFFLINE_ITERABLE_OPTION_KEYS,
+    return normalizeOfflineCashReadinessResponse(
+      body,
+      "offline cash readiness response",
     );
   }
 
   /**
-   * Query offline allowances (`POST /v1/offline/allowances/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<ToriiOfflineAllowanceListResponse>}
+   * Submit an offline cash setup request (`POST /v1/offline/cash/setup`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
    */
-  async queryOfflineAllowances(options = {}) {
-    return this._queryIterable(
-      "/v1/offline/allowances/query",
+  async setupOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/setup",
+      request,
+      "setupOfflineCash",
       options,
-      (payload) =>
-        normalizeOfflineAllowanceListResponse(payload, "offline allowances query response"),
-      (envelope) => {
-        if (envelope && envelope.filter && isPlainObject(envelope.filter)) {
-          ToriiClient._validateOfflineAllowanceFilter(envelope.filter, "filter");
-        }
-      },
-      OFFLINE_ITERABLE_OPTION_KEYS,
-      true,
     );
   }
 
   /**
-   * Iterate offline allowances with automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>}
+   * Submit an offline cash load request (`POST /v1/offline/cash/load`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
    */
-  iterateOfflineAllowances(options = {}) {
-    return this._iterateIterable(this.listOfflineAllowances, options);
+  async loadOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/load",
+      request,
+      "loadOfflineCash",
+      options,
+    );
   }
 
   /**
-   * Iterate offline allowances via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>}
+   * Submit an offline cash refresh request (`POST /v1/offline/cash/refresh`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
    */
-  iterateOfflineAllowancesQuery(options = {}) {
-    return this._iterateIterable(this.queryOfflineAllowances, options);
+  async refreshOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/refresh",
+      request,
+      "refreshOfflineCash",
+      options,
+    );
   }
 
   /**
-   * List offline counter summaries (`GET /v1/offline/summaries`).
-   * @param {IterableListOptions} [options]
-   * @returns {Promise<ToriiOfflineSummaryListResponse>}
+   * Submit an offline cash sync request (`POST /v1/offline/cash/sync`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
    */
-  async listOfflineSummaries(options = {}) {
-    if (options && isPlainObject(options.filter)) {
-      ToriiClient._validateOfflineSummaryFilter(options.filter, "options.filter");
+  async syncOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/sync",
+      request,
+      "syncOfflineCash",
+      options,
+    );
+  }
+
+  /**
+   * Submit an offline cash redeem request (`POST /v1/offline/cash/redeem`).
+   * @param {ToriiOfflineCashRequest} request
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineCashEnvelope>}
+   */
+  async redeemOfflineCash(request, options = {}) {
+    return this._postOfflineCashRequest(
+      "/v1/offline/cash/redeem",
+      request,
+      "redeemOfflineCash",
+      options,
+    );
+  }
+
+  /**
+   * Fetch the signed offline revocation bundle (`GET /v1/offline/revocations/bundle`).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiOfflineRevocationBundle>}
+   */
+  async getOfflineRevocationBundle(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getOfflineRevocationBundle");
+    const response = await this._request("GET", "/v1/offline/revocations/bundle", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error("offline revocation bundle response missing JSON body");
     }
-    return this._listIterable(
-      "/v1/offline/summaries",
-      options,
-      (payload) =>
-        normalizeOfflineSummaryListResponse(payload, "offline summaries response"),
-      OFFLINE_ITERABLE_OPTION_KEYS,
+    return normalizeOfflineRevocationBundleResponse(
+      body,
+      "offline revocation bundle response",
     );
   }
 
-  /**
-   * Query offline counter summaries (`POST /v1/offline/summaries/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<ToriiOfflineSummaryListResponse>}
-   */
-  async queryOfflineSummaries(options = {}) {
-    return this._queryIterable(
-      "/v1/offline/summaries/query",
-      options,
-      (payload) =>
-        normalizeOfflineSummaryListResponse(payload, "offline summaries query response"),
-      (envelope) => {
-        if (envelope && envelope.filter && isPlainObject(envelope.filter)) {
-          ToriiClient._validateOfflineSummaryFilter(envelope.filter, "filter");
-        }
+  async _postOfflineCashRequest(path, request, context, options = {}) {
+    const payload = normalizeOfflineCashRequest(request, context);
+    const { signal } = normalizeSignalOnlyOption(options, context);
+    const response = await this._request("POST", path, {
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
       },
-      OFFLINE_ITERABLE_OPTION_KEYS,
-      false,
-    );
-  }
-
-  /**
-   * Iterate offline counter summaries with automatic pagination.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineSummaryItem, void, unknown>}
-   */
-  iterateOfflineSummaries(options = {}) {
-    return this._iterateIterable(this.listOfflineSummaries, options);
-  }
-
-  /**
-   * Iterate offline counter summaries via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineSummaryItem, void, unknown>}
-   */
-  iterateOfflineSummariesQuery(options = {}) {
-    return this._iterateIterable(this.queryOfflineSummaries, options);
+      body: JSON.stringify(payload),
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const body = await this._maybeJson(response);
+    if (!body) {
+      throw new Error(`${context} response missing JSON body`);
+    }
+    return normalizeOfflineCashEnvelope(body, `${context} response`);
   }
 
   /**
@@ -7554,120 +7577,12 @@ export class ToriiClient {
   }
 
   /**
-   * Query offline verdict revocations (`POST /v1/offline/revocations/query`).
-   * @param {IterableQueryOptions} [options]
-   * @returns {Promise<ToriiOfflineRevocationListResponse>}
-   */
-  async queryOfflineRevocations(options = {}) {
-    return this._queryIterable(
-      "/v1/offline/revocations/query",
-      options,
-      (payload) =>
-        normalizeOfflineRevocationListResponse(
-          payload,
-          "offline revocations query response",
-        ),
-      (envelope) => {
-        if (envelope && envelope.filter && isPlainObject(envelope.filter)) {
-          ToriiClient._validateOfflineRevocationFilter(envelope.filter, "filter");
-        }
-      },
-      OFFLINE_ITERABLE_OPTION_KEYS,
-      true,
-    );
-  }
-
-  /**
    * Iterate offline verdict revocations with automatic pagination.
    * @param {PaginationIteratorOptions} [options]
    * @returns {AsyncGenerator<ToriiOfflineRevocationItem, void, unknown>}
    */
   iterateOfflineRevocations(options = {}) {
     return this._iterateIterable(this.listOfflineRevocations, options);
-  }
-
-  /**
-   * Iterate offline verdict revocations via the structured query endpoint.
-   * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<ToriiOfflineRevocationItem, void, unknown>}
-   */
-  iterateOfflineRevocationsQuery(options = {}) {
-    return this._iterateIterable(this.queryOfflineRevocations, options);
-  }
-
-  /**
-   * Submit an offline settlement bundle (`POST /v1/offline/settlements`).
-   * @param {ToriiOfflineSettlementSubmitRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineSettlementSubmitResponse>}
-   */
-  async submitOfflineSettlement(request, options = {}) {
-    const payload = normalizeOfflineSettlementSubmitRequest(
-      request,
-      "submitOfflineSettlement",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "submitOfflineSettlement");
-    const response = await this._request("POST", "/v1/offline/settlements", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("offline settlement submit response missing JSON body");
-    }
-    return normalizeOfflineSettlementSubmitResponse(
-      body,
-      "offline settlement submit response",
-    );
-  }
-
-  /**
-   * Submit an offline settlement bundle and wait for terminal pipeline status.
-   * @param {ToriiOfflineSettlementSubmitRequest} request
-   * @param {{
-   *   signal?: AbortSignal,
-   *   intervalMs?: number,
-   *   timeoutMs?: number | null,
-   *   maxAttempts?: number | null,
-   *   successStatuses?: Iterable<string>,
-   *   failureStatuses?: Iterable<string>,
-   *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
-   * }} [options]
-   * @returns {Promise<ToriiOfflineSettlementSubmitResponse>}
-   */
-  async submitOfflineSettlementAndWait(request, options = {}) {
-    const record = requirePlainObjectOption(
-      options,
-      "submitOfflineSettlementAndWait options",
-    );
-    assertSupportedOptionKeys(
-      record,
-      OFFLINE_SETTLEMENT_AND_WAIT_OPTION_KEYS,
-      "submitOfflineSettlementAndWait options",
-    );
-    const { signal } = normalizeSignalOption(record, "submitOfflineSettlementAndWait");
-    const settlement = await this.submitOfflineSettlement(request, { signal });
-    const txHashHex = settlement?.transaction_hash_hex;
-    if (typeof txHashHex !== "string" || txHashHex.length === 0) {
-      throw new Error(
-        "offline settlement submit response missing transaction_hash_hex; cannot poll transaction status",
-      );
-    }
-    await this.waitForTransactionStatus(txHashHex, {
-      signal,
-      intervalMs: record.intervalMs,
-      timeoutMs: record.timeoutMs,
-      maxAttempts: record.maxAttempts,
-      successStatuses: record.successStatuses,
-      failureStatuses: record.failureStatuses,
-      onStatus: record.onStatus,
-    });
-    return settlement;
   }
 
   /**
@@ -7699,214 +7614,6 @@ export class ToriiClient {
       body,
       "offline build claim issue response",
     );
-  }
-
-  /**
-   * Issue a signed offline certificate (`POST /v1/offline/certificates/issue`).
-   * @param {ToriiOfflineWalletCertificateDraft} certificateDraft
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineCertificateIssueResponse>}
-   */
-  async issueOfflineCertificate(certificateDraft, options = {}) {
-    const normalizedDraft = normalizeOfflineCertificateDraft(
-      certificateDraft,
-      "issueOfflineCertificate.certificate",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "issueOfflineCertificate");
-    const response = await this._request("POST", "/v1/offline/certificates/issue", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify({ certificate: normalizedDraft }),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("offline certificate issue response missing JSON body");
-    }
-    return normalizeOfflineCertificateIssueResponse(payload, "offline certificate issue response");
-  }
-
-  /**
-   * Issue a renewal certificate (`POST /v1/offline/certificates/{certificate_id_hex}/renew/issue`).
-   * @param {string} certificateIdHex
-   * @param {ToriiOfflineWalletCertificateDraft} certificateDraft
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineCertificateIssueResponse>}
-   */
-  async issueOfflineCertificateRenewal(certificateIdHex, certificateDraft, options = {}) {
-    const normalizedId = normalizeHex32String(
-      certificateIdHex,
-      "issueOfflineCertificateRenewal.certificateIdHex",
-    );
-    const normalizedDraft = normalizeOfflineCertificateDraft(
-      certificateDraft,
-      "issueOfflineCertificateRenewal.certificate",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "issueOfflineCertificateRenewal");
-    const response = await this._request(
-      "POST",
-      `/v1/offline/certificates/${encodeURIComponent(normalizedId)}/renew/issue`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({ certificate: normalizedDraft }),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("offline certificate renew issue response missing JSON body");
-    }
-    return normalizeOfflineCertificateIssueResponse(
-      payload,
-      "offline certificate renew issue response",
-    );
-  }
-
-  /**
-   * Register a signed offline allowance (`POST /v1/offline/allowances`).
-   * @param {ToriiOfflineAllowanceRegisterRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineAllowanceRegisterResponse>}
-   */
-  async registerOfflineAllowance(request, options = {}) {
-    const payload = normalizeOfflineAllowanceRegisterRequest(
-      request,
-      "registerOfflineAllowance",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "registerOfflineAllowance");
-    const response = await this._request("POST", "/v1/offline/allowances", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("offline allowance register response missing JSON body");
-    }
-    return normalizeOfflineAllowanceRegisterResponse(
-      body,
-      "offline allowance register response",
-    );
-  }
-
-  /**
-   * Renew a signed offline allowance (`POST /v1/offline/allowances/{certificate_id_hex}/renew`).
-   * @param {string} certificateIdHex
-   * @param {ToriiOfflineAllowanceRegisterRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineAllowanceRegisterResponse>}
-   */
-  async renewOfflineAllowance(certificateIdHex, request, options = {}) {
-    const normalizedId = normalizeHex32String(
-      certificateIdHex,
-      "renewOfflineAllowance.certificateIdHex",
-    );
-    const payload = normalizeOfflineAllowanceRegisterRequest(
-      request,
-      "renewOfflineAllowance",
-    );
-    const { signal } = normalizeSignalOnlyOption(options, "renewOfflineAllowance");
-    const response = await this._request(
-      "POST",
-      `/v1/offline/allowances/${encodeURIComponent(normalizedId)}/renew`,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify(payload),
-        signal,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const body = await this._maybeJson(response);
-    if (!body) {
-      throw new Error("offline allowance renew response missing JSON body");
-    }
-    return normalizeOfflineAllowanceRegisterResponse(
-      body,
-      "offline allowance renew response",
-    );
-  }
-
-  /**
-   * Issue and register an offline allowance in one call.
-   * @param {ToriiOfflineTopUpRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineTopUpResponse>}
-   */
-  async topUpOfflineAllowance(request, options = {}) {
-    const normalized = normalizeOfflineTopUpRequest(
-      request,
-      "topUpOfflineAllowance",
-    );
-    const issued = await this.issueOfflineCertificate(
-      normalized.certificate,
-      options,
-    );
-    const registration = await this.registerOfflineAllowance(
-      {
-        authority: normalized.authority,
-        private_key: normalized.private_key,
-        certificate: issued.certificate,
-      },
-      options,
-    );
-    ensureTopUpCertificateIdsMatch(
-      issued.certificate_id_hex,
-      registration.certificate_id_hex,
-      "topUpOfflineAllowance",
-    );
-    return { certificate: issued, registration };
-  }
-
-  /**
-   * Issue and register an offline allowance renewal in one call.
-   * @param {string} certificateIdHex
-   * @param {ToriiOfflineTopUpRequest} request
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiOfflineTopUpResponse>}
-   */
-  async topUpOfflineAllowanceRenewal(certificateIdHex, request, options = {}) {
-    const normalizedId = normalizeHex32String(
-      certificateIdHex,
-      "topUpOfflineAllowanceRenewal.certificateIdHex",
-    );
-    const normalized = normalizeOfflineTopUpRequest(
-      request,
-      "topUpOfflineAllowanceRenewal",
-    );
-    const issued = await this.issueOfflineCertificateRenewal(
-      normalizedId,
-      normalized.certificate,
-      options,
-    );
-    const registration = await this.renewOfflineAllowance(
-      normalizedId,
-      {
-        authority: normalized.authority,
-        private_key: normalized.private_key,
-        certificate: issued.certificate,
-      },
-      options,
-    );
-    ensureTopUpCertificateIdsMatch(
-      issued.certificate_id_hex,
-      registration.certificate_id_hex,
-      "topUpOfflineAllowanceRenewal",
-    );
-    return { certificate: issued, registration };
   }
 
   /**
@@ -8483,6 +8190,27 @@ export class ToriiClient {
       for (const [key, value] of Object.entries(canonicalHeaders)) {
         setHeader(initHeaders, key, value);
       }
+      if (headerValueRequiresRawUtf8Transport(canonicalHeaders["X-Iroha-Account"])) {
+        init[RAW_UTF8_HEADERS_INIT_KEY] = {
+          "X-Iroha-Account": canonicalHeaders["X-Iroha-Account"],
+        };
+      }
+    }
+    const rawUtf8Headers = cloneRawUtf8Headers(init[RAW_UTF8_HEADERS_INIT_KEY]);
+    const shouldUseNodeRawUtf8Transport =
+      rawUtf8Headers &&
+      !fetchSupportsRawUtf8Headers(this._fetch) &&
+      canUseNodeRawUtf8Transport(url);
+    if (
+      rawUtf8Headers &&
+      !fetchSupportsRawUtf8Headers(this._fetch) &&
+      !shouldUseNodeRawUtf8Transport
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "ToriiClient: canonicalAuth.accountId contains UTF-8 characters that require a fetch implementation with raw UTF-8 header support.",
+        "canonicalAuth.accountId",
+      );
     }
     const retryProfileName =
       typeof options.retryProfile === "string" && options.retryProfile
@@ -8533,13 +8261,25 @@ export class ToriiClient {
         }, this._config.timeoutMs);
       }
       try {
-        const response = await this._fetch(url.toString(), {
-          ...init,
-          // Give fetch a fresh header bag for each retry attempt. Reusing the
-          // same object across retries can break native fetch implementations.
-          headers: cloneHeadersForFetch(initHeaders),
-          signal: signal ?? undefined,
-        });
+        const response = shouldUseNodeRawUtf8Transport
+          ? await performNodeRawUtf8Request({
+              url,
+              method: methodUpper,
+              headers: cloneHeadersForFetch(initHeaders),
+              rawUtf8Headers,
+              body: init.body,
+              signal: signal ?? undefined,
+            })
+          : await this._fetch(url.toString(), {
+              ...init,
+              // Give fetch a fresh header bag for each retry attempt. Reusing the
+              // same object across retries can break native fetch implementations.
+              headers: cloneHeadersForFetch(initHeaders),
+              [RAW_UTF8_HEADERS_INIT_KEY]: cloneRawUtf8Headers(
+                init[RAW_UTF8_HEADERS_INIT_KEY],
+              ),
+              signal: signal ?? undefined,
+            });
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
@@ -16140,6 +15880,375 @@ function cloneHeadersForFetch(headers) {
   return clone;
 }
 
+function cloneRawUtf8Headers(headers) {
+  if (!headers || typeof headers !== "object") {
+    return undefined;
+  }
+  const clone = {};
+  for (const [key, value] of Object.entries(headers)) {
+    clone[key] = String(value);
+  }
+  return Object.keys(clone).length > 0 ? clone : undefined;
+}
+
+function headerValueRequiresRawUtf8Transport(value) {
+  if (value == null) {
+    return false;
+  }
+  const rendered = String(value);
+  for (let index = 0; index < rendered.length; index += 1) {
+    if (rendered.charCodeAt(index) > 0xff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function fetchSupportsRawUtf8Headers(fetchImpl) {
+  return Boolean(fetchImpl && fetchImpl[RAW_UTF8_HEADER_SUPPORT_FLAG] === true);
+}
+
+function canUseNodeRawUtf8Transport(url) {
+  const parsed = url instanceof URL ? url : new URL(String(url));
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false;
+  }
+  return typeof process !== "undefined" && Boolean(process?.versions?.node);
+}
+
+async function performNodeRawUtf8Request({
+  url,
+  method,
+  headers,
+  rawUtf8Headers,
+  body,
+  signal,
+}) {
+  const parsed = url instanceof URL ? url : new URL(String(url));
+  const requestBuffer = buildRawUtf8HttpRequestBuffer({
+    url: parsed,
+    method,
+    headers,
+    rawUtf8Headers,
+    body,
+  });
+  throwIfAborted(signal);
+  const socket = await openNodeRawUtf8Socket(parsed);
+  if (typeof socket.setNoDelay === "function") {
+    socket.setNoDelay(true);
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const chunks = [];
+    const finishWithError = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const finishWithResponse = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      try {
+        resolve(createNodeRawUtf8Response(Buffer.concat(chunks)));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    const onAbort = () => {
+      const reason = signal?.reason ?? createAbortError();
+      try {
+        socket.destroy(reason instanceof Error ? reason : undefined);
+      } catch {
+        // Ignore socket teardown failures during abort.
+      }
+      finishWithError(reason);
+    };
+    const cleanup = () => {
+      socket.removeListener("error", onError);
+      socket.removeListener("data", onData);
+      socket.removeListener("end", onEnd);
+      socket.removeListener("close", onClose);
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+    const onError = (error) => {
+      finishWithError(error);
+    };
+    const onData = (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    };
+    const onEnd = () => {
+      finishWithResponse();
+    };
+    const onClose = (hadError) => {
+      if (settled || hadError) {
+        return;
+      }
+      if (chunks.length > 0) {
+        finishWithResponse();
+        return;
+      }
+      finishWithError(new Error("raw UTF-8 request socket closed before a response arrived"));
+    };
+    socket.once("error", onError);
+    socket.on("data", onData);
+    socket.once("end", onEnd);
+    socket.once("close", onClose);
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    try {
+      socket.end(requestBuffer);
+    } catch (error) {
+      finishWithError(error);
+    }
+  });
+}
+
+async function openNodeRawUtf8Socket(url) {
+  const port =
+    url.port !== "" ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`invalid port for raw UTF-8 request: ${url.port}`);
+  }
+  if (url.protocol === "https:") {
+    const tls = await import("node:tls");
+    return tls.connect({
+      host: url.hostname,
+      port,
+      servername: url.hostname.includes(":") ? undefined : url.hostname,
+    });
+  }
+  const net = await import("node:net");
+  return net.createConnection({
+    host: url.hostname,
+    port,
+  });
+}
+
+function buildRawUtf8HttpRequestBuffer({
+  url,
+  method,
+  headers,
+  rawUtf8Headers,
+  body,
+}) {
+  const renderedHeaders = cloneHeadersForFetch(headers);
+  const rawHeaders = cloneRawUtf8Headers(rawUtf8Headers) ?? {};
+  for (const name of Object.keys(rawHeaders)) {
+    deleteHeader(renderedHeaders, name);
+  }
+  if (!hasHeader(renderedHeaders, "Host")) {
+    renderedHeaders.Host = renderRawHttpHostHeader(url);
+  }
+  if (!hasHeader(renderedHeaders, "Connection")) {
+    renderedHeaders.Connection = "close";
+  }
+  const bodyBuffer = encodeRawUtf8RequestBody(body);
+  if (
+    bodyBuffer &&
+    !hasHeader(renderedHeaders, "Content-Length") &&
+    !hasHeader(renderedHeaders, "Transfer-Encoding")
+  ) {
+    renderedHeaders["Content-Length"] = String(bodyBuffer.length);
+  }
+  const target = `${url.pathname || "/"}${url.search || ""}` || "/";
+  const chunks = [Buffer.from(`${method} ${target} HTTP/1.1\r\n`, "ascii")];
+  for (const [name, value] of Object.entries(renderedHeaders)) {
+    chunks.push(encodeRawHttpHeaderLine(name, value));
+  }
+  for (const [name, value] of Object.entries(rawHeaders)) {
+    chunks.push(encodeRawHttpHeaderLine(name, value));
+  }
+  chunks.push(Buffer.from("\r\n", "ascii"));
+  if (bodyBuffer) {
+    chunks.push(bodyBuffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+function encodeRawUtf8RequestBody(body) {
+  if (body === undefined || body === null) {
+    return null;
+  }
+  if (typeof body === "string") {
+    return Buffer.from(body, "utf8");
+  }
+  if (body instanceof URLSearchParams) {
+    return Buffer.from(body.toString(), "utf8");
+  }
+  return toBuffer(body);
+}
+
+function renderRawHttpHostHeader(url) {
+  const defaultPort = url.protocol === "https:" ? "443" : "80";
+  const hostname = url.hostname.includes(":") ? `[${url.hostname}]` : url.hostname;
+  if (url.port && url.port !== defaultPort) {
+    return `${hostname}:${url.port}`;
+  }
+  return hostname;
+}
+
+function encodeRawHttpHeaderLine(name, value) {
+  const renderedName = String(name);
+  if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u.test(renderedName)) {
+    throw new TypeError(`invalid raw HTTP header name: ${renderedName}`);
+  }
+  const renderedValue = value == null ? "" : String(value);
+  if (/[\r\n]/u.test(renderedValue)) {
+    throw new TypeError(`invalid raw HTTP header value for ${renderedName}`);
+  }
+  return Buffer.concat([
+    Buffer.from(`${renderedName}: `, "ascii"),
+    Buffer.from(renderedValue, "utf8"),
+    Buffer.from("\r\n", "ascii"),
+  ]);
+}
+
+function createNodeRawUtf8Response(buffer) {
+  const parsed = parseRawHttpResponse(buffer);
+  if (typeof Response === "function") {
+    return new Response(parsed.body, {
+      status: parsed.status,
+      statusText: parsed.statusText,
+      headers: parsed.headers,
+    });
+  }
+  attachHeaderAccessors(parsed.headers);
+  return {
+    status: parsed.status,
+    statusText: parsed.statusText,
+    headers: parsed.headers,
+    body: null,
+    json: async () => JSON.parse(parsed.body.toString("utf8")),
+    text: async () => parsed.body.toString("utf8"),
+    arrayBuffer: async () =>
+      parsed.body.buffer.slice(
+        parsed.body.byteOffset,
+        parsed.body.byteOffset + parsed.body.byteLength,
+      ),
+  };
+}
+
+function parseRawHttpResponse(buffer) {
+  const headerSeparator = buffer.indexOf("\r\n\r\n");
+  if (headerSeparator === -1) {
+    throw new Error("invalid raw HTTP response: missing header terminator");
+  }
+  const headerBlock = buffer.subarray(0, headerSeparator).toString("latin1");
+  const lines = headerBlock.split("\r\n");
+  const statusLine = lines.shift();
+  const match =
+    typeof statusLine === "string"
+      ? /^HTTP\/1\.[01]\s+(\d{3})(?:\s+(.*))?$/u.exec(statusLine)
+      : null;
+  if (!match) {
+    throw new Error("invalid raw HTTP response: malformed status line");
+  }
+  const headers = {};
+  for (const line of lines) {
+    const delimiter = line.indexOf(":");
+    if (delimiter === -1) {
+      continue;
+    }
+    const name = line.slice(0, delimiter).trim();
+    const value = line.slice(delimiter + 1).trim();
+    const existing = findHeaderKey(headers, name);
+    if (existing) {
+      headers[existing] = `${headers[existing]}, ${value}`;
+    } else {
+      headers[name] = value;
+    }
+  }
+  let body = buffer.subarray(headerSeparator + 4);
+  const status = Number.parseInt(match[1], 10);
+  if (status < 200 || status === 204 || status === 304) {
+    body = Buffer.alloc(0);
+  } else if (responseUsesChunkedTransferEncoding(headers)) {
+    body = decodeChunkedHttpBody(body);
+  } else {
+    const contentLength = parseContentLengthHeader(headers);
+    if (contentLength !== null) {
+      if (body.length < contentLength) {
+        throw new Error("invalid raw HTTP response: body shorter than content-length");
+      }
+      body = body.subarray(0, contentLength);
+    }
+  }
+  return {
+    status,
+    statusText: match[2] ?? "",
+    headers,
+    body,
+  };
+}
+
+function responseUsesChunkedTransferEncoding(headers) {
+  const key = findHeaderKey(headers, "transfer-encoding");
+  if (!key) {
+    return false;
+  }
+  return String(headers[key])
+    .split(",")
+    .some((entry) => entry.trim().toLowerCase() === "chunked");
+}
+
+function parseContentLengthHeader(headers) {
+  const key = findHeaderKey(headers, "content-length");
+  if (!key) {
+    return null;
+  }
+  const parsed = Number.parseInt(String(headers[key]).trim(), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error("invalid raw HTTP response: malformed content-length");
+  }
+  return parsed;
+}
+
+function decodeChunkedHttpBody(buffer) {
+  const chunks = [];
+  let offset = 0;
+  while (offset < buffer.length) {
+    const lineEnd = buffer.indexOf("\r\n", offset);
+    if (lineEnd === -1) {
+      throw new Error("invalid raw HTTP response: unterminated chunk size");
+    }
+    const sizeLine = buffer
+      .subarray(offset, lineEnd)
+      .toString("latin1")
+      .split(";", 1)[0]
+      .trim();
+    const size = Number.parseInt(sizeLine, 16);
+    if (!Number.isInteger(size) || size < 0) {
+      throw new Error("invalid raw HTTP response: malformed chunk size");
+    }
+    offset = lineEnd + 2;
+    if (size === 0) {
+      if (offset + 2 > buffer.length) {
+        throw new Error("invalid raw HTTP response: missing chunk terminator");
+      }
+      return Buffer.concat(chunks);
+    }
+    if (offset + size + 2 > buffer.length) {
+      throw new Error("invalid raw HTTP response: truncated chunk body");
+    }
+    chunks.push(buffer.subarray(offset, offset + size));
+    offset += size;
+    if (buffer[offset] !== 13 || buffer[offset + 1] !== 10) {
+      throw new Error("invalid raw HTTP response: malformed chunk delimiter");
+    }
+    offset += 2;
+  }
+  throw new Error("invalid raw HTTP response: missing terminating chunk");
+}
+
 function headersContainCredentials(headers) {
   if (!headers || typeof headers !== "object") {
     return false;
@@ -16202,6 +16311,15 @@ function delay(ms, signal) {
     }, ms);
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function createAbortError() {
+  if (typeof DOMException === "function") {
+    return new DOMException("The operation was aborted", "AbortError");
+  }
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 function throwIfAborted(signal) {
@@ -23614,6 +23732,33 @@ function normalizeSubscriptionListItem(value, context) {
 function normalizeSubscriptionGetResponse(payload) {
   const record = ensureRecord(payload, "subscription get response");
   return normalizeSubscriptionListItem(record, "subscription get response");
+}
+
+function normalizeOfflineCashRequest(input, context) {
+  return ensureRecord(input, `${context} request`);
+}
+
+function normalizeOfflineCashReadinessResponse(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  return {
+    ...record,
+    offline_recursive_stark: coerceBoolean(
+      record.offline_recursive_stark,
+      `${context}.offline_recursive_stark`,
+    ),
+  };
+}
+
+function normalizeOfflineCashEnvelope(payload, context) {
+  const record = ensureRecord(payload, context);
+  return {
+    ...record,
+    lineage_state: ensureRecord(record.lineage_state, `${context}.lineage_state`),
+  };
+}
+
+function normalizeOfflineRevocationBundleResponse(payload, context) {
+  return ensureRecord(payload, context);
 }
 
 function normalizeOfflineAllowanceListResponse(payload, context) {
