@@ -46,6 +46,6 @@ class I105CompatTest {
         val aliceI105 = aliceAddr.toI105Default()
         println("Alice I105: $aliceI105")
         println("Alice canonical: ${aliceAddr.canonicalHex()}")
-        assertEquals("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnZaK", aliceI105)
+        assertEquals("sorauロ1PノウヌmEエWオebHム6ヤルイヰiwuCWErJ7uスoPGアヤnjムKヒTCW2PV", aliceI105)
     }
 }

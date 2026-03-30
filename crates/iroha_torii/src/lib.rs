@@ -23025,7 +23025,10 @@ impl Torii {
                 )
                 .route("/v1/offline/cash/setup", post(handler_offline_cash_setup))
                 .route("/v1/offline/cash/load", post(handler_offline_cash_load))
-                .route("/v1/offline/cash/refresh", post(handler_offline_cash_refresh))
+                .route(
+                    "/v1/offline/cash/refresh",
+                    post(handler_offline_cash_refresh),
+                )
                 .route("/v1/offline/cash/sync", post(handler_offline_cash_sync))
                 .route("/v1/offline/cash/redeem", post(handler_offline_cash_redeem))
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))
@@ -29857,7 +29860,9 @@ pub(crate) mod tests_runtime_handlers {
             kind: iroha_sccp::SccpHubMessageKind::Burn,
             target_domain: payload.dest_domain,
             message_id: iroha_sccp::burn_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_burn_payload_bytes(&payload)),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_burn_payload_bytes(
+                &payload,
+            )),
             parliament_certificate_hash: None,
         };
         let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
@@ -29921,7 +29926,9 @@ pub(crate) mod tests_runtime_handlers {
         let keypair = iroha_crypto::KeyPair::random();
         let signer = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let enactment = iroha_data_model::governance::types::ParliamentEnactment {
-            preimage_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_governance_payload_bytes(&payload)),
+            preimage_hash: iroha_sccp::payload_hash(
+                &iroha_sccp::canonical_governance_payload_bytes(&payload),
+            ),
             at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 3 },
         };
         let parliament_certificate = {
@@ -29958,12 +29965,9 @@ pub(crate) mod tests_runtime_handlers {
                 signatures: vec![iroha_sccp::NexusParliamentSignatureV1 {
                     signer: signer.to_string(),
                     public_key: keypair.public_key().to_string(),
-                    signature: iroha_crypto::SignatureOf::new(
-                        keypair.private_key(),
-                        &enactment,
-                    )
-                    .payload()
-                    .to_vec(),
+                    signature: iroha_crypto::SignatureOf::new(keypair.private_key(), &enactment)
+                        .payload()
+                        .to_vec(),
                 }],
             })
             .expect("encode parliament certificate");
@@ -29974,7 +29978,9 @@ pub(crate) mod tests_runtime_handlers {
             kind: iroha_sccp::SccpHubMessageKind::TokenPause,
             target_domain: iroha_sccp::governance_target_domain(&payload),
             message_id: iroha_sccp::governance_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_governance_payload_bytes(&payload)),
+            payload_hash: iroha_sccp::payload_hash(
+                &iroha_sccp::canonical_governance_payload_bytes(&payload),
+            ),
             parliament_certificate_hash: Some(iroha_sccp::parliament_certificate_hash(
                 &parliament_certificate.1,
             )),

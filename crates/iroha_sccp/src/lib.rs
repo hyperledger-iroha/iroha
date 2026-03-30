@@ -241,9 +241,7 @@ mod serde_utils {
     }
 
     pub mod option_hex32 {
-        use super::{
-            Deserialize, Deserializer, Serializer, String, decode_hex_fixed, encode_hex,
-        };
+        use super::{Deserialize, Deserializer, Serializer, String, decode_hex_fixed, encode_hex};
 
         pub fn serialize<S>(value: &Option<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
         where
@@ -745,7 +743,10 @@ pub fn canonical_commitment_bytes(commitment: &SccpHubCommitmentV1) -> Vec<u8> {
 }
 
 pub fn burn_message_id(payload: &BurnPayloadV1) -> H256 {
-    prefixed_keccak(SCCP_MSG_PREFIX_BURN_V1, &canonical_burn_payload_bytes(payload))
+    prefixed_keccak(
+        SCCP_MSG_PREFIX_BURN_V1,
+        &canonical_burn_payload_bytes(payload),
+    )
 }
 
 pub fn token_add_message_id(payload: &TokenAddPayloadV1) -> H256 {

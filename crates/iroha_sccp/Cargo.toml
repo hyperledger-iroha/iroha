@@ -20,4 +20,4 @@ serde = ["dep:serde"]
 blake2 = { version = "0.10.6", default-features = false }
 tiny-keccak = { version = "2.0.2", default-features = false, features = ["keccak"] }
 serde = { version = "1.0.228", default-features = false, features = ["derive"], optional = true }
-norito = { path = "../norito", default-features = false, features = ["derive"], optional = true }
+norito = { path = "../norito", optional = true }

@@ -1041,7 +1041,7 @@ impl Actor {
                     self.authoritative_slot_frontier_info(height, view, block_hash)
                 })
                 .is_some()
-            || self.frontier_slot_has_active_owner_state(height)
+            || self.frontier_slot_has_active_owner_state_for_view(height, view)
     }
 
     fn locally_authoritative_frontier_info_for_block(

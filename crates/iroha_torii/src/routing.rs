@@ -4459,7 +4459,9 @@ where
 
     if matches!(format, crate::utils::ResponseFormat::Norito) {
         let body = to_bytes(bundle).map_err(|err| {
-            sccp_internal_error(format!("failed to serialize SCCP bundle Norito payload: {err}"))
+            sccp_internal_error(format!(
+                "failed to serialize SCCP bundle Norito payload: {err}"
+            ))
         })?;
         let mut resp = Response::new(Body::from(body));
         resp.headers_mut().insert(

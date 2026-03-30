@@ -141,7 +141,9 @@ site in one JSON request (`payload_b64`), so the nginx host serving
 `POST /v1/sorafs/storage/pin` with `413 Payload Too Large` before Torii sees
 the request. Torii must also run with `torii.max_content_len` high enough for
 the base64-expanded JSON body; the shipped Taira profile now pins that to
-`64_000_000`.
+`64_000_000`, and the local bootstrap overlay now rewrites the served
+`dist/taira-localnet/peer*.toml` files to keep that same cap live after every
+reset.
 
 After every Taira reset or `irohad` rebuild, verify the manifest-registration
 ingress before retrying `yarn taira:publish`:
@@ -322,6 +324,14 @@ From `../iroha2-block-explorer-web`:
      `/v1/sorafs/storage/pin`.
    - keep `torii.max_content_len = 64_000_000` in `config.toml`; otherwise
      Torii rejects the JSON body before the SoraFS storage handler sees it.
+   - after every local reset, confirm the served `dist/taira-localnet/peer*.toml`
+     copies still contain `max_content_len = 64000000`; the local bootstrap
+     script patches them from `configs/soranexus/taira/config.toml`, but a
+     stale bundle can still bring the old default back.
+   - a publish-sized ingress smoke should clear the old 16 MiB limit:
+     `POST /v1/sorafs/storage/pin` with a `24_000_037` byte JSON body should
+     reach the handler and return a normal `400` (for example `invalid base64
+     in manifest_b64`), not `413` or `502`.
    - keep the dedicated `location = /v1/connect/ws` blocks intact; they forward
      the required websocket `Upgrade` / `Connection: upgrade` headers for
      Iroha Connect on `taira.sora.org`.
