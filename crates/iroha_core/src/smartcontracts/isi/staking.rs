@@ -84,7 +84,12 @@ impl Execute for RegisterPublicLaneValidator {
             "register_public_lane_validator",
         )?;
         finalize_validator_lifecycle(state_transaction)?;
-        ensure_validator_peer_registered(state_transaction, self.lane_id, &self.validator)?;
+        ensure_validator_peer_registered(
+            state_transaction,
+            self.lane_id,
+            &self.validator,
+            &self.peer_id,
+        )?;
 
         if self.initial_stake.is_zero() {
             return Err(Error::InvariantViolation(
@@ -126,6 +131,19 @@ impl Execute for RegisterPublicLaneValidator {
         if existing >= max_validators {
             return Err(Error::InvariantViolation(
                 "lane reached maximum validator capacity".into(),
+            ));
+        }
+
+        if state_transaction.world.public_lane_validators.iter().any(
+            |((lane, validator_id), record)| {
+                *lane == self.lane_id
+                    && validator_id != &self.validator
+                    && record.peer_id == self.peer_id
+                    && !matches!(record.status, PublicLaneValidatorStatus::Exited)
+            },
+        ) {
+            return Err(Error::InvariantViolation(
+                "validator peer is already registered for lane".into(),
             ));
         }
 
@@ -176,6 +194,7 @@ impl Execute for RegisterPublicLaneValidator {
         let record = PublicLaneValidatorRecord {
             lane_id: self.lane_id,
             validator: self.validator.clone(),
+            peer_id: self.peer_id.clone(),
             stake_account: self.stake_account.clone(),
             total_stake: initial_stake.clone(),
             self_stake: initial_stake.clone(),
@@ -236,7 +255,20 @@ impl Execute for ActivatePublicLaneValidator {
             "activate_public_lane_validator",
         )?;
         finalize_validator_lifecycle(state_transaction)?;
-        ensure_validator_peer_registered(state_transaction, self.lane_id, &self.validator)?;
+        let validator_key = validator_storage_key(self.lane_id, &self.validator);
+        let validator_peer = state_transaction
+            .world
+            .public_lane_validators
+            .get(&validator_key)
+            .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?
+            .peer_id
+            .clone();
+        ensure_validator_peer_registered(
+            state_transaction,
+            self.lane_id,
+            &self.validator,
+            &validator_peer,
+        )?;
         let block_height = state_transaction.block_height();
         let epoch_length = state_transaction
             .world
@@ -247,7 +279,6 @@ impl Execute for ActivatePublicLaneValidator {
             )
             .max(1);
         let current_epoch = current_epoch(block_height, epoch_length)?;
-        let validator_key = validator_storage_key(self.lane_id, &self.validator);
         let validator = state_transaction
             .world
             .public_lane_validators
@@ -1307,20 +1338,13 @@ fn ensure_validator_peer_registered(
     state_transaction: &StateTransaction<'_, '_>,
     lane_id: LaneId,
     validator: &AccountId,
+    validator_peer: &PeerId,
 ) -> Result<(), Error> {
-    let validator_peer = validator
-        .try_signatory()
-        .map(|pk| PeerId::from(pk.clone()))
-        .ok_or_else(|| {
-            Error::InvariantViolation(
-                "validator must be single-signatory to register for public lanes".into(),
-            )
-        })?;
     if !state_transaction
         .world
         .peers
         .iter()
-        .any(|peer| peer == &validator_peer)
+        .any(|peer| peer == validator_peer)
     {
         #[cfg(feature = "telemetry")]
         state_transaction
@@ -1338,7 +1362,7 @@ fn ensure_validator_peer_registered(
     }
 
     let block_height = state_transaction.block_height();
-    let gate = peer_consensus_key_gate(&state_transaction.world, &validator_peer, block_height);
+    let gate = peer_consensus_key_gate(&state_transaction.world, validator_peer, block_height);
     if gate != ConsensusKeyGate::Live {
         let (telemetry_reason, message) = match gate {
             ConsensusKeyGate::Live => ("consensus_key_live", "unexpected live consensus key"),
@@ -1378,7 +1402,7 @@ fn ensure_validator_peer_registered(
     if !commit_topology.is_empty()
         && commit_topology
             .iter()
-            .all(|peer_in_topology| peer_in_topology != &validator_peer)
+            .all(|peer_in_topology| peer_in_topology != validator_peer)
     {
         #[cfg(feature = "telemetry")]
         state_transaction
@@ -1735,15 +1759,19 @@ mod tests {
         stx: &mut StateTransaction<'_, '_>,
         account: &AccountId,
     ) -> crate::PeerId {
-        let peer = crate::PeerId::from(
+        let peer = validator_peer_id(account);
+        let _ = stx.world.peers.push(peer.clone());
+        seed_validator_consensus_key(stx, &peer, ConsensusKeyStatus::Active);
+        peer
+    }
+
+    fn validator_peer_id(account: &AccountId) -> crate::PeerId {
+        crate::PeerId::from(
             account
                 .try_signatory()
                 .expect("test accounts are single-signatory")
                 .clone(),
-        );
-        let _ = stx.world.peers.push(peer.clone());
-        seed_validator_consensus_key(stx, &peer, ConsensusKeyStatus::Active);
-        peer
+        )
     }
 
     fn seed_validator_consensus_key(
@@ -1897,6 +1925,7 @@ mod tests {
         stx.commit_topology.get_mut().push(peer);
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: initial_stake.clone(),
@@ -2017,6 +2046,7 @@ mod tests {
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(1),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2092,6 +2122,7 @@ mod tests {
 
         let result = RegisterPublicLaneValidator {
             lane_id: LaneId::new(14),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2136,6 +2167,7 @@ mod tests {
 
         let result = RegisterPublicLaneValidator {
             lane_id: LaneId::new(22),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2180,6 +2212,7 @@ mod tests {
 
         let result = RegisterPublicLaneValidator {
             lane_id: LaneId::new(23),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2227,6 +2260,7 @@ mod tests {
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let result = RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator,
             initial_stake: Numeric::new(1_000, 0),
@@ -2295,6 +2329,7 @@ mod tests {
         );
         RegisterPublicLaneValidator {
             lane_id: stake_lane,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2305,6 +2340,7 @@ mod tests {
 
         let err = RegisterPublicLaneValidator {
             lane_id: admin_lane,
+            peer_id: validator_peer_id(&delegator),
             validator: delegator.clone(),
             stake_account: delegator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2449,6 +2485,7 @@ mod tests {
 
         let result = RegisterPublicLaneValidator {
             lane_id: LaneId::new(42),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2472,6 +2509,80 @@ mod tests {
                 .any(|peer| peer == &validator_peer),
             "validator peer should remain absent from topology in rejection path"
         );
+    }
+
+    #[test]
+    fn register_accepts_distinct_validator_peer_binding() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, _, _, _) = prepare_accounts(&mut stx);
+        let foreign_peer = crate::PeerId::from(KeyPair::random().public_key().clone());
+        let _ = stx.world.peers.push(foreign_peer.clone());
+        seed_validator_consensus_key(&mut stx, &foreign_peer, ConsensusKeyStatus::Active);
+        stx.commit_topology.get_mut().clear();
+        stx.commit_topology.get_mut().push(foreign_peer.clone());
+
+        RegisterPublicLaneValidator {
+            lane_id: LaneId::new(43),
+            peer_id: foreign_peer.clone(),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("registration should accept a distinct peer binding");
+
+        let record = stx
+            .world
+            .public_lane_validators()
+            .get(&(LaneId::new(43), validator.clone()))
+            .expect("validator record should be stored");
+        assert_eq!(record.peer_id, foreign_peer);
+        assert_ne!(record.peer_id, validator_peer_id(&validator));
+    }
+
+    #[test]
+    fn register_rejects_duplicate_peer_binding_on_same_lane() {
+        let state = setup_state();
+        let block = new_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let (validator, replacement, _, _) = prepare_accounts(&mut stx);
+        let shared_peer = validator_peer_id(&validator);
+        stx.commit_topology.get_mut().clear();
+        stx.commit_topology.get_mut().push(shared_peer.clone());
+
+        RegisterPublicLaneValidator {
+            lane_id: LaneId::new(44),
+            peer_id: shared_peer.clone(),
+            validator: validator.clone(),
+            stake_account: validator.clone(),
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("first validator should bind the shared peer");
+
+        let err = RegisterPublicLaneValidator {
+            lane_id: LaneId::new(44),
+            peer_id: shared_peer,
+            validator: replacement.clone(),
+            stake_account: replacement,
+            initial_stake: Numeric::new(1_000, 0),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("second validator must not reuse the same peer binding");
+
+        assert!(matches!(
+            err,
+            Error::InvariantViolation(msg) if msg.contains("validator peer is already registered for lane")
+        ));
     }
 
     #[test]
@@ -2503,6 +2614,7 @@ mod tests {
 
         let result = RegisterPublicLaneValidator {
             lane_id: LaneId::new(99),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2534,6 +2646,7 @@ mod tests {
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(1),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2614,6 +2727,7 @@ mod tests {
         let (validator, _delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2683,6 +2797,7 @@ mod tests {
             .unwrap();
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(1),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2734,6 +2849,7 @@ mod tests {
         let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(1),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2814,6 +2930,7 @@ mod tests {
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(11),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2881,6 +2998,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(7),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2891,6 +3009,7 @@ mod tests {
 
         let second_attempt = RegisterPublicLaneValidator {
             lane_id: LaneId::new(7),
+            peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
             stake_account: replacement.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2913,6 +3032,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(7),
+            peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
             stake_account: replacement.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -2954,6 +3074,7 @@ mod tests {
         let lane_id = LaneId::new(0);
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3001,6 +3122,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
             stake_account: replacement.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3044,6 +3166,7 @@ mod tests {
         let lane_id = LaneId::new(12);
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3104,6 +3227,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3153,6 +3277,7 @@ mod tests {
         let lane_id = LaneId::new(10);
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3213,6 +3338,7 @@ mod tests {
             stx.nexus.staking.slash_sink_account_id = escrow.to_string();
             let err = RegisterPublicLaneValidator {
                 lane_id,
+                peer_id: validator_peer_id(&replacement),
                 validator: replacement.clone(),
                 stake_account: replacement.clone(),
                 initial_stake: Numeric::new(1_000, 0),
@@ -3239,6 +3365,7 @@ mod tests {
             stx.nexus.staking.slash_sink_account_id = escrow.to_string();
             RegisterPublicLaneValidator {
                 lane_id,
+                peer_id: validator_peer_id(&replacement),
                 validator: replacement.clone(),
                 stake_account: replacement.clone(),
                 initial_stake: Numeric::new(1_000, 0),
@@ -3298,6 +3425,7 @@ mod tests {
         let (validator, _, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3377,6 +3505,7 @@ mod tests {
         let (validator, _, _, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3459,6 +3588,7 @@ mod tests {
         let (validator, _, _, _asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3539,6 +3669,7 @@ mod tests {
         let (validator, delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(7),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(500, 0),
@@ -3639,6 +3770,7 @@ mod tests {
         stx.world.peers.clear();
         let res = RegisterPublicLaneValidator {
             lane_id: LaneId::new(42),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3663,6 +3795,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(2),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3703,6 +3836,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(3),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3723,6 +3857,7 @@ mod tests {
         // Re-register should succeed once exited.
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(3),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(500, 0),
@@ -3746,6 +3881,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3767,6 +3903,7 @@ mod tests {
 
         let err = RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(250, 0),
@@ -3790,6 +3927,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(250, 0),
@@ -3839,6 +3977,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3909,6 +4048,7 @@ mod tests {
             prerelease_tx.nexus.staking.slash_sink_account_id = escrow.to_string();
             let err = RegisterPublicLaneValidator {
                 lane_id,
+                peer_id: validator_peer_id(&replacement),
                 validator: replacement.clone(),
                 stake_account: replacement.clone(),
                 initial_stake: Numeric::new(1_000, 0),
@@ -3942,6 +4082,7 @@ mod tests {
         }
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&replacement),
             validator: replacement.clone(),
             stake_account: replacement.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -3985,6 +4126,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(31),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -4043,6 +4185,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id,
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -4125,6 +4268,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(12),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(500, 0),
@@ -4159,6 +4303,7 @@ mod tests {
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         let res = RegisterPublicLaneValidator {
             lane_id: LaneId::new(3),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -4194,6 +4339,7 @@ mod tests {
 
         let res = RegisterPublicLaneValidator {
             lane_id: LaneId::new(42),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -4218,6 +4364,7 @@ mod tests {
         let (validator, delegator, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(4),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -4253,6 +4400,7 @@ mod tests {
 
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(13),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),
@@ -4470,6 +4618,7 @@ mod tests {
         let (validator, _, _, _) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             lane_id: LaneId::new(5),
+            peer_id: validator_peer_id(&validator),
             validator: validator.clone(),
             stake_account: validator.clone(),
             initial_stake: Numeric::new(1_000, 0),

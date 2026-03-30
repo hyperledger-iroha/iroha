@@ -13119,6 +13119,7 @@ pub mod isi {
                 iroha_data_model::nexus::PublicLaneValidatorRecord {
                     lane_id: LaneId::SINGLE,
                     validator: account_id.clone(),
+                    peer_id: PeerId::from(account_id.signatory().clone()),
                     stake_account: account_id.clone(),
                     total_stake: Numeric::new(1, 0),
                     self_stake: Numeric::new(1, 0),

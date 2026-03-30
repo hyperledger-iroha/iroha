@@ -4893,6 +4893,7 @@ impl NetworkBuilder {
                     RegisterPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
                         validator: validator_id.clone(),
+                        peer_id: peer.clone(),
                         stake_account: validator_id.clone(),
                         initial_stake: Numeric::from(stake_amount),
                         metadata: Metadata::default(),

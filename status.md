@@ -2,6 +2,59 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Nexus public-lane routing now uses explicit authoritative peer bindings
+- Split public-lane validator authority into two first-release roles:
+  `validator` remains the staking/governance `AccountId`, while stake-elected
+  validator records and registration ISIs now carry an explicit `peer_id` for
+  consensus and Torii routing (`crates/iroha_data_model/src/isi/staking.rs`,
+  `crates/iroha_data_model/src/nexus/staking.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/staking.rs`).
+- Updated staking admission, state helpers, stake snapshot / roster derivation,
+  and related bootstrap tooling to resolve authoritative peers from stored
+  validator `peer_id` bindings instead of inferring them from validator account
+  signatories (`crates/iroha_core/src/{state.rs,sumeragi/**}`,
+  `crates/iroha_genesis/src/lib.rs`, `crates/iroha_kagami/src/{genesis/sign.rs,localnet.rs}`,
+  `crates/iroha_test_network/src/{config.rs,lib.rs}`, `crates/izanami/src/{instructions.rs,chaos.rs}`,
+  `crates/irohad/src/main.rs`).
+- Tightened Torii routed public-lane proxying so candidate selection uses only
+  authoritative peers and fails closed with deterministic
+  `503 route_unavailable` when bindings are missing, stale, or all
+  authoritative peers are offline; the old generic online-peer spray and
+  routed public-lane fallback probing are removed
+  (`crates/iroha_torii/src/{lib.rs,routing.rs,openapi.rs}`).
+- Surfaced the new `peer_id` through operator tooling and public docs:
+  public-lane validator registration now requires `--peer-id`, validator
+  snapshots expose `peer_id`, and
+  `docs/source/nexus_public_lanes.md` now documents authoritative-only routing.
+- Verification:
+  - `cargo check -p iroha_core --all-targets`
+  - `cargo check -p iroha_torii --all-targets`
+  - `cargo check -p iroha_data_model -p iroha_cli -p iroha_genesis -p iroha_executor -p iroha_kagami -p iroha_test_network -p izanami -p irohad --all-targets`
+
+## 2026-03-30 JS SDK canonical auth now falls back to raw Node HTTP/TLS for UTF-8 account headers
+- Fixed the JS Torii client canonical-auth transport in
+  `javascript/iroha_js/src/toriiClient.js` so requests that need a UTF-8
+  `X-Iroha-Account` header no longer hard-fail when the supplied fetch
+  implementation cannot emit raw UTF-8 header bytes.
+- Added a built-in Node socket fallback for `http:` and `https:` requests that
+  writes the HTTP/1.1 request directly over `node:net` / `node:tls`, preserves
+  the UTF-8 account literal on the wire, and parses fixed-length or chunked
+  responses back into a fetch-compatible response object.
+- Kept the previous validation error for unsupported transports such as
+  `wss:` so browser-like environments still fail fast instead of silently
+  downgrading behavior.
+- Added focused regression coverage in:
+  - `javascript/iroha_js/test/toriiCanonicalAuth.test.js` for the new raw
+    transport path and the unsupported-transport rejection; and
+  - `javascript/iroha_js/test/toriiClient.test.js` to keep the VPN canonical
+    auth unit tests on the explicit raw-header-capable mock path.
+- Verification:
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiCanonicalAuth.test.js test/toriiClient.test.js`
+  - `npm run build:dist`
+- `npx eslint src/toriiClient.js test/toriiCanonicalAuth.test.js test/toriiClient.test.js`
+  could not run in this checkout because the local `eslint` install is missing
+  the transitive `debug` module.
+
 ## 2026-03-30 Fresh full preserved-peer stable reruns on the current worktree still fail on synchronized no-lagging-peers stalls
 - Rebuilt the current-tree release binaries and reran the canonical 4-peer
   preserved-peer stable envelopes (`--duration 3600s --target-blocks 2000

@@ -49311,6 +49311,7 @@ fn validator_record_to_json(record: &PublicLaneValidatorRecord) -> (String, Valu
     let stake_literal = crate::account_literal::display_literal(&record.stake_account);
     map.insert("lane_id".into(), Value::from(u64::from(record.lane_id)));
     map.insert("validator".into(), Value::from(validator_literal));
+    map.insert("peer_id".into(), Value::from(record.peer_id.to_string()));
     map.insert("stake_account".into(), Value::from(stake_literal));
     map.insert(
         "total_stake".into(),
@@ -49354,6 +49355,7 @@ fn manifest_validator_to_json(lane_id: LaneId, validator: &AccountId) -> (String
     let validator_literal = crate::account_literal::display_literal(validator);
     map.insert("lane_id".into(), Value::from(u64::from(lane_id)));
     map.insert("validator".into(), Value::from(validator_literal.clone()));
+    map.insert("peer_id".into(), Value::Null);
     map.insert("stake_account".into(), Value::from(validator_literal));
     map.insert("total_stake".into(), Value::from("0"));
     map.insert("self_stake".into(), Value::from("0"));
@@ -49545,6 +49547,7 @@ mod public_lane_tests {
         let record = PublicLaneValidatorRecord {
             lane_id: LaneId::new(7),
             validator: ALICE_ID.clone(),
+            peer_id: PeerId::from(ALICE_ID.signatory().clone()),
             stake_account: BOB_ID.clone(),
             total_stake: Numeric::from(10_u32),
             self_stake: Numeric::from(4_u32),

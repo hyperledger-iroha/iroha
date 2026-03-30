@@ -1823,6 +1823,7 @@ mod tests {
             RegisterPublicLaneValidator::new(
                 lane_one.id,
                 validator_id.clone(),
+                peer_id.clone(),
                 validator_id.clone(),
                 Numeric::from(10_u32),
                 Metadata::default(),

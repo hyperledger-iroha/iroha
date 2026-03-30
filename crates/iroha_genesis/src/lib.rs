@@ -911,6 +911,12 @@ pub mod genesis_instructions_json {
         let lane_id = LaneId::from(parse_u32(lane_value, "lane_id")?);
         let validator_str = take_string(&mut fields, "validator")?;
         let validator: AccountId = parse_account_id(&validator_str, "validator")?;
+        let peer_id_str = take_string(&mut fields, "peer_id")?;
+        let peer_id: PeerId = peer_id_str.parse().map_err(|_| {
+            json::Error::Message(format!(
+                "invalid peer id for RegisterPublicLaneValidator: {peer_id_str}"
+            ))
+        })?;
         let stake_account_str = take_string(&mut fields, "stake_account")?;
         let stake_account: AccountId = parse_account_id(&stake_account_str, "stake_account")?;
         let stake_value = fields
@@ -926,6 +932,7 @@ pub mod genesis_instructions_json {
         let register = RegisterPublicLaneValidator::new(
             lane_id,
             validator,
+            peer_id,
             stake_account,
             initial_stake,
             metadata,
@@ -1429,6 +1436,7 @@ pub mod genesis_instructions_json {
             let register = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator_id.clone(),
+                PeerId::from(validator_id.signatory().clone()),
                 validator_id.clone(),
                 Numeric::from(10_u64),
                 Metadata::default(),

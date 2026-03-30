@@ -4098,6 +4098,7 @@ mod tests {
                     Box::new(RegisterPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
                         validator: validator.clone(),
+                        peer_id: PeerId::new(key_pair.public_key().clone()),
                         stake_account: validator.clone(),
                         initial_stake: Numeric::from(stake),
                         metadata: Metadata::default(),

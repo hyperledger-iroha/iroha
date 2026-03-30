@@ -67,15 +67,13 @@ impl<'a> PenaltyApplier<'a> {
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
 
         for ((lane_id, validator_id), record) in world.public_lane_validators().iter() {
-            if let Some(pk) = record.validator.try_signatory() {
-                candidates_map
-                    .entry(pk.clone())
-                    .or_default()
-                    .push(ValidatorLocator {
-                        lane_id: *lane_id,
-                        validator: validator_id.clone(),
-                    });
-            }
+            candidates_map
+                .entry(record.peer_id.public_key().clone())
+                .or_default()
+                .push(ValidatorLocator {
+                    lane_id: *lane_id,
+                    validator: validator_id.clone(),
+                });
         }
 
         let mut result = BTreeMap::new();
@@ -1134,6 +1132,7 @@ mod tests {
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
+            peer_id: peer.clone(),
             stake_account: validator.clone(),
             total_stake: Numeric::new(100, 0),
             self_stake: Numeric::new(50, 0),
@@ -1759,6 +1758,7 @@ mod tests {
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
+            peer_id: PeerId::from(validator.signatory().clone()),
             stake_account: validator.clone(),
             total_stake: slash_amount.clone(),
             self_stake: slash_amount.clone(),
@@ -2004,6 +2004,7 @@ mod tests {
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
+            peer_id: peer.clone(),
             stake_account: validator.clone(),
             total_stake: Numeric::new(100, 0),
             self_stake: Numeric::new(50, 0),

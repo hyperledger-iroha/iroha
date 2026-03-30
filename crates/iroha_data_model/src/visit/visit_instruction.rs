@@ -564,6 +564,7 @@ mod tests {
         let instruction = RegisterPublicLaneValidator::new(
             LaneId::SINGLE,
             validator.clone(),
+            PeerId::from(validator.signatory().clone()),
             validator,
             Numeric::from(1u64),
             Metadata::default(),

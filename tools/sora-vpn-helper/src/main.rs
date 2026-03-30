@@ -43,8 +43,8 @@ use rustls::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
-    io::{self as tokio_io, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     io::unix::AsyncFd,
+    io::{self as tokio_io, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     signal::unix::{SignalKind, signal},
     time::timeout,
 };

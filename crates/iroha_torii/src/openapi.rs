@@ -9107,7 +9107,7 @@ fn openapi_schemas() -> Map {
         "PublicLaneValidatorRecord".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_id", "validator", "stake_account", "total_stake", "self_stake", "status"],
+            "required": ["lane_id", "validator", "peer_id", "stake_account", "total_stake", "self_stake", "status"],
             "additionalProperties": false,
             "properties": {
                 "lane_id": {
@@ -9117,7 +9117,12 @@ fn openapi_schemas() -> Map {
                 },
                 "validator": {
                     "type": "string",
-                    "description": "Validator account literal rendered as canonical I105."
+                    "description": "Validator authority account literal rendered as canonical I105."
+                },
+                "peer_id": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Peer identity bound to the validator for consensus and routed traffic. Null for manifest-backed admin-managed lanes."
                 },
                 "stake_account": {
                     "type": "string",

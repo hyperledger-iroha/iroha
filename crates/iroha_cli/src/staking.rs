@@ -9,6 +9,7 @@ use iroha::data_model::{
     },
     metadata::Metadata,
     nexus::LaneId,
+    peer::PeerId,
     prelude::AccountId,
 };
 use iroha_primitives::numeric::Numeric;
@@ -42,6 +43,9 @@ pub struct RegisterArgs {
     /// Validator account identifier (canonical I105 account literal)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
+    /// Peer identity that will participate in consensus for this validator
+    #[arg(long, value_name = "PEER_ID")]
+    pub peer_id: String,
     /// Optional staking account (defaults to validator)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub stake_account: Option<String>,
@@ -57,6 +61,10 @@ impl Run for RegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let lane_id = LaneId::new(self.lane_id);
         let validator = parse_account_id(context, &self.validator, "--validator")?;
+        let peer_id = self
+            .peer_id
+            .parse::<PeerId>()
+            .wrap_err("--peer-id must be a valid peer id")?;
         let stake_account = match self.stake_account {
             Some(value) => parse_account_id(context, &value, "--stake-account")?,
             None => validator.clone(),
@@ -65,6 +73,7 @@ impl Run for RegisterArgs {
         let instruction: InstructionBox = RegisterPublicLaneValidator {
             lane_id,
             validator,
+            peer_id,
             stake_account,
             initial_stake: Numeric::new(self.initial_stake, 0),
             metadata,

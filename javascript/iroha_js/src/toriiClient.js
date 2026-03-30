@@ -8191,17 +8191,26 @@ export class ToriiClient {
         setHeader(initHeaders, key, value);
       }
       if (headerValueRequiresRawUtf8Transport(canonicalHeaders["X-Iroha-Account"])) {
-        if (!fetchSupportsRawUtf8Headers(this._fetch)) {
-          throw createValidationError(
-            ValidationErrorCode.INVALID_OBJECT,
-            "ToriiClient: canonicalAuth.accountId contains UTF-8 characters that require a fetch implementation with raw UTF-8 header support.",
-            "canonicalAuth.accountId",
-          );
-        }
         init[RAW_UTF8_HEADERS_INIT_KEY] = {
           "X-Iroha-Account": canonicalHeaders["X-Iroha-Account"],
         };
       }
+    }
+    const rawUtf8Headers = cloneRawUtf8Headers(init[RAW_UTF8_HEADERS_INIT_KEY]);
+    const shouldUseNodeRawUtf8Transport =
+      rawUtf8Headers &&
+      !fetchSupportsRawUtf8Headers(this._fetch) &&
+      canUseNodeRawUtf8Transport(url);
+    if (
+      rawUtf8Headers &&
+      !fetchSupportsRawUtf8Headers(this._fetch) &&
+      !shouldUseNodeRawUtf8Transport
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        "ToriiClient: canonicalAuth.accountId contains UTF-8 characters that require a fetch implementation with raw UTF-8 header support.",
+        "canonicalAuth.accountId",
+      );
     }
     const retryProfileName =
       typeof options.retryProfile === "string" && options.retryProfile
@@ -8252,16 +8261,25 @@ export class ToriiClient {
         }, this._config.timeoutMs);
       }
       try {
-        const response = await this._fetch(url.toString(), {
-          ...init,
-          // Give fetch a fresh header bag for each retry attempt. Reusing the
-          // same object across retries can break native fetch implementations.
-          headers: cloneHeadersForFetch(initHeaders),
-          [RAW_UTF8_HEADERS_INIT_KEY]: cloneRawUtf8Headers(
-            init[RAW_UTF8_HEADERS_INIT_KEY],
-          ),
-          signal: signal ?? undefined,
-        });
+        const response = shouldUseNodeRawUtf8Transport
+          ? await performNodeRawUtf8Request({
+              url,
+              method: methodUpper,
+              headers: cloneHeadersForFetch(initHeaders),
+              rawUtf8Headers,
+              body: init.body,
+              signal: signal ?? undefined,
+            })
+          : await this._fetch(url.toString(), {
+              ...init,
+              // Give fetch a fresh header bag for each retry attempt. Reusing the
+              // same object across retries can break native fetch implementations.
+              headers: cloneHeadersForFetch(initHeaders),
+              [RAW_UTF8_HEADERS_INIT_KEY]: cloneRawUtf8Headers(
+                init[RAW_UTF8_HEADERS_INIT_KEY],
+              ),
+              signal: signal ?? undefined,
+            });
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
@@ -15890,6 +15908,348 @@ function fetchSupportsRawUtf8Headers(fetchImpl) {
   return Boolean(fetchImpl && fetchImpl[RAW_UTF8_HEADER_SUPPORT_FLAG] === true);
 }
 
+function canUseNodeRawUtf8Transport(url) {
+  const parsed = url instanceof URL ? url : new URL(String(url));
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false;
+  }
+  return typeof process !== "undefined" && Boolean(process?.versions?.node);
+}
+
+async function performNodeRawUtf8Request({
+  url,
+  method,
+  headers,
+  rawUtf8Headers,
+  body,
+  signal,
+}) {
+  const parsed = url instanceof URL ? url : new URL(String(url));
+  const requestBuffer = buildRawUtf8HttpRequestBuffer({
+    url: parsed,
+    method,
+    headers,
+    rawUtf8Headers,
+    body,
+  });
+  throwIfAborted(signal);
+  const socket = await openNodeRawUtf8Socket(parsed);
+  if (typeof socket.setNoDelay === "function") {
+    socket.setNoDelay(true);
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const chunks = [];
+    const finishWithError = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const finishWithResponse = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      try {
+        resolve(createNodeRawUtf8Response(Buffer.concat(chunks)));
+      } catch (error) {
+        reject(error);
+      }
+    };
+    const onAbort = () => {
+      const reason = signal?.reason ?? createAbortError();
+      try {
+        socket.destroy(reason instanceof Error ? reason : undefined);
+      } catch {
+        // Ignore socket teardown failures during abort.
+      }
+      finishWithError(reason);
+    };
+    const cleanup = () => {
+      socket.removeListener("error", onError);
+      socket.removeListener("data", onData);
+      socket.removeListener("end", onEnd);
+      socket.removeListener("close", onClose);
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    };
+    const onError = (error) => {
+      finishWithError(error);
+    };
+    const onData = (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    };
+    const onEnd = () => {
+      finishWithResponse();
+    };
+    const onClose = (hadError) => {
+      if (settled || hadError) {
+        return;
+      }
+      if (chunks.length > 0) {
+        finishWithResponse();
+        return;
+      }
+      finishWithError(new Error("raw UTF-8 request socket closed before a response arrived"));
+    };
+    socket.once("error", onError);
+    socket.on("data", onData);
+    socket.once("end", onEnd);
+    socket.once("close", onClose);
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+    try {
+      socket.write(requestBuffer);
+    } catch (error) {
+      finishWithError(error);
+    }
+  });
+}
+
+async function openNodeRawUtf8Socket(url) {
+  const port =
+    url.port !== "" ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`invalid port for raw UTF-8 request: ${url.port}`);
+  }
+  if (url.protocol === "https:") {
+    const tls = await import("node:tls");
+    return tls.connect({
+      host: url.hostname,
+      port,
+      ALPNProtocols: ["http/1.1"],
+      servername: url.hostname.includes(":") ? undefined : url.hostname,
+    });
+  }
+  const net = await import("node:net");
+  return net.createConnection({
+    host: url.hostname,
+    port,
+  });
+}
+
+function buildRawUtf8HttpRequestBuffer({
+  url,
+  method,
+  headers,
+  rawUtf8Headers,
+  body,
+}) {
+  const renderedHeaders = cloneHeadersForFetch(headers);
+  const rawHeaders = cloneRawUtf8Headers(rawUtf8Headers) ?? {};
+  for (const name of Object.keys(rawHeaders)) {
+    deleteHeader(renderedHeaders, name);
+  }
+  if (!hasHeader(renderedHeaders, "Host")) {
+    renderedHeaders.Host = renderRawHttpHostHeader(url);
+  }
+  if (!hasHeader(renderedHeaders, "Connection")) {
+    renderedHeaders.Connection = "close";
+  }
+  const bodyBuffer = encodeRawUtf8RequestBody(body);
+  if (
+    bodyBuffer &&
+    !hasHeader(renderedHeaders, "Content-Length") &&
+    !hasHeader(renderedHeaders, "Transfer-Encoding")
+  ) {
+    renderedHeaders["Content-Length"] = String(bodyBuffer.length);
+  }
+  const target = `${url.pathname || "/"}${url.search || ""}` || "/";
+  const chunks = [Buffer.from(`${method} ${target} HTTP/1.1\r\n`, "ascii")];
+  for (const [name, value] of Object.entries(renderedHeaders)) {
+    chunks.push(encodeRawHttpHeaderLine(name, value));
+  }
+  for (const [name, value] of Object.entries(rawHeaders)) {
+    chunks.push(encodeRawHttpHeaderLine(name, value));
+  }
+  chunks.push(Buffer.from("\r\n", "ascii"));
+  if (bodyBuffer) {
+    chunks.push(bodyBuffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+function encodeRawUtf8RequestBody(body) {
+  if (body === undefined || body === null) {
+    return null;
+  }
+  if (typeof body === "string") {
+    return Buffer.from(body, "utf8");
+  }
+  if (body instanceof URLSearchParams) {
+    return Buffer.from(body.toString(), "utf8");
+  }
+  return toBuffer(body);
+}
+
+function renderRawHttpHostHeader(url) {
+  const defaultPort = url.protocol === "https:" ? "443" : "80";
+  const hostname = url.hostname.includes(":") ? `[${url.hostname}]` : url.hostname;
+  if (url.port && url.port !== defaultPort) {
+    return `${hostname}:${url.port}`;
+  }
+  return hostname;
+}
+
+function encodeRawHttpHeaderLine(name, value) {
+  const renderedName = String(name);
+  if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u.test(renderedName)) {
+    throw new TypeError(`invalid raw HTTP header name: ${renderedName}`);
+  }
+  const renderedValue = value == null ? "" : String(value);
+  if (/[\r\n]/u.test(renderedValue)) {
+    throw new TypeError(`invalid raw HTTP header value for ${renderedName}`);
+  }
+  return Buffer.concat([
+    Buffer.from(`${renderedName}: `, "ascii"),
+    Buffer.from(renderedValue, "utf8"),
+    Buffer.from("\r\n", "ascii"),
+  ]);
+}
+
+function createNodeRawUtf8Response(buffer) {
+  const parsed = parseRawHttpResponse(buffer);
+  if (typeof Response === "function") {
+    return new Response(parsed.body, {
+      status: parsed.status,
+      statusText: parsed.statusText,
+      headers: parsed.headers,
+    });
+  }
+  attachHeaderAccessors(parsed.headers);
+  return {
+    status: parsed.status,
+    statusText: parsed.statusText,
+    headers: parsed.headers,
+    body: null,
+    json: async () => JSON.parse(parsed.body.toString("utf8")),
+    text: async () => parsed.body.toString("utf8"),
+    arrayBuffer: async () =>
+      parsed.body.buffer.slice(
+        parsed.body.byteOffset,
+        parsed.body.byteOffset + parsed.body.byteLength,
+      ),
+  };
+}
+
+function parseRawHttpResponse(buffer) {
+  const headerSeparator = buffer.indexOf("\r\n\r\n");
+  if (headerSeparator === -1) {
+    throw new Error("invalid raw HTTP response: missing header terminator");
+  }
+  const headerBlock = buffer.subarray(0, headerSeparator).toString("latin1");
+  const lines = headerBlock.split("\r\n");
+  const statusLine = lines.shift();
+  const match =
+    typeof statusLine === "string"
+      ? /^HTTP\/1\.[01]\s+(\d{3})(?:\s+(.*))?$/u.exec(statusLine)
+      : null;
+  if (!match) {
+    throw new Error("invalid raw HTTP response: malformed status line");
+  }
+  const headers = {};
+  for (const line of lines) {
+    const delimiter = line.indexOf(":");
+    if (delimiter === -1) {
+      continue;
+    }
+    const name = line.slice(0, delimiter).trim();
+    const value = line.slice(delimiter + 1).trim();
+    const existing = findHeaderKey(headers, name);
+    if (existing) {
+      headers[existing] = `${headers[existing]}, ${value}`;
+    } else {
+      headers[name] = value;
+    }
+  }
+  let body = buffer.subarray(headerSeparator + 4);
+  const status = Number.parseInt(match[1], 10);
+  if (status < 200 || status === 204 || status === 304) {
+    body = Buffer.alloc(0);
+  } else if (responseUsesChunkedTransferEncoding(headers)) {
+    body = decodeChunkedHttpBody(body);
+  } else {
+    const contentLength = parseContentLengthHeader(headers);
+    if (contentLength !== null) {
+      if (body.length < contentLength) {
+        throw new Error("invalid raw HTTP response: body shorter than content-length");
+      }
+      body = body.subarray(0, contentLength);
+    }
+  }
+  return {
+    status,
+    statusText: match[2] ?? "",
+    headers,
+    body,
+  };
+}
+
+function responseUsesChunkedTransferEncoding(headers) {
+  const key = findHeaderKey(headers, "transfer-encoding");
+  if (!key) {
+    return false;
+  }
+  return String(headers[key])
+    .split(",")
+    .some((entry) => entry.trim().toLowerCase() === "chunked");
+}
+
+function parseContentLengthHeader(headers) {
+  const key = findHeaderKey(headers, "content-length");
+  if (!key) {
+    return null;
+  }
+  const parsed = Number.parseInt(String(headers[key]).trim(), 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error("invalid raw HTTP response: malformed content-length");
+  }
+  return parsed;
+}
+
+function decodeChunkedHttpBody(buffer) {
+  const chunks = [];
+  let offset = 0;
+  while (offset < buffer.length) {
+    const lineEnd = buffer.indexOf("\r\n", offset);
+    if (lineEnd === -1) {
+      throw new Error("invalid raw HTTP response: unterminated chunk size");
+    }
+    const sizeLine = buffer
+      .subarray(offset, lineEnd)
+      .toString("latin1")
+      .split(";", 1)[0]
+      .trim();
+    const size = Number.parseInt(sizeLine, 16);
+    if (!Number.isInteger(size) || size < 0) {
+      throw new Error("invalid raw HTTP response: malformed chunk size");
+    }
+    offset = lineEnd + 2;
+    if (size === 0) {
+      if (offset + 2 > buffer.length) {
+        throw new Error("invalid raw HTTP response: missing chunk terminator");
+      }
+      return Buffer.concat(chunks);
+    }
+    if (offset + size + 2 > buffer.length) {
+      throw new Error("invalid raw HTTP response: truncated chunk body");
+    }
+    chunks.push(buffer.subarray(offset, offset + size));
+    offset += size;
+    if (buffer[offset] !== 13 || buffer[offset + 1] !== 10) {
+      throw new Error("invalid raw HTTP response: malformed chunk delimiter");
+    }
+    offset += 2;
+  }
+  throw new Error("invalid raw HTTP response: missing terminating chunk");
+}
+
 function headersContainCredentials(headers) {
   if (!headers || typeof headers !== "object") {
     return false;
@@ -15952,6 +16312,15 @@ function delay(ms, signal) {
     }, ms);
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+function createAbortError() {
+  if (typeof DOMException === "function") {
+    return new DOMException("The operation was aborted", "AbortError");
+  }
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 function throwIfAborted(signal) {

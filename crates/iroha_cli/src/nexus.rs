@@ -322,15 +322,16 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
     let mut output = String::new();
     writeln!(
         &mut output,
-        "{:<36}  {:<18}  {:<22}  {:<20}  {:<11}",
-        "VALIDATOR", "STATUS", "ACTIVATION", "STAKE", "LAST_REWARD"
+        "{:<36}  {:<24}  {:<18}  {:<22}  {:<20}  {:<11}",
+        "VALIDATOR", "PEER_ID", "STATUS", "ACTIVATION", "STAKE", "LAST_REWARD"
     )?;
     for entry in entries {
         let row = build_validator_row(entry);
         writeln!(
             &mut output,
-            "{:<36}  {:<18}  {:<22}  {:<20}  {:<11}",
+            "{:<36}  {:<24}  {:<18}  {:<22}  {:<20}  {:<11}",
             truncate_field(&row.validator, 36),
+            truncate_field(&row.peer_id, 24),
             truncate_field(&row.status, 18),
             truncate_field(&row.activation, 22),
             truncate_field(&row.stake, 20),
@@ -395,6 +396,7 @@ fn lane_items(payload: &Value) -> Result<Vec<&Map>> {
 
 struct ValidatorRow {
     validator: String,
+    peer_id: String,
     status: String,
     activation: String,
     stake: String,
@@ -404,6 +406,11 @@ struct ValidatorRow {
 fn build_validator_row(entry: &Map) -> ValidatorRow {
     let validator = entry
         .get("validator")
+        .and_then(Value::as_str)
+        .unwrap_or("-")
+        .to_string();
+    let peer_id = entry
+        .get("peer_id")
         .and_then(Value::as_str)
         .unwrap_or("-")
         .to_string();
@@ -423,6 +430,7 @@ fn build_validator_row(entry: &Map) -> ValidatorRow {
 
     ValidatorRow {
         validator,
+        peer_id,
         status,
         activation,
         stake,

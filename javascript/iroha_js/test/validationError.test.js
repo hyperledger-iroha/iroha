@@ -107,6 +107,15 @@ test("normalizeAccountId preserves canonical i105 literals", () => {
   assert.equal(normalized, literalWithoutDomain);
 });
 
+test("normalizeAccountId preserves non-default i105 discriminants", () => {
+  const address = AccountAddress.fromAccount({
+    publicKey: SAMPLE_KEY,
+  });
+  const literalWithoutDomain = address.toI105(369);
+  const normalized = normalizeAccountId(literalWithoutDomain, "accountId");
+  assert.equal(normalized, literalWithoutDomain);
+});
+
 test("normalizeAccountId rejects invalid domain labels", () => {
   assert.throws(
     () => normalizeAccountId("alice@bad domain", "accountId"),

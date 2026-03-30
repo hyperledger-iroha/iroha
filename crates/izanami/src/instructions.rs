@@ -268,6 +268,7 @@ pub fn npos_post_topology_instructions(
         instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: validator_id.clone(),
+            peer_id: PeerId::from(validator_id.signatory().clone()),
             stake_account: validator_id.clone(),
             initial_stake: stake_amount.clone(),
             metadata: Metadata::default(),
@@ -2256,6 +2257,7 @@ impl ChaosState {
         instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
             lane_id: lane,
             validator: validator.id.clone(),
+            peer_id: PeerId::from(validator.id.signatory().clone()),
             stake_account: stake_account.id.clone(),
             initial_stake: stake_amount,
             metadata: Metadata::default(),

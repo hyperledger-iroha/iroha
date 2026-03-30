@@ -205,6 +205,7 @@ fn append_npos_bootstrap(
         builder = builder.append_instruction(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: validator_id.clone(),
+            peer_id: peer.clone(),
             stake_account: validator_id.clone(),
             initial_stake: Numeric::from(DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT),
             metadata: Metadata::default(),
