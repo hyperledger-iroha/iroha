@@ -2981,200 +2981,56 @@ They are normalised via the same unsigned-integer validators before any request 
 exactly like `25` while still surfacing a `TypeError` when the value is negative,
 fractional, NaN, or otherwise invalid.
 
-Offline allowances and transfers reuse the same ergonomics. The helpers wrap the
-`/v1/offline/allowances` and `/v1/offline/transfers` list/query endpoints so
-monitoring agents can inspect registered wallet certificates and queued bundle
-submissions without bespoke pagination logic.
+The supported first-release offline HTTP surface is the device-bound cash flow:
 
-Allowance entries surface the ledger metadata directly on each item —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` — so dashboards do not have to
-drill into the embedded record to understand refresh cadence or verdict
-bindings. The new `integrity_metadata` field mirrors the Android policy slug
-(`policy`) and, when Provisioned allowances are in play, surfaces the inspector
-public key plus manifest schema/version/TTL/digest under
-`integrity_metadata.provisioned`. Dashboards and telemetry exporters can now
-bucket inventory by `policy` without parsing raw metadata maps.
+- `getOfflineCashReadiness()` for feature readiness
+- `setupOfflineCash()`, `loadOfflineCash()`, `refreshOfflineCash()`, `syncOfflineCash()`, and `redeemOfflineCash()`
+- `listOfflineTransfers()`, `getTransfer()`, and `queryOfflineTransfers()` for read-side transfer inspection
+- `listOfflineRevocations()` plus `getOfflineRevocationBundle()` for revocation state
 
-Transfer rows expose the Android policy snapshot as top-level JSON so agents can
-differentiate marker-key, Play Integrity, HMS Safety Detect, or Provisioned
-allowances without decoding the raw Norito payload. Inspect `platform_policy`
-or the new `integrity_metadata.policy` helper to bucket bundles by provider and
-`platform_token_snapshot.attestation_jws_b64` when you need to persist or audit
-the inspector-issued JWS backing a Provisioned manifest; when Provisioned is in
-use the inspector metadata appears under
-`integrity_metadata.provisioned`.
-
-`status_transitions` mirrors validator lifecycle events (Settled, Archived,
-Pruned) and each entry now carries the same `verdict_snapshot` captured during
-settlement, so POS importers can correlate attestation metadata with every
-state change without scraping the top-level record. When `verdict_snapshot`
-appears on either the transition or the parent transfer item, the payload uses
-the `hash:...` literal form emitted by Torii (matching the REST API).【crates/iroha_torii/src/routing.rs:26370】【javascript/iroha_js/src/toriiClient.js:12966】
-
-`listOfflineAllowances` also exposes the roadmap-driven convenience filters from
-`/v1/offline/allowances` via camelCase options. Set `controllerId`,
-`assetId`, `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`refreshBeforeMs/AfterMs`, `attestationNonceHex`, `verdictIdHex`,
-`requireVerdict`, or `onlyMissingVerdict` to avoid crafting Norito filter
-expressions for common reporting workflows; invalid combinations (`verdictIdHex`
-+ `onlyMissingVerdict`, or `requireVerdict` + `onlyMissingVerdict`) are rejected
-locally before hitting Torii. Transfers share the same ergonomics while adding
-`receiverId`, `depositAccountId`, and `platformPolicy` to mirror the GET query
-parameters on `/v1/offline/transfers`.
-
-To issue and register an allowance in one call, use
-`topUpOfflineAllowance` (or `topUpOfflineAllowanceRenewal` for renewals). The
-helper performs the certificate issue + register steps, returning both payloads
-so you can persist the verdict metadata immediately.
+The cash helpers mirror the mounted `/v1/offline/cash/*` routes and return the
+envelope Torii sends back. Request bodies are passed through as JSON, which
+lets wallet adapters keep their own serializers while still reusing the shared
+transport, retries, and auth/header configuration:
 
 ```js
-const draft = {
-  controller: "<i105-account-id>",
-  allowance: {
-    asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-    amount: "10",
-    commitment: [1, 2, 3],
+const readiness = await torii.getOfflineCashReadiness();
+console.log("recursive stark ready", readiness.offline_recursive_stark);
+
+const setupEnvelope = await torii.setupOfflineCash({
+  operation_id: "setup-001",
+  account_id: "<i105-account-id>",
+  device_binding: {
+    platform: "android",
+    device_id: "<device-id>",
   },
-  spend_public_key: "ed0120...",
-  attestation_report: [4, 5, 6],
-  issued_at_ms: Date.now(),
-  expires_at_ms: Date.now() + 86_400_000,
-  policy: {
-    max_balance: "10",
-    max_tx_value: "5",
-    expires_at_ms: Date.now() + 86_400_000,
+  device_proof: {
+    kind: "play_integrity",
   },
-};
-
-// Torii derives the certificate operator from its configured offline issuer keypair.
-
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<i105-account-id>",
-  privateKey: "ed25519:...",
-  certificate: draft,
 });
-console.log("registered", topUp.registration.certificate_id_hex);
-```
+console.log("lineage", setupEnvelope.lineage_state.lineage_id);
 
-For renewals, call `topUpOfflineAllowanceRenewal` with the existing certificate id:
-
-```js
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<i105-account-id>",
-    privateKey: "ed25519:...",
-    certificate: draft,
+const loadEnvelope = await torii.loadOfflineCash({
+  operation_id: "load-001",
+  lineage_id: setupEnvelope.lineage_state.lineage_id,
+  account_id: "<i105-account-id>",
+  asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+  amount: "10.00",
+  device_binding: {
+    platform: "android",
+    device_id: "<device-id>",
   },
-);
-console.log("renewed", renewed.registration.certificate_id_hex);
-```
-
-To issue a signed build claim directly (for example to attach to receipts before
-settlement), call `issueOfflineBuildClaim`:
-
-```js
-const claim = await torii.issueOfflineBuildClaim({
-  certificateIdHex: topUp.registration.certificate_id_hex,
-  txIdHex: "ab".repeat(64),
-  platform: "apple", // or "android"
-  appId: "com.example.ios",
-  buildNumber: 77,
+  device_proof: {
+    kind: "play_integrity",
+  },
 });
-console.log("issued build claim", claim.claim_id_hex);
-console.log("claim platform", claim.build_claim.platform); // Apple / Android
+console.log("balance", loadEnvelope.lineage_state.balance);
 ```
 
-Submit offline settlement bundles with `submitOfflineSettlement`. When Torii
-cannot infer a single app/build tuple (for example Android multi-package
-certificates), pass per-receipt `buildClaimOverrides` and set
-`repairExistingBuildClaims` when existing claims should be re-issued:
+Transfer and revocation reads keep the same iterable ergonomics as the rest of
+the SDK:
 
 ```js
-const settlement = await torii.submitOfflineSettlement({
-  authority: "<i105-account-id>",
-  privateKey: "ed25519:...",
-  transfer: transferPayload,
-  buildClaimOverrides: [
-    {
-      txIdHex: "ab".repeat(32),
-      appId: "com.example.android",
-      buildNumber: 77,
-      issuedAtMs: Date.now() - 1_000,
-      expiresAtMs: Date.now() + 30_000,
-    },
-  ],
-  repairExistingBuildClaims: true,
-});
-console.log("settled bundle", settlement.bundle_id_hex);
-```
-
-To enforce tx-status checks in one call, use `submitOfflineSettlementAndWait`
-and inspect `TransactionStatusError` when rejected:
-
-```js
-try {
-  const settleAbort = new AbortController();
-  const settlement = await torii.submitOfflineSettlementAndWait(
-    {
-      authority: "<i105-account-id>",
-      privateKey: "ed25519:...",
-      transfer: transferPayload,
-    },
-    { signal: settleAbort.signal, intervalMs: 250, maxAttempts: 40 },
-  );
-  console.log("bundle", settlement.bundle_id_hex, "tx", settlement.transaction_hash_hex);
-} catch (error) {
-  if (error && error.name === "TransactionStatusError") {
-    console.error(error.status, error.rejectionReason); // e.g. Rejected build_claim_missing
-  }
-}
-```
-
-If you already have a signed certificate, call `registerOfflineAllowance` or
-`renewOfflineAllowance` directly instead of the top-up helpers.
-
-Offline counter summaries expose the aggregate App Attest / Android series map
-for each certificate via `listOfflineSummaries`/`queryOfflineSummaries`. These
-helpers share the iterable ergonomics described above and now validate filter
-expressions before issuing requests — only `controller_id` and
-`certificate_id_hex` support equality/membership/exists operators, mirroring the
-Torii routing rules. Supplying any other field fails fast with a `TypeError`, so
-misconfigured dashboards never reach the network.
-
-Persist counters locally and enforce monotonic increments with
-`OfflineCounterJournal`. The journal stores `summary_hash_hex` parity plus
-per-scope counters under `~/.iroha/offline_counters/journal.json` by default
-(use `storage: "memory"` for ephemeral tests).
-
-```js
-import { OfflineCounterJournal, OfflineCounterPlatform } from "@iroha/iroha-js";
-
-const journal = new OfflineCounterJournal();
-const summaries = await torii.listOfflineSummaries({ limit: 50 });
-await journal.upsert(summaries, { recordedAtMs: Date.now() });
-
-const summary = summaries.items[0];
-const nextCounter = (summary.apple_key_counters["QUFQTERFTU8x"] ?? 0) + 1;
-await journal.updateCounter({
-  certificateIdHex: summary.certificate_id_hex,
-  controllerId: summary.controller_id,
-  platform: OfflineCounterPlatform.APPLE_KEY,
-  scope: "QUFQTERFTU8x",
-  counter: nextCounter,
-});
-```
-
-```js
-const { items: allowances } = await torii.listOfflineAllowances({ limit: 10 });
-console.log(
-  "first certificate",
-  allowances[0]?.controller_display,
-  allowances[0]?.remaining_amount,
-  allowances[0]?.verdict_id_hex,
-);
-
 for await (const transfer of torii.iterateOfflineTransfersQuery({
   filter: { Eq: ["asset_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"] },
   pageSize: 5,
@@ -3182,40 +3038,21 @@ for await (const transfer of torii.iterateOfflineTransfersQuery({
   console.log("bundle", transfer.bundle_id_hex, "receipts", transfer.receipt_count);
 }
 
-const rejectionStats = await torii.getOfflineRejectionStats({
-  telemetryProfile: "full",
-});
-if (rejectionStats) {
-  console.log(
-    "offline rejection total",
-    rejectionStats.total,
-    "top entry",
-    rejectionStats.items[0],
-  );
-} else {
-  console.log("telemetry profile forbids offline rejection stats");
-}
-```
+const revocationBundle = await torii.getOfflineRevocationBundle();
+console.log("revocation bundle", revocationBundle);
 
-Use `listOfflineRevocations`/`queryOfflineRevocations` (or their iterator
-counterparts) to watch verdict revocation records in near real time. The SDK
-surfaces the issuer display, revocation reason, optional notes/metadata, and the
-raw ledger payload so operators can join the data with audit pipelines:
-
-```js
 const revocations = await torii.listOfflineRevocations({
   limit: 5,
   sort: "revoked_at_ms:desc",
-  filter: { Eq: ["reason", "compromised_device"] },
 });
 for (const item of revocations.items) {
-  console.log(
-    `${item.verdict_id_hex} revoked at ${item.revoked_at_ms} by ${item.issuer_display}`,
-    "note:",
-    item.note ?? "<none>",
-  );
+  console.log(item.verdict_id_hex, item.reason, item.note ?? "<none>");
 }
 ```
+
+Legacy allowance, certificate, settlement, summary, and revocation-query
+helpers were removed from the public client surface. Use the cash lifecycle,
+transfer, revocation list, and revocation bundle helpers instead.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,

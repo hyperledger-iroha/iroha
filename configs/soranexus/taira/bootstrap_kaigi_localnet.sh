@@ -52,15 +52,20 @@ onboarding = cfg["torii"]["onboarding"]
 print(onboarding["authority"])
 print(onboarding["private_key"])
 print(cfg["torii"]["max_content_len"])
+quota = cfg.get("sorafs", {}).get("quota", {})
+print(quota.get("storage_pin_max_events", 64))
+print(quota.get("storage_pin_window_secs", 3600))
 PY
   )
-  if [[ "${#values[@]}" -lt 3 ]]; then
-    echo "failed to load Taira onboarding authority/max_content_len from $TAIRA_PROFILE_CONFIG" >&2
+  if [[ "${#values[@]}" -lt 5 ]]; then
+    echo "failed to load Taira onboarding authority/max_content_len/quota from $TAIRA_PROFILE_CONFIG" >&2
     exit 1
   fi
   TAIRA_AUTHORITY="${IROHA_TAIRA_AUTHORITY:-${values[0]}}"
   TAIRA_AUTHORITY_PRIVATE_KEY="${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-${values[1]}}"
   TAIRA_TORII_MAX_CONTENT_LEN="${IROHA_TAIRA_TORII_MAX_CONTENT_LEN:-${values[2]}}"
+  TAIRA_STORAGE_PIN_MAX_EVENTS="${IROHA_TAIRA_STORAGE_PIN_MAX_EVENTS:-${values[3]}}"
+  TAIRA_STORAGE_PIN_WINDOW_SECS="${IROHA_TAIRA_STORAGE_PIN_WINDOW_SECS:-${values[4]}}"
 }
 
 patch_peer_configs_for_taira_authority() {
@@ -68,6 +73,8 @@ patch_peer_configs_for_taira_authority() {
   TAIRA_AUTHORITY="$TAIRA_AUTHORITY" \
   TAIRA_AUTHORITY_PRIVATE_KEY="$TAIRA_AUTHORITY_PRIVATE_KEY" \
   TAIRA_TORII_MAX_CONTENT_LEN="$TAIRA_TORII_MAX_CONTENT_LEN" \
+  TAIRA_STORAGE_PIN_MAX_EVENTS="$TAIRA_STORAGE_PIN_MAX_EVENTS" \
+  TAIRA_STORAGE_PIN_WINDOW_SECS="$TAIRA_STORAGE_PIN_WINDOW_SECS" \
   TAIRA_FEE_ASSET_ID="$fee_asset_id" \
   LOCALNET_DIR="$LOCALNET_DIR" \
   python3 <<'PY'
@@ -79,6 +86,8 @@ localnet_dir = Path(os.environ["LOCALNET_DIR"])
 authority = os.environ["TAIRA_AUTHORITY"]
 private_key = os.environ["TAIRA_AUTHORITY_PRIVATE_KEY"]
 max_content_len = os.environ["TAIRA_TORII_MAX_CONTENT_LEN"]
+storage_pin_max_events = os.environ["TAIRA_STORAGE_PIN_MAX_EVENTS"]
+storage_pin_window_secs = os.environ["TAIRA_STORAGE_PIN_WINDOW_SECS"]
 fee_asset_id = os.environ["TAIRA_FEE_ASSET_ID"]
 
 onboarding_block = f"""[torii.onboarding]
@@ -103,6 +112,11 @@ pow_adaptive_lookback_blocks = 64
 pow_adaptive_claims_per_extra_bit = 4
 pow_adaptive_max_extra_bits = 2
 pow_vrf_seed_enabled = false
+"""
+
+quota_block = f"""[sorafs.quota]
+storage_pin_max_events = {storage_pin_max_events}
+storage_pin_window_secs = {storage_pin_window_secs}
 """
 
 def replace_or_insert(text: str, section: str, block: str) -> str:
@@ -140,6 +154,7 @@ def ensure_torii_max_content_len(text: str) -> str:
 for path in sorted(localnet_dir.glob("peer*.toml")):
     text = path.read_text()
     text = ensure_torii_max_content_len(text)
+    text = replace_or_insert(text, "sorafs.quota", quota_block)
     text = replace_or_insert(text, "torii.onboarding", onboarding_block)
     text = replace_or_insert(text, "torii.faucet", faucet_block)
     path.write_text(text)

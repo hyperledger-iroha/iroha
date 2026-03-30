@@ -143,7 +143,9 @@ the request. Torii must also run with `torii.max_content_len` high enough for
 the base64-expanded JSON body; the shipped Taira profile now pins that to
 `64_000_000`, and the local bootstrap overlay now rewrites the served
 `dist/taira-localnet/peer*.toml` files to keep that same cap live after every
-reset.
+reset. Taira also overrides `[sorafs.quota] storage_pin_max_events = 64` so
+publish/retry loops on the public testnet do not immediately exhaust the
+generic `4/hour` storage-pin quota inherited from the global default.
 
 After every Taira reset or `irohad` rebuild, verify the manifest-registration
 ingress before retrying `yarn taira:publish`:
@@ -328,10 +330,14 @@ From `../iroha2-block-explorer-web`:
      copies still contain `max_content_len = 64000000`; the local bootstrap
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
+   - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
+     served peer configs; otherwise a handful of failed storage-pin probes can
+     exhaust the default `4 requests / 3600s` window before a real
+     `yarn taira:publish` retry.
    - a publish-sized ingress smoke should clear the old 16 MiB limit:
      `POST /v1/sorafs/storage/pin` with a `24_000_037` byte JSON body should
      reach the handler and return a normal `400` (for example `invalid base64
-     in manifest_b64`), not `413` or `502`.
+     in manifest_b64`), not `413`, `429`, or `502`.
    - keep the dedicated `location = /v1/connect/ws` blocks intact; they forward
      the required websocket `Upgrade` / `Connection: upgrade` headers for
      Iroha Connect on `taira.sora.org`.

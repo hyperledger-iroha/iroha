@@ -16017,254 +16017,114 @@ test("queryTriggers rejects unsupported option keys", async () => {
   assert.equal(fetchCalled, false);
 });
 
-test("listOfflineAllowances normalizes payloads and query params", async () => {
-  let capturedUrl;
-  const allowanceRecord = {
-    certificate: {
-      controller: FIXTURE_ALICE_ID,
-      allowance: { asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", amount: "500" },
-    },
-    current_commitment: "0xdeadbeef",
-    registered_at_ms: 1234,
-    remaining_amount: "499",
-    counter_state: {},
-    metadata: {
-      "android.integrity.policy": "ProViSiOnEd",
-      "android.provisioned.inspector_public_key":
-        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
-      "android.provisioned.manifest_schema": "offline_provisioning_v1",
-      "android.provisioned.manifest_version": "2",
-      "android.provisioned.max_manifest_age_ms": "604800000",
-      "android.provisioned.manifest_digest":
-        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
-    },
-  };
-  const minimalAllowanceRecord = { remaining_amount: "125" };
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-      {
-        certificate_id_hex: "cafebabe",
-        controller_id: FIXTURE_ALICE_ID,
-        controller_display: "soraqqqqqqqq",
-        asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-        asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-        asset_definition_name: "USD",
-        asset_definition_alias: "usd#main",
-            registered_at_ms: "1234",
-            expires_at_ms: "9999",
-            policy_expires_at_ms: "10001",
-            refresh_at_ms: "1500",
-            verdict_id_hex: "deadbeef",
-        attestation_nonce_hex: "beadfeed",
-        remaining_amount: "499.25",
-        deadline_kind: "policy",
-        deadline_state: "warning",
-        deadline_ms: 50_000,
-        deadline_ms_remaining: -5_000,
-        record: allowanceRecord,
-      },
-          {
-            certificate_id_hex: "feedface",
-            controller_id: FIXTURE_BOB_ID,
-            controller_display: "soraqqqqqqqr",
-            asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            asset_definition_name: "USD",
-            asset_definition_alias: null,
-            registered_at_ms: 2000,
-            expires_at_ms: 3000,
-            policy_expires_at_ms: 4000,
-            remaining_amount: "125",
-            record: minimalAllowanceRecord,
-          },
-        ],
-        total: "2",
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const filter = { Eq: ["controller_id", FIXTURE_ALICE_ID] };
-  const page = await client.listOfflineAllowances({
-    filter,
-    sort: "registered_at_ms:desc",
-    limit: 5,
-    offset: 10,
-  });
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.pathname, "/v1/offline/allowances");
-  assert.equal(parsed.searchParams.get("limit"), "5");
-  assert.equal(parsed.searchParams.get("offset"), "10");
-  assert.equal(parsed.searchParams.get("canonical_i105"), null);
-  assert.equal(parsed.searchParams.get("sort"), "registered_at_ms:desc");
-  assert.equal(parsed.searchParams.get("filter"), JSON.stringify(filter));
-  assert.equal(page.total, 2);
-  assert.equal(page.items.length, 2);
-  const item = page.items[0];
-  assert.equal(item.certificate_id_hex, "cafebabe");
-  assert.equal(item.controller_id, FIXTURE_ALICE_ID);
-  assert.equal(item.controller_display, "soraqqqqqqqq");
-  assert.equal(item.asset_id, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1");
-  assert.equal(item.asset_definition_id, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1");
-  assert.equal(item.asset_definition_name, "USD");
-  assert.equal(item.asset_definition_alias, "usd#main");
-  assert.equal(item.registered_at_ms, 1234);
-  assert.equal(item.expires_at_ms, 9999);
-  assert.equal(item.policy_expires_at_ms, 10001);
-  assert.equal(item.refresh_at_ms, 1500);
-  assert.equal(item.verdict_id_hex, "deadbeef");
-  assert.equal(item.attestation_nonce_hex, "beadfeed");
-  assert.equal(item.remaining_amount, "499.25");
-  assert.equal(item.deadline_kind, "policy");
-  assert.equal(item.deadline_state, "warning");
-  assert.equal(item.deadline_ms, 50_000);
-  assert.equal(item.deadline_ms_remaining, -5_000);
-  assert.deepEqual(item.record, allowanceRecord);
-  assert.deepEqual(item.integrity_metadata, {
-    policy: "provisioned",
-    provisioned: {
-      inspector_public_key:
-        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
-      manifest_schema: "offline_provisioning_v1",
-      manifest_version: 2,
-      max_manifest_age_ms: 604800000,
-      manifest_digest_hex:
-        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+test("getOfflineCashReadiness fetches canonical readiness payload", async () => {
+  let capturedRequest = null;
+  const readiness = { offline_recursive_stark: true };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init = {}) => {
+      capturedRequest = { url, init };
+      return createResponse({
+        status: 200,
+        jsonData: readiness,
+        headers: { "content-type": "application/json" },
+      });
     },
   });
-  const fallback = page.items[1];
-  assert.equal(fallback.refresh_at_ms, null);
-  assert.equal(fallback.verdict_id_hex, null);
-  assert.equal(fallback.attestation_nonce_hex, null);
-  assert.equal(fallback.deadline_kind, null);
-  assert.equal(fallback.deadline_state, null);
-  assert.equal(fallback.deadline_ms, null);
-  assert.equal(fallback.deadline_ms_remaining, null);
-  assert.equal(fallback.remaining_amount, "125");
-  assert.equal(fallback.asset_definition_alias, null);
-  assert.equal(fallback.integrity_metadata, null);
+
+  const response = await client.getOfflineCashReadiness();
+
+  assert.ok(capturedRequest, "request not captured");
+  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/cash/readiness`);
+  assert.equal(capturedRequest.init.method, "GET");
+  assert.equal(capturedRequest.init.headers.Accept, "application/json");
+  assert.deepEqual(response, readiness);
 });
 
-test("listOfflineAllowances captures play integrity metadata", async () => {
-  const playIntegrityRecord = {
-    certificate: {
-      metadata: {
-        "android.integrity.policy": "play_integrity",
-        "android.play_integrity.cloud_project_number": 424242,
-        "android.play_integrity.environment": "production",
-        "android.play_integrity.package_names": ["tech.iroha.wallet"],
-        "android.play_integrity.signing_digests_sha256": [
-          "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
-        ],
-        "android.play_integrity.allowed_app_verdicts": ["play_recognized"],
-        "android.play_integrity.allowed_device_verdicts": ["strong"],
-        "android.play_integrity.max_token_age_ms": 30000,
-      },
+test("offline cash helpers post canonical cash routes", async () => {
+  const responseEnvelope = {
+    lineage_state: {
+      lineage_id: "deadbeef",
+      account_id: FIXTURE_ALICE_ID,
+      balance: "10",
     },
-    remaining_amount: "7",
   };
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            certificate_id_hex: "cafebabe",
-            controller_id: FIXTURE_ALICE_ID,
-            controller_display: "soraqqqqqqqq",
-            asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            asset_definition_name: "USD",
-            asset_definition_alias: null,
-            registered_at_ms: "1234",
-            expires_at_ms: "9999",
-            policy_expires_at_ms: "10001",
-            remaining_amount: "7",
-            record: playIntegrityRecord,
-          },
-        ],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const page = await client.listOfflineAllowances();
-  assert.equal(page.items.length, 1);
-  assert.deepEqual(page.items[0].integrity_metadata, {
-    policy: "play_integrity",
-    play_integrity: {
-      cloud_project_number: 424242,
-      environment: "production",
-      package_names: ["tech.iroha.wallet"],
-      signing_digests_sha256: [
-        "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
-      ],
-      allowed_app_verdicts: ["play_recognized"],
-      allowed_device_verdicts: ["strong"],
-      max_token_age_ms: 30000,
+  const cases = [
+    {
+      method: "setupOfflineCash",
+      path: "/v1/offline/cash/setup",
+      request: { operation_id: "setup-1", account_id: FIXTURE_ALICE_ID },
     },
-  });
+    {
+      method: "loadOfflineCash",
+      path: "/v1/offline/cash/load",
+      request: { operation_id: "load-1", lineage_id: "deadbeef", amount: "10" },
+    },
+    {
+      method: "refreshOfflineCash",
+      path: "/v1/offline/cash/refresh",
+      request: { operation_id: "refresh-1", lineage_id: "deadbeef" },
+    },
+    {
+      method: "syncOfflineCash",
+      path: "/v1/offline/cash/sync",
+      request: { operation_id: "sync-1", lineage_id: "deadbeef", receipts: [] },
+    },
+    {
+      method: "redeemOfflineCash",
+      path: "/v1/offline/cash/redeem",
+      request: { operation_id: "redeem-1", lineage_id: "deadbeef", amount: "3" },
+    },
+  ];
+
+  for (const scenario of cases) {
+    let capturedRequest = null;
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async (url, init = {}) => {
+        capturedRequest = { url, init };
+        return createResponse({
+          status: 200,
+          jsonData: responseEnvelope,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+
+    const response = await client[scenario.method](scenario.request);
+
+    assert.ok(capturedRequest, `${scenario.method} request not captured`);
+    assert.equal(capturedRequest.url, `${BASE_URL}${scenario.path}`);
+    assert.equal(capturedRequest.init.method, "POST");
+    assert.equal(capturedRequest.init.headers.Accept, "application/json");
+    assert.equal(capturedRequest.init.headers["Content-Type"], "application/json");
+    assert.deepEqual(JSON.parse(capturedRequest.init.body), scenario.request);
+    assert.deepEqual(response, responseEnvelope);
+  }
 });
 
-test("listOfflineAllowances captures hms safety detect metadata", async () => {
-  const hmsRecord = {
-    certificate: {
-      metadata: {
-        "android.integrity.policy": "hms_safety_detect",
-        "android.hms_safety_detect.app_id": "103000042",
-        "android.hms_safety_detect.package_names": ["tech.iroha.wallet"],
-        "android.hms_safety_detect.signing_digests_sha256": [
-          "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-        ],
-        "android.hms_safety_detect.required_evaluations": ["strong_integrity"],
-        "android.hms_safety_detect.max_token_age_ms": 3600000,
-      },
-    },
-    remaining_amount: "7",
+test("getOfflineRevocationBundle fetches canonical bundle route", async () => {
+  let capturedRequest = null;
+  const bundle = {
+    bundle_id_hex: "deadbeef",
+    issued_at_ms: 1234,
   };
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        items: [
-          {
-            certificate_id_hex: "deadbeef",
-            controller_id: FIXTURE_BOB_ID,
-            controller_display: "soraqqqqqqqq",
-            asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            asset_definition_name: "USD",
-            asset_definition_alias: null,
-            registered_at_ms: "1234",
-            expires_at_ms: "9999",
-            policy_expires_at_ms: "10001",
-            remaining_amount: "7",
-            record: hmsRecord,
-          },
-        ],
-        total: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const page = await client.listOfflineAllowances();
-  assert.equal(page.items.length, 1);
-  assert.deepEqual(page.items[0].integrity_metadata, {
-    policy: "hms_safety_detect",
-    hms_safety_detect: {
-      app_id: "103000042",
-      package_names: ["tech.iroha.wallet"],
-      signing_digests_sha256: [
-        "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789",
-      ],
-      required_evaluations: ["strong_integrity"],
-      max_token_age_ms: 3600000,
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init = {}) => {
+      capturedRequest = { url, init };
+      return createResponse({
+        status: 200,
+        jsonData: bundle,
+        headers: { "content-type": "application/json" },
+      });
     },
   });
+
+  const response = await client.getOfflineRevocationBundle();
+
+  assert.ok(capturedRequest, "request not captured");
+  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/revocations/bundle`);
+  assert.equal(capturedRequest.init.method, "GET");
+  assert.equal(capturedRequest.init.headers.Accept, "application/json");
+  assert.deepEqual(response, bundle);
 });
 
 test("listOfflineTransfers normalizes payloads and metadata", async () => {
@@ -16405,245 +16265,6 @@ test("listOfflineTransfers normalizes payloads and metadata", async () => {
   assert.equal(fallback.integrity_metadata, null);
 });
 
-test("issueOfflineCertificate posts draft and parses response", async () => {
-  const certId = "deadbeef".repeat(8);
-  const draft = {
-    controller: FIXTURE_ALICE_ID,
-    allowance: {
-      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-      amount: "10",
-      commitment: Buffer.from([1, 2, 3]),
-    },
-    spend_public_key: "ed0120deadbeef",
-    attestation_report: new Uint8Array([4, 5, 6]),
-    issued_at_ms: 100,
-    expires_at_ms: 200,
-    policy: {
-      max_balance: "10",
-      max_tx_value: "5",
-      expires_at_ms: 200,
-    },
-  };
-  let capturedRequest = null;
-  const fetchImpl = async (url, init) => {
-    capturedRequest = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        certificate_id_hex: certId,
-        certificate: {
-          controller: FIXTURE_ALICE_ID,
-          operator: FIXTURE_AUTHORITY_ID,
-          allowance: {
-            asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            amount: "10",
-            commitment: [1, 2, 3],
-          },
-          spend_public_key: "ed0120deadbeef",
-          attestation_report: [4, 5, 6],
-          issued_at_ms: 100,
-          expires_at_ms: 200,
-          policy: {
-            max_balance: "10",
-            max_tx_value: "5",
-            expires_at_ms: 200,
-          },
-          operator_signature: "AA",
-          metadata: {},
-          verdict_id: null,
-          attestation_nonce: null,
-          refresh_at_ms: null,
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const response = await client.issueOfflineCertificate(draft);
-  assert.ok(capturedRequest, "request not captured");
-  assert.equal(new URL(capturedRequest.url).pathname, "/v1/offline/certificates/issue");
-  const body = JSON.parse(capturedRequest.init.body);
-  assert.ok(body.certificate);
-  assert.deepEqual(body.certificate.attestation_report, [4, 5, 6]);
-  assert.equal(FIXTURE_AUTHORITY_ID in body.certificate, false);
-  assert.equal(response.certificate_id_hex, certId);
-  assert.equal(response.certificate.controller, FIXTURE_ALICE_ID);
-});
-
-test("submitOfflineSettlement posts transfer and parses response", async () => {
-  let capturedRequest = null;
-  const fetchImpl = async (url, init) => {
-    capturedRequest = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        bundle_id_hex: "deadbeef",
-        transaction_hash_hex:
-          "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe",
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const response = await client.submitOfflineSettlement({
-    authority: FIXTURE_AUTHORITY_ID,
-    privateKey: Buffer.alloc(32, 2),
-    transfer: {
-      bundle_id: "deadbeef",
-      receipts: [],
-    },
-  });
-  assert.ok(capturedRequest, "request not captured");
-  assert.equal(new URL(capturedRequest.url).pathname, "/v1/offline/settlements");
-  const body = JSON.parse(capturedRequest.init.body);
-  assert.equal(body.authority, FIXTURE_AUTHORITY_ID);
-  assert.ok(body.private_key.startsWith("ed25519:"));
-  assert.equal(body.transfer.bundle_id, "deadbeef");
-  assert.equal("build_claim_overrides" in body, false);
-  assert.equal("repair_existing_build_claims" in body, false);
-  assert.equal(response.bundle_id_hex, "deadbeef");
-  assert.equal(
-    response.transaction_hash_hex,
-    "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe",
-  );
-});
-
-test("submitOfflineSettlement accepts build claim overrides and repair flag", async () => {
-  const overrideTxIdHex = "ab".repeat(32);
-  let capturedRequest = null;
-  const fetchImpl = async (url, init) => {
-    capturedRequest = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { bundle_id_hex: "deadbeef" },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.submitOfflineSettlement({
-    authority: FIXTURE_AUTHORITY_ID,
-    privateKey: "ed25519:deadbeef",
-    transfer: {
-      bundle_id: "deadbeef",
-      receipts: [],
-    },
-    buildClaimOverrides: [
-      {
-        txIdHex: overrideTxIdHex,
-        appId: "com.example.android",
-        buildNumber: 77,
-        issuedAtMs: 1700000000000,
-        expiresAtMs: 1700000100000,
-      },
-    ],
-    repairExistingBuildClaims: true,
-  });
-  assert.ok(capturedRequest, "request not captured");
-  const body = JSON.parse(capturedRequest.init.body);
-  assert.equal(body.repair_existing_build_claims, true);
-  assert.equal(Array.isArray(body.build_claim_overrides), true);
-  assert.equal(body.build_claim_overrides.length, 1);
-  assert.equal(body.build_claim_overrides[0].tx_id_hex, overrideTxIdHex);
-  assert.equal(body.build_claim_overrides[0].app_id, "com.example.android");
-  assert.equal(body.build_claim_overrides[0].build_number, 77);
-  assert.equal(body.build_claim_overrides[0].issued_at_ms, 1700000000000);
-  assert.equal(body.build_claim_overrides[0].expires_at_ms, 1700000100000);
-});
-
-test("submitOfflineSettlement validates build claim override shape", async () => {
-  let fetchCalled = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      fetchCalled = true;
-      return createResponse({ status: 500 });
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.submitOfflineSettlement({
-        authority: FIXTURE_AUTHORITY_ID,
-        privateKey: "ed25519:deadbeef",
-        transfer: { bundle_id: "deadbeef", receipts: [] },
-        buildClaimOverrides: [{ appId: "com.example.android" }],
-      }),
-    /tx_id_hex/i,
-  );
-  assert.equal(fetchCalled, false);
-});
-
-test("submitOfflineSettlementAndWait delegates to submit + waitForTransactionStatus", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 200 }),
-  });
-  const settlement = {
-    bundle_id_hex: "deadbeef",
-    transaction_hash_hex: "ca".repeat(32),
-  };
-  let submitArgs = null;
-  let waitArgs = null;
-  client.submitOfflineSettlement = async (request, options) => {
-    submitArgs = { request, options };
-    return settlement;
-  };
-  client.waitForTransactionStatus = async (hashHex, pollOptions) => {
-    waitArgs = { hashHex, pollOptions };
-    return {
-      kind: "Transaction",
-      content: { hash: hashHex, status: { kind: "Committed", content: null } },
-    };
-  };
-  const controller = new AbortController();
-  const request = {
-    authority: FIXTURE_AUTHORITY_ID,
-    privateKey: "ed25519:deadbeef",
-    transfer: { bundle_id: "deadbeef", receipts: [] },
-  };
-
-  const response = await client.submitOfflineSettlementAndWait(request, {
-    signal: controller.signal,
-    intervalMs: 0,
-    timeoutMs: null,
-    maxAttempts: 4,
-  });
-
-  assert.equal(response, settlement);
-  assert.ok(submitArgs, "submitOfflineSettlement should be called");
-  assert.equal(submitArgs.request, request);
-  assert.equal(submitArgs.options.signal, controller.signal);
-  assert.ok(waitArgs, "waitForTransactionStatus should be called");
-  assert.equal(waitArgs.hashHex, settlement.transaction_hash_hex);
-  assert.equal(waitArgs.pollOptions.signal, controller.signal);
-  assert.equal(waitArgs.pollOptions.intervalMs, 0);
-  assert.equal(waitArgs.pollOptions.timeoutMs, null);
-  assert.equal(waitArgs.pollOptions.maxAttempts, 4);
-});
-
-test("submitOfflineSettlementAndWait rejects when settlement response lacks tx hash", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => createResponse({ status: 200 }),
-  });
-  client.submitOfflineSettlement = async () => ({
-    bundle_id_hex: "deadbeef",
-    transaction_hash_hex: null,
-  });
-  let waitCalled = false;
-  client.waitForTransactionStatus = async () => {
-    waitCalled = true;
-    return null;
-  };
-
-  await assert.rejects(
-    () =>
-      client.submitOfflineSettlementAndWait({
-        authority: FIXTURE_AUTHORITY_ID,
-        privateKey: "ed25519:deadbeef",
-        transfer: { bundle_id: "deadbeef", receipts: [] },
-      }),
-    /missing transaction_hash_hex/i,
-  );
-  assert.equal(waitCalled, false);
-});
-
 test("issueOfflineBuildClaim posts request and parses response", async () => {
   const certificateIdHex = "ab".repeat(32);
   const txIdHex = "cd".repeat(32);
@@ -16774,587 +16395,6 @@ test("issueOfflineBuildClaim rejects malformed build-claim response", async () =
   );
 });
 
-test("issueOfflineCertificate rejects invalid Numeric amounts", async () => {
-  let fetchCalled = false;
-  const fetchImpl = async () => {
-    fetchCalled = true;
-    return createResponse({ status: 500 });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const draft = {
-    controller: FIXTURE_ALICE_ID,
-    allowance: {
-      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-      amount: "1e-3",
-      commitment: Buffer.from([1, 2, 3]),
-    },
-    spend_public_key: "ed0120deadbeef",
-    attestation_report: new Uint8Array([4, 5, 6]),
-    issued_at_ms: 100,
-    expires_at_ms: 200,
-    policy: {
-      max_balance: "10",
-      max_tx_value: "5",
-      expires_at_ms: 200,
-    },
-  };
-  await assert.rejects(
-    () => client.issueOfflineCertificate(draft),
-    /Numeric literal/i,
-  );
-  assert.equal(fetchCalled, false);
-});
-
-test("issueOfflineCertificateRenewal posts to renewal path", async () => {
-  const certId = "deadbeef".repeat(8);
-  let capturedRequest = null;
-  const fetchImpl = async (url, init) => {
-    capturedRequest = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        certificate_id_hex: certId,
-        certificate: {
-          controller: FIXTURE_ALICE_ID,
-          operator: FIXTURE_AUTHORITY_ID,
-          allowance: {
-            asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            amount: "10",
-            commitment: [1, 2, 3],
-          },
-          spend_public_key: "ed0120deadbeef",
-          attestation_report: [4, 5, 6],
-          issued_at_ms: 100,
-          expires_at_ms: 200,
-          policy: {
-            max_balance: "10",
-            max_tx_value: "5",
-            expires_at_ms: 200,
-          },
-          operator_signature: "AA",
-          metadata: {},
-          verdict_id: null,
-          attestation_nonce: null,
-          refresh_at_ms: null,
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.issueOfflineCertificateRenewal(certId.toUpperCase(), {
-    controller: FIXTURE_ALICE_ID,
-    allowance: {
-      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-      amount: "10",
-      commitment: [1, 2, 3],
-    },
-    spend_public_key: "ed0120deadbeef",
-    attestation_report: [4, 5, 6],
-    issued_at_ms: 100,
-    expires_at_ms: 200,
-    policy: {
-      max_balance: "10",
-      max_tx_value: "5",
-      expires_at_ms: 200,
-    },
-  });
-  assert.ok(capturedRequest, "request not captured");
-  const parsed = new URL(capturedRequest.url);
-  assert.equal(
-    parsed.pathname,
-    `/v1/offline/certificates/${certId}/renew/issue`,
-  );
-  const body = JSON.parse(capturedRequest.init.body);
-  assert.ok(body.certificate);
-  assert.equal(FIXTURE_AUTHORITY_ID in body.certificate, false);
-});
-
-test("registerOfflineAllowance posts certificate and parses response", async () => {
-  const certId = "deadbeef".repeat(8);
-  let capturedRequest = null;
-  const fetchImpl = async (url, init) => {
-    capturedRequest = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: {
-        certificate_id_hex: certId.toUpperCase(),
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const certificate = {
-    controller: FIXTURE_ALICE_ID,
-    operator: FIXTURE_AUTHORITY_ID,
-    allowance: {
-      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-      amount: "10",
-      commitment: [1, 2, 3],
-    },
-    spend_public_key: "ed0120deadbeef",
-    attestation_report: [4, 5, 6],
-    issued_at_ms: 100,
-    expires_at_ms: 200,
-    policy: {
-      max_balance: "10",
-      max_tx_value: "5",
-      expires_at_ms: 200,
-    },
-    operator_signature: "aa",
-    metadata: {},
-    verdict_id: null,
-    attestation_nonce: null,
-    refresh_at_ms: null,
-  };
-  const response = await client.registerOfflineAllowance({
-    authority: FIXTURE_AUTHORITY_ID,
-    privateKey: Buffer.alloc(32, 1),
-    certificate,
-  });
-  assert.ok(capturedRequest, "request not captured");
-  assert.equal(new URL(capturedRequest.url).pathname, "/v1/offline/allowances");
-  const body = JSON.parse(capturedRequest.init.body);
-  assert.equal(body.authority, FIXTURE_AUTHORITY_ID);
-  assert.ok(body.private_key.startsWith("ed25519:"));
-  assert.equal(body.certificate.operator_signature, "AA");
-  assert.equal(response.certificate_id_hex, certId.toLowerCase());
-});
-
-test("renewOfflineAllowance posts to renewal path", async () => {
-  const certId = "deadbeef".repeat(8);
-  let capturedRequest = null;
-  const fetchImpl = async (url, init) => {
-    capturedRequest = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { certificate_id_hex: certId },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const certificate = {
-    controller: FIXTURE_ALICE_ID,
-    operator: FIXTURE_AUTHORITY_ID,
-    allowance: {
-      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-      amount: "10",
-      commitment: [1, 2, 3],
-    },
-    spend_public_key: "ed0120deadbeef",
-    attestation_report: [4, 5, 6],
-    issued_at_ms: 100,
-    expires_at_ms: 200,
-    policy: {
-      max_balance: "10",
-      max_tx_value: "5",
-      expires_at_ms: 200,
-    },
-    operator_signature: "AA",
-    metadata: {},
-    verdict_id: null,
-    attestation_nonce: null,
-    refresh_at_ms: null,
-  };
-  await client.renewOfflineAllowance(certId.toUpperCase(), {
-    authority: FIXTURE_AUTHORITY_ID,
-    privateKey: "ed25519:deadbeef",
-    certificate,
-  });
-  assert.ok(capturedRequest, "request not captured");
-  const parsed = new URL(capturedRequest.url);
-  assert.equal(
-    parsed.pathname,
-    `/v1/offline/allowances/${certId}/renew`,
-  );
-  const body = JSON.parse(capturedRequest.init.body);
-  assert.ok(body.certificate);
-});
-
-test("topUpOfflineAllowance chains issue and register", async () => {
-  const certId = "deadbeef".repeat(8);
-  const requests = [];
-  const responses = [
-    createResponse({
-      status: 200,
-      jsonData: {
-        certificate_id_hex: certId,
-        certificate: {
-          controller: FIXTURE_ALICE_ID,
-          operator: FIXTURE_AUTHORITY_ID,
-          allowance: {
-            asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            amount: "10",
-            commitment: [1, 2, 3],
-          },
-          spend_public_key: "ed0120deadbeef",
-          attestation_report: [4, 5, 6],
-          issued_at_ms: 100,
-          expires_at_ms: 200,
-          policy: {
-            max_balance: "10",
-            max_tx_value: "5",
-            expires_at_ms: 200,
-          },
-          operator_signature: "bb",
-          metadata: {},
-          verdict_id: null,
-          attestation_nonce: null,
-          refresh_at_ms: null,
-        },
-      },
-      headers: { "content-type": "application/json" },
-    }),
-    createResponse({
-      status: 200,
-      jsonData: { certificate_id_hex: certId.toUpperCase() },
-      headers: { "content-type": "application/json" },
-    }),
-  ];
-  const fetchImpl = async (url, init) => {
-    requests.push({ url, init });
-    return responses.shift();
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const draft = {
-    controller: FIXTURE_ALICE_ID,
-    allowance: {
-      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-      amount: "10",
-      commitment: Buffer.from([1, 2, 3]),
-    },
-    spend_public_key: "ed0120deadbeef",
-    attestation_report: new Uint8Array([4, 5, 6]),
-    issued_at_ms: 100,
-    expires_at_ms: 200,
-    policy: {
-      max_balance: "10",
-      max_tx_value: "5",
-      expires_at_ms: 200,
-    },
-  };
-  const response = await client.topUpOfflineAllowance({
-    authority: FIXTURE_AUTHORITY_ID,
-    privateKey: Buffer.alloc(32, 2),
-    certificate: draft,
-  });
-  assert.equal(response.certificate.certificate_id_hex, certId);
-  assert.equal(response.registration.certificate_id_hex, certId);
-  assert.equal(requests.length, 2);
-  assert.equal(new URL(requests[0].url).pathname, "/v1/offline/certificates/issue");
-  const issueBody = JSON.parse(requests[0].init.body);
-  assert.equal(FIXTURE_AUTHORITY_ID in issueBody.certificate, false);
-  assert.equal(new URL(requests[1].url).pathname, "/v1/offline/allowances");
-  const registerBody = JSON.parse(requests[1].init.body);
-  assert.ok(registerBody.private_key.startsWith("ed25519:"));
-  assert.equal(registerBody.certificate.operator_signature, "BB");
-});
-
-test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
-  const certId = "deadbeef".repeat(8);
-  const requests = [];
-  const responses = [
-    createResponse({
-      status: 200,
-      jsonData: {
-        certificate_id_hex: certId,
-        certificate: {
-          controller: FIXTURE_ALICE_ID,
-          operator: FIXTURE_AUTHORITY_ID,
-          allowance: {
-            asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-            amount: "10",
-            commitment: [1, 2, 3],
-          },
-          spend_public_key: "ed0120deadbeef",
-          attestation_report: [4, 5, 6],
-          issued_at_ms: 100,
-          expires_at_ms: 200,
-          policy: {
-            max_balance: "10",
-            max_tx_value: "5",
-            expires_at_ms: 200,
-          },
-          operator_signature: "CC",
-          metadata: {},
-          verdict_id: null,
-          attestation_nonce: null,
-          refresh_at_ms: null,
-        },
-      },
-      headers: { "content-type": "application/json" },
-    }),
-    createResponse({
-      status: 200,
-      jsonData: { certificate_id_hex: certId },
-      headers: { "content-type": "application/json" },
-    }),
-  ];
-  const fetchImpl = async (url, init) => {
-    requests.push({ url, init });
-    return responses.shift();
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const draft = {
-    controller: FIXTURE_ALICE_ID,
-    allowance: {
-      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
-      amount: "10",
-      commitment: Buffer.from([1, 2, 3]),
-    },
-    spend_public_key: "ed0120deadbeef",
-    attestation_report: new Uint8Array([4, 5, 6]),
-    issued_at_ms: 100,
-    expires_at_ms: 200,
-    policy: {
-      max_balance: "10",
-      max_tx_value: "5",
-      expires_at_ms: 200,
-    },
-  };
-  await client.topUpOfflineAllowanceRenewal(certId.toUpperCase(), {
-    authority: FIXTURE_AUTHORITY_ID,
-    privateKey: "ed25519:deadbeef",
-    certificate: draft,
-  });
-  assert.equal(requests.length, 2);
-  assert.equal(
-    new URL(requests[0].url).pathname,
-    `/v1/offline/certificates/${certId}/renew/issue`,
-  );
-  const renewIssueBody = JSON.parse(requests[0].init.body);
-  assert.equal(FIXTURE_AUTHORITY_ID in renewIssueBody.certificate, false);
-  assert.equal(
-    new URL(requests[1].url).pathname,
-    `/v1/offline/allowances/${certId}/renew`,
-  );
-});
-
-test("listOfflineAllowances encodes convenience query params", async () => {
-  let capturedUrl = null;
-  const assetId = FIXTURE_ASSET_ID_A;
-  const normalizedAssetId = FIXTURE_ASSET_ID_A;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url) => {
-      capturedUrl = url;
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  await client.listOfflineAllowances({
-    controllerId: FIXTURE_ALICE_ID,
-    assetId,
-    certificateExpiresBeforeMs: 1_000,
-    certificateExpiresAfterMs: 100,
-    policyExpiresBeforeMs: 2_000,
-    policyExpiresAfterMs: 250,
-    refreshBeforeMs: 750,
-    refreshAfterMs: 500,
-    attestationNonceHex: "CAFEBABE",
-    verdictIdHex: "DEADBEEF",
-    requireVerdict: true,
-  });
-  assert.ok(capturedUrl, "request not issued");
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.searchParams.get("controller_id"), FIXTURE_ALICE_ID);
-  assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
-  assert.equal(parsed.searchParams.get("certificate_expires_before_ms"), "1000");
-  assert.equal(parsed.searchParams.get("certificate_expires_after_ms"), "100");
-  assert.equal(parsed.searchParams.get("policy_expires_before_ms"), "2000");
-  assert.equal(parsed.searchParams.get("policy_expires_after_ms"), "250");
-  assert.equal(parsed.searchParams.get("refresh_before_ms"), "750");
-  assert.equal(parsed.searchParams.get("refresh_after_ms"), "500");
-  assert.equal(parsed.searchParams.get("attestation_nonce_hex"), "cafebabe");
-  assert.equal(parsed.searchParams.get("verdict_id_hex"), "deadbeef");
-  assert.equal(parsed.searchParams.get("require_verdict"), "true");
-  assert.equal(parsed.searchParams.get("only_missing_verdict"), null);
-});
-
-test("listOfflineAllowances rejects conflicting verdict filters", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.listOfflineAllowances({
-        verdictIdHex: "deadbeef",
-        onlyMissingVerdict: true,
-      }),
-    (error) =>
-      expectValidationErrorFixture(
-        error,
-        "listOfflineAllowances_conflict_verdictId_onlyMissingVerdict",
-      ),
-  );
-  await assert.rejects(
-    () =>
-      client.listOfflineAllowances({
-        requireVerdict: true,
-        onlyMissingVerdict: true,
-      }),
-    (error) =>
-      expectValidationErrorFixture(
-        error,
-        "listOfflineAllowances_conflict_requireVerdict_onlyMissingVerdict",
-      ),
-  );
-});
-
-test("listOfflineAllowances rejects unsupported filter fields", async () => {
-  let invoked = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      invoked = true;
-      throw new Error("network should not be invoked");
-    },
-  });
-  await assert.rejects(
-    client.listOfflineAllowances({
-      filter: { Eq: ["unsupported_field", "value"] },
-    }),
-    /"unsupported_field" is not allowed/i,
-  );
-  assert.equal(invoked, false);
-});
-
-test("listOfflineAllowances rejects non-boolean verdict toggles", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.listOfflineAllowances({
-        requireVerdict: "yes",
-      }),
-    (error) => expectValidationErrorFixture(error, "listOfflineAllowances_requireVerdict_type"),
-  );
-});
-
-test("listOfflineAllowances accepts verdict/expiry filter fields", async () => {
-  let capturedFilter = null;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url) => {
-      const parsed = new URL(url);
-      capturedFilter = parsed.searchParams.get("filter");
-      return createResponse({
-        status: 200,
-        jsonData: { items: [], total: 0 },
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const filter = {
-    And: [
-      { Eq: ["verdict_id_hex", "deadbeef"] },
-      { Exists: "attestation_nonce_hex" },
-      { Lt: ["certificate_expires_at_ms", 9_000] },
-      { Gt: ["refresh_at_ms", 1_000] },
-    ],
-  };
-  await client.listOfflineAllowances({ filter, limit: 1 });
-  assert.equal(capturedFilter, JSON.stringify(filter));
-});
-
-test("listOfflineAllowances rejects invalid signal values", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listOfflineAllowances({ signal: {} }),
-    /options for \/v1\/offline\/allowances options\.signal must be an AbortSignal/,
-  );
-});
-
-test("listOfflineAllowances validates controllerId literals", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () => client.listOfflineAllowances({ controllerId: 123 }),
-    /controllerId/i,
-  );
-});
-
-test("queryOfflineAllowances forwards convenience options to query endpoint", async () => {
-  let capturedUrl = null;
-  let capturedBody = null;
-  const fetchImpl = async (url, init) => {
-    capturedUrl = url;
-    capturedBody = init?.body ?? null;
-    return createResponse({
-      status: 200,
-      jsonData: { items: [], total: 0 },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const filter = { Eq: ["controller_id", FIXTURE_ALICE_ID] };
-  await client.queryOfflineAllowances({
-    controllerId: FIXTURE_ALICE_ID,
-    receiverId: FIXTURE_BOB_ID,
-    certificateExpiresBeforeMs: "5000",
-    verdictIdHex: "DEADBEEF",
-    attestationNonceHex: "CAFEBABE",
-    platformPolicy: "HARDENED",
-    includeExpired: true,
-    fetchSize: 2,
-    queryName: "offline_allowances",
-    filter,
-  });
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.pathname, "/v1/offline/allowances/query");
-  assert.equal(parsed.searchParams.get("controller_id"), FIXTURE_ALICE_ID);
-  assert.equal(parsed.searchParams.get("receiver_id"), FIXTURE_BOB_ID);
-  assert.equal(parsed.searchParams.get("certificate_expires_before_ms"), "5000");
-  assert.equal(parsed.searchParams.get("verdict_id_hex"), "deadbeef");
-  assert.equal(parsed.searchParams.get("attestation_nonce_hex"), "cafebabe");
-  assert.equal(parsed.searchParams.get("platform_policy"), "hardened");
-  assert.equal(parsed.searchParams.get("include_expired"), "true");
-  assert.equal(parsed.searchParams.get("canonical_i105"), null);
-  const body = JSON.parse(capturedBody);
-  assert.deepEqual(body.filter, filter);
-  assert.equal(body.fetch_size, 2);
-  assert.equal(body.query, "offline_allowances");
-});
-
-test("queryOfflineAllowances rejects unsupported filter fields", async () => {
-  let invoked = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      invoked = true;
-      throw new Error("network should not be invoked");
-    },
-  });
-  await assert.rejects(
-    client.queryOfflineAllowances({
-      filter: { Eq: ["unsupported_field", "value"] },
-    }),
-    /"unsupported_field" is not allowed/i,
-  );
-  assert.equal(invoked, false);
-});
-
-test("listOfflineSummaries rejects invalid signal values", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listOfflineSummaries({ signal: {} }),
-    /options for \/v1\/offline\/summaries options\.signal must be an AbortSignal/,
-  );
-});
-
 test("listOfflineRevocations normalizes payloads and query params", async () => {
   let capturedUrl = null;
   const revocationRecord = { verdict_id_hex: "deadbeef", metadata: { foo: "bar" } };
@@ -17425,32 +16465,6 @@ test("listOfflineRevocations rejects unsupported filter fields", async () => {
   assert.equal(invoked, false);
 });
 
-test("queryOfflineRevocations validates filter envelopes", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not reach network");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.queryOfflineRevocations({
-        filter: { Gt: ["issuer_id", 10] },
-      }),
-    /does not support range filters/i,
-  );
-});
-
-test("queryOfflineSummaries rejects invalid signal values", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.queryOfflineSummaries({ signal: {} }),
-    /options for \/v1\/offline\/summaries\/query options\.signal must be an AbortSignal/,
-  );
-});
-
 test("queryOfflineTransfers rejects invalid signal values", async () => {
   const fetchImpl = async () => {
     throw new Error("should not fetch");
@@ -17460,165 +16474,6 @@ test("queryOfflineTransfers rejects invalid signal values", async () => {
     () => client.queryOfflineTransfers({ signal: {} }),
     /options for \/v1\/offline\/transfers\/query options\.signal must be an AbortSignal/,
   );
-});
-
-test("listOfflineSummaries normalizes counters and query params", async () => {
-  let capturedUrl;
-  const payload = {
-    items: [
-      {
-        certificate_id_hex: "feedface",
-        controller_id: FIXTURE_ALICE_ID,
-        controller_display: "soraalice",
-        summary_hash_hex: "beadbead",
-        apple_key_counters: { primary: "4" },
-        android_series_counters: null,
-        policy_key_counters: { policy: 2 },
-        counter_totals: {
-          total_counters: "3",
-          total_weight: "9",
-          apple: "1",
-          android: "1",
-          policy: "1",
-        },
-        metadata: { cohort: "alpha" },
-      },
-    ],
-    total: "1",
-  };
-  const fetchImpl = async (url) => {
-    capturedUrl = url;
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const filter = { Eq: ["controller_id", FIXTURE_ALICE_ID] };
-  const page = await client.listOfflineSummaries({
-    limit: 10,
-    offset: 5,
-    filter,
-    sort: [{ key: "total_counters", order: "desc" }],
-  });
-  assert.ok(capturedUrl);
-  const parsed = new URL(capturedUrl);
-  assert.equal(parsed.pathname, "/v1/offline/summaries");
-  assert.equal(parsed.searchParams.get("limit"), "10");
-  assert.equal(parsed.searchParams.get("offset"), "5");
-  assert.equal(parsed.searchParams.get("filter"), JSON.stringify(filter));
-  assert.equal(parsed.searchParams.get("sort"), "total_counters:desc");
-  assert.equal(parsed.searchParams.get("canonical_i105"), null);
-  assert.equal(page.total, 1);
-  assert.equal(page.items.length, 1);
-  const item = page.items[0];
-  assert.equal(item.certificate_id_hex, "feedface");
-  assert.equal(item.controller_id, FIXTURE_ALICE_ID);
-  assert.equal(item.controller_display, "soraalice");
-  assert.equal(item.summary_hash_hex, "beadbead");
-  assert.deepEqual(item.apple_key_counters, { primary: 4 });
-  assert.deepEqual(item.android_series_counters, {});
-  assert.deepEqual(item.policy_key_counters, { policy: 2 });
-  assert.deepEqual(item.counter_totals, {
-    total_counters: 3,
-    total_weight: 9,
-    apple: 1,
-    android: 1,
-    policy: 1,
-  });
-  assert.deepEqual(item.metadata, { cohort: "alpha" });
-});
-
-test("queryOfflineSummaries posts envelope and normalizes payload", async () => {
-  let capturedRequest;
-  const payload = {
-    items: [
-      {
-        certificate_id_hex: "cafebabe",
-        controller_id: FIXTURE_BOB_ID,
-        controller_display: "sorabob",
-        summary_hash_hex: "abbaabba",
-        apple_key_counters: { regional: "7" },
-        android_series_counters: { fallback: 2 },
-      },
-    ],
-  };
-  const fetchImpl = async (url, init = {}) => {
-    capturedRequest = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const filter = { Exists: "controller_id" };
-  const select = [{ fields: ["controller_id"] }];
-  const page = await client.queryOfflineSummaries({
-    fetchSize: 25,
-    limit: 2,
-    offset: 4,
-    filter,
-    sort: "controller_id:asc",
-    queryName: "summaryCountersByController",
-    select,
-  });
-  assert.ok(capturedRequest);
-  assert.equal(capturedRequest.url, `${BASE_URL}/v1/offline/summaries/query`);
-  assert.equal(capturedRequest.init.method, "POST");
-  assert.equal(capturedRequest.init.headers["Content-Type"], "application/json");
-  const envelope = JSON.parse(capturedRequest.init.body);
-  assert.deepEqual(envelope.pagination, { offset: 4, limit: 2 });
-  assert.equal(envelope.fetch_size, 25);
-  assert.deepEqual(envelope.filter, filter);
-  assert.deepEqual(envelope.sort, [{ key: "controller_id", order: "asc" }]);
-  assert.equal(envelope.canonical_i105, undefined);
-  assert.equal(envelope.query, "summaryCountersByController");
-  assert.deepEqual(envelope.select, select);
-  assert.equal(page.total, 1);
-  const item = page.items[0];
-  assert.equal(item.certificate_id_hex, "cafebabe");
-  assert.equal(item.controller_id, FIXTURE_BOB_ID);
-  assert.equal(item.summary_hash_hex, "abbaabba");
-  assert.deepEqual(item.apple_key_counters, { regional: 7 });
-  assert.deepEqual(item.android_series_counters, { fallback: 2 });
-});
-
-test("listOfflineSummaries rejects unsupported filter fields", async () => {
-  let invoked = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      invoked = true;
-      throw new Error("should not reach Torii");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.listOfflineSummaries({
-        filter: { Eq: ["summary_hash_hex", "beadbead"] },
-      }),
-    /"summary_hash_hex" is not allowed/i,
-  );
-  assert.equal(invoked, false);
-});
-
-test("queryOfflineSummaries rejects unsupported filter fields", async () => {
-  let invoked = false;
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      invoked = true;
-      throw new Error("should not reach Torii");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.queryOfflineSummaries({
-        filter: { Eq: ["asset_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"] },
-      }),
-    /"asset_id" is not allowed/i,
-  );
-  assert.equal(invoked, false);
 });
 
 test("queryOfflineTransfers rejects range operators", async () => {
@@ -17780,86 +16635,6 @@ test("queryOfflineTransfers posts envelope and normalizes optional fields", asyn
     attestation_jws_b64: "eyJhbGciOiJFZERTQSJ9",
   });
   assert.deepEqual(transfer.transfer, payload.items[0].transfer);
-});
-
-test("iterateOfflineAllowances paginates and honours maxItems", async () => {
-  const allowances = [
-    createOfflineAllowanceItem({ certificate_id_hex: "aa".repeat(32) }),
-    createOfflineAllowanceItem({
-      certificate_id_hex: "bb".repeat(32),
-      controller_id: SAMPLE_ACCOUNT_FORMS.i105,
-    }),
-    createOfflineAllowanceItem({
-      certificate_id_hex: "cc".repeat(32),
-      controller_id: SAMPLE_ACCOUNT_FORMS.i105,
-    }),
-    createOfflineAllowanceItem({
-      certificate_id_hex: "dd".repeat(32),
-      controller_id: SAMPLE_ACCOUNT_ID,
-    }),
-  ];
-  const capturedRequests = [];
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/offline/allowances");
-    const limit = Number(parsed.searchParams.get("limit"));
-    const offset = Number(parsed.searchParams.get("offset") ?? "0");
-    capturedRequests.push({ limit, offset });
-    const items = allowances.slice(offset, offset + limit);
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: allowances.length },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const certificates = [];
-  for await (const allowance of client.iterateOfflineAllowances({
-    pageSize: 2,
-    maxItems: 3,
-  })) {
-    certificates.push(allowance.certificate_id_hex);
-  }
-  assert.deepEqual(certificates, allowances.slice(0, 3).map((entry) => entry.certificate_id_hex));
-  assert.deepEqual(capturedRequests, [
-    { limit: 2, offset: 0 },
-    { limit: 1, offset: 2 },
-  ]);
-});
-
-test("iterateOfflineSummariesQuery paginates structured responses", async () => {
-  const summaries = [
-    createOfflineSummaryItem({ summary_hash_hex: "11".repeat(32) }),
-    createOfflineSummaryItem({
-      summary_hash_hex: "22".repeat(32),
-      controller_id: SAMPLE_ACCOUNT_FORMS.i105,
-      controller_display: SAMPLE_ACCOUNT_FORMS.i105,
-    }),
-  ];
-  const capturedRequests = [];
-  const fetchImpl = async (url, init) => {
-    assert.equal(new URL(url).pathname, "/v1/offline/summaries/query");
-    const body = JSON.parse(init.body);
-    const limit = Number(body.pagination?.limit ?? 0);
-    const offset = Number(body.pagination?.offset ?? 0);
-    capturedRequests.push({ limit, offset });
-    const items = summaries.slice(offset, offset + limit);
-    return createResponse({
-      status: 200,
-      jsonData: { items, total: summaries.length },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const hashes = [];
-  for await (const summary of client.iterateOfflineSummariesQuery({ pageSize: 1 })) {
-    hashes.push(summary.summary_hash_hex);
-  }
-  assert.deepEqual(hashes, summaries.map((entry) => entry.summary_hash_hex));
-  assert.deepEqual(capturedRequests, [
-    { limit: 1, offset: 0 },
-    { limit: 1, offset: 1 },
-  ]);
 });
 
 test("iterateOfflineTransfersQuery walks paginated transfer responses", async () => {

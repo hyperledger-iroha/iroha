@@ -58,6 +58,8 @@ const STREAM_ID_PRIVATE: &str =
     "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83";
 const DEFAULT_TORII_MAX_CONTENT_LEN: u64 =
     iroha_config::parameters::defaults::torii::MAX_CONTENT_LEN.0;
+const TAIRA_STORAGE_PIN_MAX_EVENTS: u32 = 64;
+const TAIRA_STORAGE_PIN_WINDOW_SECS: u64 = 3_600;
 
 fn format_toml_integer_u64(value: u64) -> String {
     let digits = value.to_string();
@@ -332,6 +334,19 @@ submitters = ["{telemetry_submitter}"]
             )
         });
     let torii_max_content_len = format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN);
+    let sorafs_quota_overrides = if spec.slug == "iroha3-taira" {
+        format!(
+            r#"
+[sorafs.quota]
+storage_pin_max_events = {storage_pin_max_events}
+storage_pin_window_secs = {storage_pin_window_secs}
+"#,
+            storage_pin_max_events = TAIRA_STORAGE_PIN_MAX_EVENTS,
+            storage_pin_window_secs = TAIRA_STORAGE_PIN_WINDOW_SECS,
+        )
+    } else {
+        String::new()
+    };
     format!(
         r#"# Sample config for {slug} (generated via cargo xtask kagami-profiles)
 chain = "{chain}"
@@ -356,6 +371,7 @@ max_content_len = {torii_max_content_len}
 [streaming]
 identity_public_key = "{stream_pub}"
 identity_private_key = "{stream_priv}"
+{sorafs_quota_overrides}
 
 [nexus]
 enabled = true
@@ -374,6 +390,7 @@ public_key = "{genesis_pk}"
         trusted_peers_pop = trusted_peers_pop,
         p2p = node.address.split(':').next_back().unwrap_or("1337"),
         torii_max_content_len = torii_max_content_len,
+        sorafs_quota_overrides = sorafs_quota_overrides,
         governance_overrides = governance_overrides,
         genesis_pk = genesis_public_key,
         stream_pub = STREAM_ID_PUBLIC,
@@ -706,6 +723,16 @@ mod tests {
                 profile.slug
             );
         }
+    }
+
+    #[test]
+    fn taira_config_raises_storage_pin_quota() {
+        let peers = build_peers(&PROFILES[1]);
+        let genesis_key = deterministic_keypair("config-taira-quota-genesis", Algorithm::Ed25519);
+        let rendered = render_config(&PROFILES[1], &peers, genesis_key.public_key());
+        assert!(rendered.contains("[sorafs.quota]"));
+        assert!(rendered.contains("storage_pin_max_events = 64"));
+        assert!(rendered.contains("storage_pin_window_secs = 3600"));
     }
 
     #[test]

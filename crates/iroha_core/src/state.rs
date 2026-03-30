@@ -6911,6 +6911,41 @@ pub(crate) fn consensus_key_pop_for_public_key(
     })
 }
 
+/// Resolve every lane id currently associated with the provided validator peers.
+pub(crate) fn validator_lane_ids_for_peers<I, P>(
+    snapshot: &impl WorldReadOnly,
+    peers: I,
+) -> BTreeSet<LaneId>
+where
+    I: IntoIterator<Item = P>,
+    P: std::borrow::Borrow<PeerId>,
+{
+    let peer_keys: BTreeSet<PublicKey> = peers
+        .into_iter()
+        .map(|peer| peer.borrow().public_key().clone())
+        .collect();
+    if peer_keys.is_empty() {
+        return BTreeSet::new();
+    }
+
+    snapshot
+        .public_lane_validators()
+        .iter()
+        .filter_map(|((_lane_id, _validator_id), record)| {
+            let signatory = record.validator.try_signatory()?;
+            peer_keys.contains(signatory).then_some(record.lane_id)
+        })
+        .collect()
+}
+
+/// Resolve every lane id currently associated with a single validator peer.
+pub(crate) fn validator_lane_ids_for_peer(
+    snapshot: &impl WorldReadOnly,
+    peer: &PeerId,
+) -> BTreeSet<LaneId> {
+    validator_lane_ids_for_peers(snapshot, core::iter::once(peer))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConsensusKeyGate {
     Live,
@@ -7011,10 +7046,18 @@ where
     let mut topology_peers: std::collections::BTreeSet<PeerId> =
         commit_topology.into_iter().collect();
     let enforce_topology_membership = !topology_peers.is_empty();
+    let topology_lane_ids = if enforce_topology_membership {
+        validator_lane_ids_for_peers(world, topology_peers.iter())
+    } else {
+        BTreeSet::new()
+    };
     if enforce_topology_membership {
         let mut active_candidates: std::collections::BTreeSet<PeerId> =
             std::collections::BTreeSet::new();
         for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+            if !topology_lane_ids.is_empty() && !topology_lane_ids.contains(&record.lane_id) {
+                continue;
+            }
             if !matches!(record.status, PublicLaneValidatorStatus::Active) {
                 continue;
             }
@@ -7085,6 +7128,9 @@ where
     let mut candidates: Vec<(PeerId, Numeric, AccountId)> = world
         .public_lane_validators()
         .iter()
+        .filter(|(_, record)| {
+            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
+        })
         .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
         .filter(|(_, record)| {
             matches!(
@@ -7498,6 +7544,116 @@ mod stake_snapshot_tests {
         for peer in peers {
             assert!(roster.contains(&peer));
         }
+    }
+
+    #[test]
+    fn public_lane_snapshot_keeps_widening_scoped_to_commit_topology_lanes() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 100;
+        }
+
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "restricted".to_string(),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
+        }
+
+        let public_keypairs: Vec<KeyPair> = (0..2).map(|_| KeyPair::random()).collect();
+        let restricted_keypairs: Vec<KeyPair> = (0..2).map(|_| KeyPair::random()).collect();
+
+        let mut wb = state.world.block();
+        {
+            let peers = wb.peers.get_mut();
+            for kp in public_keypairs.iter().chain(restricted_keypairs.iter()) {
+                let _ = peers.push(PeerId::from(kp.public_key().clone()));
+            }
+        }
+        let peers: Vec<_> = wb.peers.clone().into_iter().collect();
+        for peer in &peers {
+            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
+        }
+        for kp in &public_keypairs {
+            let validator = DMAccountId::of(kp.public_key().clone());
+            wb.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    stake_account: validator,
+                    total_stake: Numeric::new(1_000, 0),
+                    self_stake: Numeric::new(1_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        for kp in &restricted_keypairs {
+            let validator = DMAccountId::of(kp.public_key().clone());
+            wb.public_lane_validators.insert(
+                (LaneId::new(1), validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: validator.clone(),
+                    stake_account: validator,
+                    total_stake: Numeric::new(2_000, 0),
+                    self_stake: Numeric::new(2_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        wb.commit();
+
+        {
+            let mut topo_block = state.commit_topology.block();
+            topo_block.mutate_vec(|vec| {
+                *vec = public_keypairs
+                    .iter()
+                    .take(1)
+                    .map(|kp| PeerId::from(kp.public_key().clone()))
+                    .collect();
+            });
+            topo_block.commit();
+        }
+
+        let sv = state.view();
+        let roster =
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        let expected: Vec<_> = public_keypairs
+            .iter()
+            .map(|kp| PeerId::from(kp.public_key().clone()))
+            .collect();
+        let mut expected = expected;
+        expected.sort();
+        assert_eq!(
+            roster, expected,
+            "epoch roster widening must stay inside the commit topology lane"
+        );
     }
 
     #[test]
@@ -28327,7 +28483,7 @@ mod tests {
     fn has_committed_transaction_reads_transactions_index() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let state = State::new_for_testing(World::default(), kura, query_handle);
 
         let tx = dummy_accepted_transaction();
         let tx_hash = tx.hash();
@@ -31991,9 +32147,11 @@ mod tests {
             )],
         );
 
+        let mut expected = vec![ALICE_ID.clone(), BOB_ID.clone()];
+        expected.sort();
         assert_eq!(
             state.authoritative_lane_validator_accounts(lane_id),
-            vec![ALICE_ID.clone(), BOB_ID.clone()]
+            expected
         );
     }
 

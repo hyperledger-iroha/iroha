@@ -494,11 +494,19 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-For offline cash flows, call the authenticated offline cash endpoints directly and treat the returned
-envelope as authoritative:
+For offline cash flows, use the dedicated offline cash helpers on an authenticated `ToriiClient`
+and treat the returned envelope as authoritative:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.httpAdditionalHeaders = [
+        "X-Account-Id": authorityId,
+        "X-Dataspace-Id": dataspaceId,
+        "X-Device-Id": deviceBinding.deviceId,
+    ]
+    let session = URLSession(configuration: configuration)
+    let sdk = ToriiClient(baseURL: coreApiBaseURL, session: session)
     let request = ToriiOfflineCashLoadRequest(
         operationId: UUID().uuidString,
         lineageId: existingEnvelope.lineageState.lineageId,
@@ -508,11 +516,7 @@ if #available(iOS 15, macOS 12, *) {
         deviceBinding: deviceBinding,
         deviceProof: deviceProof
     )
-    let envelope = try await authenticatedTransport.post(
-        "/v1/offline/cash/load",
-        body: request,
-        decode: ToriiOfflineCashEnvelope.self
-    )
+    let envelope = try await sdk.loadOfflineCash(request)
     print("cash", envelope.lineageState.lineageId, "balance", envelope.lineageState.balance)
 }
 ```
@@ -540,7 +544,7 @@ apps can decide how to remediate.
 The Swift SDK now exposes the offline cash surface:
 
 - setup, load, refresh, sync, and redeem
-- revocation list, signed revocation bundle, and revocation registration
+- revocation list and signed revocation bundle
 - read-only offline transfer history via `/v1/offline/transfers*`
 
 Certificate issuance, allowance registration, settlement submission, spend-receipt validation, and

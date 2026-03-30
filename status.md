@@ -96,6 +96,106 @@ Last updated: 2026-03-30
   - `cargo test -p iroha_core --lib gossip_transaction_decode_rejects_trailing_bytes -- --nocapture` (pass)
   - `cargo test -p iroha_core --lib queue_accepts_gossip_payload_cache -- --nocapture` (pass)
   - `cargo test -p iroha_core --lib queue_generated_gossip_payload_uses_framed_signed_transaction_wire -- --nocapture` (pass)
+## 2026-03-30 Offline cash cleanup is now closed end-to-end across the maintained SDKs and retail wallet adapters
+- Removed the last allowance-era public offline helpers that were still
+  lingering in the maintained SDK trees:
+  - Kotlin/JVM `OfflineToriiClient` now exposes only the supported cash
+    lifecycle routes plus transfer/revocation reads and build-claim issuance;
+  - Java Android `OfflineToriiClient` mirrors that same reduced surface; and
+  - JavaScript `ToriiClient` plus `index.d.ts` no longer publish legacy
+    allowance, summary, settlement, certificate, or revocation-query helpers.
+- Deleted the corresponding stale in-repo wrapper/test usage:
+  - the Kotlin and Java Android `OfflineWallet` adapters no longer depend on
+    removed allowance/summary/revocation-query flows; and
+  - the Java Android and JavaScript harnesses/docs now lock only the canonical
+    offline cash + transfer/revocation contract.
+- Retail wallet verification is now closed as well:
+  - `pk-retail-wallet-ios` now threads the injected `URLSession` through
+    `makeToriiService` and `makeOfflineCashService`, and `ToriiService`
+    preserves additional Torii headers even when a custom session is used, so
+    the offline cash adapter still honors the wallet’s header contract under
+    the test harness;
+  - `pk-retail-wallet-ios` offline cash contract tests now assert the
+    Torii-layer `httpStatus(...)` error surfaced by the shared client instead
+    of the old `APIError` shape; and
+  - `pk-retail-wallet-android` `OfflineToriiService` again returns decoded
+    cash envelopes on every lifecycle call after the shared-client refactor.
+- Focused verification completed:
+  - `node --test javascript/iroha_js/test/toriiClient.test.js` (pass)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.TransportSecurityClientTest --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientCashTest --console=plain` from `kotlin/` (pass)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.OfflineToriiClientTests,org.hyperledger.iroha.android.offline.OfflineWalletTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks` from `java/iroha_android` (pass)
+  - `xcodebuild test -project /Users/takemiyamakoto/dev/pk-retail-wallet-ios/RetailWalletIOS.xcodeproj -scheme RetailWalletIOS -destination 'platform=iOS Simulator,id=D221EB33-4FA9-4DC4-8D24-F170281CE350' -only-testing:RetailWalletIOSTests/APIClientRoutingTests -only-testing:RetailWalletIOSTests/OfflineAPIContractTests` (pass)
+  - `./gradlew :core:testDebugUnitTest` from `pk-retail-wallet-android/` (pass)
+
+## 2026-03-30 Offline cash contract is now the canonical public app surface across Torii and the maintained SDKs
+- Closed the public-contract drift between mounted Torii routes and the checked-in
+  route/spec/tests for the offline app API:
+  - `crates/iroha_torii/src/lib.rs` no longer mounts the legacy public
+    `/v1/offline/allowances*` routes;
+  - `crates/iroha_torii/src/openapi.rs` now publishes
+    `GET /v1/offline/cash/readiness` plus
+    `POST /v1/offline/cash/{setup,load,refresh,sync,redeem}` and explicitly
+    keeps the legacy allowance/certificate/settlement-era paths out of the
+    generated spec; and
+  - focused router/MCP regressions now assert the mounted cash routes and the
+    absence of the retired allowance routes.
+- Updated the maintained SDK surfaces to match the supported offline cash flow:
+  - Swift `ToriiClient` now performs real JSON requests for
+    `setupOfflineCash`, `loadOfflineCash`, `refreshOfflineCash`,
+    `syncOfflineCash`, and `redeemOfflineCash`, with the focused endpoint
+    transport test rewritten around successful round trips instead of the old
+    server-side-signing rejection path;
+  - Kotlin/JVM and Java Android `OfflineToriiClient` now expose shared raw-JSON
+    helpers for the cash lifecycle plus `GET /v1/offline/revocations/bundle`,
+    and new focused JVM/Android harness coverage locks those canonical paths;
+  - JavaScript `ToriiClient` now exposes
+    `getOfflineCashReadiness()`, the five cash mutation helpers, and
+    `getOfflineRevocationBundle()`, with updated type declarations, docs, and
+    focused request-path tests.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_torii generated_spec_includes_documented_paths -- --nocapture` (pass)
+  - `cargo test -p iroha_torii generated_spec_keeps_only_cash_offline_paths -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test offline_cash_router_smoke -- --nocapture` (pass)
+  - `swift test --filter ToriiOfflineCashEndpointsTests` (pass)
+  - `node --test javascript/iroha_js/test/toriiClient.test.js --test-name-pattern "OfflineCashReadiness|offline cash helpers post canonical cash routes|getOfflineRevocationBundle"` (pass)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientCashTest --console=plain` from `kotlin/` (pass)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.OfflineToriiClientTests JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks` from `java/iroha_android` (pass)
+- Known remaining gap:
+  - the broader `crates/iroha_torii/tests/app_api_router_smoke.rs` suite still
+    has pre-existing brittle status assertions for unrelated SSE/browser routes,
+    so this slice now relies on the new focused
+    `offline_cash_router_smoke` regression for the offline app-API route wiring.
+## 2026-03-30 Taira storage-pin quota is raised and the live limiter window is cleared
+- Closed the remaining live Taira publish blocker after manifest registration:
+  the public provider was still inheriting the generic
+  `sorafs.quota.storage_pin = 4 requests / 3600s` default, so earlier live
+  storage-pin probes exhausted the in-memory quota window before the real
+  Polkaswap upload retried.
+- Added an explicit Taira override of `storage_pin_max_events = 64` /
+  `storage_pin_window_secs = 3600` in
+  `configs/soranexus/taira/config.toml`, the generated Taira sample profile in
+  `defaults/kagami/iroha3-taira/config.toml`, and the Taira profile generator
+  in `xtask/src/kagami_profiles.rs`.
+- Extended `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` so future
+  local Taira resets patch the served `dist/taira-localnet/peer*.toml` bundle
+  with the same storage-pin quota override, then patched the currently served
+  `peer0.toml` .. `peer3.toml` files and restarted the detached `screen`
+  session `taira-localnet`.
+- Live verification on March 30, 2026 after the restart:
+  - `GET https://taira.sora.org/status` returned `200` with `blocks = 50`,
+    `txs_approved = 60`, `txs_rejected = 1`;
+  - six consecutive public `POST /v1/sorafs/storage/pin` quota probes all
+    returned the normal handler-level
+    `400 invalid base64 in manifest_b64` response instead of tripping the old
+    fifth-request `429`; and
+  - a publish-sized `24_000_037` byte public probe also returned the same
+    handler-level `400`, so the request reached Torii under the new quota.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh` (pass)
+  - `cargo test -p xtask taira_config_raises_storage_pin_quota -- --nocapture` (pass)
 
 ## 2026-03-30 Kagami now pins the runtime Torii body-cap default, and Iroha defaults to 64 MB
 - Raised the runtime Torii request-body default in
