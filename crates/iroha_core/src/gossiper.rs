@@ -1868,7 +1868,7 @@ pub(crate) fn dataspace_label(dataspace: DataSpaceId) -> String {
 }
 
 /// Message for gossiping batches of transactions.
-#[derive(Decode, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct TransactionGossip {
     /// Batch of transactions.
     pub txs: Vec<GossipTransaction>,
@@ -1893,6 +1893,37 @@ impl TransactionGossip {
     }
 }
 
+fn decode_len_prefixed_field<T>(bytes: &[u8], offset: usize) -> Result<(T, usize), ncore::Error>
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
+    let field = bytes.get(offset..).ok_or(ncore::Error::LengthMismatch)?;
+    let (field_len, header_len) = ncore::read_len_from_slice(field)?;
+    let payload_start = offset
+        .checked_add(header_len)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let payload_end = payload_start
+        .checked_add(field_len)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let payload = bytes
+        .get(payload_start..payload_end)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let (value, used) = ncore::decode_field_canonical::<T>(payload)?;
+    if used != field_len {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    Ok((value, payload_end))
+}
+
+fn decode_transaction_gossip_payload(
+    bytes: &[u8],
+) -> Result<(TransactionGossip, usize), ncore::Error> {
+    let (txs, offset) = decode_len_prefixed_field::<Vec<GossipTransaction>>(bytes, 0)?;
+    let (routes, offset) = decode_len_prefixed_field::<Vec<GossipRoute>>(bytes, offset)?;
+    let (plane, offset) = decode_len_prefixed_field::<GossipPlane>(bytes, offset)?;
+    Ok((TransactionGossip { txs, routes, plane }, offset))
+}
+
 impl NoritoSerialize for TransactionGossip {
     fn serialize<W: Write>(&self, mut writer: W) -> Result<(), ncore::Error> {
         let mut tmp = ncore::DeriveSmallBuf::new();
@@ -1911,6 +1942,26 @@ impl NoritoSerialize for TransactionGossip {
             .or_else(|| gossip_vec_payload_len_exact(self.txs.iter()))?;
         let routes_payload_len = gossip_routes_payload_len(self.routes.len())?;
         gossip_message_encoded_len(txs_payload_len, routes_payload_len)
+    }
+}
+
+impl<'a> NoritoDeserialize<'a> for TransactionGossip {
+    fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("decode transaction gossip")
+    }
+
+    fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
+        let ptr = core::ptr::from_ref(archived).cast::<u8>();
+        let bytes = ncore::payload_slice_from_ptr(ptr)?;
+        let (message, consumed) = decode_transaction_gossip_payload(bytes)?;
+        ncore::note_payload_access(bytes, consumed);
+        Ok(message)
+    }
+}
+
+impl<'a> ncore::DecodeFromSlice<'a> for TransactionGossip {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+        decode_transaction_gossip_payload(bytes)
     }
 }
 
@@ -2014,6 +2065,93 @@ thread_local! {
         RefCell::new(GossipKnownTxHashCache::default());
 }
 
+fn framed_payload_len(payload_len: usize, align: usize) -> Option<usize> {
+    let padding = if align <= 1 {
+        0
+    } else {
+        let rem = ncore::Header::SIZE % align;
+        if rem == 0 { 0 } else { align - rem }
+    };
+    ncore::Header::SIZE
+        .checked_add(padding)?
+        .checked_add(payload_len)
+}
+
+struct FramedPrefixInfo {
+    consumed: usize,
+    flags: u8,
+}
+
+fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixInfo, ncore::Error> {
+    const LEN_OFF: usize = 4 + 1 + 1 + 16 + 1;
+
+    if bytes.len() < ncore::Header::SIZE {
+        return Err(ncore::Error::LengthMismatch);
+    }
+    if bytes[..4] != ncore::MAGIC {
+        return Err(ncore::Error::InvalidMagic);
+    }
+    if bytes.get(4) != Some(&ncore::VERSION_MAJOR) {
+        return Err(ncore::Error::UnsupportedVersion {
+            found: bytes[4],
+            expected: ncore::VERSION_MAJOR,
+        });
+    }
+    if bytes.get(5) != Some(&ncore::VERSION_MINOR) {
+        return Err(ncore::Error::UnsupportedMinorVersion {
+            found: bytes[5],
+            supported: ncore::VERSION_MINOR,
+        });
+    }
+    let schema = bytes.get(6..22).ok_or(ncore::Error::LengthMismatch)?;
+    if schema != <T as NoritoSerialize>::schema_hash().as_slice() {
+        return Err(ncore::Error::SchemaMismatch);
+    }
+    let compression = *bytes.get(22).ok_or(ncore::Error::LengthMismatch)?;
+    if compression != ncore::Compression::None as u8 {
+        return Err(ncore::Error::unsupported_compression_with(
+            compression,
+            &[ncore::Compression::None],
+        ));
+    }
+    let len_bytes = bytes
+        .get(LEN_OFF..LEN_OFF + 8)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let mut length = [0u8; 8];
+    length.copy_from_slice(len_bytes);
+    let payload_len =
+        usize::try_from(u64::from_le_bytes(length)).map_err(|_| ncore::Error::LengthMismatch)?;
+    let _padding = if core::mem::align_of::<ncore::Archived<T>>() <= 1 {
+        0
+    } else {
+        let rem = ncore::Header::SIZE % core::mem::align_of::<ncore::Archived<T>>();
+        if rem == 0 {
+            0
+        } else {
+            core::mem::align_of::<ncore::Archived<T>>() - rem
+        }
+    };
+    let consumed = framed_payload_len(payload_len, core::mem::align_of::<ncore::Archived<T>>())
+        .filter(|size| *size <= bytes.len())
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let flags = *bytes
+        .get(ncore::Header::SIZE - 1)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    Ok(FramedPrefixInfo { consumed, flags })
+}
+
+fn encode_signed_transaction(signed: &SignedTransaction) -> Vec<u8> {
+    let _flags = ncore::DecodeFlagsGuard::enter(0);
+    ncore::to_bytes(signed).expect("encode signed transaction")
+}
+
+fn decode_framed_signed_transaction(
+    framed: &[u8],
+    _flags: u8,
+) -> Result<SignedTransaction, ncore::Error> {
+    norito::decode_from_bytes::<SignedTransaction>(framed)
+}
+
 fn decode_gossip_transaction_payload(
     bytes: &[u8],
 ) -> Result<
@@ -2047,19 +2185,23 @@ fn decode_gossip_transaction_payload(
         return Ok(hit);
     }
 
-    let (signed, consumed) = ncore::decode_field_canonical_slice::<SignedTransaction>(bytes)?;
+    let prefix = framed_prefix_info::<SignedTransaction>(bytes)?;
+    let framed = bytes
+        .get(..prefix.consumed)
+        .ok_or(ncore::Error::LengthMismatch)?;
+    let signed = decode_framed_signed_transaction(framed, prefix.flags)?;
     let signed = Arc::new(signed);
     let tx_hash = signed.hash();
-    let encoded = Arc::new(bytes[..consumed].to_vec());
+    let encoded = Arc::new(framed.to_vec());
     let entry = GossipTxDecodeCacheEntry {
         signed: signed.clone(),
         encoded: encoded.clone(),
         tx_hash,
-        consumed,
+        consumed: prefix.consumed,
     };
     let key = GossipTxDecodeCacheKey::from_bytes(bytes);
     GOSSIP_TX_DECODE_CACHE.with(|cache| cache.borrow_mut().insert(key, entry));
-    Ok((signed, encoded, tx_hash.clone(), consumed))
+    Ok((signed, encoded, tx_hash.clone(), prefix.consumed))
 }
 
 impl GossipTransaction {
@@ -2074,12 +2216,17 @@ impl GossipTransaction {
         }
     }
 
-    /// Wrap an already-signed transaction with cached encoded bytes.
+    /// Wrap an already-signed transaction with cached canonical full-frame bytes.
     pub fn with_encoded(signed: SignedTransaction, encoded: Arc<Vec<u8>>) -> Self {
         let tx_hash = signed.hash();
+        let canonical = Arc::new(encode_signed_transaction(&signed));
         Self {
             signed: Arc::new(signed),
-            encoded: Some(encoded),
+            encoded: Some(if encoded.as_slice() == canonical.as_slice() {
+                encoded
+            } else {
+                canonical
+            }),
             tx_hash,
         }
     }
@@ -2099,7 +2246,7 @@ impl GossipTransaction {
         self.into_signed_with_payload().0
     }
 
-    /// Consume the wrapper and return the signed transaction and cached payload.
+    /// Consume the wrapper and return the signed transaction and cached full-frame payload.
     pub fn into_signed_with_payload(self) -> (SignedTransaction, Option<Arc<Vec<u8>>>) {
         let signed = Arc::try_unwrap(self.signed).unwrap_or_else(|arc| (*arc).clone());
         (signed, self.encoded)
@@ -2123,21 +2270,37 @@ impl NoritoSerialize for GossipTransaction {
             writer.write_all(encoded)?;
             return Ok(());
         }
-        self.signed.as_ref().serialize(writer)
+        let encoded = encode_signed_transaction(self.signed.as_ref());
+        writer.write_all(&encoded)?;
+        Ok(())
     }
 
     fn encoded_len_hint(&self) -> Option<usize> {
-        self.encoded
-            .as_ref()
-            .map(|bytes| bytes.len())
-            .or_else(|| self.signed.as_ref().encoded_len_hint())
+        self.encoded.as_ref().map(|bytes| bytes.len()).or_else(|| {
+            self.signed
+                .as_ref()
+                .encoded_len_hint()
+                .and_then(|payload_len| {
+                    framed_payload_len(
+                        payload_len,
+                        core::mem::align_of::<ncore::Archived<SignedTransaction>>(),
+                    )
+                })
+        })
     }
 
     fn encoded_len_exact(&self) -> Option<usize> {
-        self.encoded
-            .as_ref()
-            .map(|bytes| bytes.len())
-            .or_else(|| self.signed.as_ref().encoded_len_exact())
+        self.encoded.as_ref().map(|bytes| bytes.len()).or_else(|| {
+            self.signed
+                .as_ref()
+                .encoded_len_exact()
+                .and_then(|payload_len| {
+                    framed_payload_len(
+                        payload_len,
+                        core::mem::align_of::<ncore::Archived<SignedTransaction>>(),
+                    )
+                })
+        })
     }
 }
 
@@ -2149,7 +2312,14 @@ impl<'a> NoritoDeserialize<'a> for GossipTransaction {
     fn try_deserialize(archived: &'a ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
-        let (signed, encoded, tx_hash, _) = decode_gossip_transaction_payload(bytes)?;
+        let prefix = framed_prefix_info::<SignedTransaction>(bytes)?;
+        let framed = bytes
+            .get(..prefix.consumed)
+            .ok_or(ncore::Error::LengthMismatch)?;
+        let signed = Arc::new(decode_framed_signed_transaction(framed, prefix.flags)?);
+        let encoded = Arc::new(framed.to_vec());
+        let tx_hash = signed.hash();
+        ncore::note_payload_access(bytes, prefix.consumed);
         Ok(Self {
             signed,
             encoded: Some(encoded),
@@ -2181,9 +2351,6 @@ pub enum GossipPlane {
     Restricted,
 }
 
-const GOSSIP_PLANE_BYTES: usize = core::mem::size_of::<u32>();
-const GOSSIP_SEQ_LEN_BYTES: usize = core::mem::size_of::<u64>();
-
 fn gossip_route_encoded_len() -> Option<usize> {
     let route = GossipRoute {
         lane_id: LaneId::SINGLE,
@@ -2194,20 +2361,27 @@ fn gossip_route_encoded_len() -> Option<usize> {
         .or_else(|| route.encoded_len_hint())
 }
 
+fn gossip_plane_encoded_len() -> Option<usize> {
+    GossipPlane::Public
+        .encoded_len_exact()
+        .or_else(|| GossipPlane::Public.encoded_len_hint())
+}
+
 fn gossip_message_empty_len() -> Option<usize> {
-    let txs_payload_len = GOSSIP_SEQ_LEN_BYTES;
-    let routes_payload_len = GOSSIP_SEQ_LEN_BYTES;
+    let txs_payload_len = ncore::seq_len_prefix_len(0);
+    let routes_payload_len = ncore::seq_len_prefix_len(0);
     gossip_message_encoded_len(txs_payload_len, routes_payload_len)
 }
 
 fn gossip_message_encoded_len(txs_payload_len: usize, routes_payload_len: usize) -> Option<usize> {
+    let plane_payload_len = gossip_plane_encoded_len()?;
     let mut total = ncore::len_prefix_len(txs_payload_len).checked_add(txs_payload_len)?;
     total = total
         .checked_add(ncore::len_prefix_len(routes_payload_len))?
         .checked_add(routes_payload_len)?;
     total = total
-        .checked_add(ncore::len_prefix_len(GOSSIP_PLANE_BYTES))?
-        .checked_add(GOSSIP_PLANE_BYTES)?;
+        .checked_add(ncore::len_prefix_len(plane_payload_len))?
+        .checked_add(plane_payload_len)?;
     Some(total)
 }
 
@@ -2215,33 +2389,37 @@ fn gossip_message_encoded_len(txs_payload_len: usize, routes_payload_len: usize)
 fn gossip_vec_payload_len_exact<'a>(
     items: impl Iterator<Item = &'a GossipTransaction>,
 ) -> Option<usize> {
-    let mut total = GOSSIP_SEQ_LEN_BYTES;
+    let mut count = 0usize;
+    let mut total = 0usize;
     for item in items {
+        count = count.checked_add(1)?;
         let item_len = item.encoded_len_exact()?;
         total = total.checked_add(ncore::len_prefix_len(item_len))?;
         total = total.checked_add(item_len)?;
     }
-    Some(total)
+    ncore::seq_len_prefix_len(count).checked_add(total)
 }
 
 #[allow(single_use_lifetimes)]
 fn gossip_vec_payload_len_cached<'a>(
     items: impl Iterator<Item = &'a GossipTransaction>,
 ) -> Option<usize> {
-    let mut total = GOSSIP_SEQ_LEN_BYTES;
+    let mut count = 0usize;
+    let mut total = 0usize;
     for item in items {
+        count = count.checked_add(1)?;
         let item_len = item.encoded.as_ref().map(|bytes| bytes.len())?;
         total = total.checked_add(ncore::len_prefix_len(item_len))?;
         total = total.checked_add(item_len)?;
     }
-    Some(total)
+    ncore::seq_len_prefix_len(count).checked_add(total)
 }
 
 fn gossip_routes_payload_len(len: usize) -> Option<usize> {
     let route_len = gossip_route_encoded_len()?;
     let per_elem = ncore::len_prefix_len(route_len).checked_add(route_len)?;
     let elems = per_elem.checked_mul(len)?;
-    GOSSIP_SEQ_LEN_BYTES.checked_add(elems)
+    ncore::seq_len_prefix_len(len).checked_add(elems)
 }
 
 /// Lane/dataspace tags carried alongside gossiped transactions for visibility gating.
@@ -2421,7 +2599,7 @@ mod tests {
     }
 
     fn payload_for(tx: &SignedTransaction) -> Arc<Vec<u8>> {
-        Arc::new(norito::codec::Encode::encode(tx))
+        Arc::new(encode_signed_transaction(tx))
     }
 
     fn identifier_bfv_parameters() -> BfvParameters {
@@ -3047,12 +3225,87 @@ mod tests {
     #[test]
     fn gossip_transaction_decode_rejects_trailing_bytes() {
         let (signed, _accepted) = build_transaction("trailing");
-        let mut encoded = norito::codec::Encode::encode(&signed);
+        let mut encoded = ncore::to_bytes(&signed).expect("encode signed transaction");
         encoded.extend_from_slice(&[0xAA, 0xBB]);
 
         let err =
             ncore::decode_field_canonical::<GossipTransaction>(&encoded).expect_err("bad bytes");
         assert!(matches!(err, ncore::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn gossip_network_message_roundtrip_cached_payload_is_context_free() {
+        let (signed, _accepted) = build_transaction("cached-network-flags");
+        let canonical_payload = payload_for(&signed);
+        let payload = {
+            let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
+            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"))
+        };
+        std::thread::spawn(move || {
+            let message = TransactionGossip {
+                txs: vec![GossipTransaction::with_encoded(
+                    signed.clone(),
+                    Arc::clone(&payload),
+                )],
+                routes: vec![GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::GLOBAL,
+                }],
+                plane: GossipPlane::Public,
+            };
+            let encoded = NetworkMessage::TransactionGossiper(Arc::new(message)).encode();
+            let decoded: NetworkMessage =
+                Decode::decode(&mut encoded.as_slice()).expect("decode network message");
+
+            match decoded {
+                NetworkMessage::TransactionGossiper(message) => {
+                    assert_eq!(message.txs.len(), 1);
+                    let decoded_payload = message.txs[0].encoded.as_ref().expect("cached payload");
+                    assert_eq!(decoded_payload.as_slice(), canonical_payload.as_slice());
+                    assert!(decoded_payload.starts_with(&ncore::MAGIC));
+                }
+                other => panic!("unexpected network message: {other:?}"),
+            }
+        })
+        .join()
+        .expect("context-free network gossip thread");
+    }
+
+    #[test]
+    fn transaction_gossip_roundtrip_cached_payload_is_context_free() {
+        let (signed, _accepted) = build_transaction("cached-txgossip-flags");
+        let canonical_payload = payload_for(&signed);
+        let payload = {
+            let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
+            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"))
+        };
+        std::thread::spawn(move || {
+            let message = TransactionGossip {
+                txs: vec![GossipTransaction::with_encoded(
+                    signed.clone(),
+                    Arc::clone(&payload),
+                )],
+                routes: vec![GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::GLOBAL,
+                }],
+                plane: GossipPlane::Public,
+            };
+            let encoded = message.encode();
+            let decoded: TransactionGossip =
+                Decode::decode(&mut encoded.as_slice()).expect("decode transaction gossip");
+
+            assert_eq!(decoded.txs.len(), 1);
+            let decoded_payload = decoded.txs[0].encoded.as_ref().expect("cached payload");
+            assert_eq!(decoded_payload.as_slice(), canonical_payload.as_slice());
+            assert!(decoded_payload.starts_with(&ncore::MAGIC));
+            assert_eq!(decoded.routes.len(), 1);
+            assert_eq!(decoded.routes[0].lane_id, LaneId::SINGLE);
+            assert_eq!(decoded.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+            assert_eq!(decoded.plane, GossipPlane::Public);
+        })
+        .join()
+        .expect("context-free transaction gossip thread");
     }
 
     #[test]

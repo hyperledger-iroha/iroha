@@ -53,7 +53,7 @@ use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
-use norito::core::NoritoSerialize;
+use norito::core::{self as ncore, NoritoSerialize};
 use parking_lot::RwLock;
 pub use router::{
     ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingResolveError, SingleLaneRouter,
@@ -226,7 +226,7 @@ pub struct Queue {
     tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
     /// Local enqueue timestamp in milliseconds for hashes still waiting in `tx_hashes`.
     queued_tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
-    /// Cached Norito-encoded transaction payloads for gossip retransmit.
+    /// Cached full Norito-framed signed-transaction payloads for gossip retransmit.
     tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
     removed_hashes: DashMap<SignedTxHash, ()>,
@@ -405,7 +405,7 @@ pub struct GossipBatchEntry {
     pub tx: AcceptedTransaction<'static>,
     /// Lane/dataspace routing decision cached at admission time.
     pub routing: RoutingDecision,
-    /// Pre-serialized transaction payload for retransmit.
+    /// Pre-serialized full-frame transaction payload for retransmit.
     pub payload: Arc<Vec<u8>>,
 }
 
@@ -600,6 +600,14 @@ impl Queue {
                 .encoded_len_exact()
                 .unwrap_or_else(|| entrypoint.encoded_len()),
         }
+    }
+
+    fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
+        let signed = tx
+            .external()
+            .expect("queue gossip only supports external signed transactions");
+        let _flags = ncore::DecodeFlagsGuard::enter(0);
+        Arc::new(ncore::to_bytes(signed).expect("encode signed transaction gossip payload"))
     }
 
     pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
@@ -1494,14 +1502,7 @@ impl Queue {
                 let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
                     Arc::clone(entry.value())
                 } else {
-                    let encoded_len = self
-                        .tx_encoded_len
-                        .get(&hash)
-                        .map(|entry| *entry.value())
-                        .unwrap_or_else(|| Self::compute_tx_encoded_len(tx_ref.as_accepted()));
-                    let mut buf = Vec::with_capacity(encoded_len);
-                    tx_ref.as_accepted().as_ref().encode_to(&mut buf);
-                    let payload = Arc::new(buf);
+                    let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
                     self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
                     payload
                 };
@@ -2123,7 +2124,7 @@ impl Queue {
         Ok(routing_decision)
     }
 
-    /// Pushes an accepted transaction into the queue using a cached gossip payload.
+    /// Pushes an accepted transaction into the queue using a cached canonical full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
@@ -2138,7 +2139,7 @@ impl Queue {
             .map(|_| ())
     }
 
-    /// Pushes an accepted transaction into the queue using a cached gossip payload.
+    /// Pushes an accepted transaction into the queue using a cached canonical full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
@@ -2153,7 +2154,7 @@ impl Queue {
     }
 
     /// Pushes an accepted transaction into the queue using narrow state accessors and a cached
-    /// gossip payload.
+    /// canonical full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
@@ -2169,7 +2170,7 @@ impl Queue {
     }
 
     /// Pushes an accepted transaction into the queue using a precomputed routing decision and a
-    /// cached gossip payload.
+    /// cached canonical full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
@@ -5247,7 +5248,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(tx.as_ref().encode());
+        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
 
         queue
             .push_with_gossip_payload(tx, state.view(), Some(Arc::clone(&payload)))
@@ -5278,7 +5279,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(tx.as_ref().encode());
+        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
         let state_view = state.view();
 
         queue
@@ -5299,7 +5300,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(tx.as_ref().encode());
+        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
 
         queue
             .push_with_gossip_payload_with_state(tx, &state, Some(Arc::clone(&payload)))
@@ -5310,7 +5311,7 @@ pub mod tests {
     }
 
     #[test]
-    fn queue_generated_gossip_payload_uses_signed_transaction_encoding() {
+    fn queue_generated_gossip_payload_uses_framed_signed_transaction_wire() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world_with_test_domains(), kura, query_handle);
@@ -5318,7 +5319,7 @@ pub mod tests {
 
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
-        let expected_payload = tx.as_ref().encode();
+        let expected_payload = ncore::to_bytes(tx.as_ref()).expect("encode signed transaction");
 
         queue.push(tx, state.view()).expect("push tx");
 
@@ -5937,7 +5938,8 @@ pub mod tests {
         assert_eq!(batch.len(), 1);
         let entry = &batch[0];
         assert_eq!(entry.tx.as_ref().hash(), hash);
-        let expected_payload = entry.tx.as_ref().encode();
+        let expected_payload =
+            ncore::to_bytes(entry.tx.as_ref()).expect("encode signed transaction");
         assert_eq!(entry.payload.as_slice(), expected_payload.as_slice());
         assert_eq!(entry.routing.lane_id, LaneId::SINGLE);
         assert_eq!(entry.routing.dataspace_id, DataSpaceId::GLOBAL);

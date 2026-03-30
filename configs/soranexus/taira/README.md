@@ -34,8 +34,10 @@ network online quickly.
   checks used by the Taira Codex rollout, including the optional signed write
   canary for final public cutover.
 - `bootstrap_kaigi_localnet.sh`: local-only relay bootstrap that re-signs the
-  served `dist/taira-localnet` genesis with seeded Kaigi relay metadata and
-  health samples, then restarts the detached `taira-localnet` session.
+  served `dist/taira-localnet` genesis with seeded Kaigi relay metadata,
+  health samples, and the canonical Taira onboarding/faucet authority account,
+  then rewrites the live peer configs and restarts the detached
+  `taira-localnet` session.
 - `taira-explorer.nginx.conf`: multi-domain nginx edge config for
   `taira.sora.org` and `taira-explorer.sora.org`.
 
@@ -140,6 +142,24 @@ site in one JSON request (`payload_b64`), so the nginx host serving
 the request. Torii must also run with `torii.max_content_len` high enough for
 the base64-expanded JSON body; the shipped Taira profile now pins that to
 `64_000_000`.
+
+After every Taira reset or `irohad` rebuild, verify the manifest-registration
+ingress before retrying `yarn taira:publish`:
+
+- `curl -sSki -X POST https://taira.sora.org/v1/sorafs/pin/register -H 'content-type: application/json' --data '{}'`
+
+Expected result:
+
+- `HTTP 400` with a handler-level validation error such as `missing field authority`
+
+Unexpected result:
+
+- `HTTP 405` with `Allow: GET,HEAD`
+
+That `405` means the served `irohad` is stale and missing the mounted
+`POST /v1/sorafs/pin/register` route, even if
+`GET /v1/sorafs/pin/register` still falls through to the digest lookup
+handler.
 
 ### Codex / MCP rollout
 

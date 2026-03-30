@@ -537,8 +537,11 @@ mod tests {
     use iroha_data_model::{ChainId, Level, isi::Log};
     use iroha_p2p::{ClassifyTopic, network::message::Topic as NetworkTopic};
     use iroha_test_samples::gen_account_in;
-    use norito::codec::{Decode, Encode};
     use norito::json;
+    use norito::{
+        codec::{Decode, Encode},
+        core as ncore,
+    };
 
     use crate::{
         NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
@@ -865,7 +868,7 @@ mod tests {
         let signed = builder
             .with_instructions([Log::new(Level::INFO, "ping".to_owned())])
             .sign(keypair.private_key());
-        let payload = Arc::new(signed.encode());
+        let payload = Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"));
         let gossip = TransactionGossip {
             txs: vec![GossipTransaction::with_encoded(
                 signed.clone(),
@@ -887,12 +890,68 @@ mod tests {
             NetworkMessage::TransactionGossiper(gossip) => {
                 assert_eq!(gossip.txs.len(), 1);
                 assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
+                let wire = gossip.txs[0].encode();
+                assert_eq!(wire.as_slice(), payload.as_slice());
+                assert!(wire.starts_with(&ncore::MAGIC));
                 assert_eq!(gossip.routes.len(), 1);
                 assert_eq!(gossip.routes[0].lane_id, LaneId::SINGLE);
                 assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::GLOBAL);
             }
             other => panic!("expected transaction gossip, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn network_message_roundtrip_cached_transaction_gossip_is_context_free() {
+        let (account, keypair) = gen_account_in("wonderland");
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id, account);
+        builder.set_creation_time(Duration::from_millis(0));
+        let signed = builder
+            .with_instructions([Log::new(Level::INFO, "pong".to_owned())])
+            .sign(keypair.private_key());
+        let canonical_payload =
+            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"));
+        let payload = {
+            let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
+            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"))
+        };
+        std::thread::spawn(move || {
+            let gossip = TransactionGossip {
+                txs: vec![GossipTransaction::with_encoded(
+                    signed.clone(),
+                    Arc::clone(&payload),
+                )],
+                routes: vec![GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::GLOBAL,
+                }],
+                plane: GossipPlane::Public,
+            };
+            let msg = NetworkMessage::TransactionGossiper(Arc::new(gossip));
+
+            let bytes = msg.encode();
+            let decoded: NetworkMessage =
+                Decode::decode(&mut bytes.as_slice()).expect("decode gossip network");
+
+            match decoded {
+                NetworkMessage::TransactionGossiper(gossip) => {
+                    assert_eq!(gossip.txs.len(), 1);
+                    assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
+                    let wire = gossip.txs[0].encode();
+                    assert_eq!(wire.as_slice(), canonical_payload.as_slice());
+                    assert!(wire.starts_with(&ncore::MAGIC));
+                    assert_eq!(gossip.routes.len(), 1);
+                    assert_eq!(gossip.routes[0].lane_id, LaneId::SINGLE);
+                    assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+                }
+                other => panic!("expected transaction gossip, got {other:?}"),
+            }
+        })
+        .join()
+        .expect("context-free network gossip thread");
     }
 
     #[test]

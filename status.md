@@ -24,6 +24,133 @@ Last updated: 2026-03-30
     follow-up `cargo xtask openapi --sign <key>` refresh is still required when
     the signing key is available.
 
+## 2026-03-30 Taira SoraFS deploy blockers on the served localnet are closed
+- Canonicalized the shipped Taira onboarding/faucet authority literals in
+  `configs/soranexus/taira/` and `defaults/kagami/iroha3-taira/`, then
+  extended the local bootstrap overlay in
+  `crates/iroha_kagami/examples/taira_kaigi_localnet.rs` and
+  `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` so the served
+  `dist/taira-localnet` genesis now seeds that authority account, funds it
+  with the live fee asset, grants the publish/onboarding permissions, and
+  rewrites the live peer configs to use the same canonical authority.
+- Fixed the remaining Torii ingress bug in
+  `crates/iroha_torii/src/lib.rs`: the handler for
+  `POST /v1/sorafs/pin/register` already existed, but the route was never
+  mounted under the capacity-enabled SoraFS router. That is why live Taira was
+  returning `405 Allow: GET,HEAD` while `GET /v1/sorafs/pin/register` still
+  hit the digest lookup path.
+- Updated the focused Torii regressions in
+  `crates/iroha_torii/tests/sorafs_discovery.rs` so the success-path tests now
+  enable `torii.sorafs_storage`, attach `ConnectInfo<SocketAddr>`, and seed
+  the signing authority in the harness before exercising the route.
+- Rebuilt `target/release/irohad` and restarted the detached
+  `screen` session `taira-localnet`. Live verification on March 30, 2026:
+  - `POST http://127.0.0.1:29080/v1/sorafs/pin/register` with `{}` now returns
+    `400 invalid JSON body: missing field authority`;
+  - `POST https://taira.sora.org/v1/sorafs/pin/register` with `{}` returns the
+    same `400` instead of `405`;
+  - a syntactically valid public manifest-registration request signed by the
+    canonical Taira authority returned `200`;
+  - `GET https://taira.sora.org/v1/sorafs/pin` now shows
+    `total_count = 1` at `block_height = 2`; and
+  - `GET https://taira.sora.org/status` is healthy with
+    `blocks = 2`, `txs_approved = 13`, `txs_rejected = 0`.
+
+## 2026-03-30 Full preserved-peer stable reruns on top of the transaction-gossip fix removed the residual malformed-frame churn, but permissioned still fails on ingress/global liveness and NPoS still fails the stable latency gate
+- Completed the full preserved-peer stable reruns on top of the additional
+  transaction-gossip cache normalization fix:
+  - permissioned log:
+    `/tmp/izanami_permissioned_txgossipfix_20260330T011035Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-permissioned-txgossipfix_20260330T011035Z`;
+  - NPoS log:
+    `/tmp/izanami_npos_txgossipfix_20260330T013139Z.log`;
+    peer artifacts:
+    `/tmp/iroha-soak-npos-txgossipfix_20260330T013139Z`.
+- The old transport-induced signatures remained gone in both reruns:
+  - `LengthMismatch=0`;
+  - `Failed to decode peer message=0`; and
+  - `deferring proposal: insufficient online peers for commit quorum=0`.
+- The residual recovered malformed peer-payload churn from the March 29
+  transport-fix reruns effectively disappeared:
+  - permissioned preserved peers recorded only `3`
+    `Dropped malformed decrypted peer payload frame` warnings total
+    (down from `3991`);
+  - NPoS preserved peers recorded only `3` of the same warning total
+    (down from `3435`); and
+  - neither run hit the `3`-frame disconnect threshold.
+- Permissioned no longer exhibits the old transport-decoding stall, but the
+  soak still fails much earlier on a different cluster-wide stop:
+  - the run advanced to `strict_min_height=199` / `quorum_min_height=199`
+    with `strict_reference_height=201`;
+  - then the whole quorum froze with repeated
+    `strict block height is stalled with no lagging peers` warnings and
+    failed the 600s strict-progress watchdog;
+  - final summary:
+    `successes=563`, `failures=335`,
+    `izanami_ingress_failover_total=175`,
+    `izanami_ingress_endpoint_unhealthy_total=438`;
+  - ingress distress was severe throughout the failure window:
+    `PRTRY:QUEUE_FULL=873` and
+    `no ingress endpoints available for operation submit_transaction_plan=667`;
+  - because the peer logs show only `3` recovered malformed payload drops in
+    the whole run, the March 29 transport-framing root cause is no longer a
+    credible explanation for this permissioned stall.
+- NPoS improved substantially, ran the full hour, and reached a much higher
+  height before failing only at the duration checkpoint:
+  - the run reached `strict_min_height=1568` / `quorum_min_height=1568`;
+  - `izanami` stopped at the duration deadline because
+    `quorum p95 block interval 3335ms exceeded threshold 1000ms`
+    with `samples 1568`;
+  - final summary:
+    `successes=4043`, `failures=6`,
+    `izanami_ingress_failover_total=64`,
+    `izanami_ingress_endpoint_unhealthy_total=36`;
+  - ingress backpressure was present but limited
+    (`PRTRY:QUEUE_FULL=36`, `no ingress endpoints=11`);
+  - the run still logged brief synchronized no-lagging-peer stalls, but those
+    plateaus recovered and the envelope stayed alive for the full soak.
+- Acceptance against the current slice is therefore partial:
+  - the consensus wire, peer hardening, and transaction-gossip cache fixes
+    removed the old transport stall chain and collapsed recovered malformed
+    payload churn to near-zero; but
+  - the full-envelope acceptance target is still not met because permissioned
+    now fails on cluster-wide ingress/global liveness loss and NPoS still
+    misses the stable `1000ms` p95 interval gate by a wide margin.
+
+## 2026-03-30 Residual recovered-frame transport root cause traced to transaction gossip cache normalization and fixed
+- Traced the remaining preserved-peer recovered malformed payload churn to the
+  shared transaction-gossip path in `crates/iroha_core/src/gossiper.rs` and
+  `crates/iroha_core/src/queue.rs`:
+  - `GossipTransaction` was still accepting caller-provided framed
+    `SignedTransaction` bytes as-is, so cached gossip payloads could vary with
+    the ambient Norito flag context that produced them; and
+  - the queue-side gossip cache source still encoded signed transactions via
+    the ambient framing path instead of a canonical gossip-specific framing.
+- Fixed the transaction-gossip wire/cache contract:
+  - `GossipTransaction` now canonicalizes cached payload bytes to a canonical
+    full Norito-framed `SignedTransaction` wire form before caching/reuse;
+  - cached and uncached transaction-gossip serialization now emit the same
+    canonical framed bytes;
+  - transaction-gossip decode now walks its len-prefixed fields explicitly
+    instead of relying on the derive-generated field decoder around nested
+    framed transaction bytes; and
+  - queue-generated gossip payloads now normalize through the same canonical
+    framing path at the source.
+- Focused verification completed:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --lib transaction_gossip_roundtrip_cached_payload_is_context_free -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib gossip_network_message_roundtrip_cached_payload_is_context_free -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib network_message_roundtrip_cached_transaction_gossip -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib network_message_roundtrip_cached_transaction_gossip_is_context_free -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib gossip_roundtrip_preserves_cached_payload -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib transaction_gossip_encoded_len_exact_matches_encode -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib queue_generated_gossip_payload_uses_framed_signed_transaction_wire -- --nocapture` (pass)
+  - `cargo test -p iroha_core --lib queue_accepts_gossip_payload_cache -- --nocapture` (pass)
+- Full preserved-peer stable permissioned/NPoS reruns on top of this
+  additional transaction-gossip cache fix are now recorded in the latest sync
+  above.
+
 ## 2026-03-30 Full preserved-peer stable reruns cleared the old signatures but still failed on residual recovered-frame liveness loss
 - Completed the preserved-peer stable reruns on the transport-fix patch set:
   - permissioned log:
