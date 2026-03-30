@@ -7,6 +7,7 @@ SCREEN_SESSION="${IROHA_TAIRA_SCREEN_SESSION:-taira-localnet}"
 GENESIS_JSON="${IROHA_TAIRA_GENESIS_JSON:-$LOCALNET_DIR/genesis.json}"
 GENESIS_SIGNED="${IROHA_TAIRA_GENESIS_SIGNED:-$LOCALNET_DIR/genesis.signed.nrt}"
 GENESIS_SEED="${IROHA_TAIRA_GENESIS_SEED:-taira-localgenesis}"
+TAIRA_PROFILE_CONFIG="${IROHA_TAIRA_PROFILE_CONFIG:-$ROOT_DIR/configs/soranexus/taira/config.toml}"
 CALL_DOMAIN="${IROHA_TAIRA_KAIGI_CALL_DOMAIN:-wonderland}"
 CALL_NAME="${IROHA_TAIRA_KAIGI_CALL_NAME:-taira-relay-bootstrap}"
 REPORTED_AT_MS="${IROHA_TAIRA_KAIGI_REPORTED_AT_MS:-1890864000000}"
@@ -32,6 +33,91 @@ need_cmd() {
     echo "missing required command: $1" >&2
     exit 1
   fi
+}
+
+load_taira_authority() {
+  local values=()
+  local line
+  while IFS= read -r line; do
+    values+=("$line")
+  done < <(
+    python3 - "$TAIRA_PROFILE_CONFIG" <<'PY'
+import sys
+import tomllib
+
+path = sys.argv[1]
+with open(path, "rb") as fh:
+    cfg = tomllib.load(fh)
+onboarding = cfg["torii"]["onboarding"]
+print(onboarding["authority"])
+print(onboarding["private_key"])
+PY
+  )
+  if [[ "${#values[@]}" -lt 2 ]]; then
+    echo "failed to load Taira onboarding authority from $TAIRA_PROFILE_CONFIG" >&2
+    exit 1
+  fi
+  TAIRA_AUTHORITY="${IROHA_TAIRA_AUTHORITY:-${values[0]}}"
+  TAIRA_AUTHORITY_PRIVATE_KEY="${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-${values[1]}}"
+}
+
+patch_peer_configs_for_taira_authority() {
+  local fee_asset_id="$1"
+  TAIRA_AUTHORITY="$TAIRA_AUTHORITY" \
+  TAIRA_AUTHORITY_PRIVATE_KEY="$TAIRA_AUTHORITY_PRIVATE_KEY" \
+  TAIRA_FEE_ASSET_ID="$fee_asset_id" \
+  LOCALNET_DIR="$LOCALNET_DIR" \
+  python3 <<'PY'
+from pathlib import Path
+import os
+import re
+
+localnet_dir = Path(os.environ["LOCALNET_DIR"])
+authority = os.environ["TAIRA_AUTHORITY"]
+private_key = os.environ["TAIRA_AUTHORITY_PRIVATE_KEY"]
+fee_asset_id = os.environ["TAIRA_FEE_ASSET_ID"]
+
+onboarding_block = f"""[torii.onboarding]
+enabled = true
+authority = "{authority}"
+private_key = "{private_key}"
+allowed_permissions = []
+"""
+
+faucet_block = f"""[torii.faucet]
+enabled = true
+authority = "{authority}"
+private_key = "{private_key}"
+asset_definition_id = "{fee_asset_id}"
+amount = "25000"
+pow_difficulty_bits = 8
+pow_scrypt_log_n = 13
+pow_scrypt_r = 8
+pow_scrypt_p = 1
+pow_max_anchor_age_blocks = 6
+pow_adaptive_lookback_blocks = 64
+pow_adaptive_claims_per_extra_bit = 4
+pow_adaptive_max_extra_bits = 2
+pow_vrf_seed_enabled = false
+"""
+
+def replace_or_insert(text: str, section: str, block: str) -> str:
+    pattern = re.compile(rf"(?ms)^\[{re.escape(section)}\]\n.*?(?=^\[|\Z)")
+    replacement = block.rstrip() + "\n\n"
+    if pattern.search(text):
+        return pattern.sub(replacement, text, count=1)
+
+    anchor = re.search(r"(?ms)^\[torii\.mcp\]\n.*?(?=^\[|\Z)", text)
+    if anchor:
+        return text[: anchor.end()] + "\n" + replacement + text[anchor.end() :]
+    return text.rstrip() + "\n\n" + replacement
+
+for path in sorted(localnet_dir.glob("peer*.toml")):
+    text = path.read_text()
+    text = replace_or_insert(text, "torii.onboarding", onboarding_block)
+    text = replace_or_insert(text, "torii.faucet", faucet_block)
+    path.write_text(text)
+PY
 }
 
 ensure_launchd_runner() {
@@ -146,23 +232,29 @@ discover_helper_bin() {
 need_cmd cargo
 need_cmd curl
 need_cmd jq
+need_cmd python3
 need_cmd screen
 need_file "$GENESIS_JSON"
 need_file "$LOCALNET_DIR/client.toml"
 need_file "$LOCALNET_DIR/peer0.toml"
 need_file "$LOCALNET_DIR/peer1.toml"
 need_file "$LOCALNET_DIR/peer2.toml"
+need_file "$TAIRA_PROFILE_CONFIG"
 ensure_launchd_runner
+load_taira_authority
 
 HOST_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/client.toml")"
 PEER0_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer0.toml")"
 PEER1_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer1.toml")"
 PEER2_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer2.toml")"
+FEE_ASSET_ID="$(extract_toml_string fee_asset_id "$LOCALNET_DIR/peer0.toml")"
 
-if [[ -z "$HOST_PUBLIC_KEY" || -z "$PEER0_PUBLIC_KEY" || -z "$PEER1_PUBLIC_KEY" || -z "$PEER2_PUBLIC_KEY" ]]; then
-  echo "failed to extract host/relay public keys from localnet configs" >&2
+if [[ -z "$HOST_PUBLIC_KEY" || -z "$PEER0_PUBLIC_KEY" || -z "$PEER1_PUBLIC_KEY" || -z "$PEER2_PUBLIC_KEY" || -z "$FEE_ASSET_ID" ]]; then
+  echo "failed to extract host/relay public keys or fee asset from localnet configs" >&2
   exit 1
 fi
+
+patch_peer_configs_for_taira_authority "$FEE_ASSET_ID"
 
 helper_bin="$(discover_helper_bin || true)"
 echo "building signed Kaigi overlay genesis"
@@ -176,6 +268,9 @@ if [[ -n "$helper_bin" ]]; then
     --call-domain "$CALL_DOMAIN" \
     --call-name "$CALL_NAME" \
     --reported-at-ms "$REPORTED_AT_MS" \
+    --bootstrap-authority-account "$TAIRA_AUTHORITY" \
+    --bootstrap-authority-domain "$RELAY_DOMAIN" \
+    --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID" \
     --relay-spec "${PEER0_PUBLIC_KEY}:${RELAY_HPKE_KEYS[0]}:${RELAY_BANDWIDTH_CLASSES[0]}" \
     --relay-spec "${PEER1_PUBLIC_KEY}:${RELAY_HPKE_KEYS[1]}:${RELAY_BANDWIDTH_CLASSES[1]}" \
     --relay-spec "${PEER2_PUBLIC_KEY}:${RELAY_HPKE_KEYS[2]}:${RELAY_BANDWIDTH_CLASSES[2]}"
@@ -189,6 +284,9 @@ else
     --call-domain "$CALL_DOMAIN" \
     --call-name "$CALL_NAME" \
     --reported-at-ms "$REPORTED_AT_MS" \
+    --bootstrap-authority-account "$TAIRA_AUTHORITY" \
+    --bootstrap-authority-domain "$RELAY_DOMAIN" \
+    --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID" \
     --relay-spec "${PEER0_PUBLIC_KEY}:${RELAY_HPKE_KEYS[0]}:${RELAY_BANDWIDTH_CLASSES[0]}" \
     --relay-spec "${PEER1_PUBLIC_KEY}:${RELAY_HPKE_KEYS[1]}:${RELAY_BANDWIDTH_CLASSES[1]}" \
     --relay-spec "${PEER2_PUBLIC_KEY}:${RELAY_HPKE_KEYS[2]}:${RELAY_BANDWIDTH_CLASSES[2]}"

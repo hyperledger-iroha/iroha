@@ -43,7 +43,7 @@ use iroha_core::{
 };
 use iroha_crypto::{KeyPair, PrivateKey};
 use iroha_data_model::{
-    ChainId,
+    ChainId, IntoKeyValue, Registrable,
     block::BlockHeader,
     isi::sorafs::{ApprovePinManifest, RegisterPinManifest},
     name::Name,
@@ -1504,19 +1504,11 @@ fn ensure_authority_registered(
     let mut tx = block.transaction();
 
     if !account_exists {
-        if tx.world().domain(&domain_id).is_err() {
-            let new_domain = dm::Domain::new(domain_id.clone());
-            let register_domain = dm::Register::domain(new_domain);
-            register_domain
-                .execute(&authority.account, &mut tx)
-                .expect("register domain for test authority");
-        }
-
-        let new_account = dm::Account::new_in_domain(authority.account.clone(), domain_id);
-        let register_account = dm::Register::account(new_account);
-        register_account
-            .execute(&authority.account, &mut tx)
-            .expect("register account for test authority");
+        let account = dm::Account::new_in_domain(authority.account.clone(), domain_id)
+            .build(&authority.account);
+        let (account_id, account_value) = account.into_key_value();
+        tx.world_mut_for_testing()
+            .insert_account_with_links(account_id, account_value);
     }
 
     if !has_register {
@@ -2225,30 +2217,47 @@ async fn sorafs_pin_register_route_accepts_manifest() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
+    cfg.torii.sorafs_storage.enabled = true;
+    let temp_dir = tempdir().expect("storage temp dir");
+    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
     let fixture = manifest_request_fixture(7, |_| {});
+    let mut next_height = 1;
+    ensure_authority_registered(
+        &harness,
+        &AuthorityCreds {
+            account: fixture.request.authority.clone(),
+            private_key: fixture.request.private_key.clone(),
+        },
+        &mut next_height,
+    );
 
     let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/json")
-                .body(Body::from(payload))
-                .expect("build request"),
-        )
-        .await
-        .expect("router responds");
-    assert_eq!(response.status(), StatusCode::OK);
-
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/sorafs/pin/register")
+        .header("content-type", "application/json")
+        .body(Body::from(payload))
+        .expect("build request");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
+    let response = app.clone().oneshot(request).await.expect("router responds");
+    let status = response.status();
     let bytes = BodyExt::collect(response.into_body())
         .await
         .expect("collect response body")
         .to_bytes();
+    assert!(
+        status == StatusCode::OK,
+        "pin register route failed: {status} body={}",
+        String::from_utf8_lossy(&bytes)
+    );
     let value: json::Value = json::from_slice(&bytes).expect("decode response");
     assert_eq!(
         value
@@ -2311,25 +2320,38 @@ async fn sorafs_pin_register_accepts_norito_payload() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
+    cfg.torii.sorafs_storage.enabled = true;
+    let temp_dir = tempdir().expect("storage temp dir");
+    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
     let fixture = manifest_request_fixture(8, |_| {});
+    let mut next_height = 1;
+    ensure_authority_registered(
+        &harness,
+        &AuthorityCreds {
+            account: fixture.request.authority.clone(),
+            private_key: fixture.request.private_key.clone(),
+        },
+        &mut next_height,
+    );
     let norito_payload =
         norito::to_bytes(&fixture.request).expect("encode pin manifest request as Norito");
 
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/sorafs/pin/register")
-                .header("content-type", "application/x-norito")
-                .body(Body::from(norito_payload))
-                .expect("build request"),
-        )
-        .await
-        .expect("router responds");
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/v1/sorafs/pin/register")
+        .header("content-type", "application/x-norito")
+        .body(Body::from(norito_payload))
+        .expect("build request");
+    request
+        .extensions_mut()
+        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
+    let response = app.clone().oneshot(request).await.expect("router responds");
     let status = response.status();
     let body = BodyExt::collect(response.into_body())
         .await

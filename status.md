@@ -2,6 +2,38 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Taira SoraFS deploy blockers on the served localnet are closed
+- Canonicalized the shipped Taira onboarding/faucet authority literals in
+  `configs/soranexus/taira/` and `defaults/kagami/iroha3-taira/`, then
+  extended the local bootstrap overlay in
+  `crates/iroha_kagami/examples/taira_kaigi_localnet.rs` and
+  `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` so the served
+  `dist/taira-localnet` genesis now seeds that authority account, funds it
+  with the live fee asset, grants the publish/onboarding permissions, and
+  rewrites the live peer configs to use the same canonical authority.
+- Fixed the remaining Torii ingress bug in
+  `crates/iroha_torii/src/lib.rs`: the handler for
+  `POST /v1/sorafs/pin/register` already existed, but the route was never
+  mounted under the capacity-enabled SoraFS router. That is why live Taira was
+  returning `405 Allow: GET,HEAD` while `GET /v1/sorafs/pin/register` still
+  hit the digest lookup path.
+- Updated the focused Torii regressions in
+  `crates/iroha_torii/tests/sorafs_discovery.rs` so the success-path tests now
+  enable `torii.sorafs_storage`, attach `ConnectInfo<SocketAddr>`, and seed
+  the signing authority in the harness before exercising the route.
+- Rebuilt `target/release/irohad` and restarted the detached
+  `screen` session `taira-localnet`. Live verification on March 30, 2026:
+  - `POST http://127.0.0.1:29080/v1/sorafs/pin/register` with `{}` now returns
+    `400 invalid JSON body: missing field authority`;
+  - `POST https://taira.sora.org/v1/sorafs/pin/register` with `{}` returns the
+    same `400` instead of `405`;
+  - a syntactically valid public manifest-registration request signed by the
+    canonical Taira authority returned `200`;
+  - `GET https://taira.sora.org/v1/sorafs/pin` now shows
+    `total_count = 1` at `block_height = 2`; and
+  - `GET https://taira.sora.org/status` is healthy with
+    `blocks = 2`, `txs_approved = 13`, `txs_rejected = 0`.
+
 ## 2026-03-30 Full preserved-peer stable reruns on top of the transaction-gossip fix removed the residual malformed-frame churn, but permissioned still fails on ingress/global liveness and NPoS still fails the stable latency gate
 - Completed the full preserved-peer stable reruns on top of the additional
   transaction-gossip cache normalization fix:

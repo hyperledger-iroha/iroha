@@ -10,11 +10,18 @@ use color_eyre::{
 };
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use iroha_data_model::{
-    account::{AccountId, address::ChainDiscriminantGuard},
+    account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
+    asset::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    isi::SetKeyValue,
+    isi::{Grant, Mint, Register, SetKeyValue},
     kaigi::{KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration},
     name::Name,
+    nexus::DataSpaceId,
+    permission::Permission,
+};
+use iroha_executor_data_model::permission::{
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    nexus::CanPublishSpaceDirectoryManifest,
 };
 use iroha_genesis::RawGenesisTransaction;
 use iroha_primitives::json::Json;
@@ -51,6 +58,18 @@ struct Args {
     /// Human-readable note recorded in seeded relay-health feedback.
     #[arg(long, default_value = "Seeded in Taira local genesis")]
     notes: String,
+    /// Optional canonical Taira onboarding/faucet authority account to register in the overlay.
+    #[arg(long)]
+    bootstrap_authority_account: Option<String>,
+    /// Domain linked to the seeded authority account.
+    #[arg(long, default_value = "nexus")]
+    bootstrap_authority_domain: String,
+    /// Local fee asset definition granted to the seeded authority account.
+    #[arg(long)]
+    bootstrap_authority_fee_asset_id: Option<String>,
+    /// Amount of the local fee asset minted to the seeded authority account.
+    #[arg(long, default_value_t = 250_000_000u64)]
+    bootstrap_authority_fee_amount: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +77,14 @@ struct RelaySpec {
     public_key: PublicKey,
     hpke_public_key_b64: String,
     bandwidth_class: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BootstrapAuthority {
+    account_id: AccountId,
+    linked_domain: DomainId,
+    fee_asset_id: AssetDefinitionId,
+    fee_amount: u64,
 }
 
 impl RelaySpec {
@@ -129,6 +156,33 @@ fn relay_feedback(
     }
 }
 
+fn parse_bootstrap_authority(args: &Args) -> Result<Option<BootstrapAuthority>> {
+    match (
+        args.bootstrap_authority_account.as_deref(),
+        args.bootstrap_authority_fee_asset_id.as_deref(),
+    ) {
+        (None, None) => Ok(None),
+        (Some(account), Some(asset_definition_id)) => {
+            let account_id = AccountId::parse_encoded(account)
+                .map(ParsedAccountId::into_account_id)
+                .wrap_err("failed to parse bootstrap authority account id")?;
+            let linked_domain = DomainId::from_str(&args.bootstrap_authority_domain)
+                .wrap_err("invalid bootstrap authority domain")?;
+            let fee_asset_id = AssetDefinitionId::from_str(asset_definition_id)
+                .wrap_err("failed to parse bootstrap authority fee asset id")?;
+            Ok(Some(BootstrapAuthority {
+                account_id,
+                linked_domain,
+                fee_asset_id,
+                fee_amount: args.bootstrap_authority_fee_amount,
+            }))
+        }
+        _ => Err(color_eyre::eyre::eyre!(
+            "--bootstrap-authority-account and --bootstrap-authority-fee-asset-id must be provided together"
+        )),
+    }
+}
+
 fn append_kaigi_overlay(
     manifest: RawGenesisTransaction,
     relay_domain: &DomainId,
@@ -158,6 +212,47 @@ fn append_kaigi_overlay(
     Ok(builder.build_raw())
 }
 
+fn append_bootstrap_authority_overlay(
+    manifest: RawGenesisTransaction,
+    authority: &BootstrapAuthority,
+) -> Result<RawGenesisTransaction> {
+    let manage_soracloud = Permission::new("CanManageSoracloud".into(), Json::new(()));
+    let manage_alias: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+    }
+    .into();
+    let publish_manifest: Permission = CanPublishSpaceDirectoryManifest {
+        dataspace: DataSpaceId::GLOBAL,
+    }
+    .into();
+    let authority_account = Account::new(authority.account_id.clone())
+        .with_linked_domain(authority.linked_domain.clone());
+    let authority_fee_asset =
+        AssetId::new(authority.fee_asset_id.clone(), authority.account_id.clone());
+
+    Ok(manifest
+        .into_builder()
+        .next_transaction()
+        .append_instruction(Register::account(authority_account))
+        .append_instruction(Mint::asset_numeric(
+            authority.fee_amount,
+            authority_fee_asset,
+        ))
+        .append_instruction(Grant::account_permission(
+            manage_soracloud,
+            authority.account_id.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            manage_alias,
+            authority.account_id.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            publish_manifest,
+            authority.account_id.clone(),
+        ))
+        .build_raw())
+}
+
 fn run(args: &Args) -> Result<()> {
     ensure!(
         !args.relay_specs.is_empty(),
@@ -171,6 +266,7 @@ fn run(args: &Args) -> Result<()> {
     let manifest = RawGenesisTransaction::from_path(&args.genesis)
         .wrap_err("failed to load base genesis manifest")?;
     let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
+    let bootstrap_authority = parse_bootstrap_authority(args)?;
     let host_public_key =
         PublicKey::from_str(&args.host_public_key).wrap_err("failed to parse host public key")?;
     let host = AccountId::new(host_public_key);
@@ -179,7 +275,7 @@ fn run(args: &Args) -> Result<()> {
         DomainId::from_str(&args.call_domain).wrap_err("invalid call domain")?,
         Name::from_str(&args.call_name).wrap_err("invalid call name")?,
     );
-    let signed = append_kaigi_overlay(
+    let manifest = append_kaigi_overlay(
         manifest,
         &relay_domain,
         &host,
@@ -187,12 +283,18 @@ fn run(args: &Args) -> Result<()> {
         &relay_specs,
         args.reported_at_ms,
         &args.notes,
-    )?
-    .build_and_sign(&KeyPair::from_seed(
-        args.seed.as_bytes().to_vec(),
-        Algorithm::Ed25519,
-    ))
-    .wrap_err("failed to sign Kaigi overlay genesis")?;
+    )?;
+    let manifest = if let Some(bootstrap_authority) = bootstrap_authority.as_ref() {
+        append_bootstrap_authority_overlay(manifest, bootstrap_authority)?
+    } else {
+        manifest
+    };
+    let signed = manifest
+        .build_and_sign(&KeyPair::from_seed(
+            args.seed.as_bytes().to_vec(),
+            Algorithm::Ed25519,
+        ))
+        .wrap_err("failed to sign Kaigi overlay genesis")?;
 
     let framed = signed
         .0
@@ -274,6 +376,41 @@ mod tests {
             value.get().contains("test"),
             "expected Taira/testnet prefix in relay registration JSON: {}",
             value.get()
+        );
+    }
+
+    #[test]
+    fn bootstrap_authority_overlay_keeps_canonical_taira_literals() {
+        let manifest = GenesisBuilder::new_without_executor(
+            "iroha:test:bootstrap-taira".parse().expect("chain id"),
+            PathBuf::from("."),
+        )
+        .build_raw()
+        .with_chain_discriminant(369);
+        let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
+        let bootstrap = BootstrapAuthority {
+            account_id: AccountId::parse_encoded(
+                "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
+            )
+            .map(ParsedAccountId::into_account_id)
+            .expect("bootstrap account"),
+            linked_domain: DomainId::from_str("nexus").expect("domain"),
+            fee_asset_id: AssetDefinitionId::from_str("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+                .expect("asset id"),
+            fee_amount: 25_000,
+        };
+
+        let overlaid =
+            append_bootstrap_authority_overlay(manifest, &bootstrap).expect("authority overlay");
+        assert_eq!(
+            bootstrap.account_id.to_string(),
+            "testuロ1NrpスモaMメフNhziルZfvWn9ルリvFqxセmUモマ2ハキヘhqzセ71P2D3",
+            "bootstrap authority literal should stay canonical under the Taira discriminant"
+        );
+        assert_eq!(
+            overlaid.instructions().count(),
+            5,
+            "overlay should append register/mint/grant bootstrap instructions"
         );
     }
 }
