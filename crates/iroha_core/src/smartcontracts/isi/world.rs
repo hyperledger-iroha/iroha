@@ -10338,16 +10338,14 @@ pub mod isi {
                 .into());
             }
 
-            let proof_envelope =
-                norito::decode_from_bytes::<AxtProofEnvelope>(&proof_blob.payload).map_err(
-                    |err| {
-                        InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "verified lane relay proof envelope decode failed: {err}"
-                            )),
-                        )
-                    },
-                )?;
+            let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof_blob.payload)
+                .map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "verified lane relay proof envelope decode failed: {err}"
+                        )),
+                    )
+                })?;
             if proof_envelope.manifest_root != manifest_root {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
