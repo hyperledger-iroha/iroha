@@ -7054,7 +7054,10 @@ fn build_pin_register_payload(
     );
 
     let mut map = Map::new();
-    map.insert("authority".into(), Value::from(authority_literal.to_owned()));
+    map.insert(
+        "authority".into(),
+        Value::from(authority_literal.to_owned()),
+    );
     map.insert(
         "private_key".into(),
         to_value(&ExposedPrivateKey(private_key))
@@ -7363,7 +7366,9 @@ mod tests {
 
         let payload = build_pin_register_payload(
             &authority_literal,
-            KeyPair::from_seed(vec![0x9E; 32], Algorithm::Ed25519).private_key().clone(),
+            KeyPair::from_seed(vec![0x9E; 32], Algorithm::Ed25519)
+                .private_key()
+                .clone(),
             &manifest,
             [0xCD; 32],
             99,

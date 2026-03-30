@@ -10453,16 +10453,11 @@ fn authoritative_lane_peer_ids(app: &AppState, routing_decision: RoutingDecision
         .collect();
     let state_view = app.state.view();
     let mut authoritative_peer_ids = std::collections::BTreeSet::new();
-    for ((lane_id, _validator_id), record) in state_view.world().public_lane_validators().iter() {
-        if *lane_id != routing_decision.lane_id
-            || !matches!(
-                record.status,
-                iroha_data_model::nexus::PublicLaneValidatorStatus::Active
-            )
-        {
-            continue;
-        }
-        let Some(signatory) = record.validator.try_signatory() else {
+    for validator in app
+        .state
+        .authoritative_lane_validator_accounts(routing_decision.lane_id)
+    {
+        let Some(signatory) = validator.try_signatory() else {
             continue;
         };
         authoritative_peer_ids.insert(PeerId::from(signatory.clone()));
@@ -26901,6 +26896,60 @@ pub(crate) mod tests_runtime_handlers {
         app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
 
+    fn install_lane_manifest_registry_for_test(
+        state: &IrohaState,
+        lanes: &[(LaneId, Vec<AccountId>)],
+    ) {
+        let manifest_root = std::env::temp_dir().join(format!(
+            "iroha-torii-manifests-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be valid")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&manifest_root).expect("create manifest directory");
+        for (lane_id, validators) in lanes {
+            let alias = format!("lane-{}", lane_id.as_u32());
+            let validators_json = validators
+                .iter()
+                .map(|validator| format!("\"{validator}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let manifest = format!(
+                r#"{{"lane":"{alias}","governance":"parliament","version":1,"validators":[{validators_json}],"quorum":1}}"#
+            );
+            std::fs::write(
+                manifest_root.join(format!("{alias}.manifest.json")),
+                manifest,
+            )
+            .expect("write manifest");
+        }
+
+        let mut governance_modules = std::collections::BTreeMap::new();
+        governance_modules.insert(
+            "parliament".to_owned(),
+            iroha_config::parameters::actual::GovernanceModule::default(),
+        );
+        let governance_catalog = iroha_config::parameters::actual::GovernanceCatalog {
+            default_module: None,
+            modules: governance_modules,
+        };
+        let registry_cfg = iroha_config::parameters::actual::LaneRegistry {
+            manifest_directory: Some(manifest_root),
+            ..iroha_config::parameters::actual::LaneRegistry::default()
+        };
+        let nexus = state.nexus_snapshot();
+        let registry = std::sync::Arc::new(
+            iroha_core::governance::manifest::LaneManifestRegistry::from_config(
+                &nexus.lane_catalog,
+                &governance_catalog,
+                &registry_cfg,
+            ),
+        );
+        state.install_lane_manifests(&registry);
+    }
+
     #[derive(Default)]
     struct CapturingIterableQueryExecutor {
         query: Mutex<Option<iroha_data_model::query::QueryWithParams>>,
@@ -31217,6 +31266,100 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             !super::is_local_authoritative_for_route(app.as_ref(), route),
             "non-core NPoS routes should not treat commit topology peers as authoritative"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn authoritative_lane_peer_ids_use_manifest_validators_for_admin_managed_lane() {
+        let local_keypair = KeyPair::random();
+        let remote_keypair = KeyPair::random();
+        let local_peer_id = PeerId::from(local_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_keypair.public_key().clone());
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(1);
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([
+                    Peer::new(
+                        "127.0.0.1:10001".parse().expect("valid local address"),
+                        local_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10002".parse().expect("valid remote address"),
+                        remote_keypair.public_key().clone(),
+                    ),
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+
+            let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+                NonZeroU32::new(2).expect("non-zero lane count"),
+                vec![
+                    iroha_data_model::nexus::LaneConfig::default(),
+                    iroha_data_model::nexus::LaneConfig {
+                        id: lane_id,
+                        dataspace_id,
+                        alias: format!("lane-{}", lane_id.as_u32()),
+                        visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                        ..iroha_data_model::nexus::LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: dataspace_id,
+                    alias: "restricted".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            let nexus = iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog,
+                dataspace_catalog,
+                ..iroha_config::parameters::actual::Nexus::default()
+            };
+
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            state.set_nexus(nexus.clone()).expect("apply nexus config");
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    lane_id,
+                    vec![
+                        AccountId::new(local_keypair.public_key().clone()),
+                        AccountId::new(remote_keypair.public_key().clone()),
+                    ],
+                )],
+            );
+            let state_view = app_mut.state.view();
+            app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        }
+
+        let route = RoutingDecision::new(lane_id, dataspace_id);
+        let authoritative = super::authoritative_lane_peer_ids(app.as_ref(), route);
+
+        assert!(
+            authoritative.contains(&local_peer_id),
+            "manifest-backed restricted lane should treat the local validator as authoritative"
+        );
+        assert!(
+            authoritative.contains(&remote_peer_id),
+            "manifest-backed restricted lane should include the remote validator"
+        );
+        assert!(
+            super::is_local_authoritative_for_route(app.as_ref(), route),
+            "manifest-backed restricted lane should be routable without staking records"
         );
     }
 
