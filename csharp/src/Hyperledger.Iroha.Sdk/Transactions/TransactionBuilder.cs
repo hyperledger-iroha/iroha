@@ -41,6 +41,21 @@ public sealed class TransactionBuilder
         return AddInstruction(TransactionInstruction.TransferAsset(assetDefinitionId, quantity, destinationAccountId));
     }
 
+    public TransactionBuilder TransferDomain(string domainId, string destinationAccountId)
+    {
+        return AddInstruction(TransactionInstruction.TransferDomain(domainId, destinationAccountId));
+    }
+
+    public TransactionBuilder TransferAssetDefinition(string assetDefinitionId, string destinationAccountId)
+    {
+        return AddInstruction(TransactionInstruction.TransferAssetDefinition(assetDefinitionId, destinationAccountId));
+    }
+
+    public TransactionBuilder TransferNft(string nftId, string destinationAccountId)
+    {
+        return AddInstruction(TransactionInstruction.TransferNft(nftId, destinationAccountId));
+    }
+
     public TransactionBuilder MintAsset(string assetDefinitionId, string quantity, string destinationAccountId)
     {
         return AddInstruction(TransactionInstruction.MintAsset(assetDefinitionId, quantity, destinationAccountId));
@@ -49,6 +64,81 @@ public sealed class TransactionBuilder
     public TransactionBuilder BurnAsset(string assetDefinitionId, string quantity, string destinationAccountId)
     {
         return AddInstruction(TransactionInstruction.BurnAsset(assetDefinitionId, quantity, destinationAccountId));
+    }
+
+    public TransactionBuilder SetAssetKeyValue(string assetDefinitionId, string accountId, string key, JsonNode? value)
+    {
+        return AddInstruction(TransactionInstruction.SetAssetKeyValue(assetDefinitionId, accountId, key, value));
+    }
+
+    public TransactionBuilder RemoveAssetKeyValue(string assetDefinitionId, string accountId, string key)
+    {
+        return AddInstruction(TransactionInstruction.RemoveAssetKeyValue(assetDefinitionId, accountId, key));
+    }
+
+    public TransactionBuilder SetAccountKeyValue(string accountId, string key, JsonNode? value)
+    {
+        return AddInstruction(TransactionInstruction.SetAccountKeyValue(accountId, key, value));
+    }
+
+    public TransactionBuilder SetDomainKeyValue(string domainId, string key, JsonNode? value)
+    {
+        return AddInstruction(TransactionInstruction.SetDomainKeyValue(domainId, key, value));
+    }
+
+    public TransactionBuilder RemoveAccountKeyValue(string accountId, string key)
+    {
+        return AddInstruction(TransactionInstruction.RemoveAccountKeyValue(accountId, key));
+    }
+
+    public TransactionBuilder RemoveDomainKeyValue(string domainId, string key)
+    {
+        return AddInstruction(TransactionInstruction.RemoveDomainKeyValue(domainId, key));
+    }
+
+    public TransactionBuilder SetAssetDefinitionKeyValue(string assetDefinitionId, string key, JsonNode? value)
+    {
+        return AddInstruction(TransactionInstruction.SetAssetDefinitionKeyValue(assetDefinitionId, key, value));
+    }
+
+    public TransactionBuilder RemoveAssetDefinitionKeyValue(string assetDefinitionId, string key)
+    {
+        return AddInstruction(TransactionInstruction.RemoveAssetDefinitionKeyValue(assetDefinitionId, key));
+    }
+
+    public TransactionBuilder SetNftKeyValue(string nftId, string key, JsonNode? value)
+    {
+        return AddInstruction(TransactionInstruction.SetNftKeyValue(nftId, key, value));
+    }
+
+    public TransactionBuilder RemoveNftKeyValue(string nftId, string key)
+    {
+        return AddInstruction(TransactionInstruction.RemoveNftKeyValue(nftId, key));
+    }
+
+    public TransactionBuilder SetTriggerKeyValue(string triggerId, string key, JsonNode? value)
+    {
+        return AddInstruction(TransactionInstruction.SetTriggerKeyValue(triggerId, key, value));
+    }
+
+    public TransactionBuilder RemoveTriggerKeyValue(string triggerId, string key)
+    {
+        return AddInstruction(TransactionInstruction.RemoveTriggerKeyValue(triggerId, key));
+    }
+
+    public TransactionBuilder MintTriggerRepetitions(uint repetitions, string triggerId)
+    {
+        return AddInstruction(TransactionInstruction.MintTriggerRepetitions(repetitions, triggerId));
+    }
+
+    public TransactionBuilder BurnTriggerRepetitions(uint repetitions, string triggerId)
+    {
+        return AddInstruction(TransactionInstruction.BurnTriggerRepetitions(repetitions, triggerId));
+    }
+
+    public TransactionBuilder ExecuteTrigger(string triggerId, JsonNode? args = null)
+    {
+        return AddInstruction(TransactionInstruction.ExecuteTrigger(triggerId, args));
     }
 
     public TransactionBuilder SetCreationTimeMilliseconds(ulong creationTimeMilliseconds)
