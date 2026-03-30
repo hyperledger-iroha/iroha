@@ -68,12 +68,18 @@ fn query_basic_scenarios() -> eyre::Result<()> {
 
     // find_blocks_reversed
     {
-        let register_first_domain = Register::domain(Domain::new("domain1_blocks".parse()?));
-        client.submit_blocking(register_first_domain)?;
+        submit_register_domain_with_network_lease(
+            &network,
+            &client,
+            Domain::new("domain1-blocks".parse()?),
+        )?;
         rt.block_on(async { network.ensure_blocks(2).await })?;
 
-        let register_second_domain = Register::domain(Domain::new("domain2_blocks".parse()?));
-        client.submit_blocking(register_second_domain)?;
+        submit_register_domain_with_network_lease(
+            &network,
+            &client,
+            Domain::new("domain2-blocks".parse()?),
+        )?;
         rt.block_on(async { network.ensure_blocks(3).await })?;
 
         let blocks = client.query(FindBlocks).execute_all()?;
@@ -96,7 +102,9 @@ fn query_basic_scenarios() -> eyre::Result<()> {
 
     // find_transactions_reversed
     {
-        let register_domain = Register::domain(Domain::new("domain1_txs".parse()?));
+        let domain_id: DomainId = "domain1-txs".parse()?;
+        ensure_domain_registration_lease_for_network(&network, &domain_id)?;
+        let register_domain = Register::domain(Domain::new(domain_id));
         client.submit_blocking(register_domain.clone())?;
 
         let txs = client.query(FindTransactions).execute_all()?;

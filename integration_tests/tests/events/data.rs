@@ -41,6 +41,9 @@ async fn transaction_execution_should_produce_events(
     executable: impl Into<Executable> + Send,
     mut expected_domains: BTreeSet<String>,
 ) -> Result<()> {
+    let executable = executable.into();
+    ensure_domain_registration_leases_for_network_executable(network, &executable)?;
+
     // Wait for Torii to come up before subscribing to events.
     let status = get_status_with_retry_async(&network.client())
         .await

@@ -30,6 +30,9 @@ async fn test_with_instruction_and_status(
     exec: impl Into<Executable> + Send,
     should_be: &TransactionStatus,
 ) -> Result<()> {
+    let exec = exec.into();
+    ensure_domain_registration_leases_for_network_executable(network, &exec)?;
+
     // Given
     let client = network.client();
 
@@ -84,7 +87,9 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let client = network.client();
 
     // When: submit a simple transaction to ensure a new non-genesis block is committed
-    let register = Register::domain(Domain::new("kura_test".parse()?));
+    let kura_domain: DomainId = "kura-test".parse()?;
+    ensure_domain_registration_lease_for_network(network, &kura_domain)?;
+    let register = Register::domain(Domain::new(kura_domain));
     let tx = client.build_transaction([register], Metadata::default());
     let hash = tx.hash();
     let mut events = tokio::time::timeout(
@@ -239,7 +244,7 @@ async fn pipeline_event_scenarios() -> Result<()> {
         return Ok(());
     };
 
-    let register = Register::domain(Domain::new("looking_glass".parse()?));
+    let register = Register::domain(Domain::new("looking-glass".parse()?));
     test_with_instruction_and_status(
         stringify!(transaction_with_ok_instruction_should_be_committed),
         &network,

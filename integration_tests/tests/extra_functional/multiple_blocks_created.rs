@@ -46,6 +46,7 @@ async fn multiple_blocks_created() -> Result<()> {
     submit_client.transaction_ttl = Some(sync_timeout + Duration::from_secs(5));
 
     let domain_id: DomainId = "domain".parse()?;
+    ensure_domain_registration_lease_for_network(&network, &domain_id)?;
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _account_keypair) = gen_account_in("domain");
     let create_account = Register::account(Account::new_in_domain(account_id.clone(), domain_id));

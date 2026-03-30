@@ -20511,7 +20511,7 @@ impl Actor {
         if first_deliver {
             status::record_round_gap_deliver(key.1, key.2, key.0);
         }
-        let delivered_bytes = session.delivered_payload_bytes();
+        let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry();
         let ready_count = session.ready_signatures.len();
         let ready_senders: Vec<_> = session
             .ready_signatures
@@ -30203,7 +30203,9 @@ fn drain_rbc_state_for_block(
     rbc_session_rosters: &mut BTreeMap<super::rbc_store::SessionKey, Vec<PeerId>>,
     rbc_session_roster_sources: &mut BTreeMap<super::rbc_store::SessionKey, RbcRosterSource>,
     rbc_status_handle: &rbc_status::Handle,
+    telemetry: Option<&crate::telemetry::Telemetry>,
     chunk_store: Option<&super::rbc_store::ChunkStore>,
+    purge_persisted_sessions: bool,
 ) -> (RbcLaneTotals, RbcDataspaceTotals) {
     let keys: Vec<_> = rbc_sessions
         .keys()
@@ -30215,15 +30217,17 @@ fn drain_rbc_state_for_block(
         pending_rbc.remove(key);
         rbc_session_rosters.remove(key);
         rbc_session_roster_sources.remove(key);
-        if let Some(store) = chunk_store {
-            if let Err(err) = store.remove(key) {
-                warn!(
-                    ?err,
-                    block = %key.0,
-                    height = key.1,
-                    view = key.2,
-                    "failed to purge persisted RBC session"
-                );
+        if purge_persisted_sessions {
+            if let Some(store) = chunk_store {
+                if let Err(err) = store.remove(key) {
+                    warn!(
+                        ?err,
+                        block = %key.0,
+                        height = key.1,
+                        view = key.2,
+                        "failed to purge persisted RBC session"
+                    );
+                }
             }
         }
     }
@@ -30232,7 +30236,12 @@ fn drain_rbc_state_for_block(
     let mut dataspace_totals: RbcDataspaceTotals = BTreeMap::new();
 
     for key in keys {
-        if let Some(session) = rbc_sessions.remove(&key) {
+        if let Some(mut session) = rbc_sessions.remove(&key) {
+            if let Some(bytes) = session.take_delivered_payload_bytes_for_telemetry() {
+                if let Some(telemetry) = telemetry {
+                    telemetry.add_rbc_payload_bytes_delivered(bytes);
+                }
+            }
             let ready_count = u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX);
             rbc_status_handle.update(
                 rbc_status::Summary {
@@ -31954,6 +31963,7 @@ pub(crate) struct RbcSession {
     deliver_signature: Option<Vec<u8>>,
     invalid: bool,
     recovered_from_disk: bool,
+    delivered_payload_bytes_recorded: bool,
     lane_allocations: Vec<LaneAllocation>,
     dataspace_allocations: Vec<DataspaceAllocation>,
 }
@@ -32009,6 +32019,7 @@ impl RbcSession {
             deliver_signature: None,
             invalid: false,
             recovered_from_disk: false,
+            delivered_payload_bytes_recorded: false,
             lane_allocations: Vec::new(),
             dataspace_allocations: Vec::new(),
         })
@@ -32469,6 +32480,7 @@ impl RbcSession {
         session.leader_signature = leader_signature;
         session.drop_mismatched_chunks();
         session.recovered_from_disk = true;
+        session.delivered_payload_bytes_recorded = session.delivered_payload_bytes().is_some();
         let _ = session.sync_progress_observations(false, None);
         Ok(session)
     }
@@ -32640,6 +32652,15 @@ impl RbcSession {
             total = total.saturating_add(entry.bytes.len() as u64);
         }
         Some(total)
+    }
+
+    pub(crate) fn take_delivered_payload_bytes_for_telemetry(&mut self) -> Option<u64> {
+        if self.delivered_payload_bytes_recorded {
+            return None;
+        }
+        let bytes = self.delivered_payload_bytes()?;
+        self.delivered_payload_bytes_recorded = true;
+        Some(bytes)
     }
 }
 

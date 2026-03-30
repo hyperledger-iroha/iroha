@@ -67,6 +67,7 @@ async fn set_up_trigger(
         .first()
         .expect("test network should expose at least one peer")
         .client_for(&the_one_who_fails, account_keypair.private_key().clone());
+    ensure_domain_registration_lease_for_network(network, &failand)?;
     spawn_blocking({
         let client = iroha.clone();
         let create_failand: InstructionBox = create_failand.into();

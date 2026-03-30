@@ -2,6 +2,58 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 peer-sync + light-DA follow-up):
+the remaining lease-sensitive peer-add/remove coverage is green again, and the
+1 KiB DA scenarios no longer fail by assuming that every DA-enabled commit must
+surface RBC session metrics.
+
+- the frontier block-sync path now preserves the attached commit-QC sidecar
+  even when the synced block is already known locally, which clears the
+  `register_new_peer` / `network_stable_after_add_and_after_remove_peer`
+  catch-up stall;
+- committed RBC cleanup and payload hydration now have a last-chance
+  delivered-bytes telemetry hook so completed delivered sessions do not lose
+  their payload-byte counter during runtime state drain; and
+- the `sumeragi_da` integration helper now enforces RBC payload/deliver metrics
+  only when an RBC session was actually observed (endpoint or persisted
+  snapshot with chunk metadata). Current `LARGE_PAYLOAD_BYTES = 1024`
+  scenarios commit through DA without exposing RBC session metrics on this
+  tree, so the old unconditional check was over-constraining the tests.
+
+Open work for this slice now remains:
+- rerun the heavy RBC restart-recovery / lagging-peer fetch scenarios
+  (`sumeragi_rbc_recovers_after_peer_restart`,
+  `sumeragi_rbc_recovers_after_restart_with_roster_change`,
+  `sumeragi_rbc_session_recovers_after_cold_restart`,
+  `sumeragi_rbc_unverified_roster_stash_requests_missing_block`,
+  `sumeragi_da_eviction_rehydrates_block_bodies`) against the current tree to
+  confirm whether any real persistence/recovery bug remains after the lease,
+  block-sync, and helper-alignment fixes.
+
+Latest sync (2026-03-30 integration lease alignment + committed RBC snapshot retention):
+lease-sensitive integration fixtures now provision registrar-valid SNS domain
+leases and use DNS-compatible labels, and commit cleanup no longer deletes the
+persisted RBC snapshot needed by restart/lagging-peer recovery.
+
+- `iroha_test_network` now exposes reusable helpers for runtime domain lease
+  provisioning, and the remaining failing integration tests were updated to use
+  those helpers instead of raw `Register::domain(...)` calls;
+- the leftover registrar-facing underscore fixture names were normalized to
+  accepted hyphenated labels (`looking-glass`, `domain1-blocks`,
+  `domain2-blocks`, `domain1-txs`, `kura-test`, `relay-net`);
+- committed RBC cleanup now preserves the on-disk session snapshot after commit,
+  and `cargo test -p iroha_core committed_rbc_cleanup_preserves_persisted_session_snapshot -- --nocapture`
+  locks that behavior; and
+- targeted regressions are green for the lease-sensitive pipeline/query/asset,
+  trigger-orphan, trigger-data, and multi-genesis scenarios.
+
+Open work for this slice now remains:
+- rerun the remaining heavy DA/reconfiguration integration regressions
+  (`multiple_blocks_created`, peer add/remove sync, RBC restart recovery, and
+  lagging-peer fetch scenarios) on the updated worktree to confirm the
+  snapshot-retention change clears the broader failure cluster rather than only
+  the focused unit coverage.
+
 Latest sync (2026-03-30 fresh full preserved-peer reruns on the current worktree):
 the fixed transport signatures remain gone, but the current-tree 4-peer stable
 envelopes now fail on a shared synchronized `no lagging peers` stall instead

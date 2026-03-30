@@ -115,6 +115,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     let tx_timeout = sync_timeout;
     submitter_client.transaction_status_timeout = tx_timeout;
     submitter_client.transaction_ttl = Some(tx_timeout + Duration::from_secs(5));
+    ensure_domain_registration_lease_for_network(&network, &domain_id)?;
     let setup_result = submitter_client.submit_all_blocking::<InstructionBox>([
         create_domain.into(),
         create_account.into(),

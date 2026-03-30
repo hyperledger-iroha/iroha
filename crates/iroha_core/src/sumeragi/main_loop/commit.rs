@@ -5412,16 +5412,18 @@ impl Actor {
         }
     }
 
-    pub(super) fn clean_rbc_sessions_for_block(
+    fn clean_rbc_sessions_for_block_inner(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
+        purge_persisted_sessions: bool,
     ) {
         let chunk_store = if self.ensure_rbc_chunk_store() {
             self.subsystems.da_rbc.rbc.chunk_store.as_ref()
         } else {
             None
         };
+        let telemetry = self.telemetry_handle().cloned();
         let (lane_totals, dataspace_totals) = super::drain_rbc_state_for_block(
             block_hash,
             &mut self.subsystems.da_rbc.rbc.sessions,
@@ -5429,7 +5431,9 @@ impl Actor {
             &mut self.subsystems.da_rbc.rbc.session_rosters,
             &mut self.subsystems.da_rbc.rbc.session_roster_sources,
             &self.subsystems.da_rbc.rbc.status_handle,
+            telemetry.as_ref(),
             chunk_store,
+            purge_persisted_sessions,
         );
         self.deferred_votes.remove(&block_hash);
         self.deferred_qcs
@@ -5470,6 +5474,14 @@ impl Actor {
         self.publish_rbc_backlog_snapshot();
     }
 
+    pub(super) fn clean_rbc_sessions_for_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+    ) {
+        self.clean_rbc_sessions_for_block_inner(block_hash, height, true);
+    }
+
     pub(super) fn should_retain_rbc_sessions_after_commit(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -5500,7 +5512,9 @@ impl Actor {
             return false;
         }
 
-        self.clean_rbc_sessions_for_block(block_hash, height);
+        // Keep the persisted RBC snapshot after commit so lagging peers and restart recovery
+        // can still hydrate block bodies from disk even after runtime session state is drained.
+        self.clean_rbc_sessions_for_block_inner(block_hash, height, false);
         true
     }
 

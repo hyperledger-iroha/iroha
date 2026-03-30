@@ -30397,6 +30397,48 @@ async fn hydrate_rbc_session_from_block_attributes_mismatch_to_sender() {
     harness.shutdown.send();
 }
 
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn hydrate_rbc_session_from_block_records_delivered_payload_metrics_once() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    let height = 9u64;
+    let view = 0u64;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; 32]));
+    let key = (block_hash, height, view);
+    let epoch = actor.epoch_for_height(height);
+
+    let payload = vec![0xAC; 64];
+    let payload_hash = Hash::new(&payload);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, epoch);
+    session.test_set_delivered(true);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    actor
+        .hydrate_rbc_session_from_block(key, &payload, payload_hash, None)
+        .expect("hydrate");
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64
+    );
+
+    actor
+        .hydrate_rbc_session_from_block(key, &payload, payload_hash, None)
+        .expect("rehydrate");
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64
+    );
+
+    harness.shutdown.send();
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
     let _guard = super::status::rbc_status_test_guard();
@@ -56669,6 +56711,113 @@ async fn committed_rbc_cleanup_waits_for_local_delivery() {
     );
 
     harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_rbc_cleanup_preserves_persisted_session_snapshot() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let mut harness = test_actor_harness_with_rbc_store(4, Some(cfg)).await;
+    let worker_join = harness
+        .actor
+        .attach_rbc_persist_worker()
+        .expect("persist worker");
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let key = Actor::session_key(&block_hash, height, view);
+
+    let payload = vec![0xCD; 32];
+    let payload_hash = Hash::new(&payload);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload, 0);
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "roster should not be empty");
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    actor.persist_rbc_session(key, &session);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        actor.poll_rbc_persist_results_inner();
+        if actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&key)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for committed RBC session persistence"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let persisted_before = crate::sumeragi::rbc_store::load_session_from_dir(
+        rbc_dir.path(),
+        &key,
+        &actor.chain_hash,
+        &actor.subsystems.da_rbc.rbc.manifest,
+    )
+    .expect("load persisted session before cleanup");
+    assert!(
+        persisted_before.is_some(),
+        "test precondition: committed session should be persisted before cleanup"
+    );
+
+    session.delivered = true;
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert!(
+        actor.clean_rbc_sessions_for_committed_block_if_settled(block_hash, height),
+        "delivered committed RBC sessions should still clear runtime state"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "runtime RBC session should be removed after committed cleanup"
+    );
+
+    let persisted_after = crate::sumeragi::rbc_store::load_session_from_dir(
+        rbc_dir.path(),
+        &key,
+        &actor.chain_hash,
+        &actor.subsystems.da_rbc.rbc.manifest,
+    )
+    .expect("load persisted session after cleanup");
+    assert!(
+        persisted_after.is_some(),
+        "committed cleanup should retain the persisted session snapshot for restart recovery"
+    );
+
+    harness.shutdown.send();
+    drop(harness);
+    if let Err(err) = worker_join.join() {
+        panic!("persist worker panicked: {err:?}");
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -98866,6 +99015,12 @@ async fn block_sync_update_contiguous_frontier_requested_with_commit_qc_routes_t
             || actor.block_known_locally(block_hash),
         "committed + 1 block-sync updates with commit evidence must stay on the local frontier candidate instead of handing ownership to block sync"
     );
+    if let Some(pending) = actor.pending.pending_blocks.get(&block_hash) {
+        assert!(
+            pending.commit_qc_observed(),
+            "frontier block-sync updates carrying a commit QC must mark the local pending block ready for commit"
+        );
+    }
 
     harness.shutdown.send();
 }
@@ -101504,6 +101659,8 @@ fn drain_rbc_state_for_block_retains_status_snapshot() {
         &mut BTreeMap::new(),
         &status_handle,
         None,
+        None,
+        true,
     );
 
     assert!(sessions.is_empty());
@@ -101519,6 +101676,68 @@ fn drain_rbc_state_for_block_retains_status_snapshot() {
     assert_eq!(
         dataspace_totals.get(&(LaneId::new(8), DataSpaceId::new(22))),
         Some(&(2, 1, 4, 6))
+    );
+}
+
+#[test]
+fn drain_rbc_state_for_block_records_delivered_payload_metrics_before_cleanup() {
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x56; 32]));
+    let key = (block_hash, 5, 0);
+    let payload = vec![0xAB, 0xCD, 0xEF];
+    let payload_hash = Hash::new(&payload);
+
+    let mut sessions = BTreeMap::new();
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload.clone(), 0);
+    session.test_set_delivered(true);
+    sessions.insert(key, session);
+
+    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+    let telemetry = crate::telemetry::Telemetry::new(Arc::clone(&metrics), true);
+
+    let _ = super::drain_rbc_state_for_block(
+        block_hash,
+        &mut sessions,
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        &rbc_status::register_handle(),
+        Some(&telemetry),
+        None,
+        true,
+    );
+
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64
+    );
+}
+
+#[test]
+fn delivered_payload_metrics_wait_for_complete_payload_and_record_once() {
+    let mut session = RbcSession::test_new(2, None, None, 0);
+    session.ingest_chunk(0, vec![1, 2, 3], None);
+
+    assert!(
+        session.record_deliver(7, vec![0xAA]),
+        "first DELIVER should be recorded"
+    );
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry(),
+        None,
+        "telemetry should wait until all chunks are present"
+    );
+
+    session.ingest_chunk(1, vec![4, 5], None);
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry(),
+        Some(5),
+        "telemetry should report bytes once the payload is complete"
+    );
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry(),
+        None,
+        "telemetry should not double count the same delivered payload"
     );
 }
 

@@ -75,7 +75,11 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
         "expected governance manifest file",
     );
     let governance_rules = governance_status.rules().expect("governance rules parsed");
-    assert_eq!(governance_rules.validators.len(), 3);
+    assert_eq!(
+        governance_rules.validators.len(),
+        2,
+        "fixture duplicate validators should be deduplicated by the registry"
+    );
     assert_eq!(governance_rules.quorum, Some(2));
     assert!(
         governance_status
@@ -110,7 +114,11 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
         "expected zk manifest file",
     );
     let zk_rules = zk_status.rules().expect("zk rules parsed");
-    assert_eq!(zk_rules.validators.len(), 3);
+    assert_eq!(
+        zk_rules.validators.len(),
+        2,
+        "fixture duplicate validators should be deduplicated by the registry"
+    );
     assert_eq!(zk_rules.quorum, Some(2));
     assert!(
         zk_status

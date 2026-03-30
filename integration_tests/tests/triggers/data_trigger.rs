@@ -113,9 +113,11 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         .await?;
         assert_eq!(new_value, prev_value.checked_add(numeric!(1)).unwrap());
 
+        let neverland: DomainId = "neverland".parse()?;
+        ensure_domain_registration_lease_for_network(&network, &neverland)?;
         spawn_blocking({
             let client = test_client.clone();
-            move || client.submit_blocking(Register::domain(Domain::new("neverland".parse()?)))
+            move || client.submit_blocking(Register::domain(Domain::new(neverland)))
         })
         .await??;
 

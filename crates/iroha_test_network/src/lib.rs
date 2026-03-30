@@ -7,7 +7,7 @@ pub mod fslock_ports;
 use core::{fmt, future::Future, time::Duration};
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, hash_map::DefaultHasher},
+    collections::{BTreeSet, HashMap, HashSet, hash_map::DefaultHasher},
     ffi::OsString,
     fs,
     hash::{Hash as StdHash, Hasher},
@@ -51,21 +51,29 @@ use iroha_crypto::{
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
-    account::AccountId,
+    account::{AccountAddress, AccountId},
     block::consensus::{ConsensusGenesisParams, NposGenesisParams},
+    domain::NewDomain,
     isi::{
-        InstructionBox, SetParameter, set_instruction_registry,
+        InstructionBox, SetParameter,
+        register::RegisterBox,
+        set_instruction_registry,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
+    metadata::Metadata,
     parameter::{
         CustomParameter, SmartContractParameter, SumeragiParameter,
         system::{SumeragiNposParameters, consensus_metadata},
+    },
+    sns::{
+        DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
     },
     transaction::Executable,
 };
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
+    json::Json,
     time::TimeSource,
     unique_vec::UniqueVec,
 };
@@ -111,6 +119,150 @@ pub fn genesis_factory_with_post_topology(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
     )
 }
+
+fn test_domain_name_controller(account: &AccountId) -> Result<NameControllerV1> {
+    let address = AccountAddress::from_account_id(account)
+        .map_err(|err| eyre!("convert account `{account}` to SNS controller: {err}"))?;
+    Ok(NameControllerV1::account(&address))
+}
+
+fn test_domain_register_request(
+    domain: &DomainId,
+    owner: &AccountId,
+) -> Result<RegisterNameRequestV1> {
+    Ok(RegisterNameRequestV1 {
+        selector: iroha_data_model::sns::NameSelectorV1::new(
+            DOMAIN_NAME_SUFFIX_ID,
+            domain.name().as_ref(),
+        )
+        .map_err(|err| eyre!("build SNS selector for domain `{domain}`: {err}"))?,
+        owner: owner.clone(),
+        controllers: vec![test_domain_name_controller(owner)?],
+        term_years: 1,
+        pricing_class_hint: Some(0),
+        payment: PaymentProofV1 {
+            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
+            gross_amount: 120,
+            net_amount: 120,
+            settlement_tx: Json::from("mock-settlement"),
+            payer: owner.clone(),
+            signature: Json::from("mock-signature"),
+        },
+        governance: None,
+        metadata: Metadata::default(),
+    })
+}
+
+/// Ensure a runtime domain registration has the SNS lease required by the executor.
+pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<()> {
+    let domain_exists = client
+        .query(FindDomains::new())
+        .execute_all()?
+        .into_iter()
+        .any(|existing| existing.id() == domain);
+    if domain_exists {
+        return Ok(());
+    }
+
+    match client
+        .sns()
+        .get_name(iroha::sns::SnsNamespacePath::Domain, domain.name().as_ref())
+    {
+        Ok(record) if record.owner == client.account && record.status == NameStatus::Active => {
+            Ok(())
+        }
+        Ok(record) => Err(eyre!(
+            "domain `{domain}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
+            client.account,
+            record.owner,
+            record.status
+        )),
+        Err(_) => {
+            let request = test_domain_register_request(domain, &client.account)?;
+            client.sns().register(&request)?;
+            Ok(())
+        }
+    }
+}
+
+/// Ensure a runtime domain registration has the SNS lease required by the executor on every peer
+/// in a test network.
+pub fn ensure_domain_registration_lease_for_network(
+    network: &Network,
+    domain: &DomainId,
+) -> Result<()> {
+    for peer in network.peers() {
+        ensure_domain_registration_lease(&peer.client(), domain)?;
+    }
+    Ok(())
+}
+
+/// Ensure SNS leases exist for every runtime `Register<Domain>` instruction in an executable.
+pub fn ensure_domain_registration_leases_for_executable(
+    client: &Client,
+    executable: &Executable,
+) -> Result<()> {
+    let Executable::Instructions(instructions) = executable else {
+        return Ok(());
+    };
+    let mut domains = BTreeSet::new();
+    for instruction in instructions {
+        let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
+            continue;
+        };
+        if let RegisterBox::Domain(register_domain) = register {
+            domains.insert(register_domain.object.id.clone());
+        }
+    }
+    for domain in domains {
+        ensure_domain_registration_lease(client, &domain)?;
+    }
+    Ok(())
+}
+
+/// Ensure SNS leases exist on every peer for every runtime `Register<Domain>` instruction in an
+/// executable.
+pub fn ensure_domain_registration_leases_for_network_executable(
+    network: &Network,
+    executable: &Executable,
+) -> Result<()> {
+    let Executable::Instructions(instructions) = executable else {
+        return Ok(());
+    };
+    let mut domains = BTreeSet::new();
+    for instruction in instructions {
+        let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
+            continue;
+        };
+        if let RegisterBox::Domain(register_domain) = register {
+            domains.insert(register_domain.object.id.clone());
+        }
+    }
+    for domain in domains {
+        ensure_domain_registration_lease_for_network(network, &domain)?;
+    }
+    Ok(())
+}
+
+/// Register a runtime domain after provisioning its required SNS lease.
+pub fn submit_register_domain_with_lease(client: &Client, domain: NewDomain) -> Result<()> {
+    ensure_domain_registration_lease(client, &domain.id)?;
+    client.submit_blocking(Register::domain(domain))?;
+    Ok(())
+}
+
+/// Register a runtime domain after provisioning its required SNS lease on every peer in a test
+/// network.
+pub fn submit_register_domain_with_network_lease(
+    network: &Network,
+    client: &Client,
+    domain: NewDomain,
+) -> Result<()> {
+    ensure_domain_registration_lease_for_network(network, &domain.id)?;
+    client.submit_blocking(Register::domain(domain))?;
+    Ok(())
+}
+
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
 // Fast localnet pipeline time for test networks; callers can opt into Sumeragi defaults.
 const LOCALNET_PIPELINE_TIME: Duration = Duration::from_secs(1);
