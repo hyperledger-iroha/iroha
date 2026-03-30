@@ -6,7 +6,7 @@ package org.hyperledger.iroha.sdk.norito
 import java.nio.ByteBuffer
 import java.util.Locale
 
-private const val OFFSET_BASIS = -0x340AB5673053566BL // 0xCBF29CE484222325L
+private const val OFFSET_BASIS = -0x340D631B7BDDDCDBL // 0xCBF29CE484222325L
 private const val FNV_PRIME = 0x100000001B3L
 
 /** Computes FNV-1a 64-bit schema hashes matching the Rust implementation. */
