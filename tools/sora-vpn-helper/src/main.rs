@@ -43,6 +43,7 @@ use rustls::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
+    io::{self as tokio_io, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     io::unix::AsyncFd,
     signal::unix::{SignalKind, signal},
     time::timeout,
@@ -84,6 +85,8 @@ enum Command {
     Repair,
     #[command(hide = true)]
     RunTunnel,
+    #[command(hide = true)]
+    RunPacketEngine,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -310,6 +313,13 @@ fn run(cli: Cli) -> Result<(), ControllerError> {
                 .build()?;
             runtime.block_on(run_tunnel_command(payload))
         }
+        Command::RunPacketEngine => {
+            let payload = parse_connect_payload(cli.payload.as_deref())?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(run_packet_engine_command(payload))
+        }
     }
 }
 
@@ -513,6 +523,60 @@ async fn run_tunnel_command(payload: ConnectPayload) -> Result<(), ControllerErr
                 (false, error.to_string())
             }
         }
+    };
+
+    let _ = send.finish();
+    connection.close(0u32.into(), message.as_bytes());
+    endpoint.close(0u32.into(), message.as_bytes());
+    endpoint.wait_idle().await;
+    update_terminal_state(
+        false,
+        repair_required,
+        None,
+        payload.session_id.as_str(),
+        payload.relay_endpoint.as_str(),
+        message,
+    )?;
+    Ok(())
+}
+
+async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), ControllerError> {
+    let pid = std::process::id();
+    let (endpoint, connection) = connect_and_handshake(&payload).await?;
+    let (mut send, mut recv) = match timeout(CONNECT_TIMEOUT, connection.open_bi()).await {
+        Ok(Ok(streams)) => streams,
+        Ok(Err(error)) => {
+            let failure = ControllerError::Connection(error);
+            connection.close(0u32.into(), failure.to_string().as_bytes());
+            endpoint.close(0u32.into(), failure.to_string().as_bytes());
+            endpoint.wait_idle().await;
+            return Err(failure);
+        }
+        Err(_) => {
+            let failure =
+                ControllerError::State("timed out opening relay VPN tunnel stream".to_owned());
+            connection.close(0u32.into(), failure.to_string().as_bytes());
+            endpoint.close(0u32.into(), failure.to_string().as_bytes());
+            endpoint.wait_idle().await;
+            return Err(failure);
+        }
+    };
+
+    update_terminal_state(
+        true,
+        false,
+        Some(pid),
+        payload.session_id.as_str(),
+        payload.relay_endpoint.as_str(),
+        "connected".to_owned(),
+    )?;
+
+    let circuit_id = relay_session_id_from_session_id(payload.session_id.as_str());
+    let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
+    let shutdown = packet_engine_loop(&mut send, &mut recv, circuit_id, flow_label).await;
+    let (repair_required, message) = match shutdown {
+        Ok(exit) => (exit.repair_required, exit.message),
+        Err(error) => (false, error.to_string()),
     };
 
     let _ = send.finish();
@@ -751,6 +815,45 @@ async fn tunnel_packet_loop(
     }
 }
 
+async fn packet_engine_loop(
+    send: &mut SendStream,
+    recv: &mut RecvStream,
+    circuit_id: [u8; 16],
+    flow_label: VpnFlowLabelV1,
+) -> Result<TunnelShutdown, ControllerError> {
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let upstream = packet_engine_to_vpn_loop(send, circuit_id, flow_label);
+    let downstream = vpn_to_packet_engine_loop(recv);
+    tokio::pin!(upstream);
+    tokio::pin!(downstream);
+
+    tokio::select! {
+        _ = sigterm.recv() => Ok(TunnelShutdown {
+            repair_required: false,
+            message: "idle".to_owned(),
+        }),
+        _ = sigint.recv() => Ok(TunnelShutdown {
+            repair_required: false,
+            message: "idle".to_owned(),
+        }),
+        result = &mut upstream => match result {
+            Ok(()) => Ok(TunnelShutdown {
+                repair_required: false,
+                message: "packet engine input closed".to_owned(),
+            }),
+            Err(error) => Err(error),
+        },
+        result = &mut downstream => match result {
+            Ok(()) => Ok(TunnelShutdown {
+                repair_required: false,
+                message: "relay tunnel closed".to_owned(),
+            }),
+            Err(error) => Err(error),
+        },
+    }
+}
+
 async fn tun_to_vpn_loop(
     device: Arc<LinuxTunDevice>,
     send: &mut SendStream,
@@ -789,6 +892,42 @@ async fn tun_to_vpn_loop(
     }
 }
 
+async fn packet_engine_to_vpn_loop(
+    send: &mut SendStream,
+    circuit_id: [u8; 16],
+    flow_label: VpnFlowLabelV1,
+) -> Result<(), ControllerError> {
+    let mut reader = tokio_io::stdin();
+    let mut sequence = 0u64;
+    loop {
+        let Some(packet) = read_packet_from_stream(&mut reader).await? else {
+            send.finish()?;
+            return Ok(());
+        };
+        let encoded = encode_packet_stream_frame(&packet)?;
+        for chunk in encoded.chunks(VpnCellV1::max_payload_len()) {
+            let cell = VpnCellV1 {
+                header: VpnCellHeaderV1 {
+                    version: 1,
+                    class: VpnCellClassV1::Data,
+                    flags: VpnCellFlagsV1::new(false, false, false, false),
+                    circuit_id,
+                    flow_label,
+                    sequence,
+                    ack: 0,
+                    padding_budget_ms: 0,
+                    payload_len: 0,
+                },
+                payload: chunk.to_vec(),
+            };
+            let padded = cell.into_padded_frame()?;
+            send.write_all(padded.as_ref()).await?;
+            sequence = sequence.saturating_add(1);
+        }
+        add_traffic_bytes(0, packet.len() as u64)?;
+    }
+}
+
 async fn vpn_to_tun_loop(
     device: Arc<LinuxTunDevice>,
     recv: &mut RecvStream,
@@ -808,6 +947,41 @@ async fn vpn_to_tun_loop(
                 }
                 for packet in decoder.ingest(&cell.payload)? {
                     device.send(&packet).await?;
+                    add_traffic_bytes(packet.len() as u64, 0)?;
+                }
+            }
+            Err(ReadExactError::FinishedEarly(0)) => return Ok(()),
+            Err(ReadExactError::FinishedEarly(_)) => {
+                return Err(ControllerError::State(
+                    "relay tunnel closed mid-frame".to_owned(),
+                ));
+            }
+            Err(ReadExactError::ReadError(error)) => {
+                return Err(ControllerError::State(format!(
+                    "relay read failed: {error}"
+                )));
+            }
+        }
+    }
+}
+
+async fn vpn_to_packet_engine_loop(recv: &mut RecvStream) -> Result<(), ControllerError> {
+    let mut decoder = PacketStreamDecoder::default();
+    let mut frame = [0u8; VPN_CELL_LEN];
+    let mut writer = tokio_io::stdout();
+
+    loop {
+        match recv.read_exact(&mut frame).await {
+            Ok(()) => {
+                let cell = VpnPaddedCellV1::parse_bytes_with_flow_label_bits(
+                    &frame,
+                    VpnFlowLabelV1::MAX_BITS,
+                )?;
+                if cell.header.class != VpnCellClassV1::Data {
+                    continue;
+                }
+                for packet in decoder.ingest(&cell.payload)? {
+                    write_packet_to_stream(&mut writer, &packet).await?;
                     add_traffic_bytes(packet.len() as u64, 0)?;
                 }
             }
@@ -950,6 +1124,38 @@ fn encode_packet_stream_frame(packet: &[u8]) -> Result<Vec<u8>, ControllerError>
     encoded.extend_from_slice(&packet_len.to_be_bytes());
     encoded.extend_from_slice(packet);
     Ok(encoded)
+}
+
+async fn read_packet_from_stream<R>(reader: &mut R) -> Result<Option<Vec<u8>>, ControllerError>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut len_buf = [0u8; PACKET_LEN_PREFIX_BYTES];
+    let first_len = reader.read(&mut len_buf[..1]).await?;
+    if first_len == 0 {
+        return Ok(None);
+    }
+    reader.read_exact(&mut len_buf[1..]).await?;
+    let packet_len = usize::from(u16::from_be_bytes(len_buf));
+    let mut packet = vec![0u8; packet_len];
+    reader.read_exact(&mut packet).await?;
+    Ok(Some(packet))
+}
+
+async fn write_packet_to_stream<W>(writer: &mut W, packet: &[u8]) -> Result<(), ControllerError>
+where
+    W: AsyncWrite + Unpin,
+{
+    let packet_len = u16::try_from(packet.len()).map_err(|_| {
+        ControllerError::State(format!(
+            "packet length {} exceeds u16 packet-stream limit",
+            packet.len()
+        ))
+    })?;
+    writer.write_all(&packet_len.to_be_bytes()).await?;
+    writer.write_all(packet).await?;
+    writer.flush().await?;
+    Ok(())
 }
 
 fn add_traffic_bytes(bytes_in: u64, bytes_out: u64) -> Result<(), ControllerError> {
