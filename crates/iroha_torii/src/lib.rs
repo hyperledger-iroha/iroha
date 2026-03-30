@@ -23555,6 +23555,10 @@ impl Torii {
                         axum::routing::get(sorafs::api::handle_get_sorafs_pin_manifest),
                     )
                     .route(
+                        "/v1/sorafs/pin/register",
+                        axum::routing::post(handler_post_sorafs_register_manifest),
+                    )
+                    .route(
                         "/v1/sorafs/aliases",
                         axum::routing::get(sorafs::api::handle_get_sorafs_aliases),
                     )

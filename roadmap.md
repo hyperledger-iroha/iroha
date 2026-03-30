@@ -2,6 +2,26 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 Taira SoraFS ingress + authority repair):
+the served Taira localnet no longer has any code-side blocker for SoraFS pin
+registration.
+
+- the canonical onboarding/faucet authority now exists in live Taira state,
+  is funded with the local fee asset, and has the required publish/onboarding
+  permissions; and
+- `POST /v1/sorafs/pin/register` is now mounted in Torii, rebuilt into the
+  served `irohad`, and verified end-to-end on the public Taira edge with both
+  malformed-body (`400`) and valid signed-manifest (`200`) probes.
+
+Remaining operational work for Taira SoraFS is outside this router/account fix:
+- if named-host root serving on `https://taira.sora.org/` is still required,
+  rerun the real `yarn taira:publish` flow with the intended live
+  `SORAFS_AUTHORITY` / `SORAFS_PRIVATE_KEY` and then sync any resulting
+  `sorafs_sites.json` binding update to the serving nodes; and
+- keep the post-reset smoke in `configs/soranexus/taira/README.md`:
+  `POST /v1/sorafs/pin/register` must return a handler-level `400` on `{}`,
+  not `405 Allow: GET,HEAD`, or the served `irohad` is stale.
+
 Latest sync (2026-03-30 full reruns on top of transaction-gossip cache normalization):
 the additional transaction-gossip wire/cache fix removed the residual
 recovered malformed payload churn as the dominant soak failure source, but the
