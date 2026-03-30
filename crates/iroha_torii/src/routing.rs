@@ -144,7 +144,8 @@ use iroha_sccp::{
     NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentRosterMemberV1,
     NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
     NexusSccpGovernanceProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
-    burn_message_id, commitment_leaf_hash, parliament_certificate_hash, payload_hash,
+    burn_message_id, canonical_burn_payload_bytes, canonical_governance_payload_bytes,
+    commitment_leaf_hash, parliament_certificate_hash, payload_hash,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
@@ -156,7 +157,6 @@ use norito::{
     json::{self, Map, Value},
     to_bytes,
 };
-use parity_scale_codec::Encode as ScaleEncode;
 #[cfg(feature = "telemetry")]
 use prometheus::core::Collector;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
@@ -4450,20 +4450,23 @@ fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
 
 fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
 where
-    T: ScaleEncode + serde::Serialize,
+    T: norito::core::NoritoSerialize + serde::Serialize,
 {
-    let accepts_scale = accept
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value.contains("application/octet-stream")
-                || value.contains("application/x-parity-scale")
-        });
+    let format = match crate::utils::negotiate_response_format(accept) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
 
-    if accepts_scale {
-        let mut resp = Response::new(Body::from(ScaleEncode::encode(bundle)));
+    if matches!(format, crate::utils::ResponseFormat::Norito) {
+        let body = to_bytes(bundle).map_err(|err| {
+            sccp_internal_error(format!(
+                "failed to serialize SCCP bundle Norito payload: {err}"
+            ))
+        })?;
+        let mut resp = Response::new(Body::from(body));
         resp.headers_mut().insert(
             axum::http::header::CONTENT_TYPE,
-            axum::http::HeaderValue::from_static("application/x-parity-scale"),
+            axum::http::HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
         );
         return Ok(resp);
     }
@@ -4523,7 +4526,7 @@ fn build_sccp_finality_proof_bytes(
         ))
     })?;
 
-    Ok(ScaleEncode::encode(&NexusBridgeFinalityProofV1 {
+    to_bytes(&NexusBridgeFinalityProofV1 {
         version: 1,
         chain_id: finality_proof.chain_id.as_str().to_owned(),
         height: finality_proof.height,
@@ -4553,7 +4556,12 @@ fn build_sccp_finality_proof_bytes(
                 .bls_aggregate_signature
                 .clone(),
         },
-    }))
+    })
+    .map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode Nexus SCCP finality proof payload: {err}"
+        ))
+    })
 }
 
 fn min_votes_for_len(len: usize) -> u16 {
@@ -4600,7 +4608,7 @@ fn validate_parliament_certificate(
         ));
     }
 
-    let expected_preimage_hash = payload_hash(&ScaleEncode::encode(payload));
+    let expected_preimage_hash = payload_hash(&canonical_governance_payload_bytes(payload));
     if certificate.payload.preimage_hash != expected_preimage_hash {
         return Err(sccp_bad_request(
             "parliament certificate preimage_hash does not match the SCCP governance payload",
@@ -4691,7 +4699,7 @@ fn validate_parliament_certificate(
         ))
     })?;
 
-    Ok(ScaleEncode::encode(&NexusParliamentCertificateV1 {
+    to_bytes(&NexusParliamentCertificateV1 {
         version: 1,
         preimage_hash: certificate.payload.preimage_hash,
         enactment_window_start: certificate.payload.at_window.lower,
@@ -4711,7 +4719,12 @@ fn validate_parliament_certificate(
                 signature: signature.signature.payload().to_vec(),
             })
             .collect(),
-    }))
+    })
+    .map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to encode Nexus parliament certificate payload: {err}"
+        ))
+    })
 }
 
 pub fn publish_sccp_burn_bundle(
@@ -4726,7 +4739,7 @@ pub fn publish_sccp_burn_bundle(
         kind: SccpHubMessageKind::Burn,
         target_domain: payload.dest_domain,
         message_id: burn_message_id(&payload),
-        payload_hash: payload_hash(&ScaleEncode::encode(&payload)),
+        payload_hash: payload_hash(&canonical_burn_payload_bytes(&payload)),
         parliament_certificate_hash: None,
     };
     let commitment_root = commitment_leaf_hash(&commitment);
@@ -4760,7 +4773,7 @@ pub fn publish_sccp_governance_bundle(
         kind: sccp_governance_message_kind(&payload),
         target_domain: iroha_sccp::governance_target_domain(&payload),
         message_id: iroha_sccp::governance_message_id(&payload),
-        payload_hash: payload_hash(&ScaleEncode::encode(&payload)),
+        payload_hash: payload_hash(&canonical_governance_payload_bytes(&payload)),
         parliament_certificate_hash: Some(parliament_certificate_hash(&parliament_certificate)),
     };
     let commitment_root = commitment_leaf_hash(&commitment);

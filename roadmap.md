@@ -2,6 +2,59 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 fresh full preserved-peer reruns on the current worktree):
+the fixed transport signatures remain gone, but the current-tree 4-peer stable
+envelopes now fail on a shared synchronized `no lagging peers` stall instead
+of the earlier transport-induced failure chain.
+
+- permissioned rerun:
+  `/tmp/izanami_permissioned_post_txgossipfix_20260330T110147Z.log`
+  with peer artifacts in
+  `/tmp/iroha-soak-permissioned-post-txgossipfix_20260330T110147Z/irohad_test_network_uEh1mM`
+  reached `strict_min_height=260` / `quorum_min_height=260` with
+  `strict_reference_height=266`, then failed the 600s strict-progress watchdog
+  after `59` repeated
+  `strict block height is stalled with no lagging peers` warnings; final
+  summary:
+  `successes=1036`, `failures=65`,
+  `izanami_ingress_failover_total=170`,
+  `izanami_ingress_endpoint_unhealthy_total=142`,
+  with workload distress dominated by
+  `transaction queued for too long=68` and
+  `haven't got tx confirmation within 20s=52`;
+- NPoS rerun:
+  `/tmp/izanami_npos_post_txgossipfix_20260330T111513Z.log`
+  with peer artifacts in
+  `/tmp/iroha-soak-npos-post-txgossipfix_20260330T111513Z/irohad_test_network_hf4kWS`
+  reached `strict_min_height=571` / `quorum_min_height=571`, then failed the
+  same 600s strict-progress watchdog after `59`
+  `strict block height is stalled with no lagging peers` warnings; final
+  summary:
+  `successes=2391`, `failures=56`,
+  `izanami_ingress_failover_total=79`,
+  `izanami_ingress_endpoint_unhealthy_total=39`,
+  with workload distress dominated by
+  `transaction confirmation timed out; fallback status check failed=56`; and
+- the old transport/proposer signatures stayed gone in both reruns
+  (`LengthMismatch=0`, `Failed to decode peer message=0`,
+  `deferring proposal: insufficient online peers for commit quorum=0`), while
+  the preserved-peer malformed high-stream churn remained low
+  (`permissioned=3`, `NPoS=4`, `threshold disconnects=0`), so the current
+  blocker is not a return of the original peer-frame decoding bug.
+
+Open work for this slice now remains:
+- explain and fix the shared cluster-wide `strict_min_height == quorum_min_height`
+  / `lagging_peers=0` stall now visible in both fresh current-tree reruns,
+  since this is the active reason both envelopes still fail the 600s strict
+  progress gate;
+- explain why the current-tree NPoS rerun regressed from the earlier March 30
+  tx-gossipfix run (`1568` full-hour duration result) down to the new
+  `571` strict plateau, and isolate whether that regression is caused by the
+  current additional worktree changes or by a newly exposed consensus/ingress
+  interaction; and
+- keep the residual `3/4` malformed decrypted payload drops as secondary
+  follow-up only: identify their exact producer to confirm they are incidental
+  noise rather than the source of the new synchronized no-lagging-peers stop.
 Latest sync (2026-03-30 offline cash gap closure):
 the remaining offline cash cleanup gaps are closed.
 
@@ -91,6 +144,18 @@ registrar-invalid underscore label.
 
 Open work for this slice now remains:
 - none.
+
+Latest sync (2026-03-30 transaction-gossip framed-cache implementation):
+the code now matches the intended transaction-gossip transport fix rather than
+only the soak-status narrative.
+
+- `crates/iroha_core/src/gossiper.rs` now canonicalizes send-side cached gossip
+  payloads to the stable full-frame `SignedTransaction` wire form, preserves
+  exact received framed bytes on decode, and decodes `TransactionGossip` with
+  an explicit len-prefixed field walker; and
+- the focused `iroha_core` regressions covering direct gossip roundtrips,
+  wrapped `NetworkMessage` roundtrips, queue-generated framed gossip payloads,
+  and queue cache acceptance all pass.
 
 Latest sync (2026-03-30 Torii OpenAPI parity for maintained PK routes):
 the checked-in Torii OpenAPI now matches the current maintained browser/app

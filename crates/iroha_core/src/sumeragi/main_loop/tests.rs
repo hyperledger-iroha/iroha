@@ -37472,8 +37472,12 @@ async fn seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_v
         "slot-owned handoff should preserve the quorum-timeout reason on the seeded frontier owner"
     );
     assert!(
-        actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
-        "seeded same-height commit vote evidence must suppress competing local proposals after a view advance"
+        actor.slot_has_proposal_evidence(height, view),
+        "seeded same-height commit vote evidence should count as proposal evidence for its exact slot"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
+        "seeded same-height vote evidence must not leak into later views"
     );
 
     harness.shutdown.send();
@@ -60156,6 +60160,131 @@ async fn force_view_change_if_idle_preserves_quorum_timeout_owner_across_post_ro
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_treats_post_rotation_stale_frontier_owner_as_no_proposal() {
+    use std::borrow::Cow;
+
+    let _guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = false;
+    let mut harness = test_actor_harness_with_config(1, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let committed_height = actor.state.view().height() as u64;
+    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
+    let height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let initial_view = 0_u64;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    let stale_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD4; Hash::LENGTH]));
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        initial_view,
+        stale_block_hash,
+        now,
+        Duration::from_secs(1),
+        None,
+        BTreeSet::new(),
+        true,
+        false,
+        true,
+        None,
+        None,
+    ));
+
+    actor.trigger_view_change_with_cause(height, initial_view, super::ViewChangeCause::MissingQc);
+
+    let current_view = initial_view.saturating_add(1);
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "setup should advance to the post-rotation view"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height == height
+                && slot.view == initial_view
+                && slot.block_hash == stale_block_hash),
+        "stale frontier ownership should survive for repair after the view advances"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, current_view),
+        "old-view frontier ownership must not count as proposal evidence for the post-rotation round"
+    );
+
+    let no_proposal_timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let proposal_seen_timeout = super::idle_view_timeout(
+        true,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    assert!(
+        no_proposal_timeout < proposal_seen_timeout,
+        "test requires the no-proposal timeout to be shorter so the stale-owner classification is observable"
+    );
+
+    let rotate_at = now
+        .checked_add(no_proposal_timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let round_started = rotate_at
+        .checked_sub(no_proposal_timeout.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(rotate_at);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, round_started);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height,
+        view: current_view,
+        since: round_started,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
+
+    let before = super::status::snapshot();
+    assert!(
+        actor.force_view_change_if_idle(rotate_at),
+        "post-rotation stale frontier ownership should follow the no-proposal MissingQc timeout path"
+    );
+    let after = super::status::snapshot();
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view.saturating_add(1)),
+        "idle MissingQc should rotate again once the shorter no-proposal timeout elapses"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total,
+        before.view_change_causes.missing_qc_total.saturating_add(1),
+        "post-rotation idle timeout should count one additional MissingQc rotation"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn frontier_dependency_recovery_cause_classifies_contiguous_missing_block_as_missing_payload()
 {
     let mut harness = test_actor_harness(4).await;
@@ -73240,6 +73369,85 @@ async fn pacemaker_defers_reproposal_when_frontier_slot_owns_current_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_stale_frontier_owner()
+ {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.highest_qc = None;
+
+    let tracked_height = actor.state.view().height() as u64 + 1;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(tracked_height, now);
+    let stale_block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC3; Hash::LENGTH]));
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        tracked_height,
+        0,
+        stale_block_hash,
+        now,
+        Duration::from_secs(1),
+        None,
+        BTreeSet::new(),
+        true,
+        false,
+        true,
+        None,
+        None,
+    ));
+
+    actor.trigger_view_change_with_cause(tracked_height, 0, super::ViewChangeCause::MissingQc);
+
+    assert_eq!(
+        actor.phase_tracker.current_view(tracked_height),
+        Some(1),
+        "missing-QC recovery should advance the round to the next view"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height == tracked_height
+                && slot.view == 0
+                && slot.block_hash == stale_block_hash),
+        "view advance should preserve the stale frontier candidate for repair"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(tracked_height, 1),
+        "stale frontier ownership from the prior view must not suppress proposal assembly for the new view"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        proposed,
+        "pacemaker should assemble a fresh proposal once only stale old-view frontier ownership remains"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, 1)
+            .is_some(),
+        "new-view proposal should be cached for the post-rotation slot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_gossip_targets_excludes_sender_and_local() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -80923,7 +81131,8 @@ async fn slot_has_proposal_evidence_preserves_authoritative_frontier_owner_witho
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn slot_has_proposal_evidence_preserves_same_height_candidate_across_view_change() {
+async fn slot_has_proposal_evidence_keeps_frontier_candidate_across_view_change_without_leaking_into_next_view()
+ {
     let mut harness = test_actor_harness(4).await;
     let _proof_guard = super::status::view_change_proof_test_guard();
     let actor = &mut harness.actor;
@@ -80970,8 +81179,12 @@ async fn slot_has_proposal_evidence_preserves_same_height_candidate_across_view_
         "same-height view advance should still proceed through the slot FSM"
     );
     assert!(
-        actor.slot_has_proposal_evidence(height, view + 1),
-        "same-height view changes must preserve authoritative proposal evidence from the existing slot owner"
+        actor.slot_has_proposal_evidence(height, view),
+        "same-view frontier ownership must remain authoritative after the view advances"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, view + 1),
+        "stale same-height frontier ownership must not be treated as proposal evidence for the next view"
     );
     assert!(
         actor
@@ -80985,7 +81198,8 @@ async fn slot_has_proposal_evidence_preserves_same_height_candidate_across_view_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn slot_has_proposal_evidence_counts_await_body_and_deep_catchup_slot_ownership() {
+async fn slot_has_proposal_evidence_limits_await_body_and_deep_catchup_slot_ownership_to_exact_view()
+ {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -81010,8 +81224,12 @@ async fn slot_has_proposal_evidence_counts_await_body_and_deep_catchup_slot_owne
     ));
 
     assert!(
-        actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
-        "an active committed+1 slot awaiting the exact body must still suppress competing same-height proposal/view-change churn"
+        actor.slot_has_proposal_evidence(height, view),
+        "an active committed+1 slot awaiting the exact body should still count as proposal evidence for its exact view"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
+        "await-body frontier ownership must not suppress proposal evidence for later views"
     );
 
     let lag_actions = actor.apply_frontier_slot_event(
@@ -81022,8 +81240,12 @@ async fn slot_has_proposal_evidence_counts_await_body_and_deep_catchup_slot_owne
     );
     assert_eq!(lag_actions.enter_deep_catchup, Some("frontier_stall_reset"));
     assert!(
-        actor.slot_has_proposal_evidence(height, view.saturating_add(2)),
-        "deep-catchup ownership must continue to count as same-height proposal evidence until the slot is finalized or superseded"
+        actor.slot_has_proposal_evidence(height, view),
+        "deep-catchup ownership should still count as proposal evidence for the exact stale slot"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, view.saturating_add(2)),
+        "deep-catchup ownership must not continue suppressing proposal evidence for later views"
     );
 
     harness.shutdown.send();
@@ -92345,8 +92567,12 @@ async fn zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_othe
         "current-frontier timeout handoff should stay inside the slot owner, not the legacy frontier recovery controller"
     );
     assert!(
-        actor.slot_has_proposal_evidence(height, local_view.saturating_add(1)),
-        "same-height QC-owned slot should suppress later local reproposals even after the local pending view advanced"
+        actor.slot_has_proposal_evidence(height, committed_view),
+        "same-height QC-owned slot should still count as proposal evidence for the exact authoritative slot"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(height, local_view.saturating_add(1)),
+        "same-height QC-owned slot must not suppress later reproposals once the view moves beyond the authoritative slot"
     );
     assert!(
         actor.subsystems.propose.forced_view_after_timeout.is_none(),

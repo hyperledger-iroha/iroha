@@ -19243,27 +19243,6 @@ async fn handler_post_transaction(
     if !is_local_authoritative_for_route(app.as_ref(), routing_decision) {
         return Ok(execute_torii_transaction_via_proxy(&app, transaction, routing_decision).await);
     }
-    let queue_depth = app.queue.active_len();
-    let queue_pressure = current_torii_queue_pressure(app.as_ref());
-    if queue_depth >= app.high_load_tx_threshold || queue_pressure.saturated_by_age {
-        iroha_logger::warn!(
-            tx_hash = %tx_hash,
-            lane = routing_decision.lane_id.as_u32(),
-            dataspace = routing_decision.dataspace_id.as_u64(),
-            queue_depth,
-            high_load_tx_threshold = app.high_load_tx_threshold,
-            queued_tx_count = queue_pressure.queued_tx_count,
-            oldest_queued_tx_age_ms = queue_pressure.oldest_queued_tx_age_ms,
-            queue_pressure_saturated_by_count = queue_pressure.saturated_by_count,
-            queue_pressure_saturated_by_age = queue_pressure.saturated_by_age,
-            backpressure = ?queue_pressure.into_backpressure(),
-            "Torii early-shed rejected local transaction before enqueue"
-        );
-        return Err(Error::PushIntoQueue {
-            source: Box::new(queue::Error::Full),
-            backpressure: queue_pressure.into_backpressure(),
-        });
-    }
     let routing_decision = routing::push_accepted_transaction_for_ingress(
         app.queue.clone(),
         app.state.clone(),
@@ -26654,7 +26633,7 @@ pub(crate) mod tests_runtime_handlers {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
-    use parity_scale_codec::Encode;
+    use norito::codec::Encode;
 
     use super::*;
     #[cfg(feature = "telemetry")]
@@ -27607,8 +27586,13 @@ pub(crate) mod tests_runtime_handlers {
         let mut app = mk_app_state_for_tests();
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-            app_mut.high_load_tx_threshold = 1;
+            app_mut.high_load_tx_threshold = usize::MAX;
             app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.fee_policy = FeePolicy::Manual {
+                asset_id: "xor#wonderland".to_string(),
+                amount: 1,
+                receiver: "receiver".to_string(),
+            };
         }
 
         let keypair = KeyPair::random();
@@ -27660,7 +27644,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn handler_post_transaction_early_sheds_before_local_enqueue() {
+    async fn handler_post_transaction_high_load_threshold_does_not_reject_before_enqueue() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique app state")
@@ -27687,30 +27671,20 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(first.status(), StatusCode::ACCEPTED);
         assert_eq!(app.queue.active_len(), 1);
 
-        let err = match super::handler_post_transaction(
+        let second = super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
             NoritoVersioned(tx2),
         )
         .await
-        {
-            Ok(_) => panic!("expected early shed"),
-            Err(err) => err,
-        };
-        let response = err.into_response();
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
-            Some("PRTRY:QUEUE_FULL")
-        );
-        assert_eq!(app.queue.active_len(), 1);
+        .expect("second transaction should not be rejected")
+        .into_response();
+        assert_eq!(second.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.active_len(), 2);
     }
 
     #[tokio::test]
-    async fn handler_post_transaction_early_sheds_when_queue_age_saturates() {
+    async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
         let mut app = mk_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique app state")
@@ -27743,6 +27717,54 @@ pub(crate) mod tests_runtime_handlers {
 
         std::thread::sleep(Duration::from_millis(2_100));
 
+        assert!(
+            app.queue.current_backpressure().is_saturated(),
+            "age saturation should still be observable"
+        );
+
+        let second = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx2),
+        )
+        .await
+        .expect("second transaction should not be age-shed")
+        .into_response();
+        assert_eq!(second.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.active_len(), 2);
+    }
+
+    #[tokio::test]
+    async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_overflow() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let mut queue_cfg = iroha_config::parameters::actual::Queue::default();
+            queue_cfg.capacity = NonZeroUsize::new(1).expect("nonzero queue capacity");
+            app_mut.queue = Arc::new(Queue::from_config(queue_cfg, app_mut.events.clone()));
+            app_mut.high_load_tx_threshold = usize::MAX;
+        }
+
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain = (*app.chain_id).clone();
+        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "queue-full-1".to_string())])
+            .sign(keypair.private_key());
+        let tx2 = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "queue-full-2".to_string())])
+            .sign(keypair.private_key());
+
+        let first = super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx1),
+        )
+        .await
+        .expect("first transaction should be accepted")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::ACCEPTED);
+
         let err = match super::handler_post_transaction(
             State(app.clone()),
             HeaderMap::new(),
@@ -27750,7 +27772,7 @@ pub(crate) mod tests_runtime_handlers {
         )
         .await
         {
-            Ok(_) => panic!("expected age-based early shed"),
+            Ok(_) => panic!("expected real queue overflow"),
             Err(err) => err,
         };
         let response = err.into_response();
@@ -27762,7 +27784,6 @@ pub(crate) mod tests_runtime_handlers {
                 .and_then(|value| value.to_str().ok()),
             Some("PRTRY:QUEUE_FULL")
         );
-        assert_eq!(app.queue.active_len(), 1);
     }
 
     #[tokio::test]
@@ -29683,7 +29704,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_burn_bundle_endpoint_roundtrips_json_and_scale() {
+    async fn sccp_burn_bundle_endpoint_roundtrips_json_and_norito() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::BurnPayloadV1 {
             version: 1,
@@ -29699,7 +29720,9 @@ pub(crate) mod tests_runtime_handlers {
             kind: iroha_sccp::SccpHubMessageKind::Burn,
             target_domain: payload.dest_domain,
             message_id: iroha_sccp::burn_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(&payload.encode()),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_burn_payload_bytes(
+                &payload,
+            )),
             parliament_certificate_hash: None,
         };
         let app = app_with_commit_qc_for_test(1, iroha_sccp::commitment_leaf_hash(&commitment));
@@ -29724,28 +29747,25 @@ pub(crate) mod tests_runtime_handlers {
             serde_json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
 
-        let scale_response = routing::handle_v1_sccp_burn_bundle(
+        let norito_response = routing::handle_v1_sccp_burn_bundle(
             hex::encode(bundle.commitment.message_id),
-            Some(HeaderValue::from_static("application/x-parity-scale")),
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
         )
         .await
-        .expect("scale response");
+        .expect("norito response");
         assert_eq!(
-            scale_response
+            norito_response
                 .headers()
                 .get(axum::http::header::CONTENT_TYPE)
                 .map(HeaderValue::as_bytes),
-            Some(b"application/x-parity-scale".as_slice())
+            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
         );
-        let scale_bytes = axum::body::to_bytes(scale_response.into_body(), usize::MAX)
+        let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
             .await
-            .expect("scale body");
-        let decoded_scale =
-            <iroha_sccp::NexusSccpBurnProofV1 as parity_scale_codec::Decode>::decode(
-                &mut &scale_bytes[..],
-            )
-            .expect("decode scale bundle");
-        assert_eq!(decoded_scale, bundle);
+            .expect("norito body");
+        let decoded_norito: iroha_sccp::NexusSccpBurnProofV1 =
+            norito::decode_from_bytes(&norito_bytes).expect("decode norito bundle");
+        assert_eq!(decoded_norito, bundle);
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -29766,7 +29786,9 @@ pub(crate) mod tests_runtime_handlers {
         let keypair = iroha_crypto::KeyPair::random();
         let signer = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
         let enactment = iroha_data_model::governance::types::ParliamentEnactment {
-            preimage_hash: iroha_sccp::payload_hash(&payload.encode()),
+            preimage_hash: iroha_sccp::payload_hash(
+                &iroha_sccp::canonical_governance_payload_bytes(&payload),
+            ),
             at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 3 },
         };
         let parliament_certificate = {
@@ -29787,31 +29809,28 @@ pub(crate) mod tests_runtime_handlers {
                     ],
                 },
             };
-            let encoded =
-                parity_scale_codec::Encode::encode(&iroha_sccp::NexusParliamentCertificateV1 {
-                    version: 1,
-                    preimage_hash: enactment.preimage_hash,
-                    enactment_window_start: enactment.at_window.lower,
-                    enactment_window_end: enactment.at_window.upper,
-                    payload_bytes: norito::to_bytes(&enactment).expect("encode enactment"),
-                    signature_scheme: iroha_sccp::NexusParliamentSignatureSchemeV1::SimpleThreshold,
-                    roster_epoch,
-                    roster_members: vec![iroha_sccp::NexusParliamentRosterMemberV1 {
-                        signer: signer.to_string(),
-                        public_keys: vec![keypair.public_key().to_string()],
-                    }],
-                    required_signatures: 1,
-                    signatures: vec![iroha_sccp::NexusParliamentSignatureV1 {
-                        signer: signer.to_string(),
-                        public_key: keypair.public_key().to_string(),
-                        signature: iroha_crypto::SignatureOf::new(
-                            keypair.private_key(),
-                            &enactment,
-                        )
+            let encoded = norito::to_bytes(&iroha_sccp::NexusParliamentCertificateV1 {
+                version: 1,
+                preimage_hash: enactment.preimage_hash,
+                enactment_window_start: enactment.at_window.lower,
+                enactment_window_end: enactment.at_window.upper,
+                payload_bytes: norito::to_bytes(&enactment).expect("encode enactment"),
+                signature_scheme: iroha_sccp::NexusParliamentSignatureSchemeV1::SimpleThreshold,
+                roster_epoch,
+                roster_members: vec![iroha_sccp::NexusParliamentRosterMemberV1 {
+                    signer: signer.to_string(),
+                    public_keys: vec![keypair.public_key().to_string()],
+                }],
+                required_signatures: 1,
+                signatures: vec![iroha_sccp::NexusParliamentSignatureV1 {
+                    signer: signer.to_string(),
+                    public_key: keypair.public_key().to_string(),
+                    signature: iroha_crypto::SignatureOf::new(keypair.private_key(), &enactment)
                         .payload()
                         .to_vec(),
-                    }],
-                });
+                }],
+            })
+            .expect("encode parliament certificate");
             (certificate, encoded)
         };
         let commitment = iroha_sccp::SccpHubCommitmentV1 {
@@ -29819,7 +29838,9 @@ pub(crate) mod tests_runtime_handlers {
             kind: iroha_sccp::SccpHubMessageKind::TokenPause,
             target_domain: iroha_sccp::governance_target_domain(&payload),
             message_id: iroha_sccp::governance_message_id(&payload),
-            payload_hash: iroha_sccp::payload_hash(&payload.encode()),
+            payload_hash: iroha_sccp::payload_hash(
+                &iroha_sccp::canonical_governance_payload_bytes(&payload),
+            ),
             parliament_certificate_hash: Some(iroha_sccp::parliament_certificate_hash(
                 &parliament_certificate.1,
             )),

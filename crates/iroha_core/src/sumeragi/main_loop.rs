@@ -6520,24 +6520,35 @@ impl Actor {
             || self.frontier_recovery_owned_by_quorum_timeout(frontier_height)
     }
 
-    fn frontier_slot_has_active_owner_state(&self, height: u64) -> bool {
+    fn frontier_slot_has_active_owner_state_for_view(&self, height: u64, view: u64) -> bool {
         self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.height == height
-                && !matches!(slot.mode, FrontierSlotMode::Finalized)
-                && (matches!(slot.mode, FrontierSlotMode::DeepCatchup)
-                    || matches!(
-                        slot.phase,
-                        FrontierSlotPhase::AwaitBody
-                            | FrontierSlotPhase::ValidateBody
-                            | FrontierSlotPhase::AwaitCommitQc
-                    )
-                    || slot.block_created_seen
-                    || slot.body_present
-                    || slot.frontier_info.is_some()
-                    || slot.candidate.exact_fetch_armed
-                    || slot.quorum_progress.votes_observed
-                    || slot.quorum_progress.commit_qc_observed)
+                && slot.view == view
+                && Self::frontier_slot_has_active_owner_state_in_slot(slot)
         })
+    }
+
+    fn frontier_slot_has_active_owner_state(&self, height: u64) -> bool {
+        self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height && Self::frontier_slot_has_active_owner_state_in_slot(slot)
+        })
+    }
+
+    fn frontier_slot_has_active_owner_state_in_slot(slot: &FrontierSlot) -> bool {
+        !matches!(slot.mode, FrontierSlotMode::Finalized)
+            && (matches!(slot.mode, FrontierSlotMode::DeepCatchup)
+                || matches!(
+                    slot.phase,
+                    FrontierSlotPhase::AwaitBody
+                        | FrontierSlotPhase::ValidateBody
+                        | FrontierSlotPhase::AwaitCommitQc
+                )
+                || slot.block_created_seen
+                || slot.body_present
+                || slot.frontier_info.is_some()
+                || slot.candidate.exact_fetch_armed
+                || slot.quorum_progress.votes_observed
+                || slot.quorum_progress.commit_qc_observed)
     }
 
     fn seed_frontier_slot_from_same_height_evidence(
