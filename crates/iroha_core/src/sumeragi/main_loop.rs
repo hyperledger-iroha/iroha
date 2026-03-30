@@ -26500,8 +26500,19 @@ impl Actor {
         let committed_height = self.committed_height_snapshot();
         let live_height = height.min(committed_height.saturating_add(1)).max(1);
         let world_peers: BTreeSet<_> = world.peers().iter().cloned().collect();
+        let local_lane_ids =
+            crate::state::validator_lane_ids_for_peer(&world, self.common_config.peer.id());
         let candidates = match consensus_mode {
-            ConsensusMode::Npos => roster::stake_active_validator_roster_from_world(&world),
+            ConsensusMode::Npos => {
+                if local_lane_ids.is_empty() {
+                    roster::stake_active_validator_roster_from_world(&world)
+                } else {
+                    roster::stake_active_validator_roster_for_lanes_from_world(
+                        &world,
+                        &local_lane_ids,
+                    )
+                }
+            }
             ConsensusMode::Permissioned => self.trusted_topology(),
         };
         let present: Vec<_> = candidates

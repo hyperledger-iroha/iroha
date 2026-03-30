@@ -2505,7 +2505,7 @@ test(
 );
 
 test(
-  "offline allowance, summary, and transfer endpoints respond (optional)",
+  "offline transfer endpoints respond (optional)",
   {
     skip: !!SKIP_REASON,
     timeout: 60_000,
@@ -2519,26 +2519,6 @@ test(
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
     });
-
-    const allowances = await fetchOfflineListPage(
-      t,
-      "offline allowances list",
-      () => client.listOfflineAllowances({ limit: 5 }),
-    );
-    if (!allowances) {
-      return;
-    }
-    assertOfflineAllowanceResponse(allowances);
-
-    const summaries = await fetchOfflineListPage(
-      t,
-      "offline summaries list",
-      () => client.listOfflineSummaries({ limit: 5 }),
-    );
-    if (!summaries) {
-      return;
-    }
-    assertOfflineSummaryResponse(summaries);
 
     const transfers = await fetchOfflineListPage(
       t,
@@ -2581,15 +2561,18 @@ test(
     }
     assertOfflineRevocationResponse(revocations);
 
-    const revocationQuery = await fetchOfflineListPage(
-      t,
-      "offline revocations query",
-      () => client.queryOfflineRevocations({ limit: 5 }),
-    );
-    if (!revocationQuery) {
-      return;
+    try {
+      const revocationBundle = await client.getOfflineRevocationBundle();
+      assert.equal(typeof revocationBundle, "object");
+    } catch (error) {
+      if (isOfflineApiUnavailableError(error)) {
+        t.diagnostic(
+          `offline revocation bundle unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return;
+      }
+      throw error;
     }
-    assertOfflineRevocationResponse(revocationQuery);
   },
 );
 

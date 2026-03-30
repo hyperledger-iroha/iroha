@@ -3369,6 +3369,25 @@ export interface SubscriptionActionResponse {
   tx_hash_hex: string;
 }
 
+export interface ToriiOfflineCashReadinessResponse {
+  offline_recursive_stark: boolean;
+  [key: string]: unknown;
+}
+
+export interface ToriiOfflineCashRequest {
+  [key: string]: unknown;
+}
+
+export interface ToriiOfflineCashEnvelope {
+  lineage_state: Record<string, unknown>;
+  settlement?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface ToriiOfflineRevocationBundle {
+  [key: string]: unknown;
+}
+
 export interface ToriiOfflineAllowanceItem {
   certificate_id_hex: string;
   controller_id: string;
@@ -7442,30 +7461,32 @@ export declare class ToriiClient {
     request: SubscriptionUsageRequest,
     options?: { signal?: AbortSignal },
   ): Promise<SubscriptionActionResponse>;
-  listOfflineAllowances(
-    options?: OfflineAllowanceListOptions,
-  ): Promise<ToriiOfflineAllowanceListResponse>;
-  queryOfflineAllowances(
-    options?: IterableQueryOptions,
-  ): Promise<ToriiOfflineAllowanceListResponse>;
-  iterateOfflineAllowances(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>;
-  iterateOfflineAllowancesQuery(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>;
-  listOfflineSummaries(
-    options?: IterableListOptions,
-  ): Promise<ToriiOfflineSummaryListResponse>;
-  queryOfflineSummaries(
-    options?: IterableQueryOptions,
-  ): Promise<ToriiOfflineSummaryListResponse>;
-  iterateOfflineSummaries(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineSummaryItem, void, unknown>;
-  iterateOfflineSummariesQuery(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineSummaryItem, void, unknown>;
+  getOfflineCashReadiness(
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashReadinessResponse>;
+  setupOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  loadOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  refreshOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  syncOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  redeemOfflineCash(
+    request: ToriiOfflineCashRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineCashEnvelope>;
+  getOfflineRevocationBundle(
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiOfflineRevocationBundle>;
   listOfflineTransfers(
     options?: OfflineTransferListOptions,
   ): Promise<ToriiOfflineTransferListResponse>;
@@ -7481,54 +7502,13 @@ export declare class ToriiClient {
   listOfflineRevocations(
     options?: IterableListOptions,
   ): Promise<ToriiOfflineRevocationListResponse>;
-  queryOfflineRevocations(
-    options?: IterableQueryOptions,
-  ): Promise<ToriiOfflineRevocationListResponse>;
   iterateOfflineRevocations(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<ToriiOfflineRevocationItem, void, unknown>;
-  iterateOfflineRevocationsQuery(
-    options?: PaginationIteratorOptions,
-  ): AsyncGenerator<ToriiOfflineRevocationItem, void, unknown>;
-  issueOfflineCertificate(
-    certificate: ToriiOfflineWalletCertificateDraft,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCertificateIssueResponse>;
-  issueOfflineCertificateRenewal(
-    certificateIdHex: string,
-    certificate: ToriiOfflineWalletCertificateDraft,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineCertificateIssueResponse>;
-  submitOfflineSettlement(
-    request: ToriiOfflineSettlementSubmitRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineSettlementSubmitResponse>;
-  submitOfflineSettlementAndWait(
-    request: ToriiOfflineSettlementSubmitRequest,
-    options?: SubmitOfflineSettlementAndWaitOptions,
-  ): Promise<ToriiOfflineSettlementSubmitResponse>;
   issueOfflineBuildClaim(
     request: ToriiOfflineBuildClaimIssueRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiOfflineBuildClaimIssueResponse>;
-  registerOfflineAllowance(
-    request: ToriiOfflineAllowanceRegisterRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineAllowanceRegisterResponse>;
-  renewOfflineAllowance(
-    certificateIdHex: string,
-    request: ToriiOfflineAllowanceRegisterRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineAllowanceRegisterResponse>;
-  topUpOfflineAllowance(
-    request: ToriiOfflineTopUpRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineTopUpResponse>;
-  topUpOfflineAllowanceRenewal(
-    certificateIdHex: string,
-    request: ToriiOfflineTopUpRequest,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiOfflineTopUpResponse>;
   getOfflineRejectionStats(options?: {
     telemetryProfile?: string;
     signal?: AbortSignal;

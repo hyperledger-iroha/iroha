@@ -652,6 +652,55 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/offline/cash/readiness".to_owned(),
+        Value::Object(json_get_operation(
+            "Offline",
+            "Report offline cash feature readiness.",
+            "Returns feature-flag style readiness signals for the device-bound offline cash flow.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    for (path, summary, description) in [
+        (
+            "/v1/offline/cash/setup",
+            "Initialize an offline cash lineage.",
+            "Create the initial device-bound offline cash lineage and return the signed server envelope.",
+        ),
+        (
+            "/v1/offline/cash/load",
+            "Load value into offline cash.",
+            "Top up an existing device-bound offline cash lineage and return the updated signed envelope.",
+        ),
+        (
+            "/v1/offline/cash/refresh",
+            "Refresh offline cash authorization.",
+            "Rotate or refresh device-bound offline cash authorization material and return the updated signed envelope.",
+        ),
+        (
+            "/v1/offline/cash/sync",
+            "Sync offline cash state.",
+            "Submit the current device-side lineage view so the server can reconcile and return the canonical signed envelope.",
+        ),
+        (
+            "/v1/offline/cash/redeem",
+            "Redeem offline cash on-ledger.",
+            "Redeem device-bound offline cash back on-ledger and return the post-redeem signed envelope.",
+        ),
+    ] {
+        paths.insert(
+            path.to_owned(),
+            Value::Object(json_post_operation(
+                "Offline",
+                summary,
+                description,
+                "#/components/schemas/JsonValue",
+                "#/components/schemas/JsonValue",
+                Vec::new(),
+            )),
+        );
+    }
+    paths.insert(
         "/v1/offline/revocations".to_owned(),
         Value::Object(offline_revocations_operation()),
     );
@@ -10027,6 +10076,12 @@ mod tests {
         assert!(paths.contains_key("/v1/accounts"));
         assert!(paths.contains_key("/v1/transactions/history"));
         assert!(paths.contains_key("/v1/offline/policy"));
+        assert!(paths.contains_key("/v1/offline/cash/readiness"));
+        assert!(paths.contains_key("/v1/offline/cash/setup"));
+        assert!(paths.contains_key("/v1/offline/cash/load"));
+        assert!(paths.contains_key("/v1/offline/cash/refresh"));
+        assert!(paths.contains_key("/v1/offline/cash/sync"));
+        assert!(paths.contains_key("/v1/offline/cash/redeem"));
         assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
         assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
         assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
@@ -10042,7 +10097,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_keeps_only_lineage_offline_paths() {
+    fn generated_spec_keeps_only_cash_offline_paths() {
         let doc = generate_spec();
         let paths = doc
             .get("paths")
@@ -10068,6 +10123,26 @@ mod tests {
             assert!(
                 !paths.contains_key(legacy_path),
                 "legacy offline path should be absent: {legacy_path}"
+            );
+        }
+
+        for supported_path in [
+            "/v1/offline/cash/readiness",
+            "/v1/offline/cash/setup",
+            "/v1/offline/cash/load",
+            "/v1/offline/cash/refresh",
+            "/v1/offline/cash/sync",
+            "/v1/offline/cash/redeem",
+            "/v1/offline/revocations",
+            "/v1/offline/revocations/bundle",
+            "/v1/offline/transfers",
+            "/v1/offline/transfers/{bundle_id_hex}",
+            "/v1/offline/transfers/query",
+            "/v1/offline/policy",
+        ] {
+            assert!(
+                paths.contains_key(supported_path),
+                "supported offline path should be present: {supported_path}"
             );
         }
     }

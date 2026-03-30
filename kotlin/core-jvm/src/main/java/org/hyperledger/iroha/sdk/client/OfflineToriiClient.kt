@@ -26,86 +26,23 @@ class OfflineToriiClient private constructor(builder: Builder) {
     private val defaultHeaders: Map<String, String> = Collections.unmodifiableMap(LinkedHashMap(builder.defaultHeaders))
     private val observers: List<ClientObserver> = builder.observers.toList()
 
-    fun listAllowances(params: OfflineListParams): CompletableFuture<OfflineAllowanceList> = executeRequest(ALLOWANCES_PATH, params, OfflineJsonParser::parseAllowances)
     fun listTransfers(params: OfflineListParams): CompletableFuture<OfflineTransferList> = executeRequest(TRANSFERS_PATH, params, OfflineJsonParser::parseTransfers)
-    fun listSummaries(params: OfflineListParams): CompletableFuture<OfflineSummaryList> = executeRequest(SUMMARIES_PATH, params, OfflineJsonParser::parseSummaries)
     fun listRevocations(params: OfflineListParams): CompletableFuture<OfflineRevocationList> = executeRequest(REVOCATIONS_PATH, params, OfflineJsonParser::parseRevocations)
-    fun queryAllowances(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineAllowanceList> = executeQuery(ALLOWANCES_QUERY_PATH, envelope, OfflineJsonParser::parseAllowances)
     fun queryTransfers(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineTransferList> = executeQuery(TRANSFERS_QUERY_PATH, envelope, OfflineJsonParser::parseTransfers)
-    fun querySummaries(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineSummaryList> = executeQuery(SUMMARIES_QUERY_PATH, envelope, OfflineJsonParser::parseSummaries)
-    fun queryRevocations(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineRevocationList> = executeQuery(REVOCATIONS_QUERY_PATH, envelope, OfflineJsonParser::parseRevocations)
-
-    fun submitSettlement(transferPayload: Map<String, Any>, authority: String, privateKeyHex: String): CompletableFuture<OfflineSettlementSubmitResponse> =
-        unsupportedServerSideSigning("/v1/offline/settlements")
-
-    fun submitSettlementAndWait(transferPayload: Map<String, Any>, authority: String, privateKeyHex: String, statusClient: IrohaClient): CompletableFuture<OfflineSettlementSubmitResponse> =
-        unsupportedServerSideSigning("/v1/offline/settlements")
-
-    fun submitSettlementAndWait(transferPayload: Map<String, Any>, authority: String, privateKeyHex: String, statusClient: IrohaClient, statusOptions: PipelineStatusOptions?): CompletableFuture<OfflineSettlementSubmitResponse> =
-        unsupportedServerSideSigning("/v1/offline/settlements")
-
-    fun submitSettlement(transferPayload: Map<String, Any>, authority: String, privateKeyHex: String, buildClaimOverrides: List<OfflineSettlementBuildClaimOverride>?, repairExistingBuildClaims: Boolean): CompletableFuture<OfflineSettlementSubmitResponse> {
-        return unsupportedServerSideSigning("/v1/offline/settlements")
-    }
-
-    fun submitSettlementAndWait(transferPayload: Map<String, Any>, authority: String, privateKeyHex: String, buildClaimOverrides: List<OfflineSettlementBuildClaimOverride>?, repairExistingBuildClaims: Boolean, statusClient: IrohaClient): CompletableFuture<OfflineSettlementSubmitResponse> =
-        unsupportedServerSideSigning("/v1/offline/settlements")
-
-    fun submitSettlementAndWait(transferPayload: Map<String, Any>, authority: String, privateKeyHex: String, buildClaimOverrides: List<OfflineSettlementBuildClaimOverride>?, repairExistingBuildClaims: Boolean, statusClient: IrohaClient, statusOptions: PipelineStatusOptions?): CompletableFuture<OfflineSettlementSubmitResponse> =
-        unsupportedServerSideSigning("/v1/offline/settlements")
-
-    fun getSettlement(bundleIdHex: String): CompletableFuture<OfflineTransferList.OfflineTransferItem> = executeGet("$SETTLEMENTS_PATH/${urlEncode(bundleIdHex.trim())}", OfflineJsonParser::parseTransferItem)
     fun getTransfer(bundleIdHex: String): CompletableFuture<OfflineTransferList.OfflineTransferItem> = executeGet("$TRANSFERS_PATH/${urlEncode(bundleIdHex.trim())}", OfflineJsonParser::parseTransferItem)
+    fun getRevocationBundleJson(): CompletableFuture<String> = executeGet(REVOCATIONS_BUNDLE_PATH, ::decodeJsonPayload)
 
-    fun getBundleProofStatus(bundleIdHex: String): CompletableFuture<OfflineBundleProofStatus> {
-        val request = buildGetRequest(BUNDLE_PROOF_STATUS_PATH, mapOf("bundle_id_hex" to bundleIdHex.trim()))
-        notifyRequest(request)
-        return executeHttpRequest(request, OfflineJsonParser::parseBundleProofStatus)
-    }
-
-    fun buildProofRequest(params: OfflineProofRequestParams): CompletableFuture<OfflineProofRequestResult> {
-        val request = buildPostRequest(TRANSFER_PROOF_PATH, params.toJsonBytes())
-        notifyRequest(request)
-        return executeHttpRequest(request) { payload -> OfflineProofRequestResult(params.kind, OfflineJsonParser.canonicalJson(payload)) }
-    }
-
-    fun issueCertificate(draft: OfflineWalletCertificateDraft): CompletableFuture<OfflineCertificateIssueResponse> {
-        val body = JsonEncoder.encode(mapOf("certificate" to draft.toJsonMap())).toByteArray(StandardCharsets.UTF_8)
-        val request = buildPostRequest(CERTIFICATE_ISSUE_PATH, body)
-        notifyRequest(request)
-        return executeHttpRequest(request, OfflineJsonParser::parseCertificateIssueResponse)
-    }
+    fun setupCash(requestJson: String): CompletableFuture<String> = executeJsonPost(CASH_SETUP_PATH, requestJson)
+    fun loadCash(requestJson: String): CompletableFuture<String> = executeJsonPost(CASH_LOAD_PATH, requestJson)
+    fun refreshCash(requestJson: String): CompletableFuture<String> = executeJsonPost(CASH_REFRESH_PATH, requestJson)
+    fun syncCash(requestJson: String): CompletableFuture<String> = executeJsonPost(CASH_SYNC_PATH, requestJson)
+    fun redeemCash(requestJson: String): CompletableFuture<String> = executeJsonPost(CASH_REDEEM_PATH, requestJson)
 
     fun issueBuildClaim(requestBody: OfflineBuildClaimIssueRequest): CompletableFuture<OfflineBuildClaimIssueResponse> {
         val body = JsonEncoder.encode(requestBody.toJsonMap()).toByteArray(StandardCharsets.UTF_8)
         val request = buildPostRequest(BUILD_CLAIM_ISSUE_PATH, body)
         notifyRequest(request)
         return executeHttpRequest(request, OfflineJsonParser::parseBuildClaimIssueResponse)
-    }
-
-    fun registerAllowance(certificate: OfflineWalletCertificate, authority: String, privateKeyHex: String): CompletableFuture<Void> =
-        unsupportedServerSideSigning("/v1/offline/allowances")
-
-    fun registerAllowanceDetailed(certificate: OfflineWalletCertificate, authority: String, privateKeyHex: String): CompletableFuture<OfflineAllowanceRegisterResponse> {
-        return unsupportedServerSideSigning("/v1/offline/allowances")
-    }
-
-    fun renewAllowance(certificateIdHex: String, certificate: OfflineWalletCertificate, authority: String, privateKeyHex: String): CompletableFuture<OfflineAllowanceRegisterResponse> {
-        return unsupportedServerSideSigning("/v1/offline/allowances/{certificate_id_hex}/renew")
-    }
-
-    fun topUpAllowance(draft: OfflineWalletCertificateDraft, authority: String, privateKeyHex: String): CompletableFuture<OfflineTopUpResponse> =
-        unsupportedServerSideSigning("/v1/offline/allowances")
-
-    fun topUpAllowanceRenewal(certificateIdHex: String, draft: OfflineWalletCertificateDraft, authority: String, privateKeyHex: String): CompletableFuture<OfflineTopUpResponse> =
-        unsupportedServerSideSigning("/v1/offline/allowances/{certificate_id_hex}/renew")
-
-    fun issueCertificateRenewal(certificateIdHex: String, draft: OfflineWalletCertificateDraft): CompletableFuture<OfflineCertificateIssueResponse> {
-        val path = "$CERTIFICATE_RENEW_ISSUE_PATH/${urlEncode(certificateIdHex.trim())}/renew/issue"
-        val body = JsonEncoder.encode(mapOf("certificate" to draft.toJsonMap())).toByteArray(StandardCharsets.UTF_8)
-        val request = buildPostRequest(path, body)
-        notifyRequest(request)
-        return executeHttpRequest(request, OfflineJsonParser::parseCertificateIssueResponse)
     }
 
     fun executor(): HttpTransportExecutor = executor
@@ -120,6 +57,14 @@ class OfflineToriiClient private constructor(builder: Builder) {
         val request = buildGetRequest(path, emptyMap<String, String>())
         notifyRequest(request)
         return executeHttpRequest(request, parser)
+    }
+
+    private fun executeJsonPost(path: String, requestJson: String): CompletableFuture<String> {
+        val trimmed = requestJson.trim()
+        require(trimmed.isNotEmpty()) { "requestJson must not be blank" }
+        val request = buildPostRequest(path, trimmed.toByteArray(StandardCharsets.UTF_8))
+        notifyRequest(request)
+        return executeHttpRequest(request, ::decodeJsonPayload)
     }
 
     private fun buildGetRequest(path: String, params: OfflineListParams?): TransportRequest = buildGetRequest(path, params?.toQueryParameters() ?: emptyMap())
@@ -176,11 +121,6 @@ class OfflineToriiClient private constructor(builder: Builder) {
     private fun notifyResponse(request: TransportRequest, response: ClientResponse) { for (o in observers) o.onResponse(request, response) }
     private fun notifyFailure(request: TransportRequest, error: Throwable) { for (o in observers) o.onFailure(request, error) }
 
-    private fun <T> unsupportedServerSideSigning(endpoint: String): CompletableFuture<T> =
-        throw UnsupportedOperationException(
-            "$endpoint no longer accepts server-side signing inputs; submit a locally signed transaction instead.",
-        )
-
     private fun <T> executeHttpRequest(request: TransportRequest, parser: (ByteArray) -> T): CompletableFuture<T> {
         val future = CompletableFuture<T>()
         executor.execute(request).whenComplete { response, throwable ->
@@ -215,38 +155,25 @@ class OfflineToriiClient private constructor(builder: Builder) {
         fun baseUri(baseUri: URI): Builder { this.baseUri = baseUri; return this }
         fun timeout(timeout: Duration?): Builder { this.timeout = timeout; return this }
         fun addHeader(name: String, value: String): Builder { defaultHeaders[name] = value; return this }
-        fun defaultHeaders(headers: Map<String, String>?): Builder { defaultHeaders.clear(); headers?.forEach { (k, v) -> if (k != null && v != null) defaultHeaders[k] = v }; return this }
+        fun defaultHeaders(headers: Map<String, String>?): Builder { defaultHeaders.clear(); headers?.forEach { (k, v) -> defaultHeaders[k] = v }; return this }
         fun addObserver(observer: ClientObserver?): Builder { if (observer != null) observers.add(observer); return this }
         fun observers(observers: List<ClientObserver>?): Builder { this.observers.clear(); observers?.forEach { addObserver(it) }; return this }
         fun build(): OfflineToriiClient = OfflineToriiClient(this)
     }
 
     companion object {
-        private const val ALLOWANCES_PATH = "/v1/offline/allowances"
         private const val TRANSFERS_PATH = "/v1/offline/transfers"
-        private const val SETTLEMENTS_PATH = "/v1/offline/settlements"
-        private const val SUMMARIES_PATH = "/v1/offline/summaries"
         private const val REVOCATIONS_PATH = "/v1/offline/revocations"
-        private const val ALLOWANCES_QUERY_PATH = "/v1/offline/allowances/query"
+        private const val REVOCATIONS_BUNDLE_PATH = "/v1/offline/revocations/bundle"
+        private const val CASH_SETUP_PATH = "/v1/offline/cash/setup"
+        private const val CASH_LOAD_PATH = "/v1/offline/cash/load"
+        private const val CASH_REFRESH_PATH = "/v1/offline/cash/refresh"
+        private const val CASH_SYNC_PATH = "/v1/offline/cash/sync"
+        private const val CASH_REDEEM_PATH = "/v1/offline/cash/redeem"
         private const val TRANSFERS_QUERY_PATH = "/v1/offline/transfers/query"
-        private const val SUMMARIES_QUERY_PATH = "/v1/offline/summaries/query"
-        private const val REVOCATIONS_QUERY_PATH = "/v1/offline/revocations/query"
-        private const val TRANSFER_PROOF_PATH = "/v1/offline/transfers/proof"
-        private const val BUNDLE_PROOF_STATUS_PATH = "/v1/offline/bundle/proof_status"
-        private const val CERTIFICATE_ISSUE_PATH = "/v1/offline/certificates/issue"
         private const val BUILD_CLAIM_ISSUE_PATH = "/v1/offline/build-claims/issue"
-        private const val CERTIFICATE_RENEW_ISSUE_PATH = "/v1/offline/certificates"
 
         @JvmStatic fun builder(): Builder = Builder()
-
-        private fun buildAllowanceRegisterBody(certificate: OfflineWalletCertificate, authority: String, privateKeyHex: String): ByteArray {
-            val body = LinkedHashMap<String, Any>(); body["authority"] = authority; body["private_key"] = privateKeyHex; body["certificate"] = certificate.toJsonMap()
-            return JsonEncoder.encode(body).toByteArray(StandardCharsets.UTF_8)
-        }
-        private fun ensureTopUpCertificateIdsMatch(issuedId: String?, registeredId: String?) {
-            check(issuedId != null && registeredId != null) { "Missing certificate id in top-up responses" }
-            check(issuedId.equals(registeredId, ignoreCase = true)) { "Top-up certificate id mismatch: issued=$issuedId registered=$registeredId" }
-        }
         private fun extractRejectCode(headers: Map<String, List<String>>): String? = HttpErrorMessageExtractor.extractRejectCode(headers, "x-iroha-reject-code")
         private fun decodeBodyPreview(payload: ByteArray): String? = HttpErrorMessageExtractor.extractMessage(payload)
         private fun summarizeCauseMessage(cause: Throwable?): String = cause?.message?.takeIf { it.isNotBlank() } ?: cause?.javaClass?.simpleName ?: "unknown transport error"
@@ -264,6 +191,7 @@ class OfflineToriiClient private constructor(builder: Builder) {
             if (!bodyPreview.isNullOrBlank()) sb.append(". body=$bodyPreview")
             return sb.toString()
         }
+        private fun decodeJsonPayload(payload: ByteArray): String = String(payload, StandardCharsets.UTF_8)
         private fun findHeader(headers: Map<String, String>, name: String): String? { for (key in headers.keys) if (key.equals(name, ignoreCase = true)) return key; return null }
         private fun appendQuery(target: URI, params: Map<String, String>): URI {
             if (params.isEmpty()) return target

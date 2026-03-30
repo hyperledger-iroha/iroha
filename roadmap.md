@@ -2,6 +2,21 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 offline cash gap closure):
+the remaining offline cash cleanup gaps are closed.
+
+- the maintained Kotlin/JVM, Java Android, and JavaScript SDK surfaces no
+  longer publish the removed allowance-era offline helpers, and the in-repo
+  Android `OfflineWallet` wrappers/tests were pruned to the canonical
+  first-release offline cash contract; and
+- the retail wallet adapter verification now passes in both downstream apps:
+  `pk-retail-wallet-ios` focused routing/contract XCTest coverage is green,
+  and `pk-retail-wallet-android` `:core:testDebugUnitTest` is green after the
+  shared-client refactor fixes.
+
+Open work for this slice now remains:
+- none.
+
 Latest sync (2026-03-30 misc status smoke SNS lease alignment):
 the `misc_status_endpoints_smoke` integration fixture now matches the current
 SNS-backed runtime domain-registration invariant and no longer uses a
@@ -3894,6 +3909,49 @@ Validation:
 Open work for this slice now remains:
 - monitor upstream replacements for the accepted `derivative` / `paste` debt
   and remove the `deny.toml` exceptions when safe upgrades become available.
+
+Latest sync (2026-03-30 offline cash contract cleanup across Torii, maintained SDKs, and retail wallet adapters):
+`crates/iroha_torii/src/lib.rs`,
+`crates/iroha_torii/src/openapi.rs`,
+`crates/iroha_torii/tests/offline_cash_router_smoke.rs`,
+`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`,
+`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/OfflineToriiClient.kt`,
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/OfflineToriiClient.java`,
+and
+`javascript/iroha_js/src/toriiClient.js`
+now align the maintained public offline surface to the first-release cash flow:
+`GET /v1/offline/cash/readiness`,
+`POST /v1/offline/cash/{setup,load,refresh,sync,redeem}`,
+`GET /v1/offline/revocations`,
+`POST /v1/offline/revocations`,
+`GET /v1/offline/revocations/bundle`,
+`GET /v1/offline/transfers`,
+`GET /v1/offline/transfers/{bundle_id_hex}`,
+`POST /v1/offline/transfers/query`,
+and
+`POST /v1/offline/policy`.
+
+- implementation on this sync:
+  - Torii no longer mounts the legacy public `/v1/offline/allowances*` routes, and the generated OpenAPI now publishes the mounted cash readiness + lifecycle paths while explicitly keeping the legacy allowance/certificate/settlement-era paths out of the checked-in app spec;
+  - Swift now performs real JSON round trips for `setupOfflineCash`, `loadOfflineCash`, `refreshOfflineCash`, `syncOfflineCash`, and `redeemOfflineCash`;
+  - Kotlin/JVM and Java Android now expose shared raw-JSON cash lifecycle helpers plus `GET /v1/offline/revocations/bundle`, with focused parity tests locking those canonical paths;
+  - JavaScript now exposes `getOfflineCashReadiness()`, the five cash mutation helpers, and `getOfflineRevocationBundle()` with updated typings/tests/docs; and
+  - the retail wallet adapters were reviewed and aligned with the actual deployment split already used in production apps: iOS now uses `ToriiService` on `coreApiBaseUrl` for cash calls, while Android routes cash writes and revocation-bundle fetches through the shared `OfflineToriiClient` on `coreApiBaseUrl` and keeps transfer/revocation reads on `irohaApiBaseUrl`.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_torii generated_spec_includes_documented_paths -- --nocapture`
+- `cargo test -p iroha_torii generated_spec_keeps_only_cash_offline_paths -- --nocapture`
+- `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture`
+- `cargo test -p iroha_torii --test offline_cash_router_smoke -- --nocapture`
+- `cd IrohaSwift && swift test --filter ToriiOfflineCashEndpointsTests`
+- `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.OfflineToriiClientCashTest --console=plain`
+- `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.OfflineToriiClientTests JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks`
+- `node --test javascript/iroha_js/test/toriiClient.test.js --test-name-pattern "OfflineCashReadiness|offline cash helpers post canonical cash routes|getOfflineRevocationBundle"`
+
+Open work for this slice now remains:
+- rerun the wallet-app suites in `pk-retail-wallet-ios` and `pk-retail-wallet-android` to lock the adapter changes against app-level regressions; and
+- the older allowance-era `OfflineWallet` layers under `kotlin/offline-wallet-android` and `java/iroha_android/.../offline/OfflineWallet.java` still depend on legacy `OfflineToriiClient` helpers, so a follow-up refactor is still required before those internal compatibility methods can be hard-deleted.
 
 Latest sync (2026-03-25 offline cash app-API canonical binding/proof hardening):
 `crates/iroha_torii/src/lib.rs`,

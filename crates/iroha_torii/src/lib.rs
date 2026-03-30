@@ -1200,6 +1200,7 @@ struct AppState {
     zk_ivm_prove_jobs: Arc<DashMap<String, ZkIvmProveJobState>>,
     soracloud_public_inflight: Arc<tokio::sync::Semaphore>,
     soracloud_public_inflight_total: usize,
+    sns_mutation_lock: Arc<tokio::sync::Mutex<()>>,
     zk_ivm_prove_inflight: Arc<tokio::sync::Semaphore>,
     zk_ivm_prove_slots: Arc<tokio::sync::Semaphore>,
     zk_ivm_prove_slots_total: usize,
@@ -4728,141 +4729,6 @@ async fn handler_offline_cash_readiness() -> Result<impl IntoResponse, Error> {
         "offline_recursive_stark",
         crate::offline_lineage::offline_recursive_stark_ready(),
     )]))
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_lineage_setup(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_lineage::OfflineLineageSetupRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/offline/lineage/setup",
-            enforce,
-        )
-        .await?;
-    }
-
-    json_ok(crate::offline_lineage::setup_lineage(app.as_ref(), req).await?)
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_lineage_load(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_lineage::OfflineLineageLoadRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/offline/lineage/load",
-            enforce,
-        )
-        .await?;
-    }
-
-    json_ok(crate::offline_lineage::load_lineage(app.as_ref(), req).await?)
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_lineage_refresh(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_lineage::OfflineLineageRefreshRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/offline/lineage/refresh",
-            enforce,
-        )
-        .await?;
-    }
-
-    json_ok(crate::offline_lineage::refresh_lineage(app.as_ref(), req).await?)
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_lineage_sync(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_lineage::OfflineLineageSyncRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/offline/lineage/sync",
-            enforce,
-        )
-        .await?;
-    }
-
-    json_ok(crate::offline_lineage::sync_lineage(app.as_ref(), req).await?)
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_lineage_redeem(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_lineage::OfflineLineageRedeemRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        let enforce =
-            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(
-            &app,
-            &headers,
-            Some(remote_ip),
-            "v1/offline/lineage/redeem",
-            enforce,
-        )
-        .await?;
-    }
-
-    json_ok(crate::offline_lineage::redeem_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -23036,17 +22902,12 @@ impl Torii {
                     "/v1/offline/cash/readiness",
                     get(handler_offline_cash_readiness),
                 )
-                .route(
-                    "/v1/offline/allowances",
-                    get(handler_offline_allowances_list),
-                )
-                .route(
-                    "/v1/offline/allowances/query",
-                    post(handler_offline_allowances_query),
-                )
                 .route("/v1/offline/cash/setup", post(handler_offline_cash_setup))
                 .route("/v1/offline/cash/load", post(handler_offline_cash_load))
-                .route("/v1/offline/cash/refresh", post(handler_offline_cash_refresh))
+                .route(
+                    "/v1/offline/cash/refresh",
+                    post(handler_offline_cash_refresh),
+                )
                 .route("/v1/offline/cash/sync", post(handler_offline_cash_sync))
                 .route("/v1/offline/cash/redeem", post(handler_offline_cash_redeem))
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))
@@ -24719,6 +24580,7 @@ impl Torii {
             zk_ivm_prove_jobs,
             soracloud_public_inflight,
             soracloud_public_inflight_total,
+            sns_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             zk_ivm_prove_inflight,
             zk_ivm_prove_slots,
             zk_ivm_prove_slots_total,
@@ -27390,6 +27252,7 @@ pub(crate) mod tests_runtime_handlers {
             zk_ivm_prove_jobs,
             soracloud_public_inflight,
             soracloud_public_inflight_total,
+            sns_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             zk_ivm_prove_inflight,
             zk_ivm_prove_slots,
             zk_ivm_prove_slots_total,

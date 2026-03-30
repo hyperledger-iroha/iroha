@@ -48954,10 +48954,17 @@ async fn roster_unavailability_candidate_source_matches_consensus_mode() {
         "permissioned candidate source should clamp live-key filtering to the committed horizon"
     );
 
+    let npos_lane_ids =
+        crate::state::validator_lane_ids_for_peer(&world, actor.common_config.peer.id());
+    let npos_candidates = if npos_lane_ids.is_empty() {
+        super::roster::stake_active_validator_roster_from_world(&world)
+    } else {
+        super::roster::stake_active_validator_roster_for_lanes_from_world(&world, &npos_lane_ids)
+    };
     let npos_expected = super::roster::canonicalize_roster_for_mode(
         super::roster::filter_roster_with_live_consensus_keys_at_height_world(
             &world,
-            super::roster::stake_active_validator_roster_from_world(&world),
+            npos_candidates.clone(),
             live_height,
         ),
         ConsensusMode::Npos,
@@ -48970,7 +48977,7 @@ async fn roster_unavailability_candidate_source_matches_consensus_mode() {
     let npos_far_expected = super::roster::canonicalize_roster_for_mode(
         super::roster::filter_roster_with_live_consensus_keys_at_height_world(
             &world,
-            super::roster::stake_active_validator_roster_from_world(&world),
+            npos_candidates,
             far_live_height,
         ),
         ConsensusMode::Npos,

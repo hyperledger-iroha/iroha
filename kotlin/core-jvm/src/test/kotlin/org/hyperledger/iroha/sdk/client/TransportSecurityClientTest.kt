@@ -43,17 +43,16 @@ class TransportSecurityClientTest {
     }
 
     @Test
-    fun offlineClientRejectsRemovedServerSideSigningFlow() {
+    fun offlineClientRejectsInsecureAuthorizationHeader() {
         val client = OfflineToriiClient.builder()
             .executor(StubExecutor())
             .baseUri(URI.create("http://example.com"))
+            .addHeader("Authorization", "Bearer token")
             .build()
 
-        assertFailsWith<UnsupportedOperationException> {
-            client.submitSettlement(
-                mapOf("bundle_id" to "deadbeef"),
-                sampleAuthority(0x41),
-                "deadbeef",
+        assertFailsWith<IllegalArgumentException> {
+            client.listTransfers(
+                org.hyperledger.iroha.sdk.offline.OfflineListParams(limit = 1),
             )
         }
     }

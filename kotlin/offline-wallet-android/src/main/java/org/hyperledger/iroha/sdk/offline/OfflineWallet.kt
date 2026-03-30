@@ -201,58 +201,14 @@ class OfflineWallet : Any {
         notifyModeChange()
     }
 
-    fun fetchAllowances(params: OfflineListParams): CompletableFuture<OfflineAllowanceList> =
-        toriiClient.listAllowances(params).whenComplete(this::recordVerdictMetadata)
-
-    fun topUpAllowance(
-        draft: OfflineWalletCertificateDraft, authority: String, privateKeyHex: String,
-    ): CompletableFuture<OfflineTopUpResponse> = topUpAllowance(draft, authority, privateKeyHex, true)
-
-    fun topUpAllowance(
-        draft: OfflineWalletCertificateDraft, authority: String, privateKeyHex: String,
-        recordVerdict: Boolean,
-    ): CompletableFuture<OfflineTopUpResponse> =
-        toriiClient.topUpAllowance(draft, authority, privateKeyHex).whenComplete { response, throwable ->
-            if (throwable != null || response == null || !recordVerdict) return@whenComplete
-            try { recordVerdictMetadata(response.certificate) } catch (e: IOException) { throw CompletionException(e) }
-        }
-
-    fun topUpAllowanceRenewal(
-        certificateIdHex: String, draft: OfflineWalletCertificateDraft,
-        authority: String, privateKeyHex: String,
-    ): CompletableFuture<OfflineTopUpResponse> =
-        topUpAllowanceRenewal(certificateIdHex, draft, authority, privateKeyHex, true)
-
-    fun topUpAllowanceRenewal(
-        certificateIdHex: String, draft: OfflineWalletCertificateDraft,
-        authority: String, privateKeyHex: String, recordVerdict: Boolean,
-    ): CompletableFuture<OfflineTopUpResponse> =
-        toriiClient.topUpAllowanceRenewal(certificateIdHex, draft, authority, privateKeyHex)
-            .whenComplete { response, throwable ->
-                if (throwable != null || response == null || !recordVerdict) return@whenComplete
-                try { recordVerdictMetadata(response.certificate) } catch (e: IOException) { throw CompletionException(e) }
-            }
-
     fun fetchTransfers(params: OfflineListParams): CompletableFuture<OfflineTransferList> =
         toriiClient.listTransfers(params)
-
-    fun fetchSummaries(params: OfflineListParams): CompletableFuture<OfflineSummaryList> =
-        toriiClient.listSummaries(params).whenComplete(this::recordSummaryCounters)
-
-    fun fetchAllowances(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineAllowanceList> =
-        toriiClient.queryAllowances(envelope).whenComplete(this::recordVerdictMetadata)
 
     fun fetchTransfers(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineTransferList> =
         toriiClient.queryTransfers(envelope)
 
-    fun fetchSummaries(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineSummaryList> =
-        toriiClient.querySummaries(envelope).whenComplete(this::recordSummaryCounters)
-
     fun fetchRevocations(params: OfflineListParams): CompletableFuture<OfflineRevocationList> =
         toriiClient.listRevocations(params)
-
-    fun fetchRevocations(envelope: OfflineQueryEnvelope): CompletableFuture<OfflineRevocationList> =
-        toriiClient.queryRevocations(envelope)
 
     fun fetchTransfersWithAudit(params: OfflineListParams): CompletableFuture<OfflineTransferList> =
         toriiClient.listTransfers(params).whenComplete { list, throwable ->
@@ -281,15 +237,6 @@ class OfflineWallet : Any {
 
     fun verdictMetadata(certificateIdHex: String): Optional<OfflineVerdictMetadata> =
         verdictJournal.find(certificateIdHex)
-
-    @Throws(IOException::class)
-    fun recordVerdictMetadata(response: OfflineCertificateIssueResponse): OfflineVerdictMetadata =
-        recordVerdictMetadata(response, Instant.now())
-
-    @Throws(IOException::class)
-    fun recordVerdictMetadata(
-        response: OfflineCertificateIssueResponse, recordedAt: Instant,
-    ): OfflineVerdictMetadata = verdictJournal.upsert(response, recordedAt)
 
     fun counterCheckpoints(): List<OfflineCounterJournal.OfflineCounterCheckpoint> =
         counterJournal.entries()
@@ -544,18 +491,6 @@ class OfflineWallet : Any {
         if (attestation == null) return
         val snapshot = OfflineVerdictMetadata.PlayIntegrityTokenSnapshot(attestation.token, attestation.fetchedAtMs)
         try { verdictJournal.updatePlayIntegrityToken(request.certificateIdHex, snapshot) }
-        catch (e: IOException) { throw CompletionException(e) }
-    }
-
-    private fun recordVerdictMetadata(list: OfflineAllowanceList?, throwable: Throwable?) {
-        if (throwable != null || list == null || list.items.isEmpty()) return
-        try { verdictJournal.upsert(list.items, Instant.now()) }
-        catch (e: IOException) { throw CompletionException(e) }
-    }
-
-    private fun recordSummaryCounters(list: OfflineSummaryList?, throwable: Throwable?) {
-        if (throwable != null || list == null || list.items.isEmpty()) return
-        try { counterJournal.upsert(list.items, Instant.now()) }
         catch (e: IOException) { throw CompletionException(e) }
     }
 
