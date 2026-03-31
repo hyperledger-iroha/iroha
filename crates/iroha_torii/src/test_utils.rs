@@ -909,6 +909,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             rbc: A::SumeragiRbc {
                 chunk_max_bytes: 32 * 1024,
+                encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                data_shards: 0,
+                parity_shards: 0,
                 chunk_fanout: defaults::sumeragi::RBC_CHUNK_FANOUT,
                 pending_max_chunks: defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                 pending_max_bytes: defaults::sumeragi::RBC_PENDING_MAX_BYTES,

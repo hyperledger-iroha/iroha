@@ -1206,6 +1206,9 @@ mod tests {
                 },
                 rbc: iroha_config::parameters::actual::SumeragiRbc {
                     chunk_max_bytes: 64 * 1024,
+                    encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                    data_shards: 0,
+                    parity_shards: 0,
                     chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
                     pending_max_chunks:
                         iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,

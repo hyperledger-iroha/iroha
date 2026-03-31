@@ -413,6 +413,16 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
     let height = rng.next_u64().max(1);
     let view = rng.next_u64();
     let total_chunks = u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32");
+    let chunk_size_bytes = u32::try_from(rng.range_inclusive(1, 128)).expect("range bound fits");
+    let payload_size_bytes = u64::from(chunk_size_bytes)
+        .saturating_mul(u64::from(total_chunks.saturating_sub(1)))
+        .saturating_add(
+            u64::try_from(rng.range_inclusive(
+                1,
+                usize::try_from(chunk_size_bytes).expect("u32 fits usize"),
+            ))
+            .expect("range bound fits"),
+        );
     let mut chunk_digests = Vec::with_capacity(total_chunks as usize);
     for _ in 0..total_chunks {
         chunk_digests.push(rng.array32());
@@ -443,6 +453,11 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
         roster,
         roster_hash,
         total_chunks,
+        encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+        chunk_size_bytes,
+        payload_size_bytes,
+        data_shards: 0,
+        parity_shards: 0,
         chunk_digests,
         payload_hash: rng_hash(rng),
         chunk_root,
@@ -965,11 +980,25 @@ fn rng_sumeragi_qc_snapshot(rng: &mut DeterministicRng) -> SumeragiQcSnapshot {
 }
 
 fn rng_consensus_caps_status(rng: &mut DeterministicRng) -> SumeragiConsensusCapsStatus {
+    let rbc_encoding = if rng.next_bool() {
+        iroha_data_model::block::consensus::RbcEncoding::Plain
+    } else {
+        iroha_data_model::block::consensus::RbcEncoding::Rs16
+    };
+    let (rbc_rs16_data_shards, rbc_rs16_parity_shards) = match rbc_encoding {
+        iroha_data_model::block::consensus::RbcEncoding::Plain => (0, 0),
+        iroha_data_model::block::consensus::RbcEncoding::Rs16 => {
+            (rng.next_u16().max(1), rng.next_u16().max(1))
+        }
+    };
     SumeragiConsensusCapsStatus {
         collectors_k: rng.next_u16(),
         redundant_send_r: rng.next_u8(),
         da_enabled: rng.next_bool(),
         rbc_chunk_max_bytes: rng.next_u64(),
+        rbc_encoding,
+        rbc_rs16_data_shards,
+        rbc_rs16_parity_shards,
         rbc_session_ttl_ms: rng.next_u64(),
         rbc_store_max_sessions: rng.next_u32(),
         rbc_store_soft_sessions: rng.next_u32(),
@@ -1291,6 +1320,9 @@ fn sumeragi_wire_status_roundtrip() {
             redundant_send_r: 1,
             da_enabled: true,
             rbc_chunk_max_bytes: 65536,
+            rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            rbc_rs16_data_shards: 0,
+            rbc_rs16_parity_shards: 0,
             rbc_session_ttl_ms: 120_000,
             rbc_store_max_sessions: 1024,
             rbc_store_soft_sessions: 512,
@@ -2000,6 +2032,11 @@ fn consensus_messages_norito_roundtrip() {
         roster,
         roster_hash,
         total_chunks: 3,
+        encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+        chunk_size_bytes: 128,
+        payload_size_bytes: 257,
+        data_shards: 0,
+        parity_shards: 0,
         chunk_digests,
         payload_hash: sample_hash(0x31),
         chunk_root,

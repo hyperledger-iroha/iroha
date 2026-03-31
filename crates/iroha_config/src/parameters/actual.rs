@@ -39,7 +39,7 @@ use iroha_data_model::{
     ChainId,
     account::AccountId,
     asset::prelude::AssetDefinitionId,
-    block::BlockHeader,
+    block::{BlockHeader, consensus::RbcEncoding},
     compute::{
         ComputeAuthPolicy, ComputeFeeSplit, ComputeGovernanceError, ComputePriceAmplifiers,
         ComputePriceDeltaBounds, ComputePriceRiskClass, ComputePriceWeights, ComputeResourceBudget,
@@ -4230,6 +4230,12 @@ pub struct SumeragiGating {
 pub struct SumeragiRbc {
     /// RBC chunk maximum bytes per chunk.
     pub chunk_max_bytes: usize,
+    /// RBC payload encoding.
+    pub encoding: RbcEncoding,
+    /// RS16 data shards per stripe.
+    pub data_shards: u16,
+    /// RS16 parity shards per stripe.
+    pub parity_shards: u16,
     /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
     pub chunk_fanout: Option<NonZeroUsize>,
     /// Maximum pending RBC chunks stashed before INIT.

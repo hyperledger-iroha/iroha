@@ -10874,7 +10874,9 @@ where
 fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
     use iroha_data_model::{
         query::{
-            QueryItemKind, iter_query_inner,
+            QueryItemKind,
+            account::prelude::FindAccountIds,
+            iter_query_inner,
             trigger::prelude::{FindActiveTriggerIds, FindTriggers},
         },
         trigger::{Trigger, TriggerId},
@@ -10893,6 +10895,7 @@ fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) 
     query
         .fast_dsl_parts()
         .is_some_and(|(item_kind, _, _, payload)| match item_kind {
+            QueryItemKind::AccountId => payload_matches_query::<FindAccountIds>(payload),
             QueryItemKind::Trigger => payload_matches_query::<FindTriggers>(payload),
             QueryItemKind::TriggerId => payload_matches_query::<FindActiveTriggerIds>(payload),
             _ => false,

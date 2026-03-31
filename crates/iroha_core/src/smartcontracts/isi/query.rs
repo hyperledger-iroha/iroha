@@ -141,6 +141,22 @@ impl SortableQueryOutput for Account {
     }
 }
 
+impl SortableQueryOutput for AccountId {
+    type TiebreakKey = Self;
+
+    fn get_metadata_sorting_key(&self, _key: &Name) -> Option<&Json> {
+        None
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.cmp(other)
+    }
+}
+
 impl SortableQueryOutput for Domain {
     type TiebreakKey = DomainId;
 
@@ -420,6 +436,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindParameters(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindAccountById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindAliasesByAccountId(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -436,6 +455,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindAssetDefinitionById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindTriggerById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindTwitterBindingByHash(q) => {
@@ -1828,6 +1850,10 @@ impl ValidQueryRequest {
                                     iroha_data_model::query::account::prelude::FindAccounts
                                 )
                             }
+                            QueryItemKind::AccountId => run_payload_or_default!(
+                                iroha_data_model::account::AccountId,
+                                iroha_data_model::query::account::prelude::FindAccountIds
+                            ),
                             QueryItemKind::Asset => run_payload_or_default!(
                                 iroha_data_model::asset::value::Asset,
                                 iroha_data_model::query::asset::prelude::FindAssets
@@ -1973,6 +1999,10 @@ impl ValidQueryRequest {
                             iroha_data_model::account::Account,
                             iroha_data_model::query::account::prelude::FindAccounts
                         ),
+                        QueryItemKind::AccountId => run_unit!(
+                            iroha_data_model::account::AccountId,
+                            iroha_data_model::query::account::prelude::FindAccountIds
+                        ),
                         QueryItemKind::Asset => run_unit!(
                             iroha_data_model::asset::value::Asset,
                             iroha_data_model::query::asset::prelude::FindAssets
@@ -2082,6 +2112,10 @@ impl ValidQueryRequest {
                         QueryItemKind::Account => run_unit!(
                             iroha_data_model::account::Account,
                             iroha_data_model::query::account::prelude::FindAccounts
+                        ),
+                        QueryItemKind::AccountId => run_unit!(
+                            iroha_data_model::account::AccountId,
+                            iroha_data_model::query::account::prelude::FindAccountIds
                         ),
                         QueryItemKind::Asset => run_unit!(
                             iroha_data_model::asset::value::Asset,
@@ -2198,6 +2232,10 @@ impl ValidQueryRequest {
                         QueryItemKind::Account => run_unit!(
                             iroha_data_model::account::Account,
                             iroha_data_model::query::account::prelude::FindAccounts
+                        ),
+                        QueryItemKind::AccountId => run_unit!(
+                            iroha_data_model::account::AccountId,
+                            iroha_data_model::query::account::prelude::FindAccountIds
                         ),
                         QueryItemKind::Asset => run_unit!(
                             iroha_data_model::asset::value::Asset,
@@ -3173,6 +3211,10 @@ impl ValidQueryRequest {
                                     iroha_data_model::query::account::prelude::FindAccounts
                                 )
                             }
+                            QueryItemKind::AccountId => run_payload_or_default!(
+                                iroha_data_model::account::AccountId,
+                                iroha_data_model::query::account::prelude::FindAccountIds
+                            ),
                             QueryItemKind::Asset => run_payload_or_default!(
                                 iroha_data_model::asset::value::Asset,
                                 iroha_data_model::query::asset::prelude::FindAssets

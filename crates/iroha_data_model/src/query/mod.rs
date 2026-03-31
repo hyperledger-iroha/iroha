@@ -854,6 +854,8 @@ mod model {
         FindExecutorDataModel(FindExecutorDataModel),
         /// Fetch current global parameters.
         FindParameters(FindParameters),
+        /// Fetch an account by identifier.
+        FindAccountById(account::prelude::FindAccountById),
         /// Fetch aliases bound to an account subject.
         FindAliasesByAccountId(account::prelude::FindAliasesByAccountId),
         /// Fetch a proof record by its identifier.
@@ -866,6 +868,8 @@ mod model {
         FindAssetById(asset::prelude::FindAssetById),
         /// Fetch an asset definition by identifier.
         FindAssetDefinitionById(asset::prelude::FindAssetDefinitionById),
+        /// Fetch a trigger by identifier.
+        FindTriggerById(trigger::prelude::FindTriggerById),
         /// Fetch a Twitter binding record by hash.
         FindTwitterBindingByHash(oracle::prelude::FindTwitterBindingByHash),
         /// Fetch domain endorsement records.
@@ -908,6 +912,8 @@ mod model {
         Parameters(Parameters),
         /// Linked domain identifier list.
         DomainIds(Vec<DomainId>),
+        /// Account payload.
+        Account(Account),
         /// Bound account alias records.
         AccountAliasBindingRecords(Vec<account::AccountAliasBindingRecord>),
         /// Linked account identifier list.
@@ -922,6 +928,8 @@ mod model {
         Asset(crate::asset::value::Asset),
         /// Asset definition payload.
         AssetDefinition(crate::asset::definition::AssetDefinition),
+        /// Trigger payload.
+        Trigger(crate::trigger::Trigger),
         /// Twitter binding payload.
         TwitterBindingRecord(crate::oracle::TwitterBindingRecord),
         /// Domain endorsements payload.
@@ -1025,6 +1033,7 @@ mod model {
                 // Attempt for all supported item kinds
                 try_build!(crate::domain::Domain, Domain);
                 try_build!(crate::account::Account, Account);
+                try_build!(crate::account::AccountId, AccountId);
                 try_build!(crate::asset::value::Asset, Asset);
                 try_build!(crate::asset::definition::AssetDefinition, AssetDefinition);
                 try_build!(crate::nft::Nft, Nft);
@@ -1106,6 +1115,8 @@ mod model {
         Domain,
         /// Account items.
         Account,
+        /// Account identifier items.
+        AccountId,
         /// Asset items.
         Asset,
         /// Asset definition items.
@@ -1171,6 +1182,12 @@ mod model {
     impl ItemKindTag for Account {
         fn kind() -> QueryItemKind {
             QueryItemKind::Account
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for AccountId {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AccountId
         }
     }
     #[cfg(feature = "fast_dsl")]
@@ -2427,12 +2444,14 @@ impl_iter_queries! {
 impl_singular_queries! {
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
+    account::prelude::FindAccountById => crate::account::Account,
     account::prelude::FindAliasesByAccountId => Vec<account::AccountAliasBindingRecord>,
     proof::prelude::FindProofRecordById => crate::proof::ProofRecord,
     smart_contract::prelude::FindContractManifestByCodeHash => crate::smart_contract::manifest::ContractManifest,
     runtime::prelude::FindAbiVersion => crate::query::runtime::AbiVersion,
     asset::prelude::FindAssetById => crate::asset::value::Asset,
     asset::prelude::FindAssetDefinitionById => crate::asset::definition::AssetDefinition,
+    trigger::prelude::FindTriggerById => crate::trigger::Trigger,
     oracle::FindTwitterBindingByHash => crate::oracle::TwitterBindingRecord,
     endorsement::prelude::FindDomainEndorsements => Vec<crate::nexus::DomainEndorsementRecord>,
     endorsement::prelude::FindDomainEndorsementPolicy => crate::nexus::DomainEndorsementPolicy,
@@ -2726,6 +2745,15 @@ pub mod account {
     }
 
     queries! {
+            /// [`FindAccountById`] Iroha Query finds an `Account` by its identifier.
+            #[derive(Display)]
+            #[display("Find account `{id}`")]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            pub struct FindAccountById {
+                /// Domainless account identifier to resolve.
+                pub id: crate::account::AccountId,
+            }
+
             /// [`FindAccounts`] Iroha Query finds all `Account`s presented.
             #[derive(Copy, Display)]
             #[display("Find all accounts")]
@@ -2774,6 +2802,13 @@ pub mod account {
         }
     }
 
+    impl FindAccountById {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &crate::account::AccountId {
+            &self.id
+        }
+    }
+
     impl FindAliasesByAccountId {
         /// Return the queried account identifier.
         pub fn account_id(&self) -> &crate::account::AccountId {
@@ -2794,8 +2829,8 @@ pub mod account {
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::{
-            AccountAliasBindingRecord, FindAccountIds, FindAccounts, FindAccountsWithAsset,
-            FindAliasesByAccountId,
+            AccountAliasBindingRecord, FindAccountById, FindAccountIds, FindAccounts,
+            FindAccountsWithAsset, FindAliasesByAccountId,
         };
     }
 }
@@ -3457,11 +3492,27 @@ pub mod trigger {
         #[display("Find all triggers")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindTriggers;
+
+        /// Find a trigger by identifier.
+        #[derive(Display)]
+        #[display("Find trigger `{id}`")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindTriggerById {
+            /// Trigger identifier to resolve.
+            pub id: crate::trigger::TriggerId,
+        }
+    }
+
+    impl FindTriggerById {
+        /// Return the queried trigger identifier.
+        pub fn trigger_id(&self) -> &crate::trigger::TriggerId {
+            &self.id
+        }
     }
 
     pub mod prelude {
         //! Convenient re-exports for common query types.
-        pub use super::{FindActiveTriggerIds, FindTriggers};
+        pub use super::{FindActiveTriggerIds, FindTriggerById, FindTriggers};
     }
 }
 

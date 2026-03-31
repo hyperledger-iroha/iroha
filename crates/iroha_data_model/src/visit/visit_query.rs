@@ -39,12 +39,14 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
     singular_query_visitors! {
         visit_find_executor_data_model(FindExecutorDataModel),
         visit_find_parameters(FindParameters),
+        visit_find_account_by_id(FindAccountById),
         visit_find_aliases_by_account_id(FindAliasesByAccountId),
         visit_find_proof_record_by_id(FindProofRecordById),
         visit_find_contract_manifest_by_code_hash(FindContractManifestByCodeHash),
         visit_find_abi_version(FindAbiVersion),
         visit_find_asset_by_id(FindAssetById),
         visit_find_asset_definition_by_id(FindAssetDefinitionById),
+        visit_find_trigger_by_id(FindTriggerById),
         visit_find_twitter_binding_by_hash(FindTwitterBindingByHash),
         visit_find_da_pin_intent_by_ticket(FindDaPinIntentByTicket),
         visit_find_da_pin_intent_by_manifest(FindDaPinIntentByManifest),
@@ -113,6 +115,7 @@ macro_rules! query_visitors {
             // Singular Query visitors
             visit_find_executor_data_model(&FindExecutorDataModel),
             visit_find_parameters(&FindParameters),
+            visit_find_account_by_id(&$crate::query::account::FindAccountById),
             visit_find_aliases_by_account_id(&$crate::query::account::FindAliasesByAccountId),
             visit_find_proof_record_by_id(&$crate::query::proof::FindProofRecordById),
             visit_find_contract_manifest_by_code_hash(
@@ -123,6 +126,7 @@ macro_rules! query_visitors {
             visit_find_asset_definition_by_id(
                 &$crate::query::asset::prelude::FindAssetDefinitionById
             ),
+            visit_find_trigger_by_id(&$crate::query::trigger::prelude::FindTriggerById),
             visit_find_twitter_binding_by_hash(
                 &$crate::query::oracle::prelude::FindTwitterBindingByHash
             ),
@@ -207,12 +211,14 @@ mod tests {
         match query {
             SingularQueryBox::FindExecutorDataModel(_) => {}
             SingularQueryBox::FindParameters(_) => {}
+            SingularQueryBox::FindAccountById(_) => {}
             SingularQueryBox::FindAliasesByAccountId(_) => {}
             SingularQueryBox::FindProofRecordById(_) => {}
             SingularQueryBox::FindContractManifestByCodeHash(_) => {}
             SingularQueryBox::FindAbiVersion(_) => {}
             SingularQueryBox::FindAssetById(_) => {}
             SingularQueryBox::FindAssetDefinitionById(_) => {}
+            SingularQueryBox::FindTriggerById(_) => {}
             SingularQueryBox::FindTwitterBindingByHash(_) => {}
             SingularQueryBox::FindDaPinIntentByTicket(_) => {}
             SingularQueryBox::FindDaPinIntentByManifest(_) => {}
@@ -307,6 +313,9 @@ mod tests {
         let queries = vec![
             SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),
             SingularQueryBox::FindParameters(FindParameters),
+            SingularQueryBox::FindAccountById(
+                crate::query::account::prelude::FindAccountById::new(account_id.clone()),
+            ),
             SingularQueryBox::FindAliasesByAccountId(
                 crate::query::account::prelude::FindAliasesByAccountId::new(
                     account_id.clone(),
@@ -329,6 +338,11 @@ mod tests {
             SingularQueryBox::FindAssetDefinitionById(
                 crate::query::asset::prelude::FindAssetDefinitionById::new(
                     asset_id.definition().clone(),
+                ),
+            ),
+            SingularQueryBox::FindTriggerById(
+                crate::query::trigger::prelude::FindTriggerById::new(
+                    "demo_trigger".parse().expect("valid trigger id"),
                 ),
             ),
         ];

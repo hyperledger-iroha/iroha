@@ -705,7 +705,8 @@ impl ManifestScaffoldProfileArgs {
         let validators = if self.validators.is_empty() {
             vec![
                 "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".to_owned(),
-                "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB".to_owned(),
+                "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
+                    .to_owned(),
             ]
         } else {
             self.validators.clone()
@@ -1416,7 +1417,8 @@ mod tests {
             governance_quorum: Some(4),
             validators: vec![
                 "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".to_owned(),
-                "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB".to_owned(),
+                "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
+                    .to_owned(),
             ],
             validator_quorum: Some(2),
             protected_namespaces: vec!["cbdc".to_owned(), "gov".to_owned()],

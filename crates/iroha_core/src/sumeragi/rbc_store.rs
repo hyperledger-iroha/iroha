@@ -11,7 +11,7 @@ use std::{
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
-    block::{BlockHeader, BlockSignature},
+    block::{BlockHeader, BlockSignature, consensus::RbcEncoding},
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -778,6 +778,21 @@ pub(super) struct PersistedSession {
     #[norito(default)]
     pub(crate) leader_signature: Option<BlockSignature>,
     pub(crate) total_chunks: u32,
+    /// Payload chunk encoding.
+    #[norito(default)]
+    pub(crate) encoding: RbcEncoding,
+    /// Configured shard/chunk size in bytes.
+    #[norito(default)]
+    pub(crate) chunk_size_bytes: u32,
+    /// Canonical payload size before any RS16 padding.
+    #[norito(default)]
+    pub(crate) payload_size_bytes: u64,
+    /// RS16 data shards per stripe (`0` when plain chunking is active).
+    #[norito(default)]
+    pub(crate) data_shards: u16,
+    /// RS16 parity shards per stripe (`0` when plain chunking is active).
+    #[norito(default)]
+    pub(crate) parity_shards: u16,
     /// SHA-256 digests for each chunk, indexed by chunk position.
     #[norito(default)]
     pub(crate) chunk_digests: Vec<[u8; 32]>,
@@ -790,6 +805,8 @@ pub(super) struct PersistedSession {
     pub(crate) delivered: bool,
     pub(crate) deliver_sender: Option<u32>,
     pub(crate) deliver_signature: Option<Vec<u8>>,
+    #[norito(default)]
+    pub(crate) reconstructed_stripes: u32,
     pub(crate) chunks: Vec<PersistedChunk>,
     pub(crate) last_updated_ms: u64,
     /// Commit topology snapshot captured when this RBC session started.
@@ -844,6 +861,64 @@ pub(super) struct PersistedReady {
 
 fn ms_to_system_time(ms: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(ms)
+}
+
+fn persisted_payload_bytes(
+    session: &PersistedSession,
+    chunks: &[&PersistedChunk],
+) -> Result<Vec<u8>, &'static str> {
+    if session.chunk_size_bytes == 0 {
+        let total_len: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+        let mut bytes = Vec::with_capacity(total_len);
+        for chunk in chunks {
+            bytes.extend_from_slice(&chunk.bytes);
+        }
+        return Ok(bytes);
+    }
+
+    let chunk_size =
+        usize::try_from(session.chunk_size_bytes).map_err(|_| "chunk size exceeds platform")?;
+    let payload_size =
+        usize::try_from(session.payload_size_bytes).map_err(|_| "payload size exceeds platform")?;
+    let payload_chunk_count = if payload_size == 0 {
+        1
+    } else {
+        payload_size.div_ceil(chunk_size)
+    };
+    match session.encoding {
+        RbcEncoding::Plain => {
+            let total_len: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+            let mut bytes = Vec::with_capacity(total_len);
+            for chunk in chunks {
+                bytes.extend_from_slice(&chunk.bytes);
+            }
+            bytes.truncate(payload_size);
+            Ok(bytes)
+        }
+        RbcEncoding::Rs16 => {
+            let data_shards = usize::from(session.data_shards);
+            let parity_shards = usize::from(session.parity_shards);
+            if chunk_size % 2 != 0 || data_shards == 0 || parity_shards == 0 {
+                return Err("invalid RBC erasure profile");
+            }
+            let stripe_width = data_shards.saturating_add(parity_shards);
+            let mut bytes = Vec::with_capacity(payload_size);
+            for payload_idx in 0..payload_chunk_count {
+                let stripe = payload_idx / data_shards;
+                let within = payload_idx % data_shards;
+                let encoded_idx = stripe
+                    .checked_mul(stripe_width)
+                    .and_then(|base| base.checked_add(within))
+                    .ok_or("encoded chunk index overflow")?;
+                let chunk = chunks
+                    .get(encoded_idx)
+                    .ok_or("encoded chunk index missing")?;
+                bytes.extend_from_slice(&chunk.bytes);
+            }
+            bytes.truncate(payload_size);
+            Ok(bytes)
+        }
+    }
 }
 
 fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
@@ -913,11 +988,7 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
 
     if let Some(expected_hash) = &session.payload_hash {
         if session.chunks.len() == expected {
-            let total_len: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
-            let mut bytes = Vec::with_capacity(total_len);
-            for chunk in &chunks {
-                bytes.extend_from_slice(&chunk.bytes);
-            }
+            let bytes = persisted_payload_bytes(session, &chunks)?;
             let calculated = Hash::new(&bytes);
             if &calculated != expected_hash {
                 return Err("payload hash mismatch");
@@ -1003,6 +1074,11 @@ mod tests {
             block_header: None,
             leader_signature: None,
             total_chunks: 0,
+            encoding: RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests: Vec::new(),
             payload_hash: None,
             expected_chunk_root: None,
@@ -1013,6 +1089,7 @@ mod tests {
             delivered: false,
             deliver_sender: None,
             deliver_signature: None,
+            reconstructed_stripes: 0,
             chunks: Vec::new(),
             last_updated_ms: 0,
             session_roster: Vec::new(),
@@ -1098,6 +1175,11 @@ mod tests {
             block_header: None,
             leader_signature: None,
             total_chunks: 0,
+            encoding: RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests: Vec::new(),
             payload_hash: None,
             expected_chunk_root: None,
@@ -1108,6 +1190,7 @@ mod tests {
             delivered: false,
             deliver_sender: None,
             deliver_signature: None,
+            reconstructed_stripes: 0,
             chunks: Vec::new(),
             last_updated_ms: 0,
             session_roster: Vec::new(),

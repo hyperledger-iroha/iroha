@@ -2856,6 +2856,10 @@ pub mod sumeragi {
     pub const ENABLE_BLS: bool = true;
     /// Default RBC chunk maximum bytes per chunk.
     pub const RBC_CHUNK_MAX_BYTES: usize = 256 * 1024; // 256 KiB
+    /// Default RS16 data shards per stripe.
+    pub const RBC_RS16_DATA_SHARDS: u16 = 4;
+    /// Default RS16 parity shards per stripe.
+    pub const RBC_RS16_PARITY_SHARDS: u16 = 2;
     /// Optional fanout cap for RBC chunk broadcasts (None = auto based on topology).
     pub const RBC_CHUNK_FANOUT: Option<NonZeroUsize> = None;
     /// Default RBC session TTL (milliseconds) before pruning inactive sessions.

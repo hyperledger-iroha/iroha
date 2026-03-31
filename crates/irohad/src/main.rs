@@ -2312,6 +2312,11 @@ mod network_relay_tests {
             roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
             roster_hash: Hash::prehashed([0x11; 32]),
             total_chunks: 1,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests: vec![[0x22; 32]],
             payload_hash: Hash::prehashed([0x33; 32]),
             chunk_root: Hash::prehashed([0x44; 32]),
@@ -2677,6 +2682,11 @@ mod network_relay_tests {
             roster: Vec::new(),
             roster_hash: Hash::prehashed([0x11; 32]),
             total_chunks: 1,
+            encoding: iroha_core::sumeragi::consensus::RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests: vec![[0x22; 32]],
             payload_hash: Hash::prehashed([0x33; 32]),
             chunk_root: Hash::prehashed([0x44; 32]),
@@ -3638,7 +3648,7 @@ impl Iroha {
                     Arc::clone(&kura),
                     live_query_store.clone(),
                     #[cfg(feature = "telemetry")]
-                    state_telemetry,
+                    state_telemetry.clone(),
                 )
             }
             Err(error) if snapshot_read_error_is_recoverable(&error) => {
@@ -3664,13 +3674,38 @@ impl Iroha {
                     Arc::clone(&kura),
                     live_query_store.clone(),
                     #[cfg(feature = "telemetry")]
-                    state_telemetry,
+                    state_telemetry.clone(),
                 )
             }
             Err(error) => {
                 return Err(Report::new(error).change_context(StartError::InitKura));
             }
         };
+        if snapshot_missing_public_lane_state(&state, stored_genesis_block.as_ref()) {
+            iroha_logger::warn!(
+                "Loaded snapshot is missing public-lane staking state; discarding it and rebuilding from Kura"
+            );
+            let genesis_public_key = effective_genesis_public_key.clone();
+            let mut world = World::with(
+                [genesis_domain(genesis_public_key.clone())],
+                [genesis_account(genesis_public_key)],
+                [],
+            );
+            if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
+                iroha_core::sns::seed_genesis_alias_bootstrap(
+                    &mut world,
+                    &genesis_block.0,
+                    &config.nexus.dataspace_catalog,
+                );
+            }
+            state = State::new(
+                world,
+                Arc::clone(&kura),
+                live_query_store.clone(),
+                #[cfg(feature = "telemetry")]
+                state_telemetry.clone(),
+            );
+        }
         #[cfg(feature = "telemetry")]
         {
             kura.attach_telemetry(state.telemetry.clone());
@@ -5380,6 +5415,29 @@ fn genesis_account(public_key: PublicKey) -> Account {
 fn genesis_domain(public_key: PublicKey) -> Domain {
     let genesis_account_id = AccountId::new(public_key);
     Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id)
+}
+
+fn genesis_bootstraps_public_lane_validators(block: &GenesisBlock) -> bool {
+    block.0.external_transactions().any(|tx| {
+        let Executable::Instructions(batch) = tx.instructions() else {
+            return false;
+        };
+        batch.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>()
+                .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>()
+                    .is_some()
+        })
+    })
+}
+
+fn snapshot_missing_public_lane_state(state: &State, stored_genesis: Option<&GenesisBlock>) -> bool {
+    stored_genesis.is_some_and(genesis_bootstraps_public_lane_validators)
+        && state.world_view().public_lane_validators().iter().next().is_none()
 }
 
 #[cfg(test)]
@@ -7177,6 +7235,9 @@ fn build_consensus_config_caps(
         redundant_send_r: sumeragi.collectors.redundant_send_r,
         da_enabled: sumeragi.da.enabled,
         rbc_chunk_max_bytes,
+        rbc_encoding: sumeragi.rbc.encoding,
+        rbc_rs16_data_shards: sumeragi.rbc.data_shards,
+        rbc_rs16_parity_shards: sumeragi.rbc.parity_shards,
         rbc_session_ttl_ms,
         rbc_store_max_sessions,
         rbc_store_soft_sessions,

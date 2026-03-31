@@ -933,6 +933,21 @@ pub mod query {
         }
     }
 
+    impl ValidQuery for FindAccountIds {
+        #[metrics(+"find_account_ids")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<AccountId>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = AccountId>, Error> {
+            let world = state_ro.world();
+            Ok(world
+                .accounts_iter()
+                .map(|entry| entry.id().clone())
+                .filter(move |account_id| filter.applies(account_id)))
+        }
+    }
+
     impl ValidQuery for FindAccountsWithAsset {
         #[metrics(+"find_accounts_with_asset")]
         fn execute(
@@ -1068,6 +1083,18 @@ pub mod query {
                     )
                 }));
             Ok(iter)
+        }
+    }
+
+    impl ValidSingularQuery for FindAccountById {
+        #[metrics(+"find_account_by_id")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Account, Error> {
+            let world = state_ro.world();
+            let (account_id, account_value) = world
+                .accounts()
+                .get_key_value(self.account_id())
+                .ok_or_else(|| Error::Find(FindError::Account(self.account_id().clone())))?;
+            Ok(account_from_entry(world, account_id, account_value))
         }
     }
 

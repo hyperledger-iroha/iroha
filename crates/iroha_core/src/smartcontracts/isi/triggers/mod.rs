@@ -754,7 +754,7 @@ pub mod query {
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail as Error,
-            trigger::FindTriggers,
+            trigger::{FindTriggerById, FindTriggers},
         },
         trigger::{Trigger, TriggerId},
     };
@@ -762,7 +762,7 @@ pub mod query {
     use super::*;
     use crate::{
         prelude::*,
-        smartcontracts::{ValidQuery, triggers::set::SetReadOnly},
+        smartcontracts::{ValidQuery, ValidSingularQuery, triggers::set::SetReadOnly},
         state::StateReadOnly,
     };
 
@@ -805,6 +805,17 @@ pub mod query {
             Ok(Box::new(
                 iter.filter(move |trigger| filter.applies(trigger)),
             ))
+        }
+    }
+
+    impl ValidSingularQuery for FindTriggerById {
+        #[metrics(+"find_trigger_by_id")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Trigger, Error> {
+            state_ro
+                .world()
+                .triggers()
+                .trigger_by_id(self.trigger_id())
+                .ok_or_else(|| Error::Find(FindError::Trigger(self.trigger_id().clone())))
         }
     }
 }
