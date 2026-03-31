@@ -43,6 +43,7 @@ use iroha_config_base::{
     util::{Bytes, DurationMs, Emitter, EmitterResultExt},
 };
 use iroha_data_model::{
+    block::consensus::RbcEncoding,
     sorafs::capacity::ProviderId,
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
 };
@@ -5968,6 +5969,54 @@ pub struct SumeragiGating {
 }
 
 /// User-level configuration container for `SumeragiRbc`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RbcEncodingConfig {
+    /// Raw payload chunking without parity.
+    #[default]
+    Plain,
+    /// RS16 stripe encoding with parity shards.
+    Rs16,
+}
+
+/// Parse error for user-facing RBC encoding labels.
+#[derive(Debug, Clone, Copy, Error)]
+#[error("expected `plain` or `rs16`")]
+pub struct ParseRbcEncodingError;
+
+impl FromStr for RbcEncodingConfig {
+    type Err = ParseRbcEncodingError;
+
+    fn from_str(raw: &str) -> core::result::Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "plain" => Ok(Self::Plain),
+            "rs16" => Ok(Self::Rs16),
+            _ => Err(ParseRbcEncodingError),
+        }
+    }
+}
+
+impl json::JsonDeserialize for RbcEncodingConfig {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let text = parser.parse_string()?;
+        Self::from_str(&text).map_err(|err| json::Error::InvalidField {
+            field: "sumeragi.advanced.rbc.encoding".into(),
+            message: format!("{err}; got `{text}`"),
+        })
+    }
+}
+
+impl From<RbcEncodingConfig> for RbcEncoding {
+    fn from(value: RbcEncodingConfig) -> Self {
+        match value {
+            RbcEncodingConfig::Plain => Self::Plain,
+            RbcEncodingConfig::Rs16 => Self::Rs16,
+        }
+    }
+}
+
+/// User-level configuration container for reliable-broadcast tuning.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiRbc {
     /// RBC per-chunk maximum bytes.
@@ -5976,6 +6025,21 @@ pub struct SumeragiRbc {
         default = "defaults::sumeragi::RBC_CHUNK_MAX_BYTES"
     )]
     pub chunk_max_bytes: usize,
+    /// RBC payload encoding (`plain` or `rs16`).
+    #[config(env = "SUMERAGI_RBC_ENCODING", default = "RbcEncodingConfig::Plain")]
+    pub encoding: RbcEncodingConfig,
+    /// RS16 data shards per stripe.
+    #[config(
+        env = "SUMERAGI_RBC_RS16_DATA_SHARDS",
+        default = "defaults::sumeragi::RBC_RS16_DATA_SHARDS"
+    )]
+    pub data_shards: u16,
+    /// RS16 parity shards per stripe.
+    #[config(
+        env = "SUMERAGI_RBC_RS16_PARITY_SHARDS",
+        default = "defaults::sumeragi::RBC_RS16_PARITY_SHARDS"
+    )]
+    pub parity_shards: u16,
     /// Optional fanout cap for RBC chunk broadcasts (null = auto).
     #[config(env = "SUMERAGI_RBC_CHUNK_FANOUT")]
     pub chunk_fanout: Option<NonZeroUsize>,
@@ -7014,6 +7078,21 @@ impl Sumeragi {
                     .attach("sumeragi.advanced.rbc.chunk_max_bytes must be greater than zero"),
             );
             false
+        } else if matches!(rbc.encoding, RbcEncodingConfig::Rs16) && rbc.chunk_max_bytes % 2 != 0 {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.rbc.chunk_max_bytes must be even when sumeragi.advanced.rbc.encoding = \"rs16\"",
+            ));
+            false
+        } else {
+            true
+        };
+        let rbc_erasure_ok = if matches!(rbc.encoding, RbcEncodingConfig::Rs16)
+            && (rbc.data_shards == 0 || rbc.parity_shards == 0)
+        {
+            emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(
+                "sumeragi.advanced.rbc.data_shards and parity_shards must be greater than zero when sumeragi.advanced.rbc.encoding = \"rs16\"",
+            ));
+            false
         } else {
             true
         };
@@ -7114,6 +7193,7 @@ impl Sumeragi {
             && membership_mismatch_threshold_ok
             && rbc_chunk_max_ok
             && pending_caps_ok
+            && rbc_erasure_ok
             && rbc_rebroadcast_budget_ok
             && rbc_payload_budget_ok)
         {
@@ -7332,6 +7412,9 @@ impl Sumeragi {
             },
             rbc: actual::SumeragiRbc {
                 chunk_max_bytes: rbc.chunk_max_bytes,
+                encoding: rbc.encoding.into(),
+                data_shards: rbc.data_shards,
+                parity_shards: rbc.parity_shards,
                 chunk_fanout: rbc.chunk_fanout,
                 pending_max_chunks: rbc.pending_max_chunks,
                 pending_max_bytes: rbc.pending_max_bytes,

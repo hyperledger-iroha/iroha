@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// Wire protocol version for consensus messages defined here.
-pub const PROTO_VERSION: u32 = 1;
+pub const PROTO_VERSION: u32 = 2;
 
 /// Mode tag for classic permissioned Sumeragi used in handshakes and hashing domains.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v1";
@@ -1414,6 +1414,12 @@ pub struct SumeragiConsensusCapsStatus {
     pub da_enabled: bool,
     /// Maximum RBC chunk size in bytes.
     pub rbc_chunk_max_bytes: u64,
+    /// RBC payload encoding.
+    pub rbc_encoding: RbcEncoding,
+    /// RS16 data shards per stripe (`0` when plain chunking is active).
+    pub rbc_rs16_data_shards: u16,
+    /// RS16 parity shards per stripe (`0` when plain chunking is active).
+    pub rbc_rs16_parity_shards: u16,
     /// RBC session TTL in milliseconds.
     pub rbc_session_ttl_ms: u64,
     /// Hard cap on persisted RBC sessions.
@@ -2150,6 +2156,31 @@ pub struct Reconfig {
     pub activation_height: Height,
 }
 
+/// RBC payload encoding used for chunk distribution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "encoding", content = "state", rename_all = "snake_case")]
+pub enum RbcEncoding {
+    /// Raw payload chunking without parity shards.
+    #[default]
+    Plain,
+    /// RS16 stripe encoding with parity shards.
+    Rs16,
+}
+
+impl RbcEncoding {
+    /// Stable operator-facing label for the encoding.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Rs16 => "rs16",
+        }
+    }
+}
+
 /// RBC init message for payload distribution scaffolding.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcInit {
@@ -2167,6 +2198,16 @@ pub struct RbcInit {
     pub roster_hash: Hash,
     /// Total chunk count for the payload.
     pub total_chunks: u32,
+    /// Payload chunk encoding.
+    pub encoding: RbcEncoding,
+    /// Configured shard/chunk size in bytes.
+    pub chunk_size_bytes: u32,
+    /// Canonical payload size before any RS16 padding.
+    pub payload_size_bytes: u64,
+    /// Data shards per RS16 stripe (`0` for plain chunking).
+    pub data_shards: u16,
+    /// Parity shards per RS16 stripe (`0` for plain chunking).
+    pub parity_shards: u16,
     /// SHA-256 digests for each chunk (indexed by chunk position).
     pub chunk_digests: Vec<[u8; 32]>,
     /// Payload hash commitment (optional, when leader is also proposer).
@@ -2469,6 +2510,11 @@ mod tests {
             roster,
             roster_hash,
             total_chunks: 3,
+            encoding: RbcEncoding::Plain,
+            chunk_size_bytes: 128,
+            payload_size_bytes: 257,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests,
             payload_hash: Hash::new(b"payload_hash"),
             chunk_root,

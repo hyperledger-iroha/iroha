@@ -404,6 +404,7 @@ mod tests {
         match query.item {
             QueryItemKind::Domain => QueryOutputBatchBox::Domain(Vec::new()),
             QueryItemKind::Account => QueryOutputBatchBox::Account(Vec::new()),
+            QueryItemKind::AccountId => QueryOutputBatchBox::AccountId(Vec::new()),
             QueryItemKind::Asset => QueryOutputBatchBox::Asset(Vec::new()),
             QueryItemKind::AssetDefinition => QueryOutputBatchBox::AssetDefinition(Vec::new()),
             QueryItemKind::RepoAgreement => QueryOutputBatchBox::RepoAgreement(Vec::new()),

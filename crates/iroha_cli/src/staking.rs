@@ -292,14 +292,8 @@ mod tests {
 
     #[test]
     fn rebind_requires_peer_id_flag() {
-        let err = parse_command(&[
-            "rebind",
-            "--lane-id",
-            "1",
-            "--validator",
-            &alice_literal(),
-        ])
-        .expect_err("rebind without --peer-id should fail");
+        let err = parse_command(&["rebind", "--lane-id", "1", "--validator", &alice_literal()])
+            .expect_err("rebind without --peer-id should fail");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
         assert!(err.to_string().contains("--peer-id"));
@@ -307,8 +301,14 @@ mod tests {
 
     #[test]
     fn rebind_requires_validator_flag() {
-        let err = parse_command(&["rebind", "--lane-id", "1", "--peer-id", &valid_peer_id_literal()])
-            .expect_err("rebind without --validator should fail");
+        let err = parse_command(&[
+            "rebind",
+            "--lane-id",
+            "1",
+            "--peer-id",
+            &valid_peer_id_literal(),
+        ])
+        .expect_err("rebind without --validator should fail");
 
         assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
         assert!(err.to_string().contains("--validator"));
@@ -373,9 +373,14 @@ mod tests {
             metadata: None,
         };
         let mut context = TestContext::new();
-        let err = args.run(&mut context).expect_err("invalid peer id should fail");
+        let err = args
+            .run(&mut context)
+            .expect_err("invalid peer id should fail");
 
-        assert!(err.to_string().contains("--peer-id must be a valid peer id"));
+        assert!(
+            err.to_string()
+                .contains("--peer-id must be a valid peer id")
+        );
         assert!(context.submitted.is_none());
     }
 
@@ -387,9 +392,14 @@ mod tests {
             peer_id: "not-a-peer-id".to_owned(),
         };
         let mut context = TestContext::new();
-        let err = args.run(&mut context).expect_err("invalid peer id should fail");
+        let err = args
+            .run(&mut context)
+            .expect_err("invalid peer id should fail");
 
-        assert!(err.to_string().contains("--peer-id must be a valid peer id"));
+        assert!(
+            err.to_string()
+                .contains("--peer-id must be a valid peer id")
+        );
         assert!(context.submitted.is_none());
     }
 }

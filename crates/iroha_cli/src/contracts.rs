@@ -229,9 +229,7 @@ impl Run for ContractAliasResolveArgs {
                     norito::json::from_slice(&body).wrap_err("decode contract alias response")?;
                 context.print_data(&value)
             }
-            StatusCode::NOT_FOUND => {
-                Err(eyre!("contract alias `{contract_alias}` not found"))
-            }
+            StatusCode::NOT_FOUND => Err(eyre!("contract alias `{contract_alias}` not found")),
             status => Err(eyre!(
                 "contract alias resolve request failed with HTTP {}: {}",
                 status,
@@ -406,8 +404,11 @@ impl Run for CallArgs {
             .map(|value| crate::resolve_account_id(context, value))
             .transpose()
             .wrap_err("failed to resolve --fee-sponsor")?;
-        let (target, entrypoint) =
-            resolve_contract_target(self.selector.as_deref(), self.entrypoint.as_deref(), self.target)?;
+        let (target, entrypoint) = resolve_contract_target(
+            self.selector.as_deref(),
+            self.entrypoint.as_deref(),
+            self.target,
+        )?;
         let payload = load_contract_payload_value(
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
@@ -453,8 +454,11 @@ impl Run for ViewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
-        let (target, entrypoint) =
-            resolve_contract_target(self.selector.as_deref(), self.entrypoint.as_deref(), self.target)?;
+        let (target, entrypoint) = resolve_contract_target(
+            self.selector.as_deref(),
+            self.entrypoint.as_deref(),
+            self.target,
+        )?;
         let payload = load_contract_payload_value(
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
@@ -746,7 +750,7 @@ fn resolve_contract_dataspace_id_hint(
         _ => {
             return Err(eyre!(
                 "unknown dataspace alias `{trimmed}`; pass --dataspace-id for non-default dataspaces"
-            ))
+            ));
         }
     };
     Ok(iroha::data_model::nexus::DataSpaceId::new(raw))
@@ -770,8 +774,9 @@ fn resolve_contract_target(
             ));
         }
 
-        if let Some((selector_entrypoint, alias_literal)) =
-            selector.split_once(':').filter(|(_, alias)| alias.contains("::"))
+        if let Some((selector_entrypoint, alias_literal)) = selector
+            .split_once(':')
+            .filter(|(_, alias)| alias.contains("::"))
         {
             if entrypoint.is_some() {
                 return Err(eyre!(
@@ -810,7 +815,10 @@ fn resolve_contract_target(
         ));
     }
 
-    match (args.contract_address.as_deref(), args.contract_alias.as_deref()) {
+    match (
+        args.contract_address.as_deref(),
+        args.contract_alias.as_deref(),
+    ) {
         (Some(address), None) => Ok((
             ResolvedContractTarget {
                 contract_address: Some(
@@ -1206,7 +1214,8 @@ fn execute_local_contract_debug_view<C: RunContext>(
     let durable_state_overlay = host.drain_durable_state_overlay();
     let budget = build_local_debug_budget(&vm, args.gas_limit, entrypoint_pc);
     let vm_diagnostic = vm.last_diagnostic().map(map_local_vm_diagnostic);
-    let source_snippet = maybe_render_source_snippet(args.source_file.as_deref(), vm_diagnostic.as_ref());
+    let source_snippet =
+        maybe_render_source_snippet(args.source_file.as_deref(), vm_diagnostic.as_ref());
     let entrypoint = build_local_debug_entrypoint(descriptor, entrypoint_pc);
 
     if let Err(err) = run_result {
@@ -1742,7 +1751,9 @@ fn parse_local_contract_schema_type(raw: &str) -> Result<LocalContractSchemaType
 
 fn validate_local_numeric_json_value(value: &norito::json::Value) -> bool {
     match value {
-        norito::json::Value::String(raw) => raw.parse::<iroha_primitives::numeric::Numeric>().is_ok(),
+        norito::json::Value::String(raw) => {
+            raw.parse::<iroha_primitives::numeric::Numeric>().is_ok()
+        }
         norito::json::Value::Number(norito::json::native::Number::I64(_))
         | norito::json::Value::Number(norito::json::native::Number::U64(_)) => true,
         _ => false,
@@ -1774,17 +1785,21 @@ fn validate_local_contract_value(
             _ => false,
         },
         LocalContractSchemaType::AssetDefinitionId => match value {
-            norito::json::Value::String(raw) => {
-                raw.parse::<iroha_data_model::asset::AssetDefinitionId>().is_ok()
-            }
+            norito::json::Value::String(raw) => raw
+                .parse::<iroha_data_model::asset::AssetDefinitionId>()
+                .is_ok(),
             _ => false,
         },
         LocalContractSchemaType::AssetId => match value {
-            norito::json::Value::String(raw) => raw.parse::<iroha_data_model::asset::AssetId>().is_ok(),
+            norito::json::Value::String(raw) => {
+                raw.parse::<iroha_data_model::asset::AssetId>().is_ok()
+            }
             _ => false,
         },
         LocalContractSchemaType::DomainId => match value {
-            norito::json::Value::String(raw) => raw.parse::<iroha_data_model::domain::DomainId>().is_ok(),
+            norito::json::Value::String(raw) => {
+                raw.parse::<iroha_data_model::domain::DomainId>().is_ok()
+            }
             _ => false,
         },
         LocalContractSchemaType::NftId => match value {
@@ -1808,10 +1823,11 @@ fn validate_local_contract_value(
         | LocalContractSchemaType::AssetHandle
         | LocalContractSchemaType::ProofBlob => matches!(value, norito::json::Value::String(_)),
         LocalContractSchemaType::Tuple(items) => match value {
-            norito::json::Value::Array(values) if values.len() == items.len() => items
-                .iter()
-                .zip(values.iter())
-                .all(|(schema, value)| validate_local_contract_value(schema, value, field_name).is_ok()),
+            norito::json::Value::Array(values) if values.len() == items.len() => {
+                items.iter().zip(values.iter()).all(|(schema, value)| {
+                    validate_local_contract_value(schema, value, field_name).is_ok()
+                })
+            }
             _ => false,
         },
     };
@@ -1842,12 +1858,11 @@ fn normalize_local_contract_payload(
         return Ok(None);
     }
 
-    let payload = payload.ok_or_else(|| {
-        eyre!("contract payload is required for parameterized entrypoints")
-    })?;
-    let object = payload.as_object().ok_or_else(|| {
-        eyre!("contract payload must be a JSON object keyed by parameter name")
-    })?;
+    let payload = payload
+        .ok_or_else(|| eyre!("contract payload is required for parameterized entrypoints"))?;
+    let object = payload
+        .as_object()
+        .ok_or_else(|| eyre!("contract payload must be a JSON object keyed by parameter name"))?;
 
     let mut normalized = norito::json::Map::new();
     for param in &descriptor.params {
@@ -1895,13 +1910,14 @@ fn decode_local_contract_view_result_value(
         LocalContractSchemaType::Unit => Ok((norito::json::Value::Null, 0)),
         LocalContractSchemaType::Int => {
             let raw = vm.register(start_register);
-            let value = i64::try_from(raw)
-                .map_err(|_| eyre!("contract view int return overflowed i64"))?;
+            let value =
+                i64::try_from(raw).map_err(|_| eyre!("contract view int return overflowed i64"))?;
             Ok((norito::json::Value::from(value), 1))
         }
-        LocalContractSchemaType::Bool => {
-            Ok((norito::json::Value::Bool(vm.register(start_register) != 0), 1))
-        }
+        LocalContractSchemaType::Bool => Ok((
+            norito::json::Value::Bool(vm.register(start_register) != 0),
+            1,
+        )),
         LocalContractSchemaType::Numeric => {
             let ptr = vm.register(start_register);
             let value: iroha_primitives::numeric::Numeric =
@@ -1937,9 +1953,8 @@ fn decode_local_contract_view_result_value(
         LocalContractSchemaType::AssetDefinitionId => {
             let ptr = vm.register(start_register);
             let value: iroha_data_model::asset::AssetDefinitionId =
-                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId).map_err(
-                    |err| eyre!("failed to decode AssetDefinitionId return: {err}"),
-                )?;
+                CoreHost::decode_tlv_typed(vm, ptr, PointerType::AssetDefinitionId)
+                    .map_err(|err| eyre!("failed to decode AssetDefinitionId return: {err}"))?;
             Ok((norito::json::Value::from(value.to_string()), 1))
         }
         LocalContractSchemaType::AssetId => {
@@ -2166,7 +2181,8 @@ mod tests {
             }
         "#;
         std::fs::write(&source_path, source).expect("write source");
-        let program = compile_contract_program_with_source_path(source, &source_path.display().to_string());
+        let program =
+            compile_contract_program_with_source_path(source, &source_path.display().to_string());
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
         let args = DebugViewArgs {
             authority: None,
@@ -2371,7 +2387,9 @@ mod tests {
                 payload_file: None,
             },
         };
-        let err = args.run(&mut ctx).expect_err("view entrypoints must be rejected");
+        let err = args
+            .run(&mut ctx)
+            .expect_err("view entrypoints must be rejected");
         assert!(
             err.to_string().contains("is not a public entrypoint"),
             "unexpected error: {err}"
@@ -2430,7 +2448,9 @@ mod tests {
         );
         metadata.insert(
             Name::from_str("contract_payload").expect("static contract_payload key"),
-            iroha_primitives::json::Json::from(norito::json::from_str::<norito::json::Value>(&payload_json).expect("payload json")),
+            iroha_primitives::json::Json::from(
+                norito::json::from_str::<norito::json::Value>(&payload_json).expect("payload json"),
+            ),
         );
         let tx = TransactionBuilder::new(ctx.config().chain.clone(), authority.clone())
             .with_metadata(metadata)
@@ -2458,8 +2478,8 @@ mod tests {
                 .and_then(norito::json::Value::as_u64),
             Some(overlay.durable_state_overlay().len() as u64)
         );
-        let expected_durable_json =
-            render_durable_state_overlay(overlay.durable_state_overlay()).expect("serialize durable overlay");
+        let expected_durable_json = render_durable_state_overlay(overlay.durable_state_overlay())
+            .expect("serialize durable overlay");
         assert_eq!(
             output.get("durable_state_overlay"),
             Some(&expected_durable_json)
@@ -2569,7 +2589,11 @@ mod tests {
         )
         .expect("resolved target");
         assert_eq!(
-            resolved.contract_alias.as_ref().map(ToString::to_string).as_deref(),
+            resolved
+                .contract_alias
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
             Some("router::dex.universal")
         );
         assert!(resolved.contract_address.is_none());
@@ -2588,7 +2612,11 @@ mod tests {
         )
         .expect("resolved target");
         assert_eq!(
-            resolved.contract_alias.as_ref().map(ToString::to_string).as_deref(),
+            resolved
+                .contract_alias
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
             Some("router::dex.universal")
         );
         assert!(resolved.contract_address.is_none());
@@ -2620,9 +2648,10 @@ mod tests {
     #[test]
     fn resolve_contract_dataspace_id_hint_requires_override_for_unknown_alias() {
         let err = resolve_contract_dataspace_id_hint("private-ds", None).expect_err("must fail");
-        assert!(err
-            .to_string()
-            .contains("pass --dataspace-id for non-default dataspaces"));
+        assert!(
+            err.to_string()
+                .contains("pass --dataspace-id for non-default dataspaces")
+        );
     }
 
     #[test]

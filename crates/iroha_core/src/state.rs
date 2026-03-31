@@ -27048,9 +27048,23 @@ mod range_bounds {
     }
 }
 
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotPublicLaneRewardClaim {
+    pub lane_id: LaneId,
+    pub account: AccountId,
+    pub asset: AssetId,
+    pub last_claimed_epoch: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotNoritoBlob {
+    pub encoded_hex: String,
+}
+
 pub(crate) mod deserialize {
     use std::marker::PhantomData;
 
+    use norito::codec::DecodeAll;
     use norito::json::{self, JsonDeserialize};
 
     use super::{default_oracle, *};
@@ -27103,7 +27117,15 @@ pub(crate) mod deserialize {
                 ivm: &ivm_runtime,
                 _marker: PhantomData,
             };
-            let world = parse_world(world_value, &ivm_seed)?;
+            let mut world = parse_world(world_value, &ivm_seed)?;
+            let public_lane_validators: Vec<SnapshotNoritoBlob> =
+                take_optional_default(&mut map, "public_lane_validators")?;
+            let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
+                take_optional_default(&mut map, "public_lane_stake_shares")?;
+            let public_lane_rewards: Vec<SnapshotNoritoBlob> =
+                take_optional_default(&mut map, "public_lane_rewards")?;
+            let public_lane_reward_claims: Vec<SnapshotPublicLaneRewardClaim> =
+                take_optional_default(&mut map, "public_lane_reward_claims")?;
 
             let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
@@ -27113,6 +27135,46 @@ pub(crate) mod deserialize {
             let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
 
             drain_unknown(&map, "state");
+
+            world.public_lane_validators = decode_snapshot_records::<PublicLaneValidatorRecord>(
+                public_lane_validators,
+                "public_lane_validators",
+            )?
+            .into_iter()
+            .map(|record| ((record.lane_id, record.validator.clone()), record))
+            .collect();
+            world.public_lane_stake_shares = decode_snapshot_records::<PublicLaneStakeShare>(
+                public_lane_stake_shares,
+                "public_lane_stake_shares",
+            )?
+            .into_iter()
+            .map(|record| {
+                (
+                    (
+                        record.lane_id,
+                        record.validator.clone(),
+                        record.staker.clone(),
+                    ),
+                    record,
+                )
+            })
+            .collect();
+            world.public_lane_rewards = decode_snapshot_records::<PublicLaneRewardRecord>(
+                public_lane_rewards,
+                "public_lane_rewards",
+            )?
+            .into_iter()
+            .map(|record| ((record.lane_id, record.epoch), record))
+            .collect();
+            world.public_lane_reward_claims = public_lane_reward_claims
+                .into_iter()
+                .map(|record| {
+                    (
+                        (record.lane_id, record.account.clone(), record.asset.clone()),
+                        record.last_claimed_epoch,
+                    )
+                })
+                .collect();
 
             let mut state = build_state(BuildStateInputs {
                 world,
@@ -27129,6 +27191,31 @@ pub(crate) mod deserialize {
             state.chain_id = chain_id;
             Ok(state)
         }
+    }
+
+    fn decode_snapshot_records<T>(
+        records: Vec<SnapshotNoritoBlob>,
+        field: &str,
+    ) -> Result<Vec<T>, json::Error>
+    where
+        T: DecodeAll,
+    {
+        records
+            .into_iter()
+            .enumerate()
+            .map(|(index, record)| {
+                let bytes =
+                    hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: format!("record {index} hex decode failed: {err}"),
+                    })?;
+                let mut cursor = bytes.as_slice();
+                T::decode_all(&mut cursor).map_err(|err| json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: format!("record {index} norito decode failed: {err}"),
+                })
+            })
+            .collect()
     }
 
     fn take_required<T: JsonDeserialize>(
@@ -28249,7 +28336,8 @@ mod tests {
             DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog,
             LaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEmergencyValidatorSet,
             LaneRelayEnvelope, LaneRelayError, LaneStorageProfile, LaneVisibility, ManifestVersion,
-            ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
+            ProofBlob, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding,
+            RemoteSpendIntent, SpendOp, TouchManifest,
         },
         peer::PeerId,
         prelude::*,
@@ -28552,6 +28640,125 @@ mod tests {
                 .alias()
                 .as_ref(),
             Some(&alias)
+        );
+    }
+
+    #[test]
+    fn public_lane_staking_roundtrip_through_state_json() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut world = World::default();
+        let validator = ALICE_ID.clone();
+        let staker = BOB_ID.clone();
+        let stake_asset_definition = AssetDefinitionId::new(
+            "wonderland".parse().expect("stake asset domain"),
+            "stake".parse().expect("stake asset name"),
+        );
+        let reward_asset = AssetId::new(stake_asset_definition, validator.clone());
+        let request_id = Hash::new("unbond-request");
+
+        world.public_lane_validators.insert(
+            (LaneId::SINGLE, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: PeerId::from(validator.signatory().clone()),
+                stake_account: validator.clone(),
+                total_stake: Numeric::new(2_000, 0),
+                self_stake: Numeric::new(1_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(0),
+                activation_height: Some(1),
+                last_reward_epoch: Some(7),
+            },
+        );
+        world.public_lane_stake_shares.insert(
+            (LaneId::SINGLE, validator.clone(), staker.clone()),
+            PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: staker.clone(),
+                bonded: Numeric::new(900, 0),
+                pending_unbonds: BTreeMap::from([(
+                    request_id,
+                    PublicLaneUnbonding {
+                        request_id,
+                        amount: Numeric::new(100, 0),
+                        release_at_ms: 12_345,
+                    },
+                )]),
+                metadata: Metadata::default(),
+            },
+        );
+        world.public_lane_rewards.insert(
+            (LaneId::SINGLE, 7),
+            PublicLaneRewardRecord {
+                lane_id: LaneId::SINGLE,
+                epoch: 7,
+                asset: reward_asset.clone(),
+                total_reward: Numeric::new(77, 0),
+                shares: vec![PublicLaneRewardShare {
+                    account: validator.clone(),
+                    role: PublicLaneRewardRole::Validator,
+                    amount: Numeric::new(77, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+        world
+            .public_lane_reward_claims
+            .insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), 6);
+
+        let state = State::new(world, kura, query_handle);
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.public_lane_validators()
+                .get(&(LaneId::SINGLE, validator.clone()))
+                .expect("validator"),
+            &PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: PeerId::from(validator.signatory().clone()),
+                stake_account: validator.clone(),
+                total_stake: Numeric::new(2_000, 0),
+                self_stake: Numeric::new(1_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(0),
+                activation_height: Some(1),
+                last_reward_epoch: Some(7),
+            }
+        );
+        assert_eq!(
+            view.public_lane_stake_shares()
+                .get(&(LaneId::SINGLE, validator.clone(), staker.clone()))
+                .expect("stake share")
+                .bonded,
+            Numeric::new(900, 0)
+        );
+        assert_eq!(
+            view.public_lane_rewards()
+                .get(&(LaneId::SINGLE, 7))
+                .expect("reward")
+                .total_reward,
+            Numeric::new(77, 0)
+        );
+        assert_eq!(
+            view.public_lane_reward_claims()
+                .get(&(LaneId::SINGLE, validator, reward_asset)),
+            Some(&6)
         );
     }
     use crate::{

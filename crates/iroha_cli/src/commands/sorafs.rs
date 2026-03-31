@@ -1229,9 +1229,8 @@ impl ReserveLedgerArgs {
             .wrap_err("failed to resolve --treasury-account")?;
         let reserve = crate::resolve_account_id(context, &self.reserve_account)
             .wrap_err("failed to resolve --reserve-account")?;
-        let asset_definition =
-            AssetDefinitionId::parse_address_literal(&self.asset_definition)
-                .wrap_err("failed to parse --asset-definition")?;
+        let asset_definition = AssetDefinitionId::parse_address_literal(&self.asset_definition)
+            .wrap_err("failed to parse --asset-definition")?;
         let plan = build_reserve_ledger_plan(
             &self.quote_path,
             projection,
@@ -11513,8 +11512,8 @@ impl StoragePinArgs {
         ) -> Result<Response<Vec<u8>>>,
     {
         let manifest_bytes = fs::read(&self.manifest).wrap_err("failed to read manifest file")?;
-        let manifest: ManifestV1 =
-            norito::decode_from_bytes(&manifest_bytes).wrap_err("failed to decode manifest payload")?;
+        let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
+            .wrap_err("failed to decode manifest payload")?;
         let (payload_bytes, files) = load_storage_pin_payload(&self.payload, &manifest)?;
         let borrowed_files = files.as_ref().map(|entries| {
             entries
@@ -11527,7 +11526,12 @@ impl StoragePinArgs {
         });
 
         let client = context.client_from_config();
-        let response = submit(&client, &manifest_bytes, &payload_bytes, borrowed_files.as_deref())?;
+        let response = submit(
+            &client,
+            &manifest_bytes,
+            &payload_bytes,
+            borrowed_files.as_deref(),
+        )?;
         let status = response.status();
         let body = response.into_body();
         match status {
@@ -11547,8 +11551,8 @@ fn load_storage_pin_payload(
     input: &Path,
     manifest: &ManifestV1,
 ) -> Result<(Vec<u8>, Option<Vec<OwnedStorageFileEntry>>)> {
-    let metadata =
-        fs::metadata(input).wrap_err_with(|| format!("failed to access payload `{}`", input.display()))?;
+    let metadata = fs::metadata(input)
+        .wrap_err_with(|| format!("failed to access payload `{}`", input.display()))?;
 
     if metadata.is_dir() {
         let profile = chunk_profile_from_manifest(manifest)?;
@@ -13830,7 +13834,10 @@ mod tests {
         args.run_with(&mut ctx, |_client, manifest_bytes, payload_bytes, files| {
             assert_eq!(manifest_bytes, b"manifest-bytes");
             assert_eq!(payload_bytes, b"payload-bytes");
-            assert!(files.is_none(), "single-file payload should not include file table");
+            assert!(
+                files.is_none(),
+                "single-file payload should not include file table"
+            );
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -13850,8 +13857,11 @@ mod tests {
         let payload_dir = temp_dir.path().join("site");
         fs::create_dir_all(payload_dir.join("assets")).expect("create assets directory");
         fs::write(payload_dir.join("index.html"), b"<html>SoraFS</html>").expect("write index");
-        fs::write(payload_dir.join("assets").join("app.js"), b"console.log('ok');")
-            .expect("write asset");
+        fs::write(
+            payload_dir.join("assets").join("app.js"),
+            b"console.log('ok');",
+        )
+        .expect("write asset");
 
         let manifest_value = ManifestBuilder::new()
             .root_cid(vec![0xAA; 16])
@@ -13875,22 +13885,24 @@ mod tests {
         };
         let mut ctx = TestContext::new();
 
-        args.run_with(&mut ctx, |_client, _manifest_bytes, payload_bytes, files| {
-            let files = files.expect("directory payload must include file table");
-            assert_eq!(files.len(), 2);
-            assert_eq!(files[0].path, ["assets".to_owned(), "app.js".to_owned()]);
-            assert_eq!(files[1].path, ["index.html".to_owned()]);
-            assert_eq!(
-                payload_bytes,
-                b"console.log('ok');<html>SoraFS</html>",
-                "payload must follow the deterministic sorted file order"
-            );
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
-                .unwrap())
-        })
+        args.run_with(
+            &mut ctx,
+            |_client, _manifest_bytes, payload_bytes, files| {
+                let files = files.expect("directory payload must include file table");
+                assert_eq!(files.len(), 2);
+                assert_eq!(files[0].path, ["assets".to_owned(), "app.js".to_owned()]);
+                assert_eq!(files[1].path, ["index.html".to_owned()]);
+                assert_eq!(
+                    payload_bytes, b"console.log('ok');<html>SoraFS</html>",
+                    "payload must follow the deterministic sorted file order"
+                );
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
+                    .unwrap())
+            },
+        )
         .expect("directory run should succeed");
 
         assert_eq!(ctx.printed.len(), 1);
@@ -14852,7 +14864,10 @@ mod tests {
         assert_eq!(state.treasury_account, sample_account_id("treasury"));
         assert!(state.payouts.is_empty());
         assert!(state.disputes.is_empty());
-        assert_eq!(state.reward_config.policy.bond_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
+        assert_eq!(
+            state.reward_config.policy.bond_asset_id,
+            "61CtjvNd9T3THAR65GsMVHr82Bjc"
+        );
     }
 
     #[test]

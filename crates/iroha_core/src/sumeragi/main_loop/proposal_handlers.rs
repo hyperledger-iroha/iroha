@@ -1813,7 +1813,9 @@ impl Actor {
                                 key: session_key,
                                 payload_hash,
                                 payload_bytes,
-                                chunk_size: self.config.rbc.chunk_max_bytes,
+                                chunking: super::rbc::RbcChunkingSpec::from_config(
+                                    &self.config.rbc,
+                                ),
                                 epoch: self.epoch_for_height(height),
                             };
                             match seed_tx.try_send(work) {
@@ -1936,7 +1938,9 @@ impl Actor {
                                 key: session_key,
                                 payload_hash,
                                 payload_bytes,
-                                chunk_size: self.config.rbc.chunk_max_bytes,
+                                chunking: super::rbc::RbcChunkingSpec::from_config(
+                                    &self.config.rbc,
+                                ),
                                 epoch: self.epoch_for_height(height),
                             };
                             match seed_tx.try_send(work) {
@@ -2806,7 +2810,7 @@ impl Actor {
                             key: session_key,
                             payload_hash,
                             payload_bytes: payload_bytes.clone(),
-                            chunk_size: self.config.rbc.chunk_max_bytes,
+                            chunking: super::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
                             epoch: self.epoch_for_height(height),
                         };
                         match seed_tx.try_send(work) {
@@ -2924,7 +2928,7 @@ impl Actor {
                             key: session_key,
                             payload_hash,
                             payload_bytes: payload_bytes.clone(),
-                            chunk_size: self.config.rbc.chunk_max_bytes,
+                            chunking: super::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
                             epoch: self.epoch_for_height(height),
                         };
                         match seed_tx.try_send(work) {
@@ -3151,12 +3155,17 @@ impl Actor {
                     height: session_key.1,
                     view: session_key.2,
                     total_chunks,
+                    encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                    data_shards: 0,
+                    parity_shards: 0,
                     received_chunks,
                     ready_count,
                     delivered: delivered_flag,
                     payload_hash: payload_hash_opt,
                     recovered_from_disk: recovered_flag,
                     invalid: invalid_flag,
+                    reconstructed_stripes: 0,
+                    reconstructable_stripes: 0,
                     lane_backlog,
                     dataspace_backlog,
                 };
