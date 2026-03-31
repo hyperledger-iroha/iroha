@@ -15182,6 +15182,159 @@ async fn finalize_pending_block_defers_until_tip_extends() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn finalize_pending_block_commits_retired_same_height_without_conflicting_local_vote() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    let parent = Some(genesis_hash);
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let epoch = actor.epoch_for_height(height);
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, 0);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    pending.retire_same_height();
+    pending.note_commit_qc_observed(epoch);
+    pending.commit_qc_epoch = Some(epoch);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        0,
+        epoch,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor
+        .qc_cache
+        .insert((Phase::Commit, block_hash, height, 0, epoch), qc);
+
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view: 0,
+        epoch,
+    };
+
+    let committed = actor.finalize_pending_block(lock, pending, None);
+    assert!(
+        committed,
+        "retired same-height block should still commit with a matching QC"
+    );
+    assert_eq!(
+        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
+        height,
+        "commit should advance the canonical height"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(block_hash),
+        "matching retired branch should become the committed tip"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "committed retired branch should leave pending storage"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn finalize_pending_block_defers_retired_same_height_with_conflicting_local_vote() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let epoch = actor.epoch_for_height(height);
+
+    let canonical_block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, parent);
+    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 1, parent);
+    insert_validated_pending(actor, canonical_block.clone());
+    assert!(actor.emit_precommit_vote(
+        canonical_block.hash(),
+        height,
+        0,
+        epoch,
+        ValidationStatus::Valid,
+        &topology,
+        canonical_block.header().prev_block_hash(),
+        Some((zero_state_root(), zero_state_root())),
+    ));
+
+    let conflicting_hash = conflicting_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&conflicting_block));
+    let mut pending = PendingBlock::new(conflicting_block.clone(), payload_hash, height, 1);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    pending.retire_same_height();
+    pending.note_commit_qc_observed(epoch);
+    pending.commit_qc_epoch = Some(epoch);
+
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        conflicting_hash,
+        height,
+        1,
+        epoch,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor
+        .qc_cache
+        .insert((Phase::Commit, conflicting_hash, height, 1, epoch), qc);
+
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: conflicting_hash,
+        height,
+        view: 1,
+        epoch,
+    };
+
+    let committed = actor.finalize_pending_block(lock, pending, None);
+    assert!(
+        !committed,
+        "conflicting local same-height vote history must defer retired-branch finalization"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&conflicting_hash)
+        .expect("retired pending branch should remain cached");
+    assert!(
+        pending_after.is_retired_same_height(),
+        "deferred retired branch should remain in retired state"
+    );
+    assert_eq!(
+        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
+        height.saturating_sub(1),
+        "conflicting branch must not advance the committed height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_drains_inflight_result_with_empty_pending() {
     let mut harness = test_actor_harness(1).await;
 
@@ -19392,7 +19545,8 @@ async fn precommit_vote_allows_when_block_extends_locked_chain() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn emit_precommit_vote_allows_higher_view_different_block_same_height_when_lock_extends() {
+async fn emit_precommit_vote_rejects_higher_view_different_block_same_height_even_when_lock_extends()
+ {
     let _guard = super::status::qc_status_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -19431,7 +19585,7 @@ async fn emit_precommit_vote_allows_higher_view_different_block_same_height_when
         block_low.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
     ));
-    assert!(actor.emit_precommit_vote(
+    assert!(!actor.emit_precommit_vote(
         block_high.hash(),
         2,
         1,
@@ -19447,23 +19601,18 @@ async fn emit_precommit_vote_allows_higher_view_different_block_same_height_when
         .values()
         .filter(|vote| vote.phase == Phase::Commit && vote.height == 2 && vote.epoch == epoch)
         .collect();
-    assert_eq!(local_precommits.len(), 2);
+    assert_eq!(local_precommits.len(), 1);
     assert!(
         local_precommits
             .iter()
             .any(|vote| vote.block_hash == block_low.hash() && vote.view == 0)
-    );
-    assert!(
-        local_precommits
-            .iter()
-            .any(|vote| vote.block_hash == block_high.hash() && vote.view == 1)
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_allows_older_view_after_newer_vote() {
+async fn precommit_vote_rejects_older_view_after_newer_conflict() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -19497,23 +19646,18 @@ async fn precommit_vote_allows_older_view_after_newer_vote() {
         block2.header().prev_block_hash(),
         Some((Hash::new([]), Hash::new([]))),
     );
-    assert!(emitted_second);
+    assert!(!emitted_second);
 
     let local_precommits: Vec<_> = actor
         .vote_log
         .values()
         .filter(|vote| vote.phase == Phase::Commit && vote.height == height && vote.epoch == epoch)
         .collect();
-    assert_eq!(local_precommits.len(), 2);
+    assert_eq!(local_precommits.len(), 1);
     assert!(
         local_precommits
             .iter()
             .any(|vote| vote.block_hash == block1.hash() && vote.view == 1)
-    );
-    assert!(
-        local_precommits
-            .iter()
-            .any(|vote| vote.block_hash == block2.hash() && vote.view == 0)
     );
 
     harness.shutdown.send();
@@ -33863,6 +34007,137 @@ async fn commit_qc_revives_aborted_pending_block() {
     assert!(
         actor.block_payload_available_locally(block_hash),
         "revived pending payload should remain locally available after commit QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_keeps_retired_same_height_pending_inactive() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    drop(view);
+
+    let parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x79; Hash::LENGTH]));
+    let block = sample_block(height, 1, Some(parent));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, 1);
+    pending.retire_same_height();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let epoch = actor.epoch_for_height(height);
+    let signers: BTreeSet<ValidatorIndex> = (0..commit_topology.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        1,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.handle_qc(qc).expect("commit QC should be handled");
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("retired pending retained");
+    assert!(
+        pending_after.is_retired_same_height(),
+        "commit QC should keep the stale same-height branch retired"
+    );
+    assert!(
+        pending_after.aborted,
+        "retired pending block should stay inactive after commit QC"
+    );
+    assert!(
+        pending_after.commit_qc_observed(),
+        "retired pending branch should still remember the matching commit QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_conflicting_retired_branch_is_dropped() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let canonical_block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, parent);
+    let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 1, parent);
+    let canonical_hash = canonical_block.hash();
+    let conflicting_hash = conflicting_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&conflicting_block));
+    let mut retired = PendingBlock::new(conflicting_block, payload_hash, height, 1);
+    retired.retire_same_height();
+    actor
+        .pending
+        .pending_blocks
+        .insert(conflicting_hash, retired);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let epoch = actor.epoch_for_height(height);
+    assert!(actor.emit_precommit_vote(
+        canonical_hash,
+        height,
+        0,
+        epoch,
+        ValidationStatus::Valid,
+        &topology,
+        canonical_block.header().prev_block_hash(),
+        Some((zero_state_root(), zero_state_root())),
+    ));
+
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        conflicting_hash,
+        height,
+        1,
+        epoch,
+        vec![0b0000_1111],
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.handle_qc(qc).expect("handle conflicting commit QC");
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&conflicting_hash)
+        .expect("retired pending should remain cached");
+    assert!(
+        pending_after.is_retired_same_height(),
+        "conflicting commit QC must not revive the retired same-height branch"
+    );
+    assert!(
+        !pending_after.commit_qc_observed(),
+        "dropped conflicting QC must not mark the retired branch as commit-certified"
+    );
+    assert!(
+        !actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, conflicting_hash, height, 1, epoch)),
+        "conflicting QC must not enter the cache"
     );
 
     harness.shutdown.send();
@@ -56459,7 +56734,11 @@ async fn trigger_view_change_retains_aborted_pending_payloads_with_da() {
         .expect("stale pending block should be retained");
     assert!(
         stale_pending_0.aborted,
-        "stale pending block should be aborted"
+        "stale pending block should be inactive"
+    );
+    assert!(
+        stale_pending_0.is_retired_same_height(),
+        "stale pending block should move into retired same-height state"
     );
     let stale_pending_1 = actor
         .pending
@@ -56468,7 +56747,11 @@ async fn trigger_view_change_retains_aborted_pending_payloads_with_da() {
         .expect("stale pending block should be retained");
     assert!(
         stale_pending_1.aborted,
-        "stale pending block should be aborted"
+        "stale pending block should be inactive"
+    );
+    assert!(
+        stale_pending_1.is_retired_same_height(),
+        "stale pending block should move into retired same-height state"
     );
     assert!(
         actor
@@ -56484,7 +56767,11 @@ async fn trigger_view_change_retains_aborted_pending_payloads_with_da() {
         .expect("pending block for the new view should remain");
     assert!(
         !keep_pending.aborted,
-        "pending block for the new view should not be aborted"
+        "pending block for the new view should stay active"
+    );
+    assert!(
+        !keep_pending.is_retired_same_height(),
+        "pending block for the new view should not be retired"
     );
     assert!(
         actor.subsystems.da_rbc.rbc.sessions.contains_key(&key_0),
@@ -66280,7 +66567,7 @@ async fn qc_signers_for_votes_does_not_ignore_lower_view_vote_from_other_peer() 
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn try_form_qc_from_votes_keeps_lower_view_quorum_after_higher_view_votes() {
+async fn try_form_qc_from_votes_rejects_cross_view_conflicting_commit_quorums() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     actor.locked_qc = None;
@@ -66396,19 +66683,33 @@ async fn try_form_qc_from_votes_keeps_lower_view_quorum_after_higher_view_votes(
         epoch,
         &topology,
     );
+    actor.try_form_qc_from_votes(
+        Phase::Commit,
+        block_hash_high,
+        height,
+        view_high,
+        epoch,
+        &topology,
+    );
 
     assert!(
-        actor
+        !actor
             .qc_cache
             .contains_key(&(Phase::Commit, block_hash_low, height, view_low, epoch)),
-        "lower-view commit quorum should still aggregate after higher-view votes"
+        "lower-view conflicting commit quorum must not aggregate once the same peers also vote for another hash"
+    );
+    assert!(
+        !actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block_hash_high, height, view_high, epoch)),
+        "higher-view conflicting commit quorum must not aggregate from the same signer set"
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn validate_and_record_vote_accepts_cross_view_commit_vote_for_same_signer() {
+async fn validate_and_record_vote_rejects_cross_view_conflicting_commit_vote_for_same_signer() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -66504,7 +66805,7 @@ async fn validate_and_record_vote_accepts_cross_view_commit_vote_for_same_signer
         mode_tag,
         Some(Ok(())),
     ));
-    assert!(actor.validate_and_record_vote_with_signature_result(
+    assert!(!actor.validate_and_record_vote_with_signature_result(
         &vote_high,
         &signature_topology_high,
         &evidence_context,
@@ -66518,17 +66819,150 @@ async fn validate_and_record_vote_accepts_cross_view_commit_vote_for_same_signer
         vote_low.epoch,
         vote_low.signer,
     )));
-    assert!(actor.vote_log.contains_key(&(
-        Phase::Commit,
-        vote_high.height,
-        vote_high.view,
-        vote_high.epoch,
-        vote_high.signer,
-    )));
+    assert!(
+        !actor.vote_log.contains_key(&(
+            Phase::Commit,
+            vote_high.height,
+            vote_high.view,
+            vote_high.epoch,
+            vote_high.signer,
+        )),
+        "conflicting higher-view vote should not be recorded"
+    );
     let evidence_after = actor.state.world.consensus_evidence.view().iter().count();
-    assert_eq!(
-        evidence_after, evidence_before,
-        "cross-view commit votes should not produce double-vote evidence"
+    assert!(
+        evidence_after > evidence_before,
+        "cross-view conflicting commit votes should produce double-vote evidence"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validate_and_record_vote_rejects_cross_view_conflicting_prepare_vote_for_same_signer() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let chain = actor.common_config.chain.clone();
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or_default()
+        .saturating_add(1)
+        .max(1);
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let canonical_roster = super::roster::canonicalize_roster_for_mode(
+        actor.effective_commit_topology(),
+        consensus_mode,
+    );
+    let topology = super::network_topology::Topology::new(canonical_roster);
+    let canonical_signer = ValidatorIndex::try_from(0_u32).expect("signer fits");
+
+    let mut vote_low = crate::sumeragi::consensus::Vote {
+        phase: Phase::Prepare,
+        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x63; Hash::LENGTH],
+        )),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: 0,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let signature_topology_low =
+        super::topology_for_view(&topology, height, vote_low.view, mode_tag, prf_seed);
+    let signer_idx_low = super::view_index_for_canonical_signer(
+        canonical_signer,
+        &signature_topology_low,
+        &topology,
+    )
+    .expect("canonical signer maps to view index");
+    vote_low.signer = u32::try_from(signer_idx_low).expect("signer index fits u32");
+    sign_vote_for_view_with_seed(
+        &mut vote_low,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    let mut vote_high = crate::sumeragi::consensus::Vote {
+        phase: Phase::Prepare,
+        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x64; Hash::LENGTH],
+        )),
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: 1,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let signature_topology_high =
+        super::topology_for_view(&topology, height, vote_high.view, mode_tag, prf_seed);
+    let signer_idx_high = super::view_index_for_canonical_signer(
+        canonical_signer,
+        &signature_topology_high,
+        &topology,
+    )
+    .expect("canonical signer maps to view index");
+    vote_high.signer = u32::try_from(signer_idx_high).expect("signer index fits u32");
+    sign_vote_for_view_with_seed(
+        &mut vote_high,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    let evidence_context = crate::sumeragi::EvidenceValidationContext {
+        topology: &topology,
+        chain_id: &chain,
+        mode_tag,
+        prf_seed,
+    };
+    let evidence_before = actor.state.world.consensus_evidence.view().iter().count();
+    assert!(actor.validate_and_record_vote_with_signature_result(
+        &vote_low,
+        &signature_topology_low,
+        &evidence_context,
+        mode_tag,
+        Some(Ok(())),
+    ));
+    assert!(!actor.validate_and_record_vote_with_signature_result(
+        &vote_high,
+        &signature_topology_high,
+        &evidence_context,
+        mode_tag,
+        Some(Ok(())),
+    ));
+    assert!(actor.vote_log.contains_key(&(
+        Phase::Prepare,
+        vote_low.height,
+        vote_low.view,
+        vote_low.epoch,
+        vote_low.signer,
+    )));
+    assert!(
+        !actor.vote_log.contains_key(&(
+            Phase::Prepare,
+            vote_high.height,
+            vote_high.view,
+            vote_high.epoch,
+            vote_high.signer,
+        )),
+        "conflicting higher-view prepare vote should not be recorded"
+    );
+    let evidence_after = actor.state.world.consensus_evidence.view().iter().count();
+    assert!(
+        evidence_after > evidence_before,
+        "cross-view conflicting prepare votes should produce double-vote evidence"
     );
 
     harness.shutdown.send();
@@ -66625,7 +67059,7 @@ async fn validate_and_record_vote_rejects_same_view_conflicting_commit_vote_and_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn split_view_commit_votes_accept_higher_view_and_form_qc() {
+async fn split_view_conflicting_commit_votes_cannot_form_second_quorum() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     actor.locked_qc = None;
@@ -66645,43 +67079,110 @@ async fn split_view_commit_votes_accept_higher_view_and_form_qc() {
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let required = topology.min_votes_for_commit();
     let chain = actor.common_config.chain.clone();
-
-    let mut vote_low = crate::sumeragi::consensus::Vote {
-        phase: Phase::Commit,
-        block_hash: block_low.hash(),
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
+    let signature_topology_low = super::topology_for_view(
+        &topology,
         height,
-        view: view_low,
-        epoch,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    sign_vote_for_canonical_signer(&mut vote_low, &chain, &topology, &harness.key_pairs);
-    actor.handle_vote(vote_low.clone());
-
-    let mut vote_high_same_signer = crate::sumeragi::consensus::Vote {
-        phase: Phase::Commit,
-        block_hash: block_high.hash(),
-        parent_state_root: zero_state_root(),
-        post_state_root: zero_state_root(),
+        view_low,
+        actor.mode_tag(),
+        actor.npos_prf_seed(),
+    );
+    let local_signer = actor
+        .local_validator_index_for_topology(&signature_topology_low)
+        .expect("local signer should be present in the low-view topology");
+    let local_canonical_signer = *super::normalize_signer_indices_to_canonical(
+        &BTreeSet::from([ValidatorIndex::try_from(local_signer).expect("signer index fits")]),
+        &signature_topology_low,
+        &topology,
+    )
+    .iter()
+    .next()
+    .expect("local signer should map to a canonical signer");
+    assert!(actor.emit_precommit_vote(
+        block_low.hash(),
         height,
-        view: view_high,
+        view_low,
         epoch,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    sign_vote_for_canonical_signer(
-        &mut vote_high_same_signer,
+        ValidationStatus::Valid,
+        &topology,
+        block_low.header().prev_block_hash(),
+        Some((zero_state_root(), zero_state_root())),
+    ));
+
+    let mut quorum_canonical_signers = vec![local_canonical_signer];
+    for signer in 0..topology.as_ref().len() {
+        let signer = ValidatorIndex::try_from(signer).expect("signer index fits");
+        if signer == local_canonical_signer {
+            continue;
+        }
+        let mut vote_low = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: block_low.hash(),
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: view_low,
+            epoch,
+            highest_qc: None,
+            signer: u32::try_from(signer).expect("signer index fits u32"),
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_canonical_signer(&mut vote_low, &chain, &topology, &harness.key_pairs);
+        actor.handle_vote(vote_low);
+        quorum_canonical_signers.push(signer);
+        if quorum_canonical_signers.len() >= required {
+            break;
+        }
+    }
+
+    while actor.poll_vote_verify_results() {}
+    let signers_low = actor.qc_signers_for_votes(
+        Phase::Commit,
+        block_low.hash(),
+        height,
+        view_low,
+        epoch,
+        &signature_topology_low,
+    );
+    assert!(
+        signers_low.len() >= signature_topology_low.min_votes_for_commit(),
+        "first branch should still collect a full quorum of honest commit votes"
+    );
+    let signers_bitmap = super::build_signers_bitmap(&signers_low, topology.as_ref().len());
+    let low_qc = qc_with_bitmap(
         &chain,
+        block_low.hash(),
+        height,
+        view_low,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
         &topology,
         &harness.key_pairs,
     );
-    actor.handle_vote(vote_high_same_signer.clone());
+    actor.qc_cache.insert(
+        (Phase::Commit, block_low.hash(), height, view_low, epoch),
+        low_qc,
+    );
 
-    for signer in 1..required {
+    let local_high_rejected = actor.emit_precommit_vote(
+        block_high.hash(),
+        height,
+        view_high,
+        epoch,
+        ValidationStatus::Valid,
+        &topology,
+        block_high.header().prev_block_hash(),
+        Some((zero_state_root(), zero_state_root())),
+    );
+    assert!(
+        !local_high_rejected,
+        "local validator must not precommit a conflicting higher-view branch after voting on the first branch"
+    );
+
+    for signer in quorum_canonical_signers
+        .into_iter()
+        .filter(|signer| *signer != local_canonical_signer)
+    {
         let mut vote_high = crate::sumeragi::consensus::Vote {
             phase: Phase::Commit,
             block_hash: block_high.hash(),
@@ -66710,31 +67211,34 @@ async fn split_view_commit_votes_accept_higher_view_and_form_qc() {
     assert!(
         actor.vote_log.values().any(|vote| {
             vote.phase == Phase::Commit
+                && vote.block_hash == block_low.hash()
+                && vote.height == height
+                && vote.view == view_low
+                && vote.epoch == epoch
+        }),
+        "first-branch commit votes should remain recorded"
+    );
+    assert!(
+        !actor.vote_log.values().any(|vote| {
+            vote.phase == Phase::Commit
                 && vote.block_hash == block_high.hash()
                 && vote.height == height
                 && vote.view == view_high
                 && vote.epoch == epoch
         }),
-        "higher-view commit vote should be accepted"
-    );
-    let signature_topology_high = super::topology_for_view(
-        &topology,
-        height,
-        view_high,
-        actor.mode_tag(),
-        actor.npos_prf_seed(),
-    );
-    let signers_high = actor.qc_signers_for_votes(
-        Phase::Commit,
-        block_high.hash(),
-        height,
-        view_high,
-        epoch,
-        &signature_topology_high,
+        "reused signer peers must not record a conflicting higher-view commit branch"
     );
     assert!(
-        signers_high.len() >= signature_topology_high.min_votes_for_commit(),
-        "higher-view commit votes should reach quorum signers"
+        actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block_low.hash(), height, view_low, epoch)),
+        "the first branch should still aggregate a commit QC"
+    );
+    assert!(
+        !actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block_high.hash(), height, view_high, epoch)),
+        "a second conflicting commit QC must not form from the same honest signer set"
     );
 
     harness.shutdown.send();
@@ -76783,7 +77287,7 @@ async fn pacemaker_prunes_new_view_entries_below_active_height() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn precommit_vote_allows_newer_view_after_conflict() {
+async fn precommit_vote_rejects_newer_view_after_conflict() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -76812,7 +77316,7 @@ async fn precommit_vote_allows_newer_view_after_conflict() {
         "first precommit vote should be accepted"
     );
     assert!(
-        actor.emit_precommit_vote(
+        !actor.emit_precommit_vote(
             block_b_hash,
             height,
             1,
@@ -76822,7 +77326,7 @@ async fn precommit_vote_allows_newer_view_after_conflict() {
             None,
             Some((Hash::new([]), Hash::new([]))),
         ),
-        "newer view precommit should be allowed after conflicting vote"
+        "newer view precommit should be rejected after a conflicting same-height vote"
     );
 
     let votes: Vec<_> = actor
@@ -76834,8 +77338,8 @@ async fn precommit_vote_allows_newer_view_after_conflict() {
         .collect();
     assert_eq!(
         votes.len(),
-        2,
-        "both precommit votes should be recorded across views"
+        1,
+        "conflicting precommit vote should not be recorded across views"
     );
     assert!(
         votes
@@ -76843,13 +77347,6 @@ async fn precommit_vote_allows_newer_view_after_conflict() {
             .any(|vote| vote.block_hash == block_a_hash && vote.view == 0),
         "precommit vote for view 0 should be recorded"
     );
-    assert!(
-        votes
-            .iter()
-            .any(|vote| vote.block_hash == block_b_hash && vote.view == 1),
-        "precommit vote for view 1 should be recorded"
-    );
-
     harness.shutdown.send();
 }
 
@@ -77045,7 +77542,7 @@ async fn stale_block_created_preserves_committed_height_missing_request_when_not
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn stale_block_created_accepted_under_da() {
+async fn stale_block_created_requires_missing_request_when_stale() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -77074,8 +77571,75 @@ async fn stale_block_created_accepted_under_da() {
         .expect("handle stale BlockCreated under DA");
 
     assert!(
-        actor.pending.pending_blocks.contains_key(&block_hash),
-        "stale BlockCreated should be accepted under DA"
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "stale BlockCreated without a missing request or retained branch should be dropped"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stale_block_created_refreshes_retired_branch_without_reactivating_slot() {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = 2u64;
+    let view = 0u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let block_hash = block.hash();
+    let refreshed_payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+
+    let mut retired = PendingBlock::new(
+        block.clone(),
+        Hash::prehashed([0x55; Hash::LENGTH]),
+        height,
+        view,
+    );
+    retired.retire_same_height();
+    actor.pending.pending_blocks.insert(block_hash, retired);
+
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view + 1, now);
+
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("handle stale retained BlockCreated");
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("retired pending block should remain cached");
+    assert!(
+        pending_after.is_retired_same_height(),
+        "retained stale branch must remain retired after payload refresh"
+    );
+    assert_eq!(
+        pending_after.payload_hash, refreshed_payload_hash,
+        "retained stale branch should refresh its payload metadata"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(height, view)),
+        "retained stale payload must not mark proposal evidence as seen"
+    );
+    assert!(
+        actor.frontier_slot.is_none(),
+        "retained stale payload must not recreate active frontier-slot ownership"
+    );
+    assert!(
+        !actor.slot_has_authoritative_payload(height, view),
+        "retired stale payload must not count as active same-height proposal evidence"
     );
 
     harness.shutdown.send();
@@ -99152,7 +99716,7 @@ async fn conflicting_vote_does_not_override_first() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn conflicting_commit_vote_across_views_is_accepted_for_same_signer_peer() {
+async fn conflicting_commit_vote_across_views_is_dropped_for_same_signer_peer() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
@@ -99213,13 +99777,24 @@ async fn conflicting_commit_vote_across_views_is_accepted_for_same_signer_peer()
         "first vote should remain recorded"
     );
     assert!(
-        actor.vote_log.values().any(|vote| {
+        !actor.vote_log.values().any(|vote| {
             vote.phase == crate::sumeragi::consensus::Phase::Commit
                 && vote.height == height
                 && vote.epoch == epoch
                 && vote.block_hash == block_hash_b
         }),
-        "cross-view conflicting vote from the same signer peer should be accepted"
+        "cross-view conflicting vote from the same signer peer should be dropped"
+    );
+    assert!(
+        actor
+            .state
+            .world
+            .consensus_evidence
+            .view()
+            .iter()
+            .next()
+            .is_some(),
+        "dropping the conflicting vote should still persist double-vote evidence"
     );
 
     harness.shutdown.send();
@@ -100468,7 +101043,7 @@ async fn block_sync_update_accepts_stale_view_with_commit_votes() {
 }
 
 #[test]
-fn allow_stale_block_created_accepts_missing_request() {
+fn allow_stale_block_created_requires_missing_request_or_retained_match() {
     assert!(super::proposal_handlers::allow_stale_block_created(
         true, false
     ));

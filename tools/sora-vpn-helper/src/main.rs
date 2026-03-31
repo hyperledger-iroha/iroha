@@ -581,7 +581,12 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
         payload.session_id.as_str(),
         payload.relay_endpoint.as_str(),
         "connected".to_owned(),
-    )?;
+    )
+    .map_err(|error| {
+        ControllerError::State(format!(
+            "failed to persist packet engine connected state: {error}"
+        ))
+    })?;
 
     let circuit_id = relay_session_id_from_session_id(payload.session_id.as_str());
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
@@ -602,7 +607,12 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
         payload.session_id.as_str(),
         payload.relay_endpoint.as_str(),
         message,
-    )?;
+    )
+    .map_err(|error| {
+        ControllerError::State(format!(
+            "failed to persist packet engine disconnected state: {error}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -611,15 +621,36 @@ async fn connect_and_handshake(
 ) -> Result<(Endpoint, Connection), ControllerError> {
     let helper_ticket = decode_hex(payload.helper_ticket_hex.as_str())?;
     let relay = parse_multiaddr(payload.relay_endpoint.as_str())?;
-    let relay_addr = resolve_multiaddr_socket_addr(&relay).await?;
+    let relay_addr = resolve_multiaddr_socket_addr(&relay)
+        .await
+        .map_err(|error| {
+            ControllerError::State(format!(
+                "failed to resolve packet engine relay address {}: {error}",
+                payload.relay_endpoint
+            ))
+        })?;
     let bind_addr = match relay_addr {
         SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
         SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
     };
-    let mut endpoint = Endpoint::client(bind_addr)?;
-    endpoint.set_default_client_config(build_client_config()?);
+    let mut endpoint = Endpoint::client(bind_addr).map_err(|error| {
+        ControllerError::State(format!(
+            "failed to create packet engine QUIC endpoint on {bind_addr}: {error}"
+        ))
+    })?;
+    endpoint.set_default_client_config(build_client_config().map_err(|error| {
+        ControllerError::State(format!(
+            "failed to build packet engine QUIC client config: {error}"
+        ))
+    })?);
 
-    let connect = endpoint.connect(relay_addr, "soranet.local")?;
+    let connect = endpoint
+        .connect(relay_addr, "soranet.local")
+        .map_err(|error| {
+            ControllerError::State(format!(
+                "failed to start packet engine QUIC connect to {relay_addr}: {error}"
+            ))
+        })?;
     let connection = match timeout(CONNECT_TIMEOUT, connect).await {
         Ok(Ok(connection)) => connection,
         Ok(Err(error)) => return Err(ControllerError::Connection(error)),
@@ -848,8 +879,16 @@ async fn packet_engine_loop(
     circuit_id: [u8; 16],
     flow_label: VpnFlowLabelV1,
 ) -> Result<TunnelShutdown, ControllerError> {
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate()).map_err(|error| {
+        ControllerError::State(format!(
+            "failed to register packet engine SIGTERM handler: {error}"
+        ))
+    })?;
+    let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
+        ControllerError::State(format!(
+            "failed to register packet engine SIGINT handler: {error}"
+        ))
+    })?;
     let upstream = packet_engine_to_vpn_loop(send, circuit_id, flow_label);
     let downstream = vpn_to_packet_engine_loop(recv);
     tokio::pin!(upstream);
@@ -927,7 +966,14 @@ async fn packet_engine_to_vpn_loop(
     let mut reader = tokio_io::stdin();
     let mut sequence = 0u64;
     loop {
-        let Some(packet) = read_packet_from_stream(&mut reader).await? else {
+        let Some(packet) = read_packet_from_stream(&mut reader)
+            .await
+            .map_err(|error| {
+                ControllerError::State(format!(
+                    "failed to read packet engine stdin stream: {error}"
+                ))
+            })?
+        else {
             send.finish()?;
             return Ok(());
         };
@@ -1008,7 +1054,13 @@ async fn vpn_to_packet_engine_loop(recv: &mut RecvStream) -> Result<(), Controll
                     continue;
                 }
                 for packet in decoder.ingest(&cell.payload)? {
-                    write_packet_to_stream(&mut writer, &packet).await?;
+                    write_packet_to_stream(&mut writer, &packet)
+                        .await
+                        .map_err(|error| {
+                            ControllerError::State(format!(
+                                "failed to write packet engine stdout stream: {error}"
+                            ))
+                        })?;
                     add_traffic_bytes(packet.len() as u64, 0)?;
                 }
             }

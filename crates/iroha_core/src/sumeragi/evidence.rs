@@ -15,6 +15,7 @@ use iroha_data_model::{
         BlockHeader,
         consensus::{EvidenceRecord, Height, View},
     },
+    peer::PeerId,
     prelude::ChainId,
 };
 use mv::storage::StorageReadOnly;
@@ -154,6 +155,56 @@ pub fn check_double_vote(v1: &Vote, v2: &Vote) -> Option<Evidence> {
     }
 }
 
+fn signer_peer_for_vote(
+    vote: &Vote,
+    context: &EvidenceValidationContext<'_>,
+) -> Result<PeerId, EvidenceValidationError> {
+    let signature_topology = super::main_loop::topology_for_view(
+        context.topology,
+        vote.height,
+        vote.view,
+        context.mode_tag,
+        context.prf_seed,
+    );
+    usize::try_from(vote.signer)
+        .ok()
+        .and_then(|idx| signature_topology.as_ref().get(idx).cloned())
+        .ok_or(EvidenceValidationError::SignerMismatch)
+}
+
+fn check_double_vote_with_context(
+    v1: &Vote,
+    v2: &Vote,
+    context: &EvidenceValidationContext<'_>,
+) -> Option<Evidence> {
+    if v1.height != v2.height || v1.epoch != v2.epoch {
+        return None;
+    }
+    let peer_a = signer_peer_for_vote(v1, context).ok()?;
+    let peer_b = signer_peer_for_vote(v2, context).ok()?;
+    if peer_a != peer_b {
+        return None;
+    }
+    let conflicts = if v1.block_hash != v2.block_hash {
+        true
+    } else if v1.phase == Phase::Commit && v2.phase == Phase::Commit {
+        v1.parent_state_root != v2.parent_state_root || v1.post_state_root != v2.post_state_root
+    } else {
+        false
+    };
+    if !conflicts {
+        return None;
+    }
+    let (first, second) = canonical_vote_pair(v1, v2);
+    double_vote_kind_for_phases(first.phase, second.phase).map(|kind| Evidence {
+        kind,
+        payload: EvidencePayload::DoubleVote {
+            v1: first,
+            v2: second,
+        },
+    })
+}
+
 /// Very basic commit-certificate invalidity check (shape only; cryptographic validity is not assessed here).
 #[allow(dead_code)] // used by future SBV‑AM integration; unit tests cover only vote helpers
 pub fn check_invalid_commit_qc_shape(qc: &Qc) -> Option<Evidence> {
@@ -265,7 +316,7 @@ pub fn record_double_vote(
     current: &Vote,
     context: &EvidenceValidationContext<'_>,
 ) -> bool {
-    let Some(evidence) = check_double_vote(previous, current) else {
+    let Some(evidence) = check_double_vote_with_context(previous, current, context) else {
         return false;
     };
     if !store.insert(&evidence, context) {
@@ -449,23 +500,30 @@ fn validate_vote_signatures(
     v2: &Vote,
     context: &EvidenceValidationContext<'_>,
 ) -> Result<(), EvidenceValidationError> {
-    let signature_topology = super::main_loop::topology_for_view(
+    let signature_topology_v1 = super::main_loop::topology_for_view(
         context.topology,
         v1.height,
         v1.view,
         context.mode_tag,
         context.prf_seed,
     );
+    let signature_topology_v2 = super::main_loop::topology_for_view(
+        context.topology,
+        v2.height,
+        v2.view,
+        context.mode_tag,
+        context.prf_seed,
+    );
     super::main_loop::vote_signature_check(
         v1,
-        &signature_topology,
+        &signature_topology_v1,
         context.chain_id,
         context.mode_tag,
     )
     .map_err(|_| EvidenceValidationError::SignatureInvalid)?;
     super::main_loop::vote_signature_check(
         v2,
-        &signature_topology,
+        &signature_topology_v2,
         context.chain_id,
         context.mode_tag,
     )
@@ -491,13 +549,10 @@ fn validate_double_vote(
     if v1.height != v2.height {
         return Err(EvidenceValidationError::HeightMismatch);
     }
-    if v1.view != v2.view {
-        return Err(EvidenceValidationError::ViewMismatch);
-    }
     if v1.epoch != v2.epoch {
         return Err(EvidenceValidationError::EpochMismatch);
     }
-    if v1.signer != v2.signer {
+    if signer_peer_for_vote(v1, context)? != signer_peer_for_vote(v2, context)? {
         return Err(EvidenceValidationError::SignerMismatch);
     }
     let block_hash_conflict = v1.block_hash != v2.block_hash;

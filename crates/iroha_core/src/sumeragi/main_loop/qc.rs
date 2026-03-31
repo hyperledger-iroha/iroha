@@ -101,6 +101,37 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
+    fn qc_conflicts_with_vote_history(
+        &self,
+        phase: crate::sumeragi::consensus::Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        epoch: u64,
+        signers: &BTreeSet<ValidatorIndex>,
+        topology: &super::network_topology::Topology,
+    ) -> Option<(PeerId, crate::sumeragi::consensus::Vote)> {
+        if !matches!(
+            phase,
+            crate::sumeragi::consensus::Phase::Prepare | crate::sumeragi::consensus::Phase::Commit
+        ) {
+            return None;
+        }
+        let signer_peers = signer_peers_for_topology(signers, topology).ok()?;
+        self.vote_log.values().find_map(|vote| {
+            if vote.phase != phase
+                || vote.height != height
+                || vote.epoch != epoch
+                || vote.block_hash == block_hash
+            {
+                return None;
+            }
+            let signer_peer = self.vote_signer_peer(vote)?;
+            signer_peers
+                .contains(&signer_peer)
+                .then_some((signer_peer, vote.clone()))
+        })
+    }
+
     fn try_recover_missing_block_from_local_rbc_session(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -2802,6 +2833,27 @@ impl Actor {
             &signature_topology,
             required,
         );
+        if let Some((signer_peer, conflicting_vote)) = self.qc_conflicts_with_vote_history(
+            phase,
+            block_hash,
+            height,
+            epoch,
+            &snapshot.signers,
+            &signature_topology,
+        ) {
+            warn!(
+                phase = ?phase,
+                height,
+                view,
+                epoch,
+                block = %block_hash,
+                conflicting_view = conflicting_vote.view,
+                conflicting_block = %conflicting_vote.block_hash,
+                signer_peer = ?signer_peer,
+                "skipping QC aggregation: signer set conflicts with recorded same-height vote history"
+            );
+            return;
+        }
         let quorum_met = match consensus_mode {
             ConsensusMode::Permissioned => snapshot.voting_signers >= required,
             ConsensusMode::Npos => {
@@ -3357,7 +3409,7 @@ impl Actor {
                     .pending
                     .pending_blocks
                     .get(&block_hash)
-                    .filter(|pending| !pending.aborted)
+                    .filter(|pending| !pending.is_retry_aborted())
                     .map(|pending| pending.block.clone())
                 {
                     let payload_cooldown = self.payload_rebroadcast_cooldown();
@@ -3738,7 +3790,7 @@ impl Actor {
 
     pub(super) fn has_nonempty_pending_at_height(&self, height: u64) -> bool {
         self.pending.pending_blocks.values().any(|pending| {
-            pending.height == height && !pending.aborted && !pending.block.is_empty()
+            pending.height == height && !pending.is_retry_aborted() && !pending.block.is_empty()
         })
     }
 
@@ -4742,8 +4794,34 @@ impl Actor {
             missing_votes == 0 || matches!(consensus_mode, ConsensusMode::Npos),
             "QC validation should fail when votes are missing in permissioned mode"
         );
+        let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
+        if let Some((signer_peer, conflicting_vote)) = self.qc_conflicts_with_vote_history(
+            qc.phase,
+            qc.subject_block_hash,
+            qc.height,
+            qc.epoch,
+            &signer_set,
+            &topology,
+        ) {
+            warn!(
+                phase = ?qc.phase,
+                height = qc.height,
+                view = qc.view,
+                epoch = qc.epoch,
+                block = %qc.subject_block_hash,
+                conflicting_view = conflicting_vote.view,
+                conflicting_block = %conflicting_vote.block_hash,
+                signer_peer = ?signer_peer,
+                "dropping QC that conflicts with recorded same-height vote history"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::Qc,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::ConflictingVote,
+            );
+            return Ok(());
+        }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-            let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
             crate::sumeragi::status::record_precommit_signers(
                 crate::sumeragi::status::PrecommitSignerRecord {
                     block_hash: qc.subject_block_hash,
@@ -4779,7 +4857,7 @@ impl Actor {
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             if let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash) {
-                if pending.aborted
+                if pending.is_retry_aborted()
                     && !matches!(pending.validation_status, ValidationStatus::Invalid)
                 {
                     let block = pending.block.clone();
@@ -4795,6 +4873,7 @@ impl Actor {
                         "revived aborted pending block after commit QC"
                     );
                 }
+                pending.note_commit_qc_observed(qc.epoch);
             }
         }
         let committed_height = self.state.committed_height();

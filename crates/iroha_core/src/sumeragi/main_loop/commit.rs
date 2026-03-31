@@ -2179,14 +2179,36 @@ impl Actor {
         let state_tip_hash = self.state.latest_block_hash_fast();
         if pending.aborted {
             let pending_parent = pending.block.header().prev_block_hash();
-            if pending.commit_qc_observed()
-                && super::pending_extends_tip(
-                    pending_height,
-                    pending_parent,
-                    state_height,
-                    state_tip_hash,
-                )
-            {
+            let extends_tip = super::pending_extends_tip(
+                pending_height,
+                pending_parent,
+                state_height,
+                state_tip_hash,
+            );
+            let conflicting_local_vote = self
+                .local_conflicting_slot_vote(pending_height, lock.epoch, block_hash)
+                .is_some();
+            if pending.is_retired_same_height() {
+                if pending.commit_qc_observed() && extends_tip && !conflicting_local_vote {
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        "finalizing retired same-height pending block with matching commit QC"
+                    );
+                } else {
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        extends_tip,
+                        conflicting_local_vote,
+                        "retired same-height pending block not eligible for finalize"
+                    );
+                    self.pending.pending_blocks.insert(block_hash, pending);
+                    return false;
+                }
+            } else if pending.commit_qc_observed() && extends_tip {
                 debug!(
                     height = pending_height,
                     view = pending_view,
@@ -3770,13 +3792,7 @@ impl Actor {
             );
             return false;
         }
-        let conflicting_vote = self.vote_log.get(&sent_key).filter(|vote| {
-            vote.phase == crate::sumeragi::consensus::Phase::Commit
-                && vote.height == height
-                && vote.view == view
-                && vote.epoch == epoch
-                && vote.block_hash != block_hash
-        });
+        let conflicting_vote = self.local_conflicting_slot_vote(height, epoch, block_hash);
         if let Some(conflict) = conflicting_vote {
             warn!(
                 height,
@@ -3784,9 +3800,10 @@ impl Actor {
                 epoch,
                 block = ?block_hash,
                 previous_view = conflict.view,
+                previous_phase = ?conflict.phase,
                 previous_block = ?conflict.block_hash,
                 signer = local_idx,
-                "skipping precommit: local validator already voted for a different block at this height"
+                "skipping precommit: local validator already voted for a different same-height block"
             );
             return false;
         }

@@ -3019,7 +3019,7 @@ impl Actor {
                                 .pending_blocks
                                 .get(&block_hash)
                                 .is_some_and(|pending| {
-                                    !pending.aborted
+                                    !pending.is_retry_aborted()
                                         && pending.validation_status == ValidationStatus::Valid
                                 })
                                 || self.subsystems.commit.inflight.as_ref().is_some_and(
@@ -4125,7 +4125,8 @@ impl Actor {
                 .pending_blocks
                 .get(&block_hash)
                 .is_some_and(|pending| {
-                    !pending.aborted && pending.validation_status == ValidationStatus::Valid
+                    !pending.is_retry_aborted()
+                        && pending.validation_status == ValidationStatus::Valid
                 })
                 || self
                     .subsystems

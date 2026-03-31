@@ -5783,7 +5783,7 @@ impl Actor {
         tip_height: usize,
         tip_hash: Option<HashOf<BlockHeader>>,
     ) -> bool {
-        !pending.aborted
+        !pending.is_consensus_inactive()
             && pending_extends_tip(
                 pending.height,
                 pending.block.header().prev_block_hash(),
@@ -7495,7 +7495,7 @@ impl Actor {
             .pending_blocks
             .get(&key.0)
             .is_some_and(|pending| {
-                !pending.aborted && pending.height == key.1 && pending.view == key.2
+                !pending.is_retry_aborted() && pending.height == key.1 && pending.view == key.2
             })
         {
             return true;
@@ -13859,7 +13859,9 @@ impl Actor {
 
     fn local_signed_block_for_hash(&self, hash: HashOf<BlockHeader>) -> Option<Arc<SignedBlock>> {
         if let Some(pending) = self.pending.pending_blocks.get(&hash) {
-            if !pending.aborted && !matches!(pending.validation_status, ValidationStatus::Invalid) {
+            if !pending.is_retry_aborted()
+                && !matches!(pending.validation_status, ValidationStatus::Invalid)
+            {
                 return Some(Arc::new(pending.block.clone()));
             }
         }
@@ -13932,7 +13934,7 @@ impl Actor {
         self.pending
             .pending_blocks
             .get(&hash)
-            .is_some_and(|pending| !pending.aborted)
+            .is_some_and(|pending| !pending.is_retry_aborted())
             || self
                 .subsystems
                 .commit
@@ -13952,7 +13954,7 @@ impl Actor {
             .pending_blocks
             .get(&hash)
             .is_some_and(|pending| {
-                !pending.aborted && pending.validation_status == ValidationStatus::Valid
+                !pending.is_retry_aborted() && pending.validation_status == ValidationStatus::Valid
             })
             || self
                 .subsystems
@@ -14413,7 +14415,7 @@ impl Actor {
 
     fn height_has_authoritative_payload(&self, height: u64) -> bool {
         self.pending.pending_blocks.values().any(|pending| {
-            !pending.aborted
+            !pending.is_retry_aborted()
                 && pending.validation_status != ValidationStatus::Invalid
                 && pending.height == height
         }) || self
@@ -14779,7 +14781,7 @@ impl Actor {
             }
         }
         if let Some(pending) = self.pending.pending_blocks.get(&hash) {
-            if !pending.aborted {
+            if !pending.is_retry_aborted() {
                 return Some((pending.height, pending.block.header().view_change_index()));
             }
         }
@@ -30025,9 +30027,10 @@ impl Actor {
             });
         let da_enabled = self.runtime_da_enabled();
         // Keep DA availability state across view changes until payloads are durably resolved.
-        // In DA mode, retain stale pending payloads (as aborted) so block sync can still
-        // serve missing payloads after view changes. Retain stale RBC sessions until
-        // delivery (or invalidation) so READY/DELIVER can converge after view changes.
+        // In DA mode, retain stale same-height payloads in a retired state so block sync can
+        // still serve missing payloads after view changes without reviving the stale branch
+        // into active consensus ownership. Retain stale RBC sessions until delivery
+        // (or invalidation) so READY/DELIVER can converge after view changes.
         let stale_pending: Vec<_> = self
             .pending
             .pending_blocks
@@ -30044,8 +30047,8 @@ impl Actor {
                 let committed = self.kura.get_block_height_by_hash(hash).is_some();
                 let invalid = matches!(pending.validation_status, ValidationStatus::Invalid);
                 if da_enabled && !committed && !invalid {
-                    if !pending.aborted {
-                        pending.mark_aborted();
+                    if !pending.is_retired_same_height() {
+                        pending.retire_same_height();
                     }
                     self.pending.pending_blocks.insert(hash, pending);
                     pending_retained = pending_retained.saturating_add(1);

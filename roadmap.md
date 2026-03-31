@@ -2,6 +2,66 @@
 
 Last updated: 2026-03-31
 
+Latest sync (2026-03-31 same-height safety/liveness repair plus fresh full soaks):
+the slot-safety repair is implemented, but the fresh honest permissioned and
+NPoS stable reruns are substantially worse than the previous baseline.
+
+- stale same-height pending branches are now retired payload-only state, stale
+  `BlockCreated` intake is dependency/hash gated, and same-height
+  cross-view different-hash `Prepare` / `Commit` votes plus conflicting QCs are
+  fenced off by signer-peer slot history;
+- targeted consensus tests, `cargo fmt --all`, and the release rebuild passed;
+  but
+- fresh stable permissioned failed at strict/quorum height `6`, and fresh
+  stable NPoS failed at `27`, with NPoS still showing
+  `route_unavailable: no authoritative peer binding is registered for lane 1 dataspace 1`;
+  and
+- the new dominant consensus signature in both modes is early contiguous-frontier
+  unified-recovery churn rather than the previous later-height committed-edge
+  conflict shape.
+
+- open work for this slice is now:
+  - permissioned: debug why the retired-slot / slot-conflict cut now drives
+    immediate unified-recovery churn at height `7`, view `5`, including how
+    same-height retirement interacts with frontier ownership, proposal
+    evidence, and pending backlog classification;
+  - NPoS consensus: debug the matching early `missing_qc` / `no proposal
+    observed` / unified-recovery loop at heights `13` and `28`;
+  - NPoS ingress/routing: determine whether the recurring authoritative-binding
+    `route_unavailable` failures are still an independent bug or are now purely
+    downstream from the earlier consensus regression; and
+  - do not resume deferred repo-wide gates (`cargo test -p iroha_core`,
+    `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`)
+    until the full permissioned and NPoS soak envelopes are green again.
+
+Latest sync (2026-03-31 `iroha_test_network` genesis bootstrap compile fix):
+the genesis pre-exec bootstrap path now falls back to the default Nexus
+dataspace catalog when no explicit Nexus config is supplied, so
+`populate_genesis_results(...)` and the mirrored offline-allowance validation
+path compile cleanly again after the signature changed to
+`Option<&ActualNexus>`.
+
+Open work for this slice now remains:
+- none.
+
+Latest sync (2026-03-30 lane-relay emergency hardening):
+the emergency lane-relay override path is now lane-scoped and peer-bound, with
+dedicated authorization, TTL caps, and live consensus-key checks.
+
+- `SetLaneRelayEmergencyValidators` now targets a single `lane_id` plus a peer
+  roster, requires `CanManageLaneRelayEmergency`, and rejects non-empty
+  overrides without an expiry or with a TTL beyond the configured
+  `nexus.lane_relay_emergency.max_ttl_blocks`;
+- runtime relay admission now validates aggregate QC signers against live peer
+  consensus keys, and emergency peers only fill the missing committee deficit
+  instead of replacing or resampling the whole authoritative roster; and
+- stale emergency overrides are pruned when lanes disappear from the active
+  lane catalog, while account-unregister guards no longer treat peer-based
+  emergency state as an account reference.
+
+Open work for this slice now remains:
+- none.
+
 Latest sync (2026-03-31 fresh full soaks rerun on rebuilt release binaries, but both still fail):
 the branch now has an honest current-tree release-build signal again, and the
 full permissioned and NPoS stable envelopes were rerun, but neither passes.

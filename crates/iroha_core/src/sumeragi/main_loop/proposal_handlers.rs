@@ -24,8 +24,8 @@ fn stale_height(height: u64, committed_height: u64) -> bool {
     height <= committed_height
 }
 
-pub(super) fn allow_stale_block_created(da_enabled: bool, missing_request: bool) -> bool {
-    da_enabled || missing_request
+pub(super) fn allow_stale_block_created(missing_request: bool, retained_match: bool) -> bool {
+    missing_request || retained_match
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,7 +63,8 @@ impl Actor {
             .pending_blocks
             .get(&hash)
             .is_some_and(|pending| {
-                pending.aborted && !matches!(pending.validation_status, ValidationStatus::Invalid)
+                pending.is_retry_aborted()
+                    && !matches!(pending.validation_status, ValidationStatus::Invalid)
             })
             || self
                 .pending
@@ -1623,8 +1624,18 @@ impl Actor {
             return Ok(());
         }
         let da_enabled = self.runtime_da_enabled();
-        if let Some(local_view) = self.stale_view(height, view) {
-            if !allow_stale_block_created(da_enabled, missing_request) {
+        let stale_view = self.stale_view(height, view);
+        let stale_retired_match =
+            self.pending
+                .pending_blocks
+                .get(&block_hash)
+                .is_some_and(|pending| {
+                    pending.is_retired_same_height()
+                        && pending.height == height
+                        && pending.view == view
+                });
+        if let Some(local_view) = stale_view {
+            if !allow_stale_block_created(missing_request, stale_retired_match) {
                 debug!(
                     height,
                     view,
@@ -1643,8 +1654,8 @@ impl Actor {
                 height,
                 view,
                 local_view,
-                da_enabled,
                 missing_request,
+                stale_retired_match,
                 "accepting BlockCreated for stale view to recover missing payload"
             );
         }
@@ -1801,15 +1812,18 @@ impl Actor {
         }
         let pending_status = self.pending.pending_blocks.get(&block_hash).map(|pending| {
             (
-                pending.aborted,
+                pending.is_retry_aborted(),
+                pending.is_retired_same_height(),
                 pending.validation_status,
                 pending.commit_qc_observed(),
             )
         });
-        let revive_aborted = pending_status.is_some_and(|(aborted, status, commit_qc_seen)| {
-            aborted && commit_qc_seen && !matches!(status, ValidationStatus::Invalid)
-        });
-        if pending_status.is_some() && !revive_aborted {
+        let stale_payload_only = stale_view.is_some();
+        let revive_aborted = !stale_payload_only
+            && pending_status.is_some_and(|(aborted, _, status, commit_qc_seen)| {
+                aborted && commit_qc_seen && !matches!(status, ValidationStatus::Invalid)
+            });
+        if pending_status.is_some() && !revive_aborted && !stale_payload_only {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
                 if self.frontier_slot_is_exact_height(height) {
@@ -3098,36 +3112,58 @@ impl Actor {
                     if let Some(epoch) = commit_qc_epoch {
                         pending.note_commit_qc_observed(epoch);
                     }
+                } else if stale_payload_only {
+                    let pending = occ.get_mut();
+                    if pending.is_retired_same_height() {
+                        pending.refresh_retired_payload(block, payload_hash, height, view);
+                    } else {
+                        pending.replace_block(block, payload_hash, height, view);
+                        pending.retire_same_height();
+                    }
                 } else {
                     occ.get_mut()
                         .replace_block(block, payload_hash, height, view);
                 }
             }
             Entry::Vacant(vac) => {
-                vac.insert(PendingBlock::new(block, payload_hash, height, view));
+                let mut pending = PendingBlock::new(block, payload_hash, height, view);
+                if stale_payload_only {
+                    pending.retire_same_height();
+                }
+                vac.insert(pending);
             }
         }
-        if let Some(hint) = inline_hint {
-            self.subsystems.propose.proposal_cache.insert_hint(hint);
+        if !stale_payload_only {
+            if let Some(hint) = inline_hint {
+                self.subsystems.propose.proposal_cache.insert_hint(hint);
+            }
+            if let Some(proposal) = inline_proposal {
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .insert_proposal(proposal);
+                self.note_proposal_seen(height, view, payload_hash);
+            }
+            self.note_authoritative_slot_owner(height, view, block_hash);
         }
-        if let Some(proposal) = inline_proposal {
-            self.subsystems
-                .propose
-                .proposal_cache
-                .insert_proposal(proposal);
-            self.note_proposal_seen(height, view, payload_hash);
-        }
-        self.note_authoritative_slot_owner(height, view, block_hash);
-        self.note_frontier_block_created(
-            block_hash,
-            height,
-            view,
-            frontier.clone(),
-            sender.as_ref(),
-            Instant::now(),
-        );
-        if height == committed_height.saturating_add(1) {
-            self.note_view_change_from_block(height, view);
+        if stale_payload_only {
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+            self.clear_missing_block_view_change(&block_hash);
+        } else {
+            self.note_frontier_block_created(
+                block_hash,
+                height,
+                view,
+                frontier.clone(),
+                sender.as_ref(),
+                Instant::now(),
+            );
+            if height == committed_height.saturating_add(1) {
+                self.note_view_change_from_block(height, view);
+            }
         }
         self.record_phase_sample(PipelinePhase::CollectDa, height, view);
         if let Some(qc) = qc_cache_for_subject(&self.qc_cache, block_hash)

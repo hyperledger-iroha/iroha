@@ -2,6 +2,103 @@
 
 Last updated: 2026-03-31
 
+## 2026-03-31 Same-height safety/liveness repair landed, but fresh full soaks regressed much earlier in both modes
+- Implemented the consensus-only same-height repair in `iroha_core`:
+  - stale same-height DA/RBC branches are now retained as explicit retired
+    payload-only state instead of ordinary aborted pending blocks;
+  - stale `BlockCreated` intake now requires either an explicit missing-block
+    dependency or a retained-hash match and no longer recreates active slot
+    ownership;
+  - local and inbound `Prepare` / `Commit` vote handling is now slot-scoped by
+    signer peer + height + epoch, so same-height different-hash revotes across
+    views are rejected and recorded as equivocation evidence;
+  - QC reconstruction / aggregation now fail-closes when the signer set
+    conflicts with recorded same-height vote history; and
+  - retired same-height branches may only finalize on matching authoritative
+    commit evidence when no conflicting local vote history exists.
+- Focused verification for the repair passed:
+  - targeted `cargo test -p iroha_core --lib` selectors for cross-view vote
+    conflict fencing, stale `BlockCreated`, retired-slot commit/QC handling,
+    precommit fencing, split-view quorum prevention, committed-edge owner,
+    passive catch-up, proposal evidence, and conflicting-commit surfaces;
+  - `cargo fmt --all`;
+  - `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`.
+- Fresh stable permissioned rerun on the rebuilt binaries regressed badly:
+  - controller log:
+    `/tmp/izanami_permissioned_sameheightfix_20260331T102121Z.log`;
+  - peer artifacts:
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_NdecK7`;
+  - failed on the 600s strict-progress watchdog at
+    `strict_min_height=6` / `quorum_min_height=6`;
+  - final controller summary was
+    `successes=234 failures=55 izanami_ingress_failover_total=177
+    izanami_ingress_endpoint_unhealthy_total=160`; and
+  - peer logs now show immediate contiguous-frontier unified-recovery churn at
+    height `7`, view `5`, with queue/RBC backlog flags set, followed by the
+    usual ingress backpressure (`transaction queued for too long`,
+    confirmation timeouts).
+- Fresh stable NPoS rerun on the rebuilt binaries also regressed:
+  - controller log:
+    `/tmp/izanami_npos_sameheightfix_20260331T103923Z.log`;
+  - peer artifacts:
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_FFJcuH`;
+  - failed on the same 600s strict-progress watchdog at
+    `strict_min_height=27` / `quorum_min_height=27`;
+  - final controller summary was
+    `successes=468 failures=90 izanami_ingress_failover_total=206
+    izanami_ingress_endpoint_unhealthy_total=160`;
+  - workload routing still collapsed into
+    `route_unavailable: no authoritative peer binding is registered for lane 1 dataspace 1`;
+    and
+  - peer logs also show the consensus-side stall well before the watchdog:
+    repeated `no proposal observed for view before changing view` on
+    `missing_qc` at height `13`, then contiguous-frontier unified-recovery
+    churn at heights `13` and `28`.
+- Current read after the fresh honest reruns:
+  - the new slot-safety fences are in place, but this cut is much worse
+    end-to-end than the previous current-tree baseline;
+  - permissioned is no longer failing in the old `45/46` shape and instead now
+    starves almost immediately behind a same-height/frontier recovery loop; and
+  - NPoS still combines a real consensus liveness stall with the separate
+    authoritative-binding `route_unavailable` failure surface.
+
+## 2026-03-31 Follow-up: `iroha_test_network` genesis pre-exec bootstrap handles missing Nexus config again
+- Fixed `crates/iroha_test_network/src/config.rs` so
+  `populate_genesis_results(...)` no longer treats
+  `Option<&iroha_config::parameters::actual::Nexus>` as a concrete config when
+  seeding genesis SNS alias bootstrap state.
+- The helper now falls back to `ActualNexus::default().dataspace_catalog` when
+  no Nexus config is supplied, matching the existing `apply_preexec_nexus_overrides`
+  behavior instead of failing to compile on `nexus_config.dataspace_catalog`.
+- Updated the offline-allowance genesis validation test bootstrap to use the
+  same default dataspace catalog when mirroring the production pre-exec path.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_test_network populate_genesis_results_accepts_block_proof_policies -- --nocapture`
+
+## 2026-03-30 Follow-up: lane-relay emergency overrides are now lane-scoped, peer-bound, and TTL-capped
+- Hardened the Nexus emergency override path so `SetLaneRelayEmergencyValidators`
+  now stores a per-lane peer roster instead of a dataspace-wide account list.
+  The setter requires the dedicated `CanManageLaneRelayEmergency` permission,
+  enforces the configured multisig policy, rejects non-empty rosters without an
+  expiry, caps TTL with `nexus.lane_relay_emergency.max_ttl_blocks`, and only
+  accepts peers that are currently registered and have a live consensus key.
+- Moved runtime relay verification onto peer-bound committees end to end:
+  emergency overrides are keyed by `LaneId`, only fill a committee deficit, do
+  not displace the authoritative base peers, and use live consensus-key PoP
+  checks during aggregate QC verification instead of account-signatory lookup.
+- Added `LaneId` JSON key support for snapshots, pruned stale emergency
+  overrides when lanes disappear from the active lane catalog, and updated the
+  account-unregister guard/tests so peer-based emergency state no longer blocks
+  unrelated account deletion.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core -p iroha_data_model -p iroha_executor -p iroha_executor_data_model -p iroha_schema_gen -p iroha_config --all-targets`
+  - `cargo test -p iroha_config nexus_lane_relay_emergency --test fixtures`
+  - `cargo test -p iroha_core set_lane_relay_emergency_validators --lib`
+  - `cargo test -p iroha_core emergency_override --lib`
+  - `cargo test -p iroha_core unregister_account_allows_peer_based_lane_relay_emergency_state --lib`
+
 ## 2026-03-31 Fresh full permissioned and NPoS soaks rerun on current release binaries; both still fail
 - Rebuilt fresh current-tree release binaries successfully with:
   `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`.

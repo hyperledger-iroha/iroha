@@ -1,27 +1,22 @@
 use super::*;
 use crate::{
-    account::AccountId,
     metadata::Metadata,
-    nexus::{DataSpaceId, LaneRelayEnvelope, ProofBlob},
+    nexus::{LaneId, LaneRelayEnvelope, ProofBlob},
+    peer::PeerId,
 };
 
-iroha_data_model_derive::model_single! {
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-    #[derive(getset::Getters)]
-    #[derive(Decode, Encode)]
-    #[derive(iroha_schema::IntoSchema)]
-    #[getset(get = "pub")]
-    /// Set or clear emergency validators used for lane relay quorum recovery.
+isi! {
+    /// Set or clear emergency validator peers used for lane relay quorum recovery.
     ///
     /// This instruction is disabled by default and requires
     /// `nexus.lane_relay_emergency.enabled = true`. When enabled, the transaction authority
     /// must be a multisig account meeting the configured threshold/member minimums
     /// (defaults to 3-of-5).
     pub struct SetLaneRelayEmergencyValidators {
-        /// Dataspace whose validator pool is being overridden.
-        pub dataspace_id: DataSpaceId,
-        /// Validators added to the pool when quorum is at risk.
-        pub validators: Vec<AccountId>,
+        /// Lane whose emergency committee fillers are being overridden.
+        pub lane_id: LaneId,
+        /// Live consensus peers allowed to fill missing committee slots.
+        pub peers: Vec<PeerId>,
         /// Optional block height (inclusive) after which the override expires.
         #[norito(skip_serializing_if = "Option::is_none")]
         #[norito(default)]

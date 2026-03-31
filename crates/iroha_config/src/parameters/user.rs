@@ -12455,6 +12455,9 @@ pub struct LaneRelayEmergency {
     /// Minimum multisig member count required for override transactions.
     #[config(default = "defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS")]
     pub multisig_members: u16,
+    /// Maximum number of blocks an emergency override may remain active.
+    #[config(default = "defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS")]
+    pub max_ttl_blocks: u32,
 }
 
 impl Default for LaneRelayEmergency {
@@ -12463,6 +12466,7 @@ impl Default for LaneRelayEmergency {
             enabled: defaults::nexus::lane_relay_emergency::ENABLED,
             multisig_threshold: defaults::nexus::lane_relay_emergency::MULTISIG_THRESHOLD,
             multisig_members: defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
+            max_ttl_blocks: defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS,
         }
     }
 }
@@ -12486,6 +12490,14 @@ impl LaneRelayEmergency {
             );
             None
         });
+        let max_ttl_blocks = NonZeroU32::new(self.max_ttl_blocks).or_else(|| {
+            invalid = true;
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig)
+                    .attach("nexus.lane_relay_emergency.max_ttl_blocks must be > 0"),
+            );
+            None
+        });
 
         if let (Some(threshold), Some(members)) = (threshold, members)
             && threshold.get() > members.get()
@@ -12496,7 +12508,7 @@ impl LaneRelayEmergency {
             )));
         }
 
-        if invalid || threshold.is_none() || members.is_none() {
+        if invalid || threshold.is_none() || members.is_none() || max_ttl_blocks.is_none() {
             return None;
         }
 
@@ -12504,6 +12516,7 @@ impl LaneRelayEmergency {
             enabled: self.enabled,
             multisig_threshold: threshold.expect("validated"),
             multisig_members: members.expect("validated"),
+            max_ttl_blocks: max_ttl_blocks.expect("validated"),
         })
     }
 }

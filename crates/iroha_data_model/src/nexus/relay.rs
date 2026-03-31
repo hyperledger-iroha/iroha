@@ -12,11 +12,11 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
-    AccountId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
     consensus::Qc,
     da::commitment::DaCommitmentBundle,
     nexus::{AxtFastpqBinding, DataSpaceId, LaneId},
+    peer::PeerId,
     prelude::Metadata,
 };
 
@@ -146,7 +146,7 @@ pub struct LaneRelayEvidenceBundle {
     pub error_message: String,
 }
 
-/// Emergency validator override for a dataspace when lane relay quorum is at risk.
+/// Emergency validator-peer override for a lane when lane relay quorum is at risk.
 ///
 /// Application of this override is gated by `nexus.lane_relay_emergency.enabled`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -155,11 +155,10 @@ pub struct LaneRelayEvidenceBundle {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct LaneRelayEmergencyValidatorSet {
-    /// Validators temporarily allowed to satisfy lane relay quorum.
-    pub validators: Vec<AccountId>,
-    /// Optional block height (inclusive) after which the override expires.
-    #[norito(default)]
-    pub expires_at_height: Option<u64>,
+    /// Live consensus peers temporarily allowed to fill missing lane-relay committee slots.
+    pub peers: Vec<PeerId>,
+    /// Block height (inclusive) after which the override expires.
+    pub expires_at_height: u64,
     /// Optional metadata describing why the override was applied.
     #[norito(default)]
     pub metadata: Metadata,

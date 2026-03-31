@@ -254,6 +254,27 @@ pub mod isi {
         build_state_path_key_norito(&block_path, relay_ref.settlement_hash.as_ref())
     }
 
+    fn load_verified_lane_relay_record(
+        state_ro: &impl StateReadOnly,
+        relay_ref: &LaneRelayEnvelopeRef,
+    ) -> std::result::Result<
+        VerifiedLaneRelayRecord,
+        iroha_data_model::query::error::QueryExecutionFail,
+    > {
+        let key = verified_lane_relay_state_key(relay_ref).map_err(|err| {
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string())
+        })?;
+        let payload = state_ro
+            .world()
+            .smart_contract_state()
+            .get(&key)
+            .ok_or(iroha_data_model::query::error::QueryExecutionFail::NotFound)?;
+        norito::decode_from_bytes::<VerifiedLaneRelayRecord>(payload).map_err(|err| {
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "verified lane relay decode failed: {err}"
+            ))
+        })
+    }
     fn protected_contract_namespaces(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> BTreeSet<String> {
@@ -10121,9 +10142,13 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(&state_transaction.world, authority, "CanManagePeers") {
+            if !has_permission(
+                &state_transaction.world,
+                authority,
+                "CanManageLaneRelayEmergency",
+            ) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManagePeers".into(),
+                    "not permitted: CanManageLaneRelayEmergency".into(),
                 ));
             }
             if !state_transaction.nexus.enabled {
@@ -10165,45 +10190,120 @@ pub mod isi {
                 ));
             }
 
-            let dataspace_id = *self.dataspace_id();
-            if !state_transaction
-                .nexus
-                .dataspace_catalog
-                .entries()
-                .iter()
-                .any(|entry| entry.id == dataspace_id)
-            {
+            let lane_id = *self.lane_id();
+            if state_transaction.nexus.lane_config.entry(lane_id).is_none() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
-                        "unknown dataspace id {}",
-                        dataspace_id.as_u64()
+                        "unknown lane id {}",
+                        lane_id.as_u32()
                     )),
                 ));
             }
 
-            let mut validators = self.validators().clone();
-            validators.sort();
-            validators.dedup();
-            for validator in &validators {
-                state_transaction.world.account(validator)?;
-            }
-
-            if validators.is_empty() {
+            let mut peers = self.peers().clone();
+            peers.sort();
+            peers.dedup();
+            if peers.is_empty() {
+                iroha_logger::info!(
+                    %authority,
+                    lane_id = lane_id.as_u32(),
+                    "clearing lane relay emergency override"
+                );
                 state_transaction
                     .world
                     .lane_relay_emergency_validators
-                    .remove(dataspace_id);
+                    .remove(lane_id);
                 return Ok(());
             }
 
+            let current_height = state_transaction.block_height();
+            let expires_at_height = self.expires_at_height().ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "lane relay emergency override requires expires_at_height for non-empty peer rosters"
+                        .into(),
+                ))
+            })?;
+            if expires_at_height < current_height {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "lane relay emergency override expiry {} is already in the past at current height {}",
+                        expires_at_height, current_height
+                    )),
+                ));
+            }
+            let max_ttl_blocks = u64::from(
+                state_transaction
+                    .nexus
+                    .lane_relay_emergency
+                    .max_ttl_blocks
+                    .get(),
+            );
+            if expires_at_height.saturating_sub(current_height) > max_ttl_blocks {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "lane relay emergency override expiry {} exceeds max_ttl_blocks {} at current height {}",
+                        expires_at_height, max_ttl_blocks, current_height
+                    )),
+                ));
+            }
+
+            let present_peers: BTreeSet<_> =
+                state_transaction.world.peers().iter().cloned().collect();
+            let topology_peers: BTreeSet<_> = state_transaction
+                .commit_topology()
+                .get()
+                .iter()
+                .cloned()
+                .collect();
+            let enforce_topology_membership = !topology_peers.is_empty();
+            for peer in &peers {
+                if !present_peers.contains(peer) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay emergency peer {} is not registered",
+                            peer.public_key()
+                        )),
+                    ));
+                }
+                if enforce_topology_membership && !topology_peers.contains(peer) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay emergency peer {} is not in the current commit topology",
+                            peer.public_key()
+                        )),
+                    ));
+                }
+                if crate::state::live_consensus_key_pop_for_peer(
+                    &state_transaction.world,
+                    peer,
+                    current_height,
+                )
+                .is_none()
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay emergency peer {} does not have a live consensus key",
+                            peer.public_key()
+                        )),
+                    ));
+                }
+            }
+
+            iroha_logger::warn!(
+                %authority,
+                lane_id = lane_id.as_u32(),
+                peer_count = peers.len(),
+                expires_at_height,
+                "setting lane relay emergency override"
+            );
             state_transaction
                 .world
                 .lane_relay_emergency_validators
                 .insert(
-                    dataspace_id,
+                    lane_id,
                     LaneRelayEmergencyValidatorSet {
-                        validators,
-                        expires_at_height: *self.expires_at_height(),
+                        peers,
+                        expires_at_height,
                         metadata: self.metadata().clone(),
                     },
                 );
@@ -11630,6 +11730,31 @@ pub mod isi {
             );
         }
 
+        fn seed_domain_name_lease_tx(
+            world: &mut WorldTransaction<'_, '_>,
+            owner: &AccountId,
+            domain_id: &DomainId,
+        ) {
+            let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+            let address =
+                iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            world.smart_contract_state_mut_for_testing().insert(
+                crate::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+        }
+
         #[test]
         fn grant_role_permission_records_epoch_and_revoke_clears() {
             let kura = Kura::blank_kura_for_testing();
@@ -12223,6 +12348,7 @@ pub mod isi {
 
         fn bootstrap_alice_account(stx: &mut StateTransaction<'_, '_>) {
             let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
+            seed_domain_name_lease_tx(&mut stx.world, &ALICE_ID, &domain_id);
             Register::domain(Domain::new(domain_id))
                 .execute(&ALICE_ID, stx)
                 .expect("register wonderland domain");
@@ -12265,11 +12391,38 @@ pub mod isi {
             stx.world.space_directory_manifests.insert(uaid, set);
         }
 
-        fn grant_manage_peers_permission(stx: &mut StateTransaction<'_, '_>, account: &AccountId) {
-            let permission = Permission::new("CanManagePeers".into(), Json::new(()));
+        fn grant_manage_lane_relay_emergency_permission(
+            stx: &mut StateTransaction<'_, '_>,
+            account: &AccountId,
+        ) {
+            let permission = Permission::new("CanManageLaneRelayEmergency".into(), Json::new(()));
             stx.world
                 .account_permissions
                 .insert(account.clone(), BTreeSet::from([permission]));
+        }
+
+        fn seed_live_peer(stx: &mut StateTransaction<'_, '_>, keypair: &KeyPair) -> PeerId {
+            let peer = PeerId::new(keypair.public_key().clone());
+            if stx.world.peers.iter().all(|existing| existing != &peer) {
+                let _ = stx.world.peers.push(peer.clone());
+            }
+
+            let record = ConsensusKeyRecord {
+                id: crate::state::derive_validator_key_id(keypair.public_key()),
+                public_key: keypair.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                        .expect("generate pop for test peer"),
+                ),
+                activation_height: 0,
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            let record_id = record.id.clone();
+            upsert_consensus_key(&mut stx.world, &record_id, record);
+            peer
         }
 
         fn register_multisig_authority(
@@ -13586,10 +13739,10 @@ pub mod isi {
                 },
             );
             stx.world.lane_relay_emergency_validators.insert(
-                DataSpaceId::GLOBAL,
+                LaneId::new(0),
                 iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
-                    validators: vec![account_id.clone()],
-                    expires_at_height: None,
+                    peers: vec![PeerId::from(account_id.signatory().clone())],
+                    expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
             );
@@ -14249,17 +14402,13 @@ pub mod isi {
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_global_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
@@ -14267,12 +14416,12 @@ pub mod isi {
             assert!(matches!(
                 err,
                 InstructionExecutionError::InvariantViolation(msg)
-                    if msg.as_ref() == "not permitted: CanManagePeers"
+                    if msg.as_ref() == "not permitted: CanManageLaneRelayEmergency"
             ));
             assert!(
                 stx.world
                     .lane_relay_emergency_validators
-                    .get(&DataSpaceId::GLOBAL)
+                    .get(&LaneId::new(0))
                     .is_none(),
                 "override must not be stored without permission"
             );
@@ -14291,19 +14440,15 @@ pub mod isi {
             configure_global_dataspace(&mut stx);
             stx.nexus.lane_relay_emergency.enabled = true;
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
             stx.nexus.enabled = false;
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
@@ -14328,18 +14473,14 @@ pub mod isi {
             stx.nexus.enabled = true;
             configure_global_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
@@ -14365,18 +14506,14 @@ pub mod isi {
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_global_dataspace(&mut stx);
-            grant_manage_peers_permission(&mut stx, &ALICE_ID);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            grant_manage_lane_relay_emergency_permission(&mut stx, &ALICE_ID);
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&ALICE_ID, &mut stx)
@@ -14391,7 +14528,7 @@ pub mod isi {
         }
 
         #[test]
-        fn set_lane_relay_emergency_validators_rejects_unknown_dataspace() {
+        fn set_lane_relay_emergency_validators_rejects_unknown_lane() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -14404,32 +14541,27 @@ pub mod isi {
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_global_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
-
-            let unknown = DataSpaceId::new(42);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
+            let unknown = LaneId::new(42);
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: unknown,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: unknown,
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
-            .expect_err("unknown dataspace should be rejected");
+            .expect_err("unknown lane should be rejected");
             let msg = smart_contract_instruction_error_message(err);
             assert!(
-                msg.contains("unknown dataspace id"),
+                msg.contains("unknown lane id"),
                 "unexpected error message: {msg}"
             );
         }
 
         #[test]
-        fn set_lane_relay_emergency_validators_rejects_unknown_validator() {
+        fn set_lane_relay_emergency_validators_rejects_unregistered_peer() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -14442,21 +14574,128 @@ pub mod isi {
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_global_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
-
-            let (missing, _) = gen_account_in("wonderland");
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let missing = PeerId::new(
+                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            );
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![missing.clone()],
+                lane_id: LaneId::new(0),
+                peers: vec![missing],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("unregistered peer should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("is not registered"),
+                "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_peer_without_live_consensus_key() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_global_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+
+            let peer = PeerId::new(
+                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            );
+            let _ = stx.world.peers.push(peer.clone());
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("peer without live consensus key should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("does not have a live consensus key"),
+                "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_requires_expiry_for_non_empty_roster() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_global_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
                 expires_at_height: None,
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
-            .expect_err("unknown validator should be rejected");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::Find(FindError::Account(id)) if id == missing
-            ));
+            .expect_err("missing expiry should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("requires expires_at_height"),
+                "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_expiry_beyond_max_ttl() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_global_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(40),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("oversized ttl should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("exceeds max_ttl_blocks"),
+                "unexpected error message: {msg}"
+            );
         }
 
         #[test]
@@ -14473,21 +14712,20 @@ pub mod isi {
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_global_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
 
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator_a, _) = gen_account_in("wonderland");
-            let (validator_b, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator_a, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator_a");
-            Register::account(new_account_in_domain(&validator_b, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator_b");
+            let validator_a = seed_live_peer(
+                &mut stx,
+                &KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            );
+            let validator_b = seed_live_peer(
+                &mut stx,
+                &KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            );
 
             SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![
+                lane_id: LaneId::new(0),
+                peers: vec![
                     validator_b.clone(),
                     validator_a.clone(),
                     validator_b.clone(),
@@ -14501,13 +14739,13 @@ pub mod isi {
             let record = stx
                 .world
                 .lane_relay_emergency_validators
-                .get(&DataSpaceId::GLOBAL)
+                .get(&LaneId::new(0))
                 .expect("override stored");
             let mut expected = vec![validator_a, validator_b];
             expected.sort();
             expected.dedup();
-            assert_eq!(record.validators, expected);
-            assert_eq!(record.expires_at_height, Some(12));
+            assert_eq!(record.peers, expected);
+            assert_eq!(record.expires_at_height, 12);
             assert!(record.metadata.is_empty());
         }
 
@@ -14525,18 +14763,16 @@ pub mod isi {
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_global_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let validator = seed_live_peer(
+                &mut stx,
+                &KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            );
 
             SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator.clone()],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![validator.clone()],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
@@ -14544,14 +14780,14 @@ pub mod isi {
             assert!(
                 stx.world
                     .lane_relay_emergency_validators
-                    .get(&DataSpaceId::GLOBAL)
+                    .get(&LaneId::new(0))
                     .is_some(),
                 "override should be stored before clearing"
             );
 
             SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: Vec::new(),
+                lane_id: LaneId::new(0),
+                peers: Vec::new(),
                 expires_at_height: None,
                 metadata: Metadata::default(),
             }
@@ -14560,9 +14796,9 @@ pub mod isi {
             assert!(
                 stx.world
                     .lane_relay_emergency_validators
-                    .get(&DataSpaceId::GLOBAL)
+                    .get(&LaneId::new(0))
                     .is_none(),
-                "override should be removed when validators list is empty"
+                "override should be removed when peer list is empty"
             );
         }
 
@@ -17665,16 +17901,7 @@ pub mod isi {
                 &self,
                 state_ro: &impl StateReadOnly,
             ) -> Result<VerifiedLaneRelayRecord, Error> {
-                let key = verified_lane_relay_state_key(&self.relay_ref)
-                    .map_err(|err| Error::Conversion(err.to_string()))?;
-                let payload = state_ro
-                    .world()
-                    .smart_contract_state()
-                    .get(&key)
-                    .ok_or(Error::NotFound)?;
-                norito::decode_from_bytes::<VerifiedLaneRelayRecord>(payload).map_err(|err| {
-                    Error::Conversion(format!("verified lane relay decode failed: {err}"))
-                })
+                load_verified_lane_relay_record(state_ro, &self.relay_ref)
             }
         }
 

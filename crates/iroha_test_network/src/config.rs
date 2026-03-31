@@ -725,7 +725,11 @@ fn populate_genesis_results(
     let genesis_account_entry =
         Account::new(effective_genesis_account.clone()).build(&effective_genesis_account);
     let mut world = World::with([genesis_domain], [genesis_account_entry], []);
-    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0);
+    let default_nexus = ActualNexus::default();
+    let dataspace_catalog = nexus_config
+        .map(|nexus| &nexus.dataspace_catalog)
+        .unwrap_or(&default_nexus.dataspace_catalog);
+    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, dataspace_catalog);
     let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
     apply_preexec_nexus_overrides(
         &mut state,
@@ -1484,7 +1488,12 @@ mod tests {
         );
         // Mirror the production pre-exec bootstrap so direct validation sees the same
         // genesis alias state as `populate_genesis_results`.
-        iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0);
+        let default_nexus = ActualNexus::default();
+        iroha_core::sns::seed_genesis_alias_bootstrap(
+            &mut world,
+            &block.0,
+            &default_nexus.dataspace_catalog,
+        );
         let state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
         let chain = block
             .0

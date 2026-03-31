@@ -633,6 +633,22 @@ impl Actor {
         );
         let proposal_height = height;
         let proposal_epoch = self.epoch_for_height(proposal_height);
+        if let Some(existing_vote) = self.local_conflicting_slot_vote(
+            proposal_height,
+            proposal_epoch,
+            highest_qc.subject_block_hash,
+        ) {
+            debug!(
+                height = proposal_height,
+                view,
+                epoch = proposal_epoch,
+                voted_view = existing_vote.view,
+                voted_phase = ?existing_vote.phase,
+                voted_block = %existing_vote.block_hash,
+                "deferring proposal assembly: local validator already has same-height vote history for another block"
+            );
+            return Ok(false);
+        }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         self.prune_highest_qc_missing_defer_markers(committed_height);
         self.init_collector_plan(topology, proposal_height, view);

@@ -1763,9 +1763,8 @@ pub struct World {
     /// Last claimed reward epoch per `(lane_id, account, asset_id)` tuple.
     #[norito(skip)]
     pub(crate) public_lane_reward_claims: Storage<(LaneId, AccountId, AssetId), u64>,
-    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
-    pub(crate) lane_relay_emergency_validators:
-        Storage<DataSpaceId, LaneRelayEmergencyValidatorSet>,
+    /// Emergency validator overrides for lane relay quorum recovery (per lane).
+    pub(crate) lane_relay_emergency_validators: Storage<LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: Storage<AssetDefinitionId, ZkAssetState>,
     /// Anonymous elections state keyed by election id.
@@ -2153,9 +2152,9 @@ pub struct WorldBlock<'world> {
     pub(crate) public_lane_rewards: StorageBlock<'world, (LaneId, u64), PublicLaneRewardRecord>,
     /// Last claimed reward epoch per `(lane_id, account, asset_id)` tuple.
     pub(crate) public_lane_reward_claims: StorageBlock<'world, (LaneId, AccountId, AssetId), u64>,
-    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
-        StorageBlock<'world, DataSpaceId, LaneRelayEmergencyValidatorSet>,
+        StorageBlock<'world, LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageBlock<'world, AssetDefinitionId, ZkAssetState>,
     /// Anonymous elections state keyed by election id.
@@ -2751,9 +2750,9 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, (LaneId, u64), PublicLaneRewardRecord>,
     pub(crate) public_lane_reward_claims:
         StorageTransaction<'block, 'world, (LaneId, AccountId, AssetId), u64>,
-    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
-        StorageTransaction<'block, 'world, DataSpaceId, LaneRelayEmergencyValidatorSet>,
+        StorageTransaction<'block, 'world, LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageTransaction<'block, 'world, AssetDefinitionId, ZkAssetState>,
     /// Elections state
@@ -3487,9 +3486,9 @@ pub struct WorldView<'world> {
         StorageView<'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
     pub(crate) public_lane_rewards: StorageView<'world, (LaneId, u64), PublicLaneRewardRecord>,
     pub(crate) public_lane_reward_claims: StorageView<'world, (LaneId, AccountId, AssetId), u64>,
-    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
-        StorageView<'world, DataSpaceId, LaneRelayEmergencyValidatorSet>,
+        StorageView<'world, LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageView<'world, AssetDefinitionId, ZkAssetState>,
     /// Elections state view (read-only)
@@ -6998,6 +6997,61 @@ pub(crate) fn peer_has_live_consensus_key(
         peer_consensus_key_gate(snapshot, peer_id, block_height),
         ConsensusKeyGate::Live
     )
+}
+
+/// Fetch the stored BLS proof-of-possession for a peer's live consensus key.
+pub(crate) fn live_consensus_key_pop_for_peer(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+) -> Option<Vec<u8>> {
+    let pk = peer_id.public_key();
+    let ids = snapshot.consensus_keys_by_pk().get(&pk.to_string())?;
+    for id in ids {
+        let Some(record) = snapshot.consensus_keys().get(id) else {
+            continue;
+        };
+        if record.public_key != *pk {
+            continue;
+        }
+        let not_yet_active = block_height < record.activation_height;
+        let expired = record
+            .expiry_height
+            .is_some_and(|expiry| block_height >= expiry);
+        match record.status {
+            ConsensusKeyStatus::Active | ConsensusKeyStatus::Retiring
+                if !not_yet_active && !expired =>
+            {
+                if let Some(pop) = record.pop.as_ref() {
+                    return Some(pop.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Filter lane-relay emergency peers to those that are currently usable for QC verification.
+pub(crate) fn eligible_lane_relay_emergency_peers(
+    snapshot: &impl WorldReadOnly,
+    peers: &[PeerId],
+    commit_topology: &[PeerId],
+    block_height: u64,
+) -> Vec<PeerId> {
+    let present_peers: BTreeSet<PeerId> = snapshot.peers().iter().cloned().collect();
+    let topology_peers: BTreeSet<PeerId> = commit_topology.iter().cloned().collect();
+    let enforce_topology_membership = !topology_peers.is_empty();
+
+    let mut eligible = peers.to_vec();
+    eligible.retain(|peer| {
+        present_peers.contains(peer)
+            && (!enforce_topology_membership || topology_peers.contains(peer))
+            && live_consensus_key_pop_for_peer(snapshot, peer, block_height).is_some()
+    });
+    eligible.sort();
+    eligible.dedup();
+    eligible
 }
 
 /// Stake-snapshot trait: provides an epoch-specific validator roster snapshot.
@@ -11904,10 +11958,10 @@ pub trait WorldReadOnly {
     /// Last claimed reward epoch keyed by `(lane_id, account, asset_id)` (read-only).
     fn public_lane_reward_claims(&self)
     -> &impl StorageReadOnly<(LaneId, AccountId, AssetId), u64>;
-    /// Emergency lane relay validator overrides keyed by dataspace (read-only).
+    /// Emergency lane relay validator overrides keyed by lane (read-only).
     fn lane_relay_emergency_validators(
         &self,
-    ) -> &impl StorageReadOnly<DataSpaceId, LaneRelayEmergencyValidatorSet>;
+    ) -> &impl StorageReadOnly<LaneId, LaneRelayEmergencyValidatorSet>;
     /// Capacity declarations (read-only).
     fn capacity_declarations(&self)
     -> &impl StorageReadOnly<ProviderId, CapacityDeclarationRecord>;
@@ -12998,7 +13052,7 @@ macro_rules! impl_world_ro {
             }
             fn lane_relay_emergency_validators(
                 &self,
-            ) -> &impl StorageReadOnly<DataSpaceId, LaneRelayEmergencyValidatorSet> {
+            ) -> &impl StorageReadOnly<LaneId, LaneRelayEmergencyValidatorSet> {
                 &self.lane_relay_emergency_validators
             }
             fn capacity_declarations(&self) -> &impl StorageReadOnly<ProviderId, CapacityDeclarationRecord> {
@@ -18181,28 +18235,29 @@ impl State {
     }
 
     fn lane_relay_committee_from_pool(
-        pool: &[AccountId],
+        pool: &[PeerId],
         committee_size: usize,
         seed: [u8; 32],
-    ) -> Result<Vec<AccountId>, LaneRelayError> {
+    ) -> Result<Vec<PeerId>, LaneRelayError> {
         let mut scored = Vec::with_capacity(pool.len());
-        for validator in pool {
+        for peer in pool {
             let mut buffer = Vec::with_capacity(LANE_RELAY_MEMBER_DOMAIN.len() + seed.len());
             buffer.extend_from_slice(LANE_RELAY_MEMBER_DOMAIN);
             buffer.extend_from_slice(&seed);
-            let encoded = norito::to_bytes(validator)?;
+            let encoded = norito::to_bytes(peer)?;
             buffer.extend_from_slice(&encoded);
-            scored.push((Hash::new(buffer), validator.clone()));
+            scored.push((Hash::new(buffer), peer.clone()));
         }
         scored.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
         scored.dedup_by(|lhs, rhs| lhs.1 == rhs.1);
         Ok(scored
             .into_iter()
             .take(committee_size)
-            .map(|(_, account)| account)
+            .map(|(_, peer)| peer)
             .collect())
     }
 
+    #[cfg(test)]
     fn lane_relay_validator_pool(
         &self,
         lane_id: LaneId,
@@ -18277,16 +18332,13 @@ impl State {
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
-        commit_topology: &[PeerId],
+        _commit_topology: &[PeerId],
         block_height: u64,
     ) -> Vec<PeerId> {
         if let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id) {
             let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
-            let topology_peers: BTreeSet<PeerId> = commit_topology.iter().cloned().collect();
-            let enforce_topology_membership = !topology_peers.is_empty();
             bindings.retain(|binding| {
                 present_peers.contains(&binding.peer_id)
-                    && (!enforce_topology_membership || topology_peers.contains(&binding.peer_id))
                     && peer_has_live_consensus_key(world, &binding.peer_id, block_height)
             });
             bindings.sort_by(|lhs, rhs| {
@@ -18351,8 +18403,9 @@ impl State {
 
     fn lane_relay_qc_signers(
         world: &impl WorldReadOnly,
-        committee: &[AccountId],
+        committee: &[PeerId],
         signers_bitmap: &[u8],
+        block_height: u64,
     ) -> Result<(Vec<PublicKey>, Vec<Vec<u8>>), LaneRelayError> {
         let expected_len = committee.len().div_ceil(8);
         if signers_bitmap.len() != expected_len {
@@ -18380,17 +18433,14 @@ impl State {
                         validator_count,
                     });
                 }
-                let Some(signatory) = committee[signer_index].try_signatory() else {
-                    return Err(LaneRelayError::AggregateSignatureInvalid);
-                };
-                let (algorithm, _payload) = signatory.to_bytes();
-                if algorithm != Algorithm::BlsNormal {
+                let peer = &committee[signer_index];
+                if peer.public_key().algorithm() != Algorithm::BlsNormal {
                     return Err(LaneRelayError::AggregateSignatureInvalid);
                 }
-                let Some(pop) = consensus_key_pop_for_public_key(world, signatory) else {
+                let Some(pop) = live_consensus_key_pop_for_peer(world, peer, block_height) else {
                     return Err(LaneRelayError::AggregateSignatureInvalid);
                 };
-                public_keys.push(signatory.clone());
+                public_keys.push(peer.public_key().clone());
                 pops.push(pop);
             }
         }
@@ -18400,12 +18450,16 @@ impl State {
     fn verify_lane_relay_qc(
         &self,
         envelope: &LaneRelayEnvelope,
-        committee: &[AccountId],
+        committee: &[PeerId],
     ) -> Result<(), LaneRelayError> {
         let qc = envelope.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
         let world = self.world.view();
-        let (public_keys, pops) =
-            Self::lane_relay_qc_signers(&world, committee, &qc.aggregate.signers_bitmap)?;
+        let (public_keys, pops) = Self::lane_relay_qc_signers(
+            &world,
+            committee,
+            &qc.aggregate.signers_bitmap,
+            envelope.block_height,
+        )?;
         if public_keys.is_empty() {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
@@ -18508,14 +18562,26 @@ impl State {
         let validator_mode = nexus
             .staking
             .validator_mode(envelope.lane_id, &nexus.lane_catalog);
-        let mut validator_pool = self.lane_relay_validator_pool(
+        let commit_topology = self.commit_topology_snapshot();
+        let world = self.world.view();
+        let base_pool = Self::authoritative_lane_peer_ids_from_sources(
+            &world,
             envelope.lane_id,
             validator_mode,
             manifest_registry.as_ref(),
             &nexus,
+            &commit_topology,
+            envelope.block_height,
         );
         let min_quorum = crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
-        if validator_pool.len() < committee_size {
+        let seed = self.lane_relay_committee_seed(
+            envelope.dataspace_id,
+            envelope.lane_id,
+            envelope.block_height,
+        );
+        let committee = if base_pool.len() >= committee_size {
+            Self::lane_relay_committee_from_pool(&base_pool, committee_size, seed)?
+        } else {
             #[cfg(feature = "telemetry")]
             let mut override_outcome = None;
             #[cfg(feature = "telemetry")]
@@ -18524,27 +18590,35 @@ impl State {
             };
             #[cfg(not(feature = "telemetry"))]
             let set_override_outcome = |_: &'static str| {};
+
+            let mut committee = base_pool.clone();
             if !nexus.lane_relay_emergency.enabled {
                 set_override_outcome("disabled");
             } else if let Some(record) = self
                 .world
                 .lane_relay_emergency_validators
                 .view()
-                .get(&envelope.dataspace_id)
+                .get(&envelope.lane_id)
                 .cloned()
             {
-                if record
-                    .expires_at_height
-                    .is_some_and(|height| envelope.block_height > height)
-                {
+                if envelope.block_height > record.expires_at_height {
                     set_override_outcome("expired");
                 } else {
-                    validator_pool.extend(record.validators);
-                    validator_pool.sort();
-                    validator_pool.dedup();
-                    if validator_pool.len() < committee_size {
+                    let base_members: BTreeSet<_> = committee.iter().cloned().collect();
+                    let mut emergency_pool = eligible_lane_relay_emergency_peers(
+                        &world,
+                        &record.peers,
+                        &commit_topology,
+                        envelope.block_height,
+                    );
+                    emergency_pool.retain(|peer| !base_members.contains(peer));
+                    let deficit = committee_size.saturating_sub(committee.len());
+                    let fillers =
+                        Self::lane_relay_committee_from_pool(&emergency_pool, deficit, seed)?;
+                    if fillers.len() < deficit {
                         set_override_outcome("insufficient");
                     } else {
+                        committee.extend(fillers);
                         set_override_outcome("applied");
                     }
                 }
@@ -18561,21 +18635,14 @@ impl State {
                 );
             }
 
-            if validator_pool.len() < committee_size {
+            if committee.len() < committee_size {
                 return Err(LaneRelayError::InvalidValidatorSet {
-                    validator_count: u32::try_from(validator_pool.len()).unwrap_or(u32::MAX),
+                    validator_count: u32::try_from(committee.len()).unwrap_or(u32::MAX),
                     min_quorum: u32::try_from(min_quorum).unwrap_or(u32::MAX),
                 });
             }
-        }
-
-        let seed = self.lane_relay_committee_seed(
-            envelope.dataspace_id,
-            envelope.lane_id,
-            envelope.block_height,
-        );
-        let committee =
-            Self::lane_relay_committee_from_pool(&validator_pool, committee_size, seed)?;
+            committee
+        };
         let validator_count =
             u32::try_from(committee.len()).map_err(|_| LaneRelayError::InvalidValidatorSet {
                 validator_count: u32::MAX,
@@ -19103,6 +19170,12 @@ impl State {
             .iter()
             .map(|entry| entry.id)
             .collect();
+        let active_lane_ids: BTreeSet<_> = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.id)
+            .collect();
         for lane in nexus.lane_catalog.lanes() {
             if !dataspace_ids.contains(&lane.dataspace_id) {
                 return Err(LaneLifecycleError::UnknownDataspace(lane.dataspace_id));
@@ -19123,21 +19196,19 @@ impl State {
             self.da_pin_intents.write().prune_lanes(&lanes_to_prune);
         }
 
-        // Drop emergency override entries that target dataspaces no longer present
-        // in the active catalog to avoid stale cross-dataspace references.
-        let stale_overrides: Vec<DataSpaceId> = self
+        // Drop emergency override entries that target lanes no longer present in
+        // the active catalog to avoid stale lane-relay trust roots.
+        let stale_overrides: Vec<LaneId> = self
             .world
             .lane_relay_emergency_validators
             .view()
             .iter()
-            .filter_map(|(dataspace_id, _)| {
-                (!dataspace_ids.contains(dataspace_id)).then_some(*dataspace_id)
-            })
+            .filter_map(|(lane_id, _)| (!active_lane_ids.contains(lane_id)).then_some(*lane_id))
             .collect();
         if !stale_overrides.is_empty() {
             let mut tx = self.world.lane_relay_emergency_validators.block();
-            for dataspace_id in stale_overrides {
-                tx.remove(dataspace_id);
+            for lane_id in stale_overrides {
+                tx.remove(lane_id);
             }
             tx.commit();
         }
@@ -29464,31 +29535,35 @@ mod tests {
     }
 
     #[test]
-    fn set_nexus_prunes_lane_relay_emergency_overrides_for_removed_dataspaces() {
+    fn set_nexus_prunes_lane_relay_emergency_overrides_for_removed_lanes() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
-        let removed = DataSpaceId::new(7);
+        let removed = LaneId::new(1);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
-            dataspace_catalog: DataSpaceCatalog::new(vec![
-                DataSpaceMetadata {
-                    id: retained,
-                    alias: "global".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-                DataSpaceMetadata {
-                    id: removed,
-                    alias: "historical".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
             .expect("dataspace catalog"),
+            lane_catalog: LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: LaneId::new(1),
+                        dataspace_id: DataSpaceId::GLOBAL,
+                        alias: "historical".to_string(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog"),
             ..iroha_config::parameters::actual::Nexus::default()
         };
         state
@@ -29499,8 +29574,8 @@ mod tests {
         wb.lane_relay_emergency_validators.insert(
             removed,
             LaneRelayEmergencyValidatorSet {
-                validators: vec![ALICE_ID.clone()],
-                expires_at_height: None,
+                peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                expires_at_height: 10,
                 metadata: Metadata::default(),
             },
         );
@@ -29512,18 +29587,20 @@ mod tests {
                 .view()
                 .get(&removed)
                 .is_some(),
-            "test setup should install removed-dataspace override"
+            "test setup should install removed-lane override"
         );
 
         let updated_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: retained,
+                id: DataSpaceId::GLOBAL,
                 alias: "global".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
             .expect("dataspace catalog"),
+            lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()])
+                .expect("lane catalog"),
             ..iroha_config::parameters::actual::Nexus::default()
         };
         state
@@ -29537,7 +29614,7 @@ mod tests {
                 .view()
                 .get(&removed)
                 .is_none(),
-            "removed dataspace override must be pruned by set_nexus"
+            "removed lane override must be pruned by set_nexus"
         );
     }
 
@@ -30610,8 +30687,27 @@ mod tests {
         (accounts, keypairs)
     }
 
+    fn peer_id_for_account(account: &AccountId) -> PeerId {
+        PeerId::from(
+            account
+                .try_signatory()
+                .expect("test validator account must be single-signatory")
+                .clone(),
+        )
+    }
+
     fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
         let mut world_block = state.world.block();
+        {
+            let mut peers = world_block.peers_mut_for_testing().transaction();
+            for keypair in keypairs {
+                let peer = PeerId::new(keypair.public_key().clone());
+                if !peers.iter().any(|existing| existing == &peer) {
+                    peers.push(peer);
+                }
+            }
+            peers.apply();
+        }
         for keypair in keypairs {
             let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
                 .expect("generate pop for consensus key");
@@ -31210,15 +31306,17 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        let permission =
-            iroha_data_model::permission::Permission::new("CanManagePeers".into(), Json::new(()));
+        let permission = iroha_data_model::permission::Permission::new(
+            "CanManageLaneRelayEmergency".into(),
+            Json::new(()),
+        );
         stx.world
             .account_permissions
             .insert(emergency_authority.clone(), BTreeSet::from([permission]));
         SetLaneRelayEmergencyValidators {
-            dataspace_id: DataSpaceId::GLOBAL,
-            validators: vec![extra_1.clone(), extra_2.clone()],
-            expires_at_height: None,
+            lane_id: LaneId::new(0),
+            peers: vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)],
+            expires_at_height: Some(5),
             metadata: Metadata::default(),
         }
         .execute(&emergency_authority, &mut stx)
@@ -31230,7 +31328,7 @@ mod tests {
                 .world
                 .lane_relay_emergency_validators
                 .view()
-                .get(&DataSpaceId::GLOBAL)
+                .get(&LaneId::new(0))
                 .is_some(),
             "override should be stored in world"
         );
@@ -31246,22 +31344,19 @@ mod tests {
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
-        let mut validator_pool = vec![
-            base_1.clone(),
-            base_2.clone(),
-            extra_1.clone(),
-            extra_2.clone(),
-        ];
-        validator_pool.sort();
-        validator_pool.dedup();
         let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
-        let committee =
-            State::lane_relay_committee_from_pool(&validator_pool, 4, seed).expect("committee");
-        let keypairs: BTreeMap<AccountId, KeyPair> = [
-            (base_1.clone(), base_1_kp.clone()),
-            (base_2.clone(), base_2_kp.clone()),
-            (extra_1.clone(), extra_1_kp.clone()),
-            (extra_2.clone(), extra_2_kp.clone()),
+        let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
+        let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
+        let fillers =
+            State::lane_relay_committee_from_pool(&emergency_pool, 2, seed).expect("fillers");
+        let mut committee = base_pool.clone();
+        committee.extend(fillers);
+        assert_eq!(&committee[..base_pool.len()], base_pool.as_slice());
+        let keypairs: BTreeMap<PeerId, KeyPair> = [
+            (peer_id_for_account(&base_1), base_1_kp.clone()),
+            (peer_id_for_account(&base_2), base_2_kp.clone()),
+            (peer_id_for_account(&extra_1), extra_1_kp.clone()),
+            (peer_id_for_account(&extra_2), extra_2_kp.clone()),
         ]
         .into_iter()
         .collect();
@@ -31366,10 +31461,10 @@ mod tests {
         let height = 1;
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![extra_1.clone(), extra_2.clone()],
-                expires_at_height: Some(height),
+                peers: vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)],
+                expires_at_height: height,
                 metadata: Metadata::default(),
             },
         );
@@ -31385,22 +31480,19 @@ mod tests {
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
-        let mut validator_pool = vec![
-            base_1.clone(),
-            base_2.clone(),
-            extra_1.clone(),
-            extra_2.clone(),
-        ];
-        validator_pool.sort();
-        validator_pool.dedup();
         let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
-        let committee =
-            State::lane_relay_committee_from_pool(&validator_pool, 4, seed).expect("committee");
-        let keypairs: BTreeMap<AccountId, KeyPair> = [
-            (base_1.clone(), base_1_kp.clone()),
-            (base_2.clone(), base_2_kp.clone()),
-            (extra_1.clone(), extra_1_kp.clone()),
-            (extra_2.clone(), extra_2_kp.clone()),
+        let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
+        let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
+        let fillers =
+            State::lane_relay_committee_from_pool(&emergency_pool, 2, seed).expect("fillers");
+        let mut committee = base_pool.clone();
+        committee.extend(fillers);
+        assert_eq!(&committee[..base_pool.len()], base_pool.as_slice());
+        let keypairs: BTreeMap<PeerId, KeyPair> = [
+            (peer_id_for_account(&base_1), base_1_kp.clone()),
+            (peer_id_for_account(&base_2), base_2_kp.clone()),
+            (peer_id_for_account(&extra_1), extra_1_kp.clone()),
+            (peer_id_for_account(&extra_2), extra_2_kp.clone()),
         ]
         .into_iter()
         .collect();
@@ -31483,10 +31575,10 @@ mod tests {
         let (extra_2, _) = bls_account_in("validators");
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![extra_1, extra_2],
-                expires_at_height: Some(0),
+                peers: vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)],
+                expires_at_height: 0,
                 metadata: Metadata::default(),
             },
         );
@@ -31534,10 +31626,10 @@ mod tests {
         let (extra_2, _) = bls_account_in("validators");
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![extra_1, extra_2],
-                expires_at_height: None,
+                peers: vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)],
+                expires_at_height: 10,
                 metadata: Metadata::default(),
             },
         );
@@ -31587,10 +31679,10 @@ mod tests {
 
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![base_1, base_2],
-                expires_at_height: None,
+                peers: vec![peer_id_for_account(&base_1), peer_id_for_account(&base_2)],
+                expires_at_height: 10,
                 metadata: Metadata::default(),
             },
         );
@@ -31641,10 +31733,10 @@ mod tests {
         let (extra_1, _) = bls_account_in("validators");
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![extra_1],
-                expires_at_height: None,
+                peers: vec![peer_id_for_account(&extra_1)],
+                expires_at_height: 10,
                 metadata: Metadata::default(),
             },
         );
@@ -31678,9 +31770,21 @@ mod tests {
 
     #[test]
     fn lane_relay_committee_from_pool_is_deterministic() {
-        let (alice, _) = gen_account_in("wonderland");
-        let (bob, _) = gen_account_in("wonderland");
-        let (carol, _) = gen_account_in("wonderland");
+        let alice = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let bob = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let carol = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
         let pool = vec![bob.clone(), alice.clone(), carol.clone(), alice.clone()];
         let seed = [0x11; 32];
 
@@ -39674,6 +39778,18 @@ mod tests {
             topo.push(peer);
         }
         topo.commit();
+        let committed_peers: Vec<_> = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        let mut world_block = state.world.block();
+        {
+            let mut peers = world_block.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.extend(committed_peers);
+            peers.apply();
+        }
+        world_block.commit();
         seed_consensus_keys_with_pops(state, &keypairs);
         keypairs
     }

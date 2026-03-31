@@ -2088,6 +2088,8 @@ pub mod nexus {
         pub const MULTISIG_THRESHOLD: u16 = 3;
         /// Default multisig member count required to authorize overrides.
         pub const MULTISIG_MEMBERS: u16 = 5;
+        /// Default maximum number of blocks an emergency override may remain active.
+        pub const MAX_TTL_BLOCKS: u32 = 20;
     }
 
     /// Lane registry defaults.

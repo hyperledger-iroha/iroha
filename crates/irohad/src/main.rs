@@ -3627,7 +3627,11 @@ impl Iroha {
                     [],
                 );
                 if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
-                    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &genesis_block.0);
+                    iroha_core::sns::seed_genesis_alias_bootstrap(
+                        &mut world,
+                        &genesis_block.0,
+                        &config.nexus.dataspace_catalog,
+                    );
                 }
                 State::new(
                     world,
@@ -3649,7 +3653,11 @@ impl Iroha {
                     [],
                 );
                 if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
-                    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &genesis_block.0);
+                    iroha_core::sns::seed_genesis_alias_bootstrap(
+                        &mut world,
+                        &genesis_block.0,
+                        &config.nexus.dataspace_catalog,
+                    );
                 }
                 State::new(
                     world,

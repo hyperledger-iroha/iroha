@@ -90,6 +90,7 @@ pub(super) struct PendingBlock {
     pub(super) kura_aborted: bool,
     pub(super) kura_persisted: bool,
     pub(super) aborted: bool,
+    pub(super) retired_same_height: bool,
     pub(super) last_quorum_reschedule: Option<Instant>,
     last_quorum_reschedule_vote_count: usize,
     pub(super) last_precommit_rebroadcast: Option<Instant>,
@@ -121,6 +122,7 @@ impl PendingBlock {
             kura_aborted: false,
             kura_persisted: false,
             aborted: false,
+            retired_same_height: false,
             last_quorum_reschedule: None,
             last_quorum_reschedule_vote_count: 0,
             last_precommit_rebroadcast: None,
@@ -174,6 +176,7 @@ impl PendingBlock {
             self.last_quorum_reschedule = None;
             self.last_quorum_reschedule_vote_count = 0;
             self.aborted = false;
+            self.retired_same_height = false;
             self.parent_state_root = None;
             self.post_state_root = None;
             self.last_commit_evidence_replay = None;
@@ -192,6 +195,7 @@ impl PendingBlock {
         self.height = height;
         self.view = view;
         self.aborted = false;
+        self.retired_same_height = false;
         self.inserted_at = Instant::now();
         self.last_progress = self.inserted_at;
         self.validation_status = ValidationStatus::Pending;
@@ -314,8 +318,23 @@ impl PendingBlock {
         self.commit_qc_epoch = Some(epoch);
     }
 
+    pub(super) fn retire_same_height(&mut self) {
+        self.aborted = true;
+        self.retired_same_height = true;
+        self.inserted_at = Instant::now();
+        self.last_progress = self.inserted_at;
+        self.reset_kura_retry();
+        self.last_gate = None;
+        self.last_gate_satisfied = None;
+        self.last_precommit_rebroadcast = None;
+        self.last_commit_evidence_replay = None;
+        self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
+    }
+
     pub(super) fn mark_aborted(&mut self) {
         self.aborted = true;
+        self.retired_same_height = false;
         self.inserted_at = Instant::now();
         self.last_progress = self.inserted_at;
         self.reset_kura_retry();
@@ -327,6 +346,41 @@ impl PendingBlock {
         self.post_state_root = None;
         self.validated_commit_artifact = None;
         self.last_commit_evidence_replay = None;
+    }
+
+    pub(super) fn refresh_retired_payload(
+        &mut self,
+        block: SignedBlock,
+        payload_hash: Hash,
+        height: u64,
+        view: u64,
+    ) {
+        self.block = block;
+        self.payload_hash = payload_hash;
+        self.height = height;
+        self.view = view;
+        self.retired_same_height = true;
+        self.aborted = true;
+        self.inserted_at = Instant::now();
+        self.last_progress = self.inserted_at;
+        self.last_gate = None;
+        self.last_gate_satisfied = None;
+        self.last_precommit_rebroadcast = None;
+        self.last_commit_evidence_replay = None;
+        self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
+    }
+
+    pub(super) fn is_retry_aborted(&self) -> bool {
+        self.aborted && !self.retired_same_height
+    }
+
+    pub(super) fn is_retired_same_height(&self) -> bool {
+        self.retired_same_height
+    }
+
+    pub(super) fn is_consensus_inactive(&self) -> bool {
+        self.aborted
     }
 
     pub(super) fn should_replay_commit_evidence(

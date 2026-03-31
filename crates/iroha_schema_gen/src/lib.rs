@@ -53,6 +53,7 @@ macro_rules! schema_types {
             MerkleTree<SignedTransaction>,
             // Default permissions
             iroha_executor_data_model::permission::peer::CanManagePeers,
+            iroha_executor_data_model::permission::peer::CanManageLaneRelayEmergency,
             iroha_executor_data_model::permission::domain::CanRegisterDomain,
             iroha_executor_data_model::permission::domain::CanUnregisterDomain,
             iroha_executor_data_model::permission::domain::CanModifyDomainMetadata,

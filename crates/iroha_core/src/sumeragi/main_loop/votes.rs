@@ -81,6 +81,94 @@ const VOTE_VERIFY_POP_CACHE_MAX: usize = 64;
 const VOTE_VERIFY_TOPOLOGY_CACHE_MAX: usize = 64;
 
 impl Actor {
+    fn vote_signer_peer_from_base_topology(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+        base_topology: &super::network_topology::Topology,
+        mode_tag: &'static str,
+        prf_seed: Option<[u8; 32]>,
+    ) -> Option<PeerId> {
+        let signature_topology =
+            topology_for_view(base_topology, vote.height, vote.view, mode_tag, prf_seed);
+        usize::try_from(vote.signer)
+            .ok()
+            .and_then(|idx| signature_topology.as_ref().get(idx).cloned())
+    }
+
+    pub(super) fn vote_signer_peer(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> Option<PeerId> {
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
+        let roster = if vote.phase == Phase::NewView {
+            self.roster_for_new_view_with_mode(
+                vote.block_hash,
+                vote.height,
+                vote.view,
+                consensus_mode,
+            )
+        } else {
+            self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
+        };
+        if roster.is_empty() {
+            return None;
+        }
+        let topology = super::network_topology::Topology::new(roster);
+        self.vote_signer_peer_from_base_topology(vote, &topology, mode_tag, prf_seed)
+    }
+
+    fn conflicting_slot_vote_for_peer(
+        &self,
+        phase: crate::sumeragi::consensus::Phase,
+        height: u64,
+        epoch: u64,
+        block_hash: HashOf<BlockHeader>,
+        signer_peer: &PeerId,
+    ) -> Option<crate::sumeragi::consensus::Vote> {
+        if !matches!(
+            phase,
+            crate::sumeragi::consensus::Phase::Prepare | crate::sumeragi::consensus::Phase::Commit
+        ) {
+            return None;
+        }
+        self.vote_log.values().find_map(|existing| {
+            if existing.phase != phase
+                || existing.height != height
+                || existing.epoch != epoch
+                || existing.block_hash == block_hash
+            {
+                return None;
+            }
+            self.vote_signer_peer(existing)
+                .filter(|peer| peer == signer_peer)
+                .map(|_| existing.clone())
+        })
+    }
+
+    pub(super) fn local_conflicting_slot_vote(
+        &self,
+        height: u64,
+        epoch: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<crate::sumeragi::consensus::Vote> {
+        let local_peer = self.common_config.peer.id();
+        self.vote_log.values().find_map(|existing| {
+            if !matches!(
+                existing.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) || existing.height != height
+                || existing.epoch != epoch
+                || existing.block_hash == block_hash
+            {
+                return None;
+            }
+            self.vote_signer_peer(existing)
+                .filter(|peer| peer == local_peer)
+                .map(|_| existing.clone())
+        })
+    }
+
     pub(super) fn cached_vote_verify_pops(
         &mut self,
         roster: &Vec<PeerId>,
@@ -2129,6 +2217,36 @@ impl Actor {
             roster_hash,
             membership_hash,
         };
+        if let Some(signer_peer) = peer_id.as_ref() {
+            if let Some(existing) = self.conflicting_slot_vote_for_peer(
+                vote.phase,
+                vote.height,
+                vote.epoch,
+                vote.block_hash,
+                signer_peer,
+            ) {
+                self.note_double_vote(Some(&existing), vote, evidence_context);
+                warn!(
+                    phase = ?vote.phase,
+                    height = vote.height,
+                    view = vote.view,
+                    epoch = vote.epoch,
+                    signer = vote.signer,
+                    block_hash = %vote.block_hash,
+                    existing_view = existing.view,
+                    existing_block = %existing.block_hash,
+                    signer_peer = ?signer_peer,
+                    "dropping slot-conflicting vote for signer peer"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::QcVote,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::ConflictingVote,
+                );
+                record_drop(super::status::VoteValidationDropReason::ConflictingVote);
+                return false;
+            }
+        }
         if let Some(existing) = self.vote_log.get(&key).cloned() {
             if existing.block_hash == vote.block_hash {
                 iroha_logger::debug!(

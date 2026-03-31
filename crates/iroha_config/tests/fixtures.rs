@@ -1367,6 +1367,7 @@ fn minimal_config_snapshot() {
                     enabled: false,
                     multisig_threshold: 3,
                     multisig_members: 5,
+                    max_ttl_blocks: 20,
                 },
                 lane_catalog: LaneCatalog {
                     lane_count: 1,
@@ -2580,6 +2581,7 @@ fn nexus_lane_relay_emergency_rejects_zero_threshold() {
             enabled: true,
             multisig_threshold: 0,
             multisig_members: 5,
+            max_ttl_blocks: 20,
         },
         ..Nexus::default()
     };
@@ -2616,6 +2618,7 @@ fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
             enabled: true,
             multisig_threshold: 6,
             multisig_members: 5,
+            max_ttl_blocks: 20,
         },
         ..Nexus::default()
     };
