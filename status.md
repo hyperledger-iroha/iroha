@@ -2,6 +2,21 @@
 
 Last updated: 2026-03-31
 
+## 2026-03-31 Follow-up: address-canonicalisation now matches retired offline allowance app routes
+- Updated `integration_tests/tests/address_canonicalisation.rs` so the stale
+  offline-allowance list/query coverage now skips cleanly when Torii returns
+  `404 Not Found`, matching the current router/OpenAPI contract where those
+  legacy app routes are intentionally not mounted.
+- Tightened `crates/iroha_torii/src/routing.rs` unit coverage so
+  `offline_allowance_item_to_json(...)` must emit `controller_display` using
+  the canonical I105 account literal.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_torii offline_allowance_item_json_includes_verdict_metadata --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_cash_router_smoke offline_cash_routes_are_mounted_and_legacy_allowances_are_absent -- --nocapture`
+  - `cargo test -p integration_tests --test address_canonicalisation offline_allowances_ -- --nocapture`
+
 ## 2026-03-31 Follow-up: Kotodama GitHub Linguist bundle now exists for upstream syntax-highlighting work
 - Added a self-contained `tools/kotodama_linguist/` bundle so Kotodama can be
   proposed to `github-linguist/linguist` as an official GitHub language rather

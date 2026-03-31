@@ -9823,9 +9823,7 @@ fn resolve_multisig_account_and_spec(
             );
             return Err(multisig_selector_forbidden_error(
                 "multisig_alias_resolve_forbidden",
-                format!(
-                    "missing account-alias resolve permission for `{alias_literal}`"
-                ),
+                format!("missing account-alias resolve permission for `{alias_literal}`"),
             ));
         }
     }
@@ -56621,6 +56619,13 @@ mod adapter_filter_tests {
                 .get("asset_definition_alias")
                 .is_some_and(Value::is_null),
             "asset_definition_alias should be present and null"
+        );
+        assert_eq!(
+            object
+                .get("controller_display")
+                .and_then(Value::as_str)
+                .expect("controller display"),
+            crate::account_literal::display_literal(&item.controller)
         );
         assert_eq!(
             object

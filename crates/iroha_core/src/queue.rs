@@ -1796,10 +1796,10 @@ impl Queue {
                 let alias = status.alias.clone();
                 let allows_multisig_envelope_authority =
                     match checked.as_accepted().as_ref().instructions() {
-                    Executable::Instructions(instructions) => {
-                        instructions_allow_multisig_envelope_authority(&instructions)
-                    }
-                    Executable::IvmProved(_) | Executable::Ivm(_) => false,
+                        Executable::Instructions(instructions) => {
+                            instructions_allow_multisig_envelope_authority(&instructions)
+                        }
+                        Executable::IvmProved(_) | Executable::Ivm(_) => false,
                     };
                 if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
                     #[cfg(feature = "telemetry")]
@@ -4336,14 +4336,17 @@ pub mod tests {
             &time_source,
             vec![InstructionBox::from(MultisigPropose::new(
                 multisig_id,
-                vec![InstructionBox::from(Log::new(Level::INFO, "multisig envelope".into()))],
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "multisig envelope".into(),
+                ))],
                 None,
             ))],
             Metadata::default(),
         );
-        queue
-            .push(tx, state.view())
-            .expect("multisig propose envelopes from live signers should bypass lane-validator gating");
+        queue.push(tx, state.view()).expect(
+            "multisig propose envelopes from live signers should bypass lane-validator gating",
+        );
     }
 
     #[allow(clippy::too_many_lines)]

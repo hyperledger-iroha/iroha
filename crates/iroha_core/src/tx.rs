@@ -4923,7 +4923,12 @@ pub mod tests {
             .build(&multisig_id);
         let mut world = World::with(
             [home, target],
-            [signer1_account, signer2_account, validator_account, multisig_account],
+            [
+                signer1_account,
+                signer2_account,
+                validator_account,
+                multisig_account,
+            ],
             [],
         );
 

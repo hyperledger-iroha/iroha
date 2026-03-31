@@ -2,6 +2,16 @@
 
 Last updated: 2026-03-31
 
+Latest sync (2026-03-31 retired offline-allowance app route alignment):
+the address-canonicalisation suite no longer treats the legacy
+`/v1/offline/allowances*` app routes as live requirements. Those checks now
+skip on `404`, matching the existing offline cash router/OpenAPI contract, and
+Torii unit coverage now pins canonical I105 `controller_display` emission for
+offline allowance JSON serialization directly.
+
+Open work for this slice now remains:
+- none.
+
 Latest sync (2026-03-31 Kotodama GitHub Linguist upstream bundle):
 a self-contained `tools/kotodama_linguist/` bundle now exists with a TextMate
 grammar scaffold, a proposed `languages.yml` entry, a ready-to-fill Linguist

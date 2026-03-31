@@ -374,10 +374,8 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
-    req.extensions_mut().insert(ConnectInfo(std::net::SocketAddr::from((
-        [127, 0, 0, 1],
-        0,
-    ))));
+    req.extensions_mut()
+        .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
 
     let resp = app
         .clone()
