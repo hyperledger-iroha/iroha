@@ -316,9 +316,8 @@ fn seed_alias_manage_permissions_if_missing(
 pub fn seed_genesis_alias_bootstrap(
     world: &mut World,
     block: &iroha_data_model::block::SignedBlock,
+    dataspace_catalog: &DataSpaceCatalog,
 ) {
-    let dataspace_catalog = DataSpaceCatalog::default();
-
     for transaction in block.external_transactions() {
         let authority = transaction.authority();
         let Executable::Instructions(instructions) = transaction.instructions() else {
@@ -337,7 +336,7 @@ pub fn seed_genesis_alias_bootstrap(
                         if let Some(label) = register.object().label() {
                             seed_alias_manage_permissions_if_missing(world, authority, label);
                             if let Ok(selector) =
-                                selector_for_account_alias(label, &dataspace_catalog)
+                                selector_for_account_alias(label, dataspace_catalog)
                             {
                                 seed_name_record_if_missing(world, authority, selector);
                             }
@@ -353,7 +352,7 @@ pub fn seed_genesis_alias_bootstrap(
             {
                 if let Some(alias) = set_alias.alias.as_ref() {
                     seed_alias_manage_permissions_if_missing(world, authority, alias);
-                    if let Ok(selector) = selector_for_account_alias(alias, &dataspace_catalog) {
+                    if let Ok(selector) = selector_for_account_alias(alias, dataspace_catalog) {
                         seed_name_record_if_missing(world, authority, selector);
                     }
                 }
@@ -365,7 +364,7 @@ pub fn seed_genesis_alias_bootstrap(
             {
                 if let Some(alias) = bind_alias.alias.as_ref() {
                     seed_alias_manage_permissions_if_missing(world, authority, alias);
-                    if let Ok(selector) = selector_for_account_alias(alias, &dataspace_catalog) {
+                    if let Ok(selector) = selector_for_account_alias(alias, dataspace_catalog) {
                         seed_name_record_if_missing(world, authority, selector);
                     }
                 }
@@ -1299,9 +1298,19 @@ mod tests {
         let chain_id = iroha_data_model::ChainId::from("sns-genesis-alias-bootstrap");
         let genesis_key = KeyPair::random();
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
-        let domain_id: DomainId = "ivm".parse().expect("domain");
+        let domain_id: DomainId = "cbuae".parse().expect("domain");
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
         let label = AccountLabel::new(domain_id.clone(), "gas".parse().expect("label"));
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(4),
+                alias: "cbuae".to_owned(),
+                fault_tolerance: 1,
+                ..DataSpaceMetadata::default()
+            },
+        ])
+        .expect("dataspace catalog");
         let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
             .with_instructions([
                 InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
@@ -1328,15 +1337,15 @@ mod tests {
             .clone();
         let mut world = World::default();
 
-        seed_genesis_alias_bootstrap(&mut world, &block);
+        seed_genesis_alias_bootstrap(&mut world, &block, &dataspace_catalog);
 
         let view = world.view();
         let domain_selector = selector_for_domain(&domain_id).expect("selector");
-        let label_selector =
-            selector_for_account_alias(&label, &DataSpaceCatalog::default()).expect("selector");
+        let label_selector = selector_for_account_alias(&label, &dataspace_catalog)
+            .expect("selector");
         let relabel_selector = selector_for_account_alias(
             &AccountLabel::new(domain_id.clone(), "ops".parse().expect("label")),
-            &DataSpaceCatalog::default(),
+            &dataspace_catalog,
         )
         .expect("selector");
 
