@@ -1326,7 +1326,8 @@ impl Actor {
                     frontier: None,
                 },
                 sender,
-                true,
+                incoming_qc.is_none() && validator_checkpoint.is_none(),
+                incoming_qc.is_some() || validator_checkpoint.is_some(),
             );
             if result.is_ok()
                 && self.block_known_locally(block_hash)
@@ -2202,6 +2203,7 @@ impl Actor {
                             created,
                             sender.clone(),
                             true,
+                            false,
                         );
                         return Ok(());
                     }
@@ -2768,6 +2770,8 @@ impl Actor {
 
         let allow_frontier_owner_preserve_on_payload_mismatch =
             !incoming_qc_usable && !block_quorum_met && !commit_cert_present && !checkpoint_present;
+        let allow_authoritative_frontier_owner_supersede =
+            incoming_qc_usable || block_quorum_met || commit_cert_present || checkpoint_present;
         let created = super::message::BlockCreated {
             block,
             frontier: None,
@@ -2777,6 +2781,7 @@ impl Actor {
             created,
             sender.clone(),
             allow_frontier_owner_preserve_on_payload_mismatch,
+            allow_authoritative_frontier_owner_supersede,
         );
         let block_apply_ms =
             u64::try_from(block_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);

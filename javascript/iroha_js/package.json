@@ -12,6 +12,10 @@
     },
     "./torii": "./dist/toriiClient.js",
     "./norito": "./dist/norito.js",
+    "./sccp": {
+      "import": "./dist/sccp.js",
+      "types": "./index.d.ts"
+    },
     "./crypto": {
       "browser": "./dist/crypto.browser.js",
       "import": "./dist/crypto.js",
@@ -29,6 +33,9 @@
         "./index.d.ts"
       ],
       "norito": [
+        "./index.d.ts"
+      ],
+      "sccp": [
         "./index.d.ts"
       ],
       "crypto": [

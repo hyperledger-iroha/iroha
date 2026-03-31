@@ -169,6 +169,17 @@ impl Actor {
         })
     }
 
+    pub(super) fn local_conflicting_frontier_vote(
+        &self,
+        height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<crate::sumeragi::consensus::Vote> {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return None;
+        }
+        self.local_conflicting_slot_vote(height, self.epoch_for_height(height), block_hash)
+    }
+
     pub(super) fn cached_vote_verify_pops(
         &mut self,
         roster: &Vec<PeerId>,
@@ -950,6 +961,28 @@ impl Actor {
         let anchor_height =
             highest_commit.map_or(committed_height, |qc| qc.height.max(committed_height));
         let active_height = anchor_height.saturating_add(1);
+        let local_peer = self.common_config.peer.id();
+        let preserved_local_active_votes: BTreeSet<_> = self
+            .vote_log
+            .iter()
+            .filter_map(|(key, vote)| {
+                let keep_local_active_vote = key.1 == active_height
+                    && matches!(
+                        vote.phase,
+                        crate::sumeragi::consensus::Phase::Prepare
+                            | crate::sumeragi::consensus::Phase::Commit
+                    )
+                    && self
+                        .vote_signer_peer(vote)
+                        .as_ref()
+                        .is_some_and(|peer| peer == local_peer);
+                keep_local_active_vote.then_some(*key)
+            })
+            .collect();
+        let preserved_local_active_roster_hashes: BTreeSet<_> = preserved_local_active_votes
+            .iter()
+            .filter_map(|key| self.vote_log.get(key).map(|vote| vote.block_hash))
+            .collect();
         let min_height = active_height.saturating_sub(super::VOTE_CACHE_HEIGHT_WINDOW);
         let max_height = active_height.saturating_add(super::VOTE_CACHE_HEIGHT_WINDOW);
         let current_view = self.phase_tracker.current_view(active_height);
@@ -973,10 +1006,12 @@ impl Actor {
             }
             true
         };
-        self.vote_log
-            .retain(|(_, height, view, _, _), _| should_keep(*height, *view));
+        let should_keep_vote_key = |key: &VoteLogKey| -> bool {
+            should_keep(key.1, key.2) || preserved_local_active_votes.contains(key)
+        };
+        self.vote_log.retain(|key, _| should_keep_vote_key(key));
         self.vote_validation_cache
-            .retain(|(_, height, view, _, _), _| should_keep(*height, *view));
+            .retain(|key, _| should_keep_vote_key(key));
         self.qc_cache
             .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
         self.qc_signer_tally
@@ -985,8 +1020,10 @@ impl Actor {
             .qc_verify
             .verified_cache
             .retain(|key| should_keep(key.key.height, key.key.view));
-        self.vote_roster_cache
-            .retain(|_, entry| should_keep(entry.height, entry.view));
+        self.vote_roster_cache.retain(|hash, entry| {
+            should_keep(entry.height, entry.view)
+                || preserved_local_active_roster_hashes.contains(hash)
+        });
         self.deferred_qcs
             .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
         self.deferred_missing_payload_qcs

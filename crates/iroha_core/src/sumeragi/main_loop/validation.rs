@@ -16,6 +16,7 @@ pub(super) struct ValidationWork {
     pub(super) block: SignedBlock,
     pub(super) height: u64,
     pub(super) view: u64,
+    pub(super) frontier_generation: Option<u64>,
     pub(super) topology: super::network_topology::Topology,
     pub(super) commit_topology: Vec<PeerId>,
 }
@@ -26,6 +27,7 @@ pub(super) struct ValidationResult {
     pub(super) hash: HashOf<BlockHeader>,
     pub(super) height: u64,
     pub(super) view: u64,
+    pub(super) frontier_generation: Option<u64>,
     pub(super) commit_topology: Vec<PeerId>,
     pub(super) outcome: Result<Option<StateRoots>, BlockValidationError>,
 }
@@ -94,6 +96,7 @@ pub(super) fn spawn_validation_workers(
                         block,
                         height,
                         view,
+                        frontier_generation,
                         mut topology,
                         commit_topology,
                     } = work;
@@ -112,6 +115,7 @@ pub(super) fn spawn_validation_workers(
                             hash,
                             height,
                             view,
+                            frontier_generation,
                             commit_topology,
                             outcome,
                         })
@@ -385,12 +389,15 @@ impl Actor {
             }
 
             let id = self.subsystems.validation.next_id();
+            let frontier_generation =
+                self.frontier_owner_generation_for_block(pending.height, pending.view, hash);
             let mut work = ValidationWork {
                 id,
                 hash,
                 block: pending.block.clone(),
                 height: pending.height,
                 view: pending.view,
+                frontier_generation,
                 topology: topology.clone(),
                 commit_topology: commit_topology.to_vec(),
             };
@@ -439,6 +446,7 @@ impl Actor {
                     super::ValidationInFlight {
                         id,
                         started_at: Instant::now(),
+                        frontier_generation,
                     },
                 );
                 pending.validation_status = ValidationStatus::Pending;
@@ -578,11 +586,30 @@ impl Actor {
                         hash,
                         height,
                         view,
+                        frontier_generation,
                         commit_topology,
                         outcome,
                     } = result;
-                    let inflight = match self.subsystems.validation.inflight.remove(&hash) {
-                        Some(inflight) => inflight,
+                    let inflight_frontier_generation = match self
+                        .subsystems
+                        .validation
+                        .inflight
+                        .remove(&hash)
+                    {
+                        Some(inflight) => {
+                            if inflight.id != id {
+                                let inflight_id = inflight.id;
+                                self.subsystems.validation.inflight.insert(hash, inflight);
+                                warn!(
+                                    block = %hash,
+                                    inflight_id,
+                                    result_id = id,
+                                    "validation result id mismatch; ignoring"
+                                );
+                                continue;
+                            }
+                            inflight.frontier_generation
+                        }
                         None => {
                             if let Some(superseded_id) =
                                 self.subsystems.validation.superseded_results.remove(&hash)
@@ -601,31 +628,87 @@ impl Actor {
                                         "validation result id mismatch for superseded inflight; dropping stale worker result"
                                     );
                                 }
-                            } else if self.pending.pending_blocks.contains_key(&hash) {
-                                warn!(
-                                    block = %hash,
-                                    result_id = id,
-                                    "validation result received without inflight"
-                                );
-                            } else {
+                                progress = true;
+                                continue;
+                            }
+
+                            let Some(pending) = self.pending.pending_blocks.get(&hash) else {
                                 debug!(
                                     block = %hash,
                                     result_id = id,
                                     "dropping validation result for unknown block"
                                 );
+                                progress = true;
+                                continue;
+                            };
+                            if pending.height != height || pending.view != view {
+                                warn!(
+                                    block = %hash,
+                                    pending_height = pending.height,
+                                    pending_view = pending.view,
+                                    result_height = height,
+                                    result_view = view,
+                                    result_id = id,
+                                    "validation result without inflight does not match pending block"
+                                );
+                                progress = true;
+                                continue;
                             }
-                            continue;
+                            if pending.validation_status != ValidationStatus::Pending {
+                                debug!(
+                                    block = %hash,
+                                    result_id = id,
+                                    ?pending.validation_status,
+                                    "dropping validation result without inflight for non-pending block"
+                                );
+                                progress = true;
+                                continue;
+                            }
+                            if let Some(frontier_generation) = frontier_generation
+                                && !self.frontier_owner_generation_matches(
+                                    height,
+                                    hash,
+                                    frontier_generation,
+                                )
+                            {
+                                debug!(
+                                    block = %hash,
+                                    result_id = id,
+                                    height,
+                                    view,
+                                    frontier_generation,
+                                    "dropping validation result without inflight after frontier owner supersede"
+                                );
+                                progress = true;
+                                continue;
+                            }
+
+                            warn!(
+                                block = %hash,
+                                result_id = id,
+                                height,
+                                view,
+                                "recovering validation result after inflight marker disappeared"
+                            );
+                            None
                         }
                     };
-                    if inflight.id != id {
-                        let inflight_id = inflight.id;
-                        self.subsystems.validation.inflight.insert(hash, inflight);
-                        warn!(
+                    if let Some(frontier_generation) = inflight_frontier_generation
+                        && !self.frontier_owner_generation_matches(
+                            height,
+                            hash,
+                            frontier_generation,
+                        )
+                    {
+                        debug!(
                             block = %hash,
-                            inflight_id,
                             result_id = id,
-                            "validation result id mismatch; ignoring"
+                            height,
+                            view,
+                            frontier_generation,
+                            "dropping validation result for superseded frontier owner generation"
                         );
+                        progress = true;
                         continue;
                     }
 
@@ -642,6 +725,25 @@ impl Actor {
                             result_height = height,
                             result_view = view,
                             "validation result does not match pending block"
+                        );
+                        self.pending.pending_blocks.insert(hash, pending);
+                        progress = true;
+                        continue;
+                    }
+                    if let Some(frontier_generation) = frontier_generation
+                        && !self.frontier_owner_generation_matches(
+                            height,
+                            hash,
+                            frontier_generation,
+                        )
+                    {
+                        debug!(
+                            block = %hash,
+                            result_id = id,
+                            height,
+                            view,
+                            frontier_generation,
+                            "dropping late validation result after frontier owner supersede"
                         );
                         self.pending.pending_blocks.insert(hash, pending);
                         progress = true;

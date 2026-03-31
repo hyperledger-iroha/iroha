@@ -1352,6 +1352,28 @@ impl Actor {
             && effective_has_reschedule_votes
             && !drop_pending
             && !rotate_authoritative_frontier_immediately;
+        let handoff_zero_vote_frontier_owner = contiguous_frontier
+            && drop_pending
+            && !frontier_slot_owner_active
+            && self.seed_frontier_slot_from_same_height_evidence(
+                height,
+                view,
+                now,
+                "quorum_timeout",
+                false,
+            );
+        if handoff_zero_vote_frontier_owner {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                "preserving zero-vote contiguous frontier pending block because same-height QC/vote evidence handed ownership to the slot tracker"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
             if !effective_has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've

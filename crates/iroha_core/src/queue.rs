@@ -84,7 +84,7 @@ use crate::{
     state::{LaneLifecycleError, State, TransactionsReadOnly, WorldReadOnly},
     sumeragi::status,
     telemetry::StateTelemetry,
-    tx::CheckedTransaction,
+    tx::{CheckedTransaction, instructions_allow_multisig_envelope_authority},
 };
 
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
@@ -1794,6 +1794,13 @@ impl Queue {
         if let Some(status) = manifest_status {
             if let Some(rules) = status.rules() {
                 let alias = status.alias.clone();
+                let allows_multisig_envelope_authority =
+                    match checked.as_accepted().as_ref().instructions() {
+                        Executable::Instructions(instructions) => {
+                            instructions_allow_multisig_envelope_authority(&instructions)
+                        }
+                        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+                    };
                 if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
                     #[cfg(feature = "telemetry")]
                     telemetry_handle.record_manifest_admission("missing_authority");
@@ -1808,6 +1815,7 @@ impl Queue {
                     });
                 }
                 if let Some(authority) = checked.as_ref().authority_opt()
+                    && !allows_multisig_envelope_authority
                     && !rules
                         .validators
                         .iter()
@@ -3912,6 +3920,8 @@ pub mod tests {
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
         runtime::RuntimeUpgradeManifest,
     };
+    use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
+    use iroha_logger::Level;
     use iroha_primitives::json::Json;
     use iroha_schema::Ident;
     #[cfg(feature = "telemetry")]
@@ -4256,6 +4266,84 @@ pub mod tests {
                 .expect("lane registry entry")
                 .get(LaneCommitmentId::new(7))
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_manifest_allows_multisig_propose_envelope_from_live_signer() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let signer_key = KeyPair::random();
+        let signer_id = AccountId::new(signer_key.public_key().clone());
+        let cosigner_key = KeyPair::random();
+        let cosigner_id = AccountId::new(cosigner_key.public_key().clone());
+        let validator_key = KeyPair::random();
+        let validator_id = AccountId::new(validator_key.public_key().clone());
+        let multisig_key = KeyPair::random();
+        let multisig_id = AccountId::new(multisig_key.public_key().clone());
+        let domain_id: DomainId = "wonderland".parse().expect("static domain");
+
+        let mut multisig_metadata = Metadata::default();
+        multisig_metadata.insert(
+            crate::smartcontracts::isi::multisig::spec_key(),
+            Json::new(MultisigSpec {
+                signatories: BTreeMap::from([(signer_id.clone(), 1), (cosigner_id.clone(), 1)]),
+                quorum: nonzero!(2_u16),
+                transaction_ttl_ms: nonzero!(
+                    iroha_executor_data_model::isi::multisig::DEFAULT_MULTISIG_TTL_MS
+                ),
+            }),
+        );
+
+        let domain = Domain::new(domain_id.clone()).build(&signer_id);
+        let signer = Account::new(signer_id.clone()).build(&signer_id);
+        let cosigner = Account::new(cosigner_id.clone()).build(&cosigner_id);
+        let validator = Account::new(validator_id.clone()).build(&validator_id);
+        let multisig = Account::new(multisig_id.clone())
+            .with_metadata(multisig_metadata)
+            .build(&multisig_id);
+        let world = World::with([domain], [signer, cosigner, validator, multisig], []);
+        let state = Arc::new(State::new(world, kura, query_handle));
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let mut statuses = BTreeMap::new();
+        let rules = GovernanceRules {
+            validators: vec![validator_id.clone()],
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "sbp".to_string(),
+            dataspace: DataSpaceId::GLOBAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(LaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests(&manifests);
+
+        let tx = accepted_tx_with(
+            signer_id,
+            &signer_key,
+            &time_source,
+            vec![InstructionBox::from(MultisigPropose::new(
+                multisig_id,
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "multisig envelope".into(),
+                ))],
+                None,
+            ))],
+            Metadata::default(),
+        );
+        queue.push(tx, state.view()).expect(
+            "multisig propose envelopes from live signers should bypass lane-validator gating",
         );
     }
 

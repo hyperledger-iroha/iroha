@@ -7050,7 +7050,7 @@ async fn block_sync_update_accepts_pre_activation_signature_after_mode_flip() {
     let roster = actor.effective_commit_topology();
     let roster_len = roster.len();
     let topology = super::network_topology::Topology::new(roster.clone());
-    let height = 2u64;
+    let height = actor.committed_height_snapshot().saturating_add(1);
     let seed = {
         let view = actor.state.view();
         super::npos_seed_for_height(&view, height)
@@ -9728,7 +9728,7 @@ async fn fetch_pending_block_uses_block_sync_update_when_roster_available() {
     let actor = &mut harness.actor;
 
     let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
-    let height = 2u64;
+    let height = actor.committed_height_snapshot().saturating_add(1);
     let view = 0u64;
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
@@ -15252,7 +15252,7 @@ async fn finalize_pending_block_commits_retired_same_height_without_conflicting_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn finalize_pending_block_defers_retired_same_height_with_conflicting_local_vote() {
+async fn finalize_pending_block_commits_retired_same_height_with_conflicting_local_vote() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -15266,21 +15266,21 @@ async fn finalize_pending_block_defers_retired_same_height_with_conflicting_loca
 
     let canonical_block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, parent);
     let conflicting_block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 1, parent);
-    insert_validated_pending(actor, canonical_block.clone());
+    insert_validated_pending(actor, conflicting_block.clone());
     assert!(actor.emit_precommit_vote(
-        canonical_block.hash(),
+        conflicting_block.hash(),
         height,
-        0,
+        1,
         epoch,
         ValidationStatus::Valid,
         &topology,
-        canonical_block.header().prev_block_hash(),
+        conflicting_block.header().prev_block_hash(),
         Some((zero_state_root(), zero_state_root())),
     ));
 
-    let conflicting_hash = conflicting_block.hash();
-    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&conflicting_block));
-    let mut pending = PendingBlock::new(conflicting_block.clone(), payload_hash, height, 1);
+    let canonical_hash = canonical_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&canonical_block));
+    let mut pending = PendingBlock::new(canonical_block.clone(), payload_hash, height, 0);
     pending.validation_status = ValidationStatus::Valid;
     pending.parent_state_root = Some(zero_state_root());
     pending.post_state_root = Some(zero_state_root());
@@ -15290,9 +15290,9 @@ async fn finalize_pending_block_defers_retired_same_height_with_conflicting_loca
 
     let qc = qc_with_bitmap(
         &actor.common_config.chain,
-        conflicting_hash,
+        canonical_hash,
         height,
-        1,
+        0,
         epoch,
         vec![0b0000_1111],
         Phase::Commit,
@@ -15301,34 +15301,34 @@ async fn finalize_pending_block_defers_retired_same_height_with_conflicting_loca
     );
     actor
         .qc_cache
-        .insert((Phase::Commit, conflicting_hash, height, 1, epoch), qc);
+        .insert((Phase::Commit, canonical_hash, height, 0, epoch), qc);
 
     let lock = QcHeaderRef {
         phase: Phase::Commit,
-        subject_block_hash: conflicting_hash,
+        subject_block_hash: canonical_hash,
         height,
-        view: 1,
+        view: 0,
         epoch,
     };
 
     let committed = actor.finalize_pending_block(lock, pending, None);
     assert!(
-        !committed,
-        "conflicting local same-height vote history must defer retired-branch finalization"
-    );
-    let pending_after = actor
-        .pending
-        .pending_blocks
-        .get(&conflicting_hash)
-        .expect("retired pending branch should remain cached");
-    assert!(
-        pending_after.is_retired_same_height(),
-        "deferred retired branch should remain in retired state"
+        committed,
+        "a certified commit must finalize even when local same-height vote history conflicts"
     );
     assert_eq!(
         u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
-        height.saturating_sub(1),
-        "conflicting branch must not advance the committed height"
+        height,
+        "certified retired branch should advance the committed height despite prior local conflict"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(canonical_hash),
+        "the certified branch should become the committed tip"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&canonical_hash),
+        "committed retired branch should leave pending storage"
     );
 
     harness.shutdown.send();
@@ -15521,8 +15521,7 @@ async fn commit_inflight_timeout_triggers_view_change_and_retains_aborted_pendin
     harness.actor.subsystems.commit.inflight = Some(inflight);
     harness
         .actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, view));
 
@@ -15541,8 +15540,7 @@ async fn commit_inflight_timeout_triggers_view_change_and_retains_aborted_pendin
     assert!(
         !harness
             .actor
-            .subsystems
-            .propose
+            .slot_tracker
             .proposals_seen
             .contains(&(height, view)),
         "timed-out view should be pruned after view change"
@@ -22894,6 +22892,7 @@ async fn handle_qc_supersedes_validation_inflight_on_commit_qc() {
             started_at: Instant::now()
                 .checked_sub(Duration::from_millis(25))
                 .unwrap_or_else(Instant::now),
+            frontier_generation: None,
         },
     );
 
@@ -37955,11 +37954,7 @@ async fn frontier_recovery_suppresses_cleanup_while_same_slot_ingress_remains_ac
             height,
             view,
         ));
-    actor
-        .subsystems
-        .propose
-        .proposals_seen
-        .insert((height, view));
+    actor.slot_tracker.proposals_seen.insert((height, view));
 
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
@@ -38012,11 +38007,7 @@ async fn frontier_recovery_suppresses_cleanup_while_same_slot_ingress_remains_ac
         "cleanup suppression must keep the cached proposal for the active slot"
     );
     assert!(
-        actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "cleanup suppression must keep the observed slot marker so the leader does not repropose"
     );
 
@@ -38063,11 +38054,7 @@ async fn frontier_recovery_suppresses_rotation_while_same_slot_ingress_remains_a
             height,
             view,
         ));
-    actor
-        .subsystems
-        .propose
-        .proposals_seen
-        .insert((height, view));
+    actor.slot_tracker.proposals_seen.insert((height, view));
 
     super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
@@ -38298,6 +38285,7 @@ async fn frontier_recovery_suppresses_cleanup_while_same_slot_validation_infligh
         super::ValidationInFlight {
             id: 1,
             started_at: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            frontier_generation: None,
         },
     );
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
@@ -38382,6 +38370,7 @@ async fn frontier_recovery_suppresses_rotation_while_same_slot_validation_inflig
         super::ValidationInFlight {
             id: 2,
             started_at: now.checked_sub(Duration::from_millis(1)).unwrap_or(now),
+            frontier_generation: None,
         },
     );
     actor.frontier_recovery = Some(super::FrontierRecoveryState {
@@ -45458,11 +45447,7 @@ async fn frontier_stall_reset_prunes_far_future_state_and_reanchors_range_pull()
         .propose
         .proposal_cache
         .insert_proposal(sample_proposal(frontier_hash, future_height, 0));
-    actor
-        .subsystems
-        .propose
-        .proposals_seen
-        .insert((future_height, 0));
+    actor.slot_tracker.proposals_seen.insert((future_height, 0));
 
     let before = super::status::snapshot();
     assert!(
@@ -45527,8 +45512,7 @@ async fn frontier_stall_reset_prunes_far_future_state_and_reanchors_range_pull()
     );
     assert!(
         actor
-            .subsystems
-            .propose
+            .slot_tracker
             .proposals_seen
             .iter()
             .all(|(height, _)| *height <= prune_threshold),
@@ -45614,8 +45598,7 @@ async fn frontier_stall_routes_same_height_stall_through_unified_recovery() {
             0,
         ));
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((frontier_height, 0));
 
@@ -45657,8 +45640,7 @@ async fn frontier_stall_routes_same_height_stall_through_unified_recovery() {
     );
     assert!(
         actor
-            .subsystems
-            .propose
+            .slot_tracker
             .proposals_seen
             .iter()
             .any(|(height, _)| *height == frontier_height),
@@ -46110,11 +46092,7 @@ async fn lock_lag_prune_prunes_far_future_state_and_reanchors_range_pull() {
         .propose
         .proposal_cache
         .insert_proposal(sample_proposal(far_parent, far_height, 0));
-    actor
-        .subsystems
-        .propose
-        .proposals_seen
-        .insert((far_height, 0));
+    actor.slot_tracker.proposals_seen.insert((far_height, 0));
 
     let before = super::status::snapshot();
     assert!(
@@ -46166,8 +46144,7 @@ async fn lock_lag_prune_prunes_far_future_state_and_reanchors_range_pull() {
     );
     assert!(
         actor
-            .subsystems
-            .propose
+            .slot_tracker
             .proposals_seen
             .iter()
             .all(|(height, _)| *height <= keep_through),
@@ -52858,11 +52835,7 @@ async fn missing_block_height_hard_cap_prunes_stale_height_state_before_view_cha
         .propose
         .proposal_cache
         .insert_proposal(sample_proposal(proposal_parent, height, view));
-    actor
-        .subsystems
-        .propose
-        .proposals_seen
-        .insert((height, view));
+    actor.slot_tracker.proposals_seen.insert((height, view));
 
     actor.note_missing_block_height_attempt(
         block_hash,
@@ -52942,11 +52915,7 @@ async fn missing_block_height_hard_cap_prunes_stale_height_state_before_view_cha
         "hard-cap escalation should clear stale proposals at the stuck height"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "hard-cap escalation should clear stale proposal-seen markers at the stuck height"
     );
     assert!(
@@ -56454,9 +56423,9 @@ async fn trigger_view_change_prunes_proposals_seen_for_height() {
         .phase_tracker
         .on_view_change(height, current_view, Instant::now());
 
-    actor.subsystems.propose.proposals_seen.insert((height, 0));
-    actor.subsystems.propose.proposals_seen.insert((height, 1));
-    actor.subsystems.propose.proposals_seen.insert((height, 2));
+    actor.slot_tracker.proposals_seen.insert((height, 0));
+    actor.slot_tracker.proposals_seen.insert((height, 1));
+    actor.slot_tracker.proposals_seen.insert((height, 2));
 
     actor.trigger_view_change_with_cause(
         height,
@@ -56465,27 +56434,15 @@ async fn trigger_view_change_prunes_proposals_seen_for_height() {
     );
 
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, 0)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, 0)),
         "older views should be pruned after view change"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, 1)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, 1)),
         "current view entry should be pruned after advancing"
     );
     assert!(
-        actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, 2)),
+        actor.slot_tracker.proposals_seen.contains(&(height, 2)),
         "latest view entry should remain after pruning"
     );
 
@@ -56878,6 +56835,263 @@ async fn prune_stale_view_state_prunes_delivered_rbc_when_payload_available() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn prune_stale_view_state_preserves_live_frontier_owner_and_validation_inflight() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let now = Instant::now();
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.note_local_commit_vote_emitted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.active_view = view.saturating_add(1);
+        slot.sync_compat_fields();
+    }
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 7,
+            started_at: now,
+            frontier_generation: None,
+        },
+    );
+
+    actor.prune_stale_view_state(height, view.saturating_add(1));
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "stale-view pruning must not evict the live contiguous-frontier owner"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "stale-view pruning must not detach validation from the live contiguous-frontier owner"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("live frontier owner pending block")
+            .is_retired_same_height(),
+        "the preserved frontier owner must stay active rather than being downgraded into a passive retained branch"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn poll_validation_results_drops_superseded_frontier_owner_generation() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let now = Instant::now();
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    let frontier_generation = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot")
+        .owner_generation;
+    let commit_topology = actor.effective_commit_topology();
+    let (result_tx, result_rx) =
+        std::sync::mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.result_rx = Some(result_rx);
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: 11,
+            started_at: now,
+            frontier_generation: Some(frontier_generation),
+        },
+    );
+
+    let replacement = sample_block(height, view.saturating_add(1), parent);
+    let replacement_hash = replacement.hash();
+    assert_ne!(
+        replacement_hash, block_hash,
+        "test requires authoritative supersede to target a different same-height owner"
+    );
+    let _ = actor.handle_frontier_slot_event(
+        now,
+        super::FrontierSlotEvent::OnAuthoritativeSupersede {
+            block_hash: replacement_hash,
+            view: view.saturating_add(1),
+            frontier_info: None,
+            leader: None,
+            voters: BTreeSet::new(),
+            body_present: true,
+            requester: None,
+        },
+    );
+
+    result_tx
+        .send(super::validation::ValidationResult {
+            id: 11,
+            hash: block_hash,
+            height,
+            view,
+            frontier_generation: Some(frontier_generation),
+            commit_topology,
+            outcome: Ok(None),
+        })
+        .expect("validation result enqueued");
+
+    assert!(
+        actor.poll_validation_results(),
+        "polling should consume the superseded worker result"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "dropping a stale generation result should leave the old pending payload untouched"
+    );
+    assert_eq!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .expect("superseded pending")
+            .validation_status,
+        ValidationStatus::Pending,
+        "stale frontier-owner validation must not mark the superseded payload as valid"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "the consumed stale worker result should clear its inflight marker"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn poll_validation_results_recovers_live_pending_block_without_inflight_marker() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let now = Instant::now();
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    let frontier_generation = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot")
+        .owner_generation;
+    let commit_topology = actor.effective_commit_topology();
+    let (result_tx, result_rx) =
+        std::sync::mpsc::sync_channel::<super::validation::ValidationResult>(1);
+    actor.subsystems.validation.result_rx = Some(result_rx);
+
+    result_tx
+        .send(super::validation::ValidationResult {
+            id: 17,
+            hash: block_hash,
+            height,
+            view,
+            frontier_generation: Some(frontier_generation),
+            commit_topology,
+            outcome: Ok(None),
+        })
+        .expect("validation result enqueued");
+
+    assert!(
+        actor.poll_validation_results(),
+        "polling should recover the live pending block result"
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block retained after recovered validation");
+    assert_eq!(
+        pending.validation_status,
+        ValidationStatus::Valid,
+        "recovering a live worker result should mark the block as valid"
+    );
+    assert!(
+        actor.block_known_for_lock(block_hash),
+        "recovered validation should make the block lock-known"
+    );
+    assert!(
+        actor.commit_pipeline_wakeup_pending(),
+        "recovered validation should wake the commit pipeline"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retain_rbc_sessions_after_commit_when_undelivered() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -57107,33 +57321,20 @@ async fn proposals_seen_prunes_far_future_heights() {
         .saturating_add(super::PROPOSALS_SEEN_HEIGHT_WINDOW)
         .saturating_add(1);
 
-    actor
-        .subsystems
-        .propose
-        .proposals_seen
-        .insert((anchor_height, 0));
-    actor
-        .subsystems
-        .propose
-        .proposals_seen
-        .insert((far_height, 0));
+    actor.slot_tracker.proposals_seen.insert((anchor_height, 0));
+    actor.slot_tracker.proposals_seen.insert((far_height, 0));
 
     actor.prune_proposals_seen_horizon(committed_height);
 
     assert!(
         actor
-            .subsystems
-            .propose
+            .slot_tracker
             .proposals_seen
             .contains(&(anchor_height, 0)),
         "entries near the active height should be retained"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(far_height, 0)),
+        !actor.slot_tracker.proposals_seen.contains(&(far_height, 0)),
         "entries far above the active height should be pruned"
     );
 
@@ -57155,13 +57356,11 @@ async fn proposals_seen_prunes_far_future_views_for_active_height() {
         .phase_tracker
         .on_view_change(active_height, current_view, Instant::now());
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((active_height, current_view));
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((active_height, far_view));
 
@@ -57169,16 +57368,14 @@ async fn proposals_seen_prunes_far_future_views_for_active_height() {
 
     assert!(
         actor
-            .subsystems
-            .propose
+            .slot_tracker
             .proposals_seen
             .contains(&(active_height, current_view)),
         "entries near the current view should be retained"
     );
     assert!(
         !actor
-            .subsystems
-            .propose
+            .slot_tracker
             .proposals_seen
             .contains(&(active_height, far_view)),
         "entries far beyond the current view should be pruned"
@@ -57278,9 +57475,28 @@ async fn vote_log_prunes_far_future_views_for_active_height() {
     let committed_height = actor.state.view().height() as u64;
     let active_height = committed_height.saturating_add(1);
     let current_view = 1_u64;
+    let epoch = actor.epoch_for_height(active_height);
     let far_view = current_view
         .saturating_add(super::VOTE_CACHE_VIEW_WINDOW)
         .saturating_add(1);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(active_height);
+    let current_signature_topology =
+        super::topology_for_view(&topology, active_height, current_view, mode_tag, prf_seed);
+    let far_signature_topology =
+        super::topology_for_view(&topology, active_height, far_view, mode_tag, prf_seed);
+    let local_idx = actor
+        .local_validator_index_for_topology(&current_signature_topology)
+        .expect("local validator index");
+    let remote_idx = far_signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .find_map(|(idx, peer)| {
+            (peer != actor.common_config.peer.id())
+                .then(|| u32::try_from(idx).expect("validator index fits u32"))
+        })
+        .expect("remote validator index");
 
     actor
         .phase_tracker
@@ -57294,13 +57510,13 @@ async fn vote_log_prunes_far_future_views_for_active_height() {
         post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
         height: active_height,
         view: current_view,
-        epoch: 0,
+        epoch,
         highest_qc: None,
-        signer: 0,
+        signer: local_idx,
         bls_sig: vec![0_u8; 96],
     };
     actor.vote_log.insert(
-        (Phase::Commit, active_height, current_view, 0, 0),
+        (Phase::Commit, active_height, current_view, epoch, local_idx),
         current_vote,
     );
 
@@ -57312,14 +57528,15 @@ async fn vote_log_prunes_far_future_views_for_active_height() {
         post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
         height: active_height,
         view: far_view,
-        epoch: 0,
+        epoch,
         highest_qc: None,
-        signer: 0,
+        signer: remote_idx,
         bls_sig: vec![0_u8; 96],
     };
-    actor
-        .vote_log
-        .insert((Phase::Commit, active_height, far_view, 0, 0), far_vote);
+    actor.vote_log.insert(
+        (Phase::Commit, active_height, far_view, epoch, remote_idx),
+        far_vote,
+    );
     let roster = actor.effective_commit_topology();
     actor.cache_vote_roster(
         current_block.hash(),
@@ -57332,15 +57549,19 @@ async fn vote_log_prunes_far_future_views_for_active_height() {
     actor.prune_vote_caches_horizon(committed_height);
 
     assert!(
-        actor
-            .vote_log
-            .contains_key(&(Phase::Commit, active_height, current_view, 0, 0)),
+        actor.vote_log.contains_key(&(
+            Phase::Commit,
+            active_height,
+            current_view,
+            epoch,
+            local_idx
+        )),
         "votes near the current view should be retained"
     );
     assert!(
         !actor
             .vote_log
-            .contains_key(&(Phase::Commit, active_height, far_view, 0, 0)),
+            .contains_key(&(Phase::Commit, active_height, far_view, epoch, remote_idx)),
         "votes far beyond the current view should be pruned"
     );
     assert!(
@@ -57350,6 +57571,78 @@ async fn vote_log_prunes_far_future_views_for_active_height() {
     assert!(
         !actor.vote_roster_cache.contains_key(&far_block.hash()),
         "vote roster cache far beyond the current view should be pruned"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn vote_log_preserves_far_future_views_for_active_height_local_votes() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    let active_height = committed_height.saturating_add(1);
+    let current_view = 1_u64;
+    let epoch = actor.epoch_for_height(active_height);
+    let far_view = current_view
+        .saturating_add(super::VOTE_CACHE_VIEW_WINDOW)
+        .saturating_add(1);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(active_height);
+    let far_signature_topology =
+        super::topology_for_view(&topology, active_height, far_view, mode_tag, prf_seed);
+    let local_idx = actor
+        .local_validator_index_for_topology(&far_signature_topology)
+        .expect("local validator index");
+
+    actor
+        .phase_tracker
+        .on_view_change(active_height, current_view, Instant::now());
+
+    let far_block = sample_block(active_height, far_view, None);
+    let far_hash = far_block.hash();
+    let far_vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash: far_hash,
+        parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        height: active_height,
+        view: far_view,
+        epoch,
+        highest_qc: None,
+        signer: local_idx,
+        bls_sig: vec![0_u8; 96],
+    };
+    actor.vote_log.insert(
+        (Phase::Commit, active_height, far_view, epoch, local_idx),
+        far_vote,
+    );
+    actor.cache_vote_roster(
+        far_hash,
+        active_height,
+        far_view,
+        actor.effective_commit_topology(),
+    );
+
+    actor.prune_vote_caches_horizon(committed_height);
+
+    assert!(
+        actor
+            .vote_log
+            .contains_key(&(Phase::Commit, active_height, far_view, epoch, local_idx)),
+        "local same-height votes must survive long view churn"
+    );
+    assert!(
+        actor.vote_roster_cache.contains_key(&far_hash),
+        "roster cache for preserved local same-height votes must survive long view churn"
+    );
+    let conflicting_hash = sample_block(active_height, far_view.saturating_add(1), None).hash();
+    let conflict = actor
+        .local_conflicting_frontier_vote(active_height, conflicting_hash)
+        .expect("local conflicting vote history should remain visible after pruning");
+    assert_eq!(
+        conflict.block_hash, far_hash,
+        "local same-height conflict detection should keep the preserved vote target"
     );
 
     harness.shutdown.send();
@@ -57366,7 +57659,7 @@ async fn commit_topology_change_preserves_state_on_reorder() {
     );
 
     let view_key = (2_u64, 0_u64);
-    actor.subsystems.propose.proposals_seen.insert(view_key);
+    actor.slot_tracker.proposals_seen.insert(view_key);
     actor.subsystems.propose.forced_view_after_timeout = Some((3, 1));
     let sender = actor.common_config.peer.id().clone();
     let qc = sample_qc_ref(1, 0);
@@ -57386,7 +57679,7 @@ async fn commit_topology_change_preserves_state_on_reorder() {
     let change = actor.refresh_commit_topology_state(&reordered);
     assert_eq!(change, super::CommitTopologyChange::OrderOnly);
     assert!(
-        actor.subsystems.propose.proposals_seen.contains(&view_key),
+        actor.slot_tracker.proposals_seen.contains(&view_key),
         "order-only topology change should preserve proposals_seen"
     );
     assert!(
@@ -57416,7 +57709,7 @@ async fn commit_topology_change_preserves_state_on_reorder() {
     );
     actor.reset_consensus_state_for_roster_change(true);
     assert!(
-        actor.subsystems.propose.proposals_seen.contains(&view_key),
+        actor.slot_tracker.proposals_seen.contains(&view_key),
         "membership change should preserve proposals_seen"
     );
 
@@ -57453,7 +57746,7 @@ async fn on_block_commit_keeps_pending_on_order_only_topology_change() {
         .pending
         .pending_blocks
         .insert(pending_block.hash(), pending);
-    actor.subsystems.propose.proposals_seen.insert((3, 0));
+    actor.slot_tracker.proposals_seen.insert((3, 0));
 
     actor.on_block_commit(1).expect("commit should succeed");
 
@@ -57465,7 +57758,7 @@ async fn on_block_commit_keeps_pending_on_order_only_topology_change() {
         "order-only topology change should not clear pending blocks"
     );
     assert!(
-        actor.subsystems.propose.proposals_seen.contains(&(3, 0)),
+        actor.slot_tracker.proposals_seen.contains(&(3, 0)),
         "order-only topology change should retain proposals_seen"
     );
 
@@ -57495,12 +57788,12 @@ async fn on_block_commit_preserves_proposals_seen_on_membership_change() {
         topo.commit();
     }
 
-    actor.subsystems.propose.proposals_seen.insert((3, 0));
+    actor.slot_tracker.proposals_seen.insert((3, 0));
 
     actor.on_block_commit(1).expect("commit should succeed");
 
     assert!(
-        actor.subsystems.propose.proposals_seen.contains(&(3, 0)),
+        actor.slot_tracker.proposals_seen.contains(&(3, 0)),
         "membership change should preserve proposals_seen"
     );
 
@@ -57907,11 +58200,7 @@ async fn block_created_without_cached_proposal_advances_active_view() {
         "authoritative BlockCreated should block reproposal and idle rotation for the active slot"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "BlockCreated should not fabricate proposal metadata on its own"
     );
     assert_eq!(
@@ -57972,11 +58261,7 @@ async fn block_created_with_matching_proposal_advances_active_view() {
         .expect("handle BlockCreated");
 
     assert!(
-        actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "matching Proposal should still mark the slot as observed"
     );
     assert_eq!(
@@ -58027,11 +58312,7 @@ async fn proposal_after_block_created_is_safe_and_marks_metadata() {
         "pending payload should remain owned by BlockCreated after proposal metadata arrives"
     );
     assert!(
-        actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "proposal arriving after BlockCreated should still mark metadata for the slot"
     );
     assert_eq!(
@@ -58583,7 +58864,7 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
         view: current_view,
         since: start,
     });
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
     actor.pending.pending_blocks.clear();
     actor.pending.missing_block_requests.clear();
@@ -58831,13 +59112,11 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
         since: first_start,
     });
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
     actor.queue_ready_since = Some(super::QueueReadySince {
@@ -58856,7 +59135,7 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
         since: first_start,
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(first_now);
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
 
     assert!(
         actor.force_view_change_if_idle(first_now),
@@ -58911,8 +59190,7 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
     actor.subsystems.propose.last_pacemaker_attempt = Some(second_now);
     actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, next_view));
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, next_view));
 
@@ -58946,8 +59224,7 @@ async fn missing_qc_height_stall_mode_limits_missing_qc_view_rotation_to_one_per
     actor.subsystems.propose.last_pacemaker_attempt = Some(third_now);
     actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, next_view));
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, next_view));
 
@@ -59011,8 +59288,7 @@ async fn proposal_seen_without_progress_does_not_reset_missing_qc_timeout_streak
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
 
@@ -59090,8 +59366,7 @@ async fn force_view_change_if_idle_suppresses_stale_missing_qc_round() {
         since: start,
     });
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
     actor.subsystems.propose.proposal_liveness = Some(super::ProposalLivenessSlot::new(
@@ -59243,8 +59518,7 @@ async fn force_view_change_if_idle_suppresses_missing_qc_round_stale_against_qc_
         since: start,
     });
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
     actor.subsystems.propose.proposal_liveness = Some(super::ProposalLivenessSlot::new(
@@ -59401,7 +59675,7 @@ async fn force_view_change_if_idle_clamps_tracked_round_height_to_commit_horizon
         view: current_view,
         since: start,
     });
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
 
     assert!(
         !actor.force_view_change_if_idle(now),
@@ -59562,7 +59836,7 @@ async fn force_view_change_if_idle_prefers_lowest_missing_height_over_tracked_ro
         since: start,
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
     actor.subsystems.propose.last_missing_qc_reacquire_attempt =
         Some((missing_height, current_view));
 
@@ -59785,8 +60059,7 @@ async fn force_view_change_if_idle_reacquires_missing_qc_once_with_proposal_seen
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
 
@@ -59910,7 +60183,7 @@ async fn force_view_change_if_idle_reacquires_after_repeated_missing_qc_timeout_
         since: first_start,
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
 
     let before = super::status::snapshot();
     assert!(
@@ -59942,7 +60215,7 @@ async fn force_view_change_if_idle_reacquires_after_repeated_missing_qc_timeout_
         since: second_start,
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(second_now);
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
 
     assert!(
         !actor.force_view_change_if_idle(second_now),
@@ -60205,8 +60478,7 @@ async fn force_view_change_if_idle_defers_missing_qc_dependency_and_rotates_afte
         since: start,
     });
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
 
@@ -60910,7 +61182,7 @@ async fn force_view_change_if_idle_rotates_empty_frontier_missing_qc_directly() 
         since: start,
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
     actor.pending.pending_blocks.clear();
     actor.pending.missing_block_requests.clear();
     actor.frontier_recovery = None;
@@ -62349,8 +62621,7 @@ async fn force_view_change_if_idle_defers_after_timeout_while_rbc_backlog_progre
         .phase_tracker
         .on_view_change(height, current_view, start);
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
 
@@ -63101,8 +63372,7 @@ async fn force_view_change_if_idle_missing_qc_same_height_backoff_applies_with_p
     });
     actor.subsystems.propose.last_pacemaker_attempt = Some(now);
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
 
@@ -64409,8 +64679,7 @@ async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
         .phase_tracker
         .on_view_change(height, current_view, start);
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
 
@@ -64494,8 +64763,7 @@ async fn force_view_change_if_idle_defers_for_relay_backpressure_until_timeout()
         .phase_tracker
         .on_view_change(height, current_view, start);
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
 
@@ -64584,8 +64852,7 @@ async fn force_view_change_if_idle_ignores_consensus_queue_backlog() {
         since: start,
     });
     actor
-        .subsystems
-        .propose
+        .slot_tracker
         .proposals_seen
         .insert((height, current_view));
 
@@ -70498,8 +70765,7 @@ async fn repeated_committed_conflict_proposals_do_not_block_canonical_chain_prog
     );
     assert!(
         actor
-            .subsystems
-            .propose
+            .slot_tracker
             .proposals_seen
             .contains(&(round_height, 0)),
         "canonical proposal should mark the round as observed after conflict suppression"
@@ -72874,7 +73140,7 @@ async fn assemble_proposal_skips_view_overflow() {
         "overflow view should not enqueue pending blocks"
     );
     assert!(
-        actor.subsystems.propose.proposals_seen.is_empty(),
+        actor.slot_tracker.proposals_seen.is_empty(),
         "overflow view should not mark proposals as seen"
     );
     assert!(
@@ -72992,6 +73258,108 @@ async fn assemble_proposal_schedules_block_created_before_rbc_without_frontier_p
     assert!(
         first_rbc > last_block_created,
         "RBC messages should be scheduled after BlockCreated"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_broadcasts_when_candidate_conflicts_with_local_vote_history() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 1u64;
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, _, prf_seed) = actor.consensus_context_for_height(height);
+    let seed = prf_seed.expect("PRF seed available");
+    topology.canonicalize_order();
+    topology.shuffle_prf(seed, height);
+    let vote_topology = topology.clone();
+    let local_pos = topology
+        .position(actor.common_config.peer.id().public_key())
+        .expect("local peer in topology");
+    let view = u64::try_from(local_pos).expect("view fits u64");
+    let leader_index = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index");
+    let local_idx = actor
+        .local_validator_index_for_topology(&topology)
+        .expect("local validator index");
+    assert_eq!(
+        u32::try_from(leader_index).expect("leader index fits u32"),
+        local_idx,
+        "test requires the local peer to own the proposal slot"
+    );
+
+    let conflicting_block = sample_block(height, 0, None);
+    let conflicting_hash = insert_validated_pending(actor, conflicting_block);
+    let epoch = actor.epoch_for_height(height);
+    assert!(
+        actor.emit_precommit_vote(
+            conflicting_hash,
+            height,
+            0,
+            epoch,
+            ValidationStatus::Valid,
+            &vote_topology,
+            None,
+            Some((Hash::new([]), Hash::new([]))),
+        ),
+        "test setup should record a local same-height vote for the conflicting branch"
+    );
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            sample_qc_ref(0, 0),
+            &mut topology,
+            leader_index,
+            local_idx,
+            None,
+            Instant::now(),
+        )
+        .expect("proposal assembly should succeed even when the leader has local same-height vote history");
+    assert!(
+        assembled,
+        "leader should still broadcast a higher-view proposal so the frontier keeps a live proposal path"
+    );
+    assert_eq!(
+        actor.queue.queued_len(),
+        0,
+        "successful conflicting proposal assembly should consume the queued transaction"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .is_some(),
+        "broadcast conflicting proposal should still populate the proposal cache for the new view"
+    );
+    assert!(
+        actor.slot_tracker.proposals_seen.contains(&(height, view)),
+        "broadcast conflicting proposal should mark the new view as observed so the leader does not fall straight into no-proposal churn"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&conflicting_hash)
+            .is_some_and(|pending| pending.height == height),
+        "existing voted branch should remain intact after broadcasting the conflicting candidate"
     );
 
     harness.shutdown.send();
@@ -74398,7 +74766,7 @@ async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_s
         .propose
         .proposal_cache
         .pop_hint(tracked_height, 0);
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
 
     actor.trigger_view_change_with_cause(tracked_height, 0, super::ViewChangeCause::MissingQc);
 
@@ -74420,6 +74788,93 @@ async fn pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_s
     assert!(
         actor.subsystems.propose.last_successful_proposal.is_some(),
         "successful pacemaker assembly should record a successful proposal attempt for the post-rotation slot"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pacemaker_defers_reproposal_after_missing_qc_view_advance_with_live_frontier_owner() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    let committed_height = actor.state.view().height() as u64;
+    let mut highest_qc = actor
+        .latest_committed_qc()
+        .unwrap_or_else(|| sample_qc_ref(committed_height, 0));
+    highest_qc.phase = Phase::Commit;
+    actor.highest_qc = Some(highest_qc);
+
+    let tracked_height = super::active_round_height(
+        actor.highest_qc,
+        actor.latest_committed_qc(),
+        committed_height,
+    );
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(tracked_height, now);
+
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(tracked_height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, tracked_height, 0);
+    pending.note_local_commit_vote_emitted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        tracked_height,
+        0,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+
+    actor.trigger_view_change_with_cause(tracked_height, 0, super::ViewChangeCause::MissingQc);
+
+    assert_eq!(
+        actor.phase_tracker.current_view(tracked_height),
+        Some(1),
+        "missing-QC recovery should still advance the round to the next view"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "view churn must preserve the live old-view frontier owner"
+    );
+    assert!(
+        !actor.slot_has_proposal_evidence(tracked_height, 1),
+        "exact-view proposal evidence must remain scoped to the original owner view"
+    );
+    assert!(
+        actor.slot_has_round_liveness(tracked_height, 1),
+        "the live old-view owner must still count as round liveness for the post-rotation frontier"
+    );
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "pacemaker must not assemble a competing proposal while the old-view frontier owner is still locally live"
+    );
+    assert!(
+        actor.subsystems.propose.last_successful_proposal.is_none(),
+        "no fresh proposal should be recorded while the live frontier owner remains active"
     );
 
     harness.shutdown.send();
@@ -77542,6 +77997,56 @@ async fn stale_block_created_preserves_committed_height_missing_request_when_not
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn frontier_vote_placeholder_preserves_same_hash_owner_after_local_conflict() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.locked_qc = None;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let height = actor.state.view().height() as u64 + 1;
+    let epoch = actor.epoch_for_height(height);
+    let block_a = sample_block(height, 0, None);
+    let block_b = sample_block(height, 1, None);
+    let block_a_hash = insert_validated_pending(actor, block_a);
+    let block_b_hash = block_b.hash();
+
+    assert!(
+        actor.emit_precommit_vote(
+            block_a_hash,
+            height,
+            0,
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            None,
+            Some((Hash::new([]), Hash::new([]))),
+        ),
+        "first precommit vote should be accepted"
+    );
+    assert!(
+        actor.note_frontier_vote_placeholder(block_a_hash, height, 0, None, Instant::now()),
+        "same-hash vote evidence should seed the active frontier slot"
+    );
+
+    actor.note_frontier_vote_placeholder(block_b_hash, height, 1, None, Instant::now());
+
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot should remain on the voted branch");
+    assert_eq!(
+        slot.block_hash, block_a_hash,
+        "different-hash higher-view vote evidence must not steal same-height slot ownership"
+    );
+    assert_eq!(
+        slot.view, 0,
+        "same-hash owner view should remain unchanged when conflicting vote evidence arrives"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stale_block_created_requires_missing_request_when_stale() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -77626,20 +78131,172 @@ async fn stale_block_created_refreshes_retired_branch_without_reactivating_slot(
         "retained stale branch should refresh its payload metadata"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "retained stale payload must not mark proposal evidence as seen"
     );
     assert!(
         actor.frontier_slot.is_none(),
         "retained stale payload must not recreate active frontier-slot ownership"
     );
+    let retained = actor
+        .slot_tracker
+        .retained_branch_seed(height)
+        .expect("passive retained branch should be recorded for same-height repair");
+    assert_eq!(retained.block_hash, block_hash);
+    assert_eq!(retained.view, view);
     assert!(
         !actor.slot_has_authoritative_payload(height, view),
         "retired stale payload must not count as active same-height proposal evidence"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn conflicting_higher_view_block_created_stays_passive_after_local_vote() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.locked_qc = None;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let epoch = actor.epoch_for_height(height);
+    let canonical_block = sample_block(height, 0, None);
+    let canonical_hash = insert_validated_pending(actor, canonical_block);
+
+    assert!(
+        actor.emit_precommit_vote(
+            canonical_hash,
+            height,
+            0,
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            None,
+            Some((Hash::new([]), Hash::new([]))),
+        ),
+        "test setup should record a local same-height vote for the canonical branch"
+    );
+
+    let conflicting_view = 1_u64;
+    let conflicting_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, conflicting_view, None);
+    let conflicting_hash = conflicting_block.hash();
+
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: conflicting_block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("handle conflicting higher-view BlockCreated");
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&conflicting_hash)
+        .expect("conflicting BlockCreated payload should still be retained");
+    assert!(
+        pending_after.is_retired_same_height(),
+        "conflicting same-height BlockCreated must be demoted to a passive retained branch"
+    );
+    assert!(
+        !actor
+            .slot_tracker
+            .proposals_seen
+            .contains(&(height, conflicting_view)),
+        "passive conflicting BlockCreated must not mark proposal evidence as seen"
+    );
+    assert_eq!(
+        actor.authoritative_slot_owner_hash(height, conflicting_view),
+        None,
+        "passive conflicting BlockCreated must not become the authoritative slot owner"
+    );
+    if let Some(slot) = actor.frontier_slot.as_ref() {
+        assert_ne!(
+            slot.block_hash, conflicting_hash,
+            "passive conflicting BlockCreated must not take active frontier-slot ownership"
+        );
+    }
+    let retained = actor
+        .slot_tracker
+        .retained_branch_seed(height)
+        .expect("conflicting BlockCreated should remain visible as passive retained state");
+    assert_eq!(retained.block_hash, conflicting_hash);
+    assert_eq!(retained.view, conflicting_view);
+    assert!(
+        !actor.slot_has_authoritative_payload(height, conflicting_view),
+        "passive conflicting BlockCreated must not reactivate generic same-height proposal state"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retained_stale_branch_seeds_same_height_repair_without_reactivating_generic_proposal_state()
+ {
+    let mut harness = test_actor_harness(1).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let block_hash = block.hash();
+
+    let mut retired = PendingBlock::new(
+        block.clone(),
+        Hash::new(super::proposals::block_payload_bytes(&block)),
+        height,
+        view,
+    );
+    retired.retire_same_height();
+    actor.pending.pending_blocks.insert(block_hash, retired);
+
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, view + 1, now);
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("handle stale retained BlockCreated");
+
+    actor.frontier_slot = None;
+    let seeded = actor.seed_frontier_slot_from_same_height_evidence(
+        height,
+        view + 1,
+        Instant::now(),
+        "missing_qc",
+        true,
+    );
+    assert!(
+        seeded,
+        "retained stale body should seed same-height repair ownership"
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("retained stale body should instantiate a frontier slot");
+    assert_eq!(slot.block_hash, block_hash);
+    assert_eq!(slot.view, view);
+    assert_eq!(
+        slot.repair_state.last_reason,
+        Some("missing_qc"),
+        "retained stale body should be visible to exact-slot repair without reviving proposal state"
+    );
+    assert!(
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
+        "retained stale body must not reactivate generic proposal-seen state"
+    );
+    assert!(
+        actor.subsystems.propose.new_view_tracker.entries.is_empty(),
+        "retained stale body must not recreate NEW_VIEW churn state"
     );
 
     harness.shutdown.send();
@@ -78515,11 +79172,7 @@ async fn block_created_missing_hint_highest_triggers_dependency_repair_without_a
         "BlockCreated should record the unresolved highest-QC dependency for this slot"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "missing-highest BlockCreated must not fabricate proposal-seen metadata"
     );
     assert!(
@@ -80494,6 +81147,7 @@ async fn block_sync_block_created_retries_ready_after_existing_session_hydration
             },
             None,
             false,
+            false,
         )
         .expect("handle duplicate BlockCreated from block sync");
 
@@ -81510,7 +82164,7 @@ async fn proposal_hint_marks_view_seen() {
         .expect("handle proposal hint");
 
     assert!(
-        actor.subsystems.propose.proposals_seen.contains(&(2, 0)),
+        actor.slot_tracker.proposals_seen.contains(&(2, 0)),
         "proposal hint should mark the view as observed"
     );
 
@@ -81657,6 +82311,108 @@ async fn block_created_without_proposal_does_not_replace_authoritative_same_slot
         actor.authoritative_slot_owner_hash(height, view),
         Some(owner_hash),
         "authoritative slot mapping should keep the original body as the slot owner"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn later_view_block_created_becomes_passive_while_frontier_owner_is_locally_live() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = actor.state.view().latest_block_hash();
+    let height = actor.state.view().height() as u64 + 1;
+    let owner_view = 0_u64;
+    let conflicting_view = owner_view.saturating_add(1);
+    let owner_block = sample_block(height, owner_view, parent);
+    let owner_hash = owner_block.hash();
+    let owner_payload_hash = Hash::new(&super::proposals::block_payload_bytes(&owner_block));
+    actor.pending.pending_blocks.insert(
+        owner_hash,
+        PendingBlock::new(owner_block.clone(), owner_payload_hash, height, owner_view),
+    );
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&owner_hash)
+        .expect("owner pending block")
+        .note_local_commit_vote_emitted();
+    actor.note_proposal_seen(height, owner_view, owner_payload_hash);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        Instant::now(),
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+
+    let conflicting_block = block_with_txs(
+        height,
+        conflicting_view,
+        parent,
+        vec![sample_transaction(), sample_transaction()],
+    );
+    let conflicting_hash = conflicting_block.hash();
+    assert_ne!(
+        conflicting_hash, owner_hash,
+        "test setup requires a later-view conflicting body"
+    );
+
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: conflicting_block,
+                frontier: None,
+            },
+            None,
+        )
+        .expect("handle conflicting later-view BlockCreated");
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&owner_hash),
+        "the current frontier owner must remain active"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| { slot.block_hash == owner_hash && slot.view == owner_view }),
+        "later-view conflicting BlockCreated must not steal frontier ownership"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&conflicting_hash),
+        "the conflicting body should still be retained for repair"
+    );
+    assert!(
+        actor
+            .pending
+            .pending_blocks
+            .get(&conflicting_hash)
+            .expect("retained conflicting block")
+            .is_retired_same_height(),
+        "the conflicting body must be downgraded into passive same-height retained state"
+    );
+    assert!(
+        actor
+            .authoritative_slot_owner_hash(height, conflicting_view)
+            .is_none(),
+        "passive later-view retention must not register a new authoritative slot owner"
+    );
+    assert!(
+        actor.slot_tracker.retained_branches.contains_key(&(
+            height,
+            conflicting_view,
+            conflicting_hash
+        )),
+        "the conflicting later-view body should be tracked as a retained repair branch"
     );
 
     harness.shutdown.send();
@@ -81846,8 +82602,7 @@ async fn frontier_quorum_timeout_cleanup_preserves_live_authoritative_slot_state
     );
     assert!(
         actor
-            .subsystems
-            .propose
+            .slot_tracker
             .proposals_seen
             .contains(&(frontier_height, view)),
         "quorum-timeout cleanup must keep the observed same-slot proposal marker",
@@ -82039,11 +82794,7 @@ async fn block_created_advances_active_view_without_marking_proposal_seen() {
         .expect("handle BlockCreated");
 
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, 0)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, 0)),
         "accepted BlockCreated should not fabricate proposal-seen metadata"
     );
     assert!(
@@ -82095,11 +82846,7 @@ async fn block_created_with_frontier_metadata_marks_view_seen_without_proposal_m
         .expect("handle BlockCreated");
 
     assert!(
-        actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, 0)),
+        actor.slot_tracker.proposals_seen.contains(&(height, 0)),
         "frontier BlockCreated should mark the slot as observed"
     );
     let cached = actor
@@ -82205,7 +82952,7 @@ async fn slot_has_proposal_evidence_preserves_authoritative_frontier_owner_witho
         .propose
         .proposal_cache
         .pop_hint(height, view);
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
     actor.frontier_slot = None;
 
     assert_eq!(
@@ -82273,7 +83020,7 @@ async fn slot_has_proposal_evidence_keeps_frontier_candidate_across_view_change_
         .propose
         .proposal_cache
         .pop_hint(height, view);
-    actor.subsystems.propose.proposals_seen.clear();
+    actor.slot_tracker.proposals_seen.clear();
 
     actor.trigger_view_change_with_cause(height, view, super::ViewChangeCause::MissingQc);
 
@@ -82618,11 +83365,7 @@ async fn proposal_updates_highest_qc_and_marks_view_seen() {
     assert_eq!(highest.view, view);
     assert_eq!(highest.subject_block_hash, parent_block.hash());
     assert!(
-        actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "accepted proposal should mark the view as observed"
     );
     assert!(
@@ -82758,11 +83501,7 @@ async fn proposal_missing_highest_qc_triggers_dependency_repair_without_acceptin
         "missing-highest proposal should record the unresolved dependency for this slot"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "missing-highest proposal must not mark the slot as observed"
     );
     assert!(
@@ -82833,11 +83572,7 @@ async fn proposal_hint_missing_highest_qc_triggers_missing_block_fetch() {
         "proposal hint should record the unresolved highest-QC dependency"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "missing-highest proposal hint must not mark the slot as observed"
     );
     assert!(
@@ -82945,11 +83680,7 @@ async fn prune_descendants_keeps_view_seen_after_divergent_proposal_drop() {
         .proposal_cache
         .insert_proposal(proposal);
     actor.subsystems.propose.proposal_cache.insert_hint(hint);
-    actor
-        .subsystems
-        .propose
-        .proposals_seen
-        .insert((height, view));
+    actor.slot_tracker.proposals_seen.insert((height, view));
 
     actor.prune_descendants_not_on_tip(1, committed.hash());
 
@@ -82972,11 +83703,7 @@ async fn prune_descendants_keeps_view_seen_after_divergent_proposal_drop() {
         "divergent proposal hint should be dropped"
     );
     assert!(
-        actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "view should remain marked as observed after divergence"
     );
 
@@ -83006,11 +83733,7 @@ async fn proposal_rejects_epoch_mismatch() {
         "mismatched proposal epoch should be dropped"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "mismatched proposal epoch should not mark view as observed"
     );
 
@@ -83040,11 +83763,7 @@ async fn proposal_rejects_highest_qc_height_mismatch() {
         "highest QC height mismatch should drop the proposal"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "rejected proposal should not mark the view as observed"
     );
 
@@ -83075,11 +83794,7 @@ async fn proposal_rejects_highest_qc_parent_mismatch() {
         "highest QC parent mismatch should drop the proposal"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "rejected proposal should not mark the view as observed"
     );
 
@@ -83117,11 +83832,7 @@ async fn proposal_rejects_highest_qc_view_mismatch_when_parent_known() {
         "highest QC view mismatch should drop the proposal"
     );
     assert!(
-        !actor
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view)),
+        !actor.slot_tracker.proposals_seen.contains(&(height, view)),
         "rejected proposal should not mark the view as observed"
     );
 
@@ -83168,7 +83879,7 @@ async fn proposal_hint_rejects_highest_qc_height_mismatch() {
         "highest QC height mismatch should drop the proposal hint"
     );
     assert!(
-        !actor.subsystems.propose.proposals_seen.contains(&(3, 0)),
+        !actor.slot_tracker.proposals_seen.contains(&(3, 0)),
         "rejected proposal hint should not mark the view as observed"
     );
 
@@ -83215,7 +83926,7 @@ async fn proposal_hint_rejects_highest_qc_epoch_mismatch() {
         "highest QC epoch mismatch should drop the proposal hint"
     );
     assert!(
-        !actor.subsystems.propose.proposals_seen.contains(&(2, 0)),
+        !actor.slot_tracker.proposals_seen.contains(&(2, 0)),
         "rejected proposal hint should not mark the view as observed"
     );
 
@@ -83257,7 +83968,7 @@ async fn proposal_hint_rejects_highest_qc_view_mismatch_when_parent_known() {
         "highest QC view mismatch should drop the proposal hint"
     );
     assert!(
-        !actor.subsystems.propose.proposals_seen.contains(&(2, 0)),
+        !actor.slot_tracker.proposals_seen.contains(&(2, 0)),
         "rejected proposal hint should not mark the view as observed"
     );
 
@@ -83378,7 +84089,7 @@ async fn proposal_hint_defers_highest_qc_update_when_lock_lag_catchup_unresolved
         "lock-lag defer marker should be recorded for this proposal round"
     );
     assert!(
-        !actor.subsystems.propose.proposals_seen.contains(&(4, 0)),
+        !actor.slot_tracker.proposals_seen.contains(&(4, 0)),
         "proposal hint must not mark the round as observed while highest-QC repair is unresolved"
     );
     assert!(
@@ -83435,7 +84146,7 @@ async fn proposal_defers_highest_qc_update_when_lock_lag_catchup_unresolved() {
         "lock-lag defer marker should be recorded for this proposal round"
     );
     assert!(
-        !actor.subsystems.propose.proposals_seen.contains(&(4, 0)),
+        !actor.slot_tracker.proposals_seen.contains(&(4, 0)),
         "proposal must not mark the round as observed while highest-QC repair is unresolved"
     );
     assert!(
@@ -94531,6 +95242,7 @@ async fn reschedule_defers_quorum_timeout_while_validation_inflight() {
         super::ValidationInFlight {
             id: 1,
             started_at: Instant::now(),
+            frontier_generation: None,
         },
     );
 
@@ -94692,6 +95404,7 @@ async fn reschedule_defers_vote_backed_quorum_timeout_while_validation_inflight(
         super::ValidationInFlight {
             id: 3,
             started_at: Instant::now(),
+            frontier_generation: None,
         },
     );
 
@@ -98139,6 +98852,7 @@ async fn commit_pipeline_inlines_validation_when_inflight_is_stalled() {
         super::ValidationInFlight {
             id: 7,
             started_at: Instant::now() - stall_timeout - Duration::from_millis(1),
+            frontier_generation: None,
         },
     );
 
@@ -98218,6 +98932,7 @@ async fn commit_pipeline_keeps_deferred_validation_when_inflight_is_fresh() {
         super::ValidationInFlight {
             id: 9,
             started_at: Instant::now(),
+            frontier_generation: None,
         },
     );
 

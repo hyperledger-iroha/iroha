@@ -2,6 +2,111 @@
 
 Last updated: 2026-03-31
 
+## 2026-03-31 Frontier owner supersede and validation-generation hardening landed
+- Completed the remaining contiguous-frontier owner hardening in `iroha_core`
+  so stronger same-height commit evidence can replace a stale local owner
+  without reopening the old-view pacemaker split:
+  - block-sync intake now distinguishes weak owner-preservation from
+    authoritative same-height supersede, so commit-QC/checkpoint-backed
+    frontier updates no longer get forced through the conservative
+    preserve-owner path;
+  - the frontier slot now tracks explicit `owner_generation` and
+    `lock_state`, and authoritative supersede replaces the live owner via a
+    dedicated slot event instead of trying to reuse the passive same-height
+    handoff path;
+  - commit-vote emission now marks the active frontier owner as locally voted;
+    and
+  - async validation work/results now carry the frontier owner generation, so
+    late worker results for a superseded owner are dropped instead of reviving
+    stale validation state.
+- Added focused regressions in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs` for:
+  - block-sync payload mismatch with commit evidence replacing the stale
+    contiguous-frontier owner; and
+  - dropping a stale validation result after the frontier owner generation has
+    been superseded.
+- Verification completed for this follow-up slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib block_sync_payload_mismatch_with_commit_evidence_replaces_stale_frontier_owner -- --nocapture`
+- Remaining verification still pending for this slice:
+  - rerun the earlier focused frontier-owner regression set against the new
+    supersede/generation code path; and
+  - rerun fresh permissioned and NPoS soaks to confirm the height-`65`
+    frontier-owner failure shape is gone end to end.
+
+## 2026-03-31 Frontier owner round-liveness refactor landed for same-height old-view preservation
+- Hardened `iroha_core` so the contiguous-frontier owner no longer loses
+  liveness just because the pacemaker advances the view past the owner's exact
+  `(height, view)`:
+  - added a separate frontier round-liveness path that treats a locally live
+    old-view owner as active for later views without leaking
+    `slot_has_proposal_evidence(...)` into those views;
+  - proposal assembly now defers while that live owner still covers the active
+    round, instead of assembling a competing later-view same-height proposal;
+  - later-view conflicting `BlockCreated` / vote-backed / repair handoffs now
+    stay passive retained branches when the current frontier owner is still
+    locally live; and
+  - stale-view pruning now preserves the live frontier owner plus its
+    validation inflight state instead of dropping the owner and then later
+    warning about detached validation results.
+- Added focused regressions in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs` for:
+  - pacemaker deferral after a MissingQc view advance when the old-view owner
+    is still locally live;
+  - stale-view pruning preserving the live frontier owner and validation
+    inflight; and
+  - later-view conflicting `BlockCreated` intake downgrading into passive
+    retained state instead of stealing frontier ownership.
+- Re-ran the narrow consensus verification slice successfully:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib pacemaker_defers_reproposal_after_missing_qc_view_advance_with_live_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_stale_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib prune_stale_view_state_preserves_live_frontier_owner_and_validation_inflight -- --nocapture`
+  - `cargo test -p iroha_core --lib later_view_block_created_becomes_passive_while_frontier_owner_is_locally_live -- --nocapture`
+  - `cargo test -p iroha_core --lib slot_has_proposal_evidence_keeps_frontier_candidate_across_view_change_without_leaking_into_next_view -- --nocapture`
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_rotates_post_rotation_round_with_stale_quorum_timeout_owner -- --nocapture`
+
+## 2026-03-31 Permissioned strict-height 67 stall traced to missing local proposal observation after later-view frontier assembly
+- Investigated the fresh permissioned soak failure from
+  `/private/tmp/iroha-soak-permissioned-20260331T145216Z/izanami_permissioned.log`,
+  which advanced the strict controller to height `67` and then flatlined for
+  the full `600s` watchdog window with no lagging peers.
+- The permissioned peer logs showed a consensus-only liveness collapse rather
+  than ingress/routing loss:
+  - `primal_krill/run-1-stdout.log` still reported
+    `same_slot_vote_backed_evidence=true` and
+    `frontier_slot_owner_active=true` at commit-quorum timeout, then
+    immediately logged `no proposal observed for view before changing view`;
+    and
+  - `validating_turbot/run-1-stdout.log` later sat in
+    `active pending block stalled past quorum timeout` unified recovery.
+- Root cause on the current branch was the later-view proposal assembly path in
+  `iroha_core`:
+  - leaders with local same-height vote history could already build and
+    broadcast a conflicting higher-view frontier proposal after the earlier
+    fix, but the exact-frontier self-delivery path skipped `handle_proposal()`
+    and therefore never marked the new `(height, view)` as locally observed;
+  - that left the slot tracker holding same-slot evidence without a locally
+    observed live proposal for the new view, which matches the immediate
+    `missing_qc` / `no proposal observed` churn seen in the soak logs.
+- Landed the follow-up fix in `crates/iroha_core/src/sumeragi/main_loop/propose.rs`:
+  - proposal assembly no longer aborts just because the leader already has
+    same-height vote history for another block; it now warns and still
+    broadcasts so later views keep a live proposal path; and
+  - once local `BlockCreated` handling succeeds for an exact frontier proposal,
+    the leader now explicitly records `note_proposal_seen(height, view,
+    payload_hash)` so the new view does not immediately fall back into
+    `no proposal observed` recovery.
+- Updated the focused regression in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs` so the conflicting
+  higher-view proposal case now asserts that the proposal is broadcast, cached,
+  and marked observed.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib assemble_proposal_broadcasts_when_candidate_conflicts_with_local_vote_history -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_stale_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_other_hash -- --nocapture`
+
 ## 2026-03-31 Same-height safety/liveness repair landed, but fresh full soaks regressed much earlier in both modes
 - Implemented the consensus-only same-height repair in `iroha_core`:
   - stale same-height DA/RBC branches are now retained as explicit retired
@@ -61,6 +166,33 @@ Last updated: 2026-03-31
     starves almost immediately behind a same-height/frontier recovery loop; and
   - NPoS still combines a real consensus liveness stall with the separate
     authoritative-binding `route_unavailable` failure surface.
+
+## 2026-03-31 Follow-up: Kotodama GitHub Linguist bundle now exists for upstream syntax-highlighting work
+- Added a self-contained `tools/kotodama_linguist/` bundle so Kotodama can be
+  proposed to `github-linguist/linguist` as an official GitHub language rather
+  than only being force-mapped with repo-local `.gitattributes`.
+- The bundle includes:
+  - a standalone TextMate grammar repo scaffold under
+    `tools/kotodama_linguist/grammar-repo/`
+  - a proposed `languages.yml` entry plus upstream PR checklist/body under
+    `tools/kotodama_linguist/linguist/`
+  - representative `.ko` samples under `tools/kotodama_linguist/samples/`
+- The remaining blocker is external to this checkout: Linguist requires public
+  GitHub usage evidence for `.ko`, and anonymous GitHub code search no longer
+  exposes those counts. The bundle documents the authenticated search queries
+  needed before opening the upstream PR.
+- Since the initial bundle landed, the work has been pushed further externally:
+  - published grammar repo: `https://github.com/takemiyamakoto/language-kotodama`
+  - opened draft upstream Linguist PR:
+    `https://github.com/github-linguist/linguist/pull/7889`
+  - authenticated GitHub API counts captured while drafting the PR were still
+    far below the published new-language threshold (`67` for `seiyaku`, `62`
+    for `kotoage`, `2` for `register_trigger`), so the PR body leaves the
+    adoption checkbox unchecked and treats the submission as a concrete draft
+    rather than claiming acceptance readiness.
+- Verification:
+  - `python3 -m json.tool tools/kotodama_linguist/grammar-repo/package.json`
+  - `python3 -m json.tool tools/kotodama_linguist/grammar-repo/syntaxes/kotodama.tmLanguage.json`
 
 ## 2026-03-31 Follow-up: `iroha_test_network` genesis pre-exec bootstrap handles missing Nexus config again
 - Fixed `crates/iroha_test_network/src/config.rs` so

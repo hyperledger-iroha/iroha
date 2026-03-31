@@ -2,6 +2,83 @@
 
 Last updated: 2026-03-31
 
+Latest sync (2026-03-31 frontier owner supersede hardening):
+the contiguous-frontier owner path in `iroha_core` now has an explicit
+authoritative supersede path plus generation-scoped validation, so stronger
+same-height commit evidence can replace a stale local owner without letting
+late worker results resurrect it.
+
+- the refactor now:
+  - preserves one live frontier owner across later views without leaking
+    exact-view `slot_has_proposal_evidence(...)` into those later views;
+  - blocks later-view same-height reproposal while that owner still has local
+    pending / commit / vote-backed work;
+  - demotes later-view conflicting `BlockCreated` / repair handoffs into
+    passive retained branches instead of active ownership; and
+  - keeps the live owner plus validation inflight state through stale-view
+    pruning while dropping late async validation results for superseded owner
+    generations.
+- the new follow-up also:
+  - routes block-sync commit-QC/checkpoint-backed frontier updates through an
+    authoritative same-height supersede path instead of the conservative
+    preserve-owner policy; and
+  - marks the active frontier owner as locally voted once the local peer emits
+    its commit vote.
+- focused verification now includes:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib block_sync_payload_mismatch_with_commit_evidence_replaces_stale_frontier_owner -- --nocapture`
+
+- open work for this slice is now:
+  - rerun the earlier focused frontier-owner regression set on top of the new
+    supersede/generation hardening so the old-view preservation and the new
+    authoritative replacement path are green together;
+  - rerun fresh permissioned and NPoS soaks on the current branch to confirm
+    the height-`65` old-view owner split is actually gone end to end;
+  - if the soak still stalls, inspect whether the remaining gap is now in
+    some other same-height owner replacement path rather than pacemaker /
+    stale-prune churn;
+  - for NPoS specifically, keep treating the authoritative-binding
+    `route_unavailable` failures as a separate surface and check whether they
+    persist once the frontier-owner liveness collapse is removed; and
+  - keep the deferred repo-wide gates paused until the fresh soak envelope is
+    green again.
+
+Latest sync (2026-03-31 permissioned strict-height 67 proposal-observation repair):
+the fresh permissioned strict-height `67` stall from
+`/private/tmp/iroha-soak-permissioned-20260331T145216Z/` is now traced to a
+later-view frontier proposal path that preserved same-slot evidence but failed
+to preserve a locally observed proposal for the new view.
+
+- `primal_krill` showed the exact bad handoff:
+  `same_slot_vote_backed_evidence=true` and
+  `frontier_slot_owner_active=true` at quorum-timeout recovery, followed
+  immediately by `no proposal observed for view before changing view`;
+- the root cause was local exact-frontier self-delivery: after assembling and
+  broadcasting a higher-view proposal, the leader handled `BlockCreated` but
+  skipped `handle_proposal()`, so the slot tracker never recorded the new
+  `(height, view)` as observed even though the proposal path was live;
+- `iroha_core` now keeps broadcasting later-view proposals even when local
+  same-height vote history exists for another block, and exact-frontier local
+  delivery now calls `note_proposal_seen(...)` after successful
+  `BlockCreated` handling; and
+- focused `iroha_core --lib` regressions for conflicting later-view proposal
+  assembly, stale-frontier-owner pacemaker recovery, and same-height commit-QC
+  seeding are green again.
+
+- open work for this slice is now:
+  - rebuild fresh release binaries and rerun the permissioned stable soak to
+    confirm the `67`-height `missing_qc` / `no proposal observed` collapse is
+    actually closed end to end;
+  - if permissioned still stalls, capture the new first bad height/view and
+    check whether the remaining gap is in owner handoff, proposal cache
+    retention, or vote/QC reconstruction rather than local proposal
+    observation;
+  - once permissioned is green again, rerun the matching NPoS soak to see
+    whether the same proposal-observation hole was also contributing to that
+    mode's earlier liveness stall; and
+  - keep the deferred repo-wide gates paused until the fresh soak envelope is
+    green again.
+
 Latest sync (2026-03-31 same-height safety/liveness repair plus fresh full soaks):
 the slot-safety repair is implemented, but the fresh honest permissioned and
 NPoS stable reruns are substantially worse than the previous baseline.
@@ -33,6 +110,21 @@ NPoS stable reruns are substantially worse than the previous baseline.
   - do not resume deferred repo-wide gates (`cargo test -p iroha_core`,
     `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`)
     until the full permissioned and NPoS soak envelopes are green again.
+
+Latest sync (2026-03-31 Kotodama GitHub Linguist upstream bundle):
+a self-contained `tools/kotodama_linguist/` bundle now exists with a TextMate
+grammar scaffold, a proposed `languages.yml` entry, a ready-to-fill Linguist
+PR body/checklist, and representative `.ko` samples for eventual upstream
+submission.
+
+Open work for this slice now remains:
+- follow up on the external Kotodama draft submission now that the concrete
+  grammar repo and upstream draft PR exist:
+  - grammar repo: `https://github.com/takemiyamakoto/language-kotodama`
+  - draft PR: `https://github.com/github-linguist/linguist/pull/7889`
+- improve real-world public Kotodama adoption before expecting merge; the
+  authenticated counts gathered during PR prep (`67`/`62`/`2` for the current
+  search queries) remain well below Linguist's published new-language bar.
 
 Latest sync (2026-03-31 `iroha_test_network` genesis bootstrap compile fix):
 the genesis pre-exec bootstrap path now falls back to the default Nexus

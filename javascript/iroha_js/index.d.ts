@@ -235,6 +235,151 @@ export interface IsoBridgeAmount {
   amount?: string | number;
 }
 
+export const SCCP_DOMAIN_SORA: number;
+export const SCCP_DOMAIN_ETH: number;
+export const SCCP_DOMAIN_BSC: number;
+export const SCCP_DOMAIN_SOL: number;
+export const SCCP_DOMAIN_TON: number;
+export const SCCP_DOMAIN_TRON: number;
+export const SCCP_DOMAIN_SORA_KUSAMA: number;
+export const SCCP_DOMAIN_SORA_POLKADOT: number;
+export const SCCP_CORE_REMOTE_DOMAINS: number[];
+
+export interface SccpBurnPayload {
+  version: number;
+  source_domain: number;
+  dest_domain: number;
+  nonce: string | number | bigint;
+  sora_asset_id: string;
+  amount: string | number | bigint;
+  recipient: string;
+}
+
+export interface SccpTokenAddPayload {
+  version: number;
+  target_domain: number;
+  nonce: string | number | bigint;
+  sora_asset_id: string;
+  decimals: number;
+  name: string;
+  symbol: string;
+}
+
+export interface SccpTokenControlPayload {
+  version: number;
+  target_domain: number;
+  nonce: string | number | bigint;
+  sora_asset_id: string;
+}
+
+export type SccpGovernancePayload =
+  | { kind: "Add"; value: SccpTokenAddPayload }
+  | { kind: "Pause"; value: SccpTokenControlPayload }
+  | { kind: "Resume"; value: SccpTokenControlPayload }
+  | { Add: SccpTokenAddPayload }
+  | { Pause: SccpTokenControlPayload }
+  | { Resume: SccpTokenControlPayload };
+
+export type SccpHubMessageKind = "Burn" | "TokenAdd" | "TokenPause" | "TokenResume";
+
+export interface SccpHubCommitment {
+  version: number;
+  kind: SccpHubMessageKind;
+  target_domain: number;
+  message_id: string;
+  payload_hash: string;
+  parliament_certificate_hash?: string | null;
+}
+
+export interface SccpMerkleStep {
+  sibling_hash: string;
+  sibling_is_left: boolean;
+}
+
+export interface SccpMerkleProof {
+  steps: SccpMerkleStep[];
+}
+
+export interface SccpBurnBundle {
+  version: number;
+  commitment_root: string;
+  commitment: SccpHubCommitment;
+  merkle_proof: SccpMerkleProof;
+  payload: SccpBurnPayload;
+  finality_proof: string;
+}
+
+export interface SccpGovernanceBundle {
+  version: number;
+  commitment_root: string;
+  commitment: SccpHubCommitment;
+  merkle_proof: SccpMerkleProof;
+  payload: SccpGovernancePayload;
+  parliament_certificate: string;
+  finality_proof: string;
+}
+
+export interface SccpBundleSurfaceValidation {
+  ok: boolean;
+  expectedMessageId: string;
+  expectedPayloadHash: string;
+  expectedMerkleRoot: string;
+  checks: Record<string, boolean>;
+}
+
+export interface SccpGovernanceBundleSurfaceValidation extends SccpBundleSurfaceValidation {
+  expectedCertificateHash: string | null;
+}
+
+export function isSupportedSccpDomain(domainId: number): boolean;
+export function canonicalSccpBurnPayloadBytes(payload: SccpBurnPayload): Uint8Array;
+export function canonicalSccpTokenAddPayloadBytes(payload: SccpTokenAddPayload): Uint8Array;
+export function canonicalSccpTokenControlPayloadBytes(payload: SccpTokenControlPayload): Uint8Array;
+export function canonicalSccpGovernancePayloadBytes(payload: SccpGovernancePayload): Uint8Array;
+export function canonicalSccpCommitmentBytes(commitment: SccpHubCommitment): Uint8Array;
+export function sccpBurnMessageId(
+  payload: SccpBurnPayload,
+  options?: { prefix?: boolean },
+): string;
+export function sccpTokenAddMessageId(
+  payload: SccpTokenAddPayload,
+  options?: { prefix?: boolean },
+): string;
+export function sccpTokenPauseMessageId(
+  payload: SccpTokenControlPayload,
+  options?: { prefix?: boolean },
+): string;
+export function sccpTokenResumeMessageId(
+  payload: SccpTokenControlPayload,
+  options?: { prefix?: boolean },
+): string;
+export function sccpGovernanceMessageId(
+  payload: SccpGovernancePayload,
+  options?: { prefix?: boolean },
+): string;
+export function sccpGovernanceTargetDomain(payload: SccpGovernancePayload): number;
+export function sccpPayloadHash(
+  payload: Uint8Array | ArrayBufferView | ArrayBuffer | string,
+  options?: { prefix?: boolean },
+): string;
+export function sccpParliamentCertificateHash(
+  certificateBytes: Uint8Array | ArrayBufferView | ArrayBuffer | string,
+  options?: { prefix?: boolean },
+): string;
+export function sccpCommitmentLeafHash(
+  commitment: SccpHubCommitment,
+  options?: { prefix?: boolean },
+): string;
+export function sccpMerkleRootFromCommitment(
+  commitment: SccpHubCommitment,
+  proof: SccpMerkleProof,
+  options?: { prefix?: boolean },
+): string;
+export function validateSccpBurnBundleSurface(bundle: SccpBurnBundle): SccpBundleSurfaceValidation;
+export function validateSccpGovernanceBundleSurface(
+  bundle: SccpGovernanceBundle,
+): SccpGovernanceBundleSurfaceValidation;
+
 export interface BuildPacs008Options {
   messageId: string;
   creationDateTime: string | Date;

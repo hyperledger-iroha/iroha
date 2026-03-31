@@ -283,6 +283,35 @@ export {
   buildSampleCamt052Message,
   buildSampleCamt056Message,
 } from "./isoBridge.js";
+export {
+  SCCP_DOMAIN_SORA,
+  SCCP_DOMAIN_ETH,
+  SCCP_DOMAIN_BSC,
+  SCCP_DOMAIN_SOL,
+  SCCP_DOMAIN_TON,
+  SCCP_DOMAIN_TRON,
+  SCCP_DOMAIN_SORA_KUSAMA,
+  SCCP_DOMAIN_SORA_POLKADOT,
+  SCCP_CORE_REMOTE_DOMAINS,
+  isSupportedSccpDomain,
+  canonicalSccpBurnPayloadBytes,
+  canonicalSccpTokenAddPayloadBytes,
+  canonicalSccpTokenControlPayloadBytes,
+  canonicalSccpGovernancePayloadBytes,
+  canonicalSccpCommitmentBytes,
+  sccpBurnMessageId,
+  sccpTokenAddMessageId,
+  sccpTokenPauseMessageId,
+  sccpTokenResumeMessageId,
+  sccpGovernanceMessageId,
+  sccpGovernanceTargetDomain,
+  sccpPayloadHash,
+  sccpParliamentCertificateHash,
+  sccpCommitmentLeafHash,
+  sccpMerkleRootFromCommitment,
+  validateSccpBurnBundleSurface,
+  validateSccpGovernanceBundleSurface,
+} from "./sccp.js";
 export { decodeReplicationOrder, SorafsGatewayFetchError, sorafsGatewayFetch } from "./sorafs.js";
 export { ConnectRetryPolicy } from "./connectRetryPolicy.js";
 

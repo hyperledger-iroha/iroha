@@ -1,0 +1,9 @@
+Kotodama:
+  type: programming
+  color: "#C26E2D"
+  extensions:
+  - ".ko"
+  aliases:
+  - kotodama
+  tm_scope: source.kotodama
+  ace_mode: text

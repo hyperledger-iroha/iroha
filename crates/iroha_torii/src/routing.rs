@@ -9638,7 +9638,44 @@ fn multisig_not_found_error() -> Error {
 
 #[cfg(feature = "app_api")]
 fn multisig_selector_validation_error(message: impl Into<String>) -> Error {
-    conversion_error(message.into())
+    Error::AppQueryValidation {
+        code: "multisig_selector_invalid",
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_selector_forbidden_error(code: &'static str, message: impl Into<String>) -> Error {
+    Error::AppForbidden {
+        code,
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_selector_not_found_error(code: &'static str, message: impl Into<String>) -> Error {
+    Error::AppNotFound {
+        code,
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_selector_conflict_error(code: &'static str, message: impl Into<String>) -> Error {
+    Error::AppConflict {
+        code,
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn selected_multisig_alias_literal(selector: &MultisigAccountSelectorDto) -> Option<String> {
+    selector
+        .multisig_account_alias
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
 #[cfg(feature = "app_api")]
@@ -9673,21 +9710,26 @@ fn resolve_multisig_account_selector(
         (None, Some(alias)) => {
             let nexus = state.nexus_snapshot();
             let label = parse_multisig_account_alias(alias, &nexus.dataspace_catalog)?;
-            if let Some(authority) = resolve_authority {
-                let world = state.world_view();
-                if !authority_can_resolve_account_alias(&world, authority, &label) {
-                    return Err(multisig_selector_validation_error(
-                        "missing account-alias resolve permission".to_owned(),
-                    ));
-                }
-            }
             let world = state.world_view();
             world
                 .account_rekey_records()
                 .get(&label)
                 .map(|record| record.active_account_id.clone())
                 .or_else(|| world.account_aliases().get(&label).cloned())
-                .ok_or_else(multisig_not_found_error)
+                .ok_or_else(|| {
+                    let alias_literal = label
+                        .to_literal(&nexus.dataspace_catalog)
+                        .unwrap_or_else(|_| alias.to_owned());
+                    iroha_logger::warn!(
+                        alias = %alias_literal,
+                        authority = ?resolve_authority,
+                        "multisig selector rejected: authority alias not found"
+                    );
+                    multisig_selector_not_found_error(
+                        "multisig_authority_alias_not_found",
+                        format!("multisig authority alias not found: `{alias_literal}`"),
+                    )
+                })
         }
     }
 }
@@ -9699,7 +9741,10 @@ fn load_multisig_spec(
 ) -> Result<iroha_executor_data_model::isi::multisig::MultisigSpec> {
     let world = state.world_view();
     let account = world.account(multisig_account_id).map_err(|_| {
-        conversion_error(format!("multisig account not found: {multisig_account_id}"))
+        multisig_selector_not_found_error(
+            "multisig_account_not_found",
+            format!("multisig account not found: {multisig_account_id}"),
+        )
     })?;
     let key =
         Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("static multisig spec metadata key");
@@ -9710,9 +9755,14 @@ fn load_multisig_spec(
     let storage = world.smart_contract_state();
     let contract_key = multisig_account_state_contract_key(multisig_account_id);
     let Some(bytes) = storage.get(contract_key.as_ref()) else {
-        return Err(multisig_selector_validation_error(format!(
-            "resolved account is not a multisig authority: {multisig_account_id}"
-        )));
+        iroha_logger::warn!(
+            multisig_account_id = %multisig_account_id,
+            "multisig selector rejected: resolved account is not a multisig authority"
+        );
+        return Err(multisig_selector_conflict_error(
+            "multisig_account_not_authority",
+            format!("resolved account is not a multisig authority: {multisig_account_id}"),
+        ));
     };
     let account_state = norito::decode_from_bytes::<
         iroha_executor_data_model::isi::multisig::MultisigAccountState,
@@ -9746,6 +9796,28 @@ fn resolve_multisig_account_and_spec(
     let multisig_account_id =
         resolve_multisig_account_selector(state, selector, resolve_authority)?;
     let spec = load_multisig_spec(state, &multisig_account_id)?;
+    if let (Some(authority), Some(alias_literal)) =
+        (resolve_authority, selected_multisig_alias_literal(selector))
+    {
+        let nexus = state.nexus_snapshot();
+        let label = parse_multisig_account_alias(&alias_literal, &nexus.dataspace_catalog)?;
+        let world = state.world_view();
+        let allowed_via_alias_permission =
+            authority_can_resolve_account_alias(&world, authority, &label);
+        let allowed_via_live_spec = spec.signatories.contains_key(authority);
+        if !allowed_via_alias_permission && !allowed_via_live_spec {
+            iroha_logger::warn!(
+                alias = %alias_literal,
+                resolved_multisig_account_id = %multisig_account_id,
+                signer_account_id = %authority,
+                "multisig selector rejected: signer lacks alias-resolve permission and is not present in the resolved live spec"
+            );
+            return Err(multisig_selector_forbidden_error(
+                "multisig_alias_resolve_forbidden",
+                format!("missing account-alias resolve permission for `{alias_literal}`"),
+            ));
+        }
+    }
     Ok((multisig_account_id, spec))
 }
 
@@ -10657,6 +10729,36 @@ mod contract_entrypoint_validation_tests {
         }
     }
 
+    fn expect_app_validation(err: Error, expected_code: &str) -> String {
+        match err {
+            Error::AppQueryValidation { code, message } => {
+                assert_eq!(code, expected_code);
+                message
+            }
+            other => panic!("expected app validation error, got {other:?}"),
+        }
+    }
+
+    fn expect_app_not_found(err: Error, expected_code: &str) -> String {
+        match err {
+            Error::AppNotFound { code, message } => {
+                assert_eq!(code, expected_code);
+                message
+            }
+            other => panic!("expected app not-found error, got {other:?}"),
+        }
+    }
+
+    fn expect_app_conflict(err: Error, expected_code: &str) -> String {
+        match err {
+            Error::AppConflict { code, message } => {
+                assert_eq!(code, expected_code);
+                message
+            }
+            other => panic!("expected app conflict error, got {other:?}"),
+        }
+    }
+
     #[test]
     fn ensure_public_contract_entrypoint_rejects_missing_manifest_entrypoints() {
         let manifest = manifest_with_entrypoints(None);
@@ -11202,6 +11304,36 @@ mod multisig_selector_tests {
         }
     }
 
+    fn expect_app_validation(err: Error, expected_code: &str) -> String {
+        match err {
+            Error::AppQueryValidation { code, message } => {
+                assert_eq!(code, expected_code);
+                message
+            }
+            other => panic!("expected app validation error, got {other:?}"),
+        }
+    }
+
+    fn expect_app_not_found(err: Error, expected_code: &str) -> String {
+        match err {
+            Error::AppNotFound { code, message } => {
+                assert_eq!(code, expected_code);
+                message
+            }
+            other => panic!("expected app not-found error, got {other:?}"),
+        }
+    }
+
+    fn expect_app_conflict(err: Error, expected_code: &str) -> String {
+        match err {
+            Error::AppConflict { code, message } => {
+                assert_eq!(code, expected_code);
+                message
+            }
+            other => panic!("expected app conflict error, got {other:?}"),
+        }
+    }
+
     async fn decode_json_response(resp: Response) -> norito::json::Value {
         let body = resp
             .into_body()
@@ -11226,7 +11358,7 @@ mod multisig_selector_tests {
             None,
         )
         .expect_err("selector must be rejected");
-        let message = expect_conversion(err);
+        let message = expect_app_validation(err, "multisig_selector_invalid");
         assert!(message.contains("exactly one of multisig_account_id or multisig_account_alias"));
     }
 
@@ -11239,7 +11371,7 @@ mod multisig_selector_tests {
             None,
         )
         .expect_err("selector must be rejected");
-        let message = expect_conversion(err);
+        let message = expect_app_validation(err, "multisig_selector_invalid");
         assert!(message.contains("exactly one of multisig_account_id or multisig_account_alias"));
     }
 
@@ -11254,7 +11386,8 @@ mod multisig_selector_tests {
         )
         .await
         .expect_err("unknown alias must fail");
-        expect_not_found(err);
+        let message = expect_app_not_found(err, "multisig_authority_alias_not_found");
+        assert!(message.contains("missing@hbl.universal"));
     }
 
     #[tokio::test]
@@ -11283,8 +11416,59 @@ mod multisig_selector_tests {
         )
         .await
         .expect_err("non-multisig alias must fail");
-        let message = expect_conversion(err);
+        let message = expect_app_conflict(err, "multisig_account_not_authority");
         assert!(message.contains("resolved account is not a multisig authority"));
+    }
+
+    #[tokio::test]
+    async fn multisig_contract_propose_rejects_signer_missing_from_live_spec() {
+        let (
+            state,
+            multisig_account_id,
+            authority_account_id,
+            _signer_two_id,
+            _alias_literal,
+            authority_keypair,
+        ) = multisig_contract_test_fixture();
+        install_contract_instance(
+            state.as_ref(),
+            &authority_account_id,
+            &authority_keypair,
+            "apps",
+            "demo",
+        );
+        let outsider = dm::AccountId::new(KeyPair::random().public_key().clone());
+
+        let err = handle_post_contract_call_multisig_propose(
+            Arc::new("multisig-selector-test".parse().expect("chain id")),
+            build_queue(),
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigContractCallProposeDto {
+                selector: MultisigAccountSelectorDto {
+                    multisig_account_id: Some(multisig_account_id.clone()),
+                    multisig_account_alias: None,
+                },
+                signer_account_id: outsider.clone(),
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                creation_time_ms: Some(1_700_000_000_234),
+                namespace: "apps".to_owned(),
+                contract_id: "demo".to_owned(),
+                entrypoint: "main".to_owned(),
+                payload: Some(IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }))),
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: Some(10_000),
+            }),
+        )
+        .await
+        .expect_err("missing live-spec signer must fail");
+
+        let message = expect_app_conflict(err, "multisig_signer_not_in_spec");
+        assert!(message.contains(&outsider.to_string()));
+        assert!(message.contains(&multisig_account_id.to_string()));
     }
 
     #[tokio::test]
@@ -11347,7 +11531,7 @@ mod multisig_selector_tests {
         let JsonBody(response) = handle_post_multisig_spec(
             state,
             NoritoJson(MultisigSpecRequestDto {
-                selector: alias_selector(&format!("{label_name}@{domain_id}")),
+                selector: alias_selector(&format!("{label_name}@{domain_id}.universal")),
             }),
         )
         .await
@@ -12751,8 +12935,23 @@ pub async fn handle_post_contract_call_multisig_propose(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
     let gas_limit = gas_limit.unwrap_or(DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT);
+    let selector_alias_literal = selected_multisig_alias_literal(&selector);
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
+    if !spec.signatories.contains_key(&signer_account_id) {
+        iroha_logger::warn!(
+            selector_alias = ?selector_alias_literal,
+            resolved_multisig_account_id = %multisig_account_id,
+            signer_account_id = %signer_account_id,
+            "multisig contract-call propose rejected: signer is not present in live spec"
+        );
+        return Err(multisig_selector_conflict_error(
+            "multisig_signer_not_in_spec",
+            format!(
+                "signer `{signer_account_id}` is not present in the resolved live multisig spec for `{multisig_account_id}`"
+            ),
+        ));
+    }
 
     let prepared = prepare_contract_call(&state, &namespace, &contract_id)?;
     let PreparedContractCall {

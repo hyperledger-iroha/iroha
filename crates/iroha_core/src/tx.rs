@@ -620,11 +620,15 @@ pub(crate) fn allows_unregistered_authority(
     }
 }
 
-fn instructions_allow_multisig_envelope_authority(instructions: &[InstructionBox]) -> bool {
+pub(crate) fn instructions_allow_multisig_envelope_authority(
+    instructions: &[InstructionBox],
+) -> bool {
     instructions.iter().all(|instruction| {
         matches!(
             MultisigInstructionBox::try_from(instruction),
-            Ok(MultisigInstructionBox::Propose(_)) | Ok(MultisigInstructionBox::Approve(_))
+            Ok(MultisigInstructionBox::Propose(_))
+                | Ok(MultisigInstructionBox::Approve(_))
+                | Ok(MultisigInstructionBox::Cancel(_))
         )
     })
 }
@@ -3351,11 +3355,18 @@ fn enforce_lane_policies(
         || format!("lane-{}", lane_id.as_u32()),
         |status| status.alias.clone(),
     );
+    let allows_multisig_envelope_authority = match tx.instructions() {
+        Executable::Instructions(instructions) => {
+            instructions_allow_multisig_envelope_authority(instructions)
+        }
+        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+    };
 
     let mut runtime_upgrade_present = false;
     if let Some(status) = manifest_status.as_ref() {
         if let Some(rules) = status.rules() {
             if !rules.validators.is_empty()
+                && !allows_multisig_envelope_authority
                 && !rules
                     .validators
                     .iter()
@@ -4862,6 +4873,121 @@ pub mod tests {
         assert!(
             result.is_ok(),
             "multisig propose envelope should bypass direct-sign rejection for signatory roles: {result:?}"
+        );
+    }
+
+    #[test]
+    fn lane_validator_gating_allows_multisig_propose_envelope_from_live_signer() {
+        use iroha_data_model::domain::DomainId;
+        use iroha_executor_data_model::isi::multisig::MultisigPropose;
+
+        let chain: ChainId = "multisig-propose-lane-validator-bypass".parse().unwrap();
+        let home_domain: DomainId = "hbl".parse().unwrap();
+        let target_domain: DomainId = "sbp".parse().unwrap();
+
+        let signer1 = KeyPair::random();
+        let signer2 = KeyPair::random();
+        let validator = KeyPair::random();
+        let signer1_id = AccountId::new(signer1.public_key().clone());
+        let signer2_id = AccountId::new(signer2.public_key().clone());
+        let validator_id = AccountId::new(validator.public_key().clone());
+        let multisig_key = KeyPair::random();
+        let multisig_id = AccountId::new(multisig_key.public_key().clone());
+        let retail_key = KeyPair::random();
+        let retail_id = AccountId::new(retail_key.public_key().clone());
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).expect("nonzero quorum"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
+                .expect("nonzero multisig ttl"),
+        };
+        let mut multisig_metadata = Metadata::default();
+        multisig_metadata.insert(
+            crate::smartcontracts::isi::multisig::spec_key(),
+            Json::new(spec),
+        );
+
+        let home = Domain::new(home_domain.clone()).build(&signer1_id);
+        let target = Domain::new(target_domain.clone()).build(&signer1_id);
+        let signer1_account = new_account_in_domain(&signer1_id, &home_domain).build(&signer1_id);
+        let signer2_account = new_account_in_domain(&signer2_id, &home_domain).build(&signer2_id);
+        let validator_account =
+            new_account_in_domain(&validator_id, &home_domain).build(&validator_id);
+        let multisig_account = new_account_in_domain(&multisig_id, &home_domain)
+            .with_metadata(multisig_metadata)
+            .build(&multisig_id);
+        let mut world = World::with(
+            [home, target],
+            [
+                signer1_account,
+                signer2_account,
+                validator_account,
+                multisig_account,
+            ],
+            [],
+        );
+
+        let role_id: RoleId = "MULTISIG_SIGNATORY/hbl/lane-bypass"
+            .parse()
+            .expect("static multisig role must parse");
+        let role = Role {
+            id: role_id.clone(),
+            permissions: Permissions::new(),
+            permission_epochs: BTreeMap::new(),
+        };
+        world.roles.insert(role_id.clone(), role);
+        world.account_roles.insert(
+            crate::role::RoleIdWithOwner::new(signer1_id.clone(), role_id),
+            (),
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "sbp".to_string(),
+                dataspace: TestDataSpaceId::GLOBAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("parliament".to_string()),
+                manifest_path: Some(std::path::PathBuf::from("/tmp/sbp.manifest.json")),
+                governance_rules: Some(GovernanceRules {
+                    validators: vec![validator_id.clone()],
+                    ..GovernanceRules::default()
+                }),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&registry);
+
+        let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
+        let tx = TransactionBuilder::new(chain.clone(), signer1_id.clone())
+            .with_instructions([InstructionBox::from(MultisigPropose::new(
+                multisig_id,
+                vec![registration.into()],
+                None,
+            ))])
+            .sign(signer1.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission must accept the signature shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(
+            result.is_ok(),
+            "lane validator gating should not reject multisig propose envelopes from live signers: {result:?}"
         );
     }
 

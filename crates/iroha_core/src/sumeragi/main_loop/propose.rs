@@ -633,22 +633,6 @@ impl Actor {
         );
         let proposal_height = height;
         let proposal_epoch = self.epoch_for_height(proposal_height);
-        if let Some(existing_vote) = self.local_conflicting_slot_vote(
-            proposal_height,
-            proposal_epoch,
-            highest_qc.subject_block_hash,
-        ) {
-            debug!(
-                height = proposal_height,
-                view,
-                epoch = proposal_epoch,
-                voted_view = existing_vote.view,
-                voted_phase = ?existing_vote.phase,
-                voted_block = %existing_vote.block_hash,
-                "deferring proposal assembly: local validator already has same-height vote history for another block"
-            );
-            return Ok(false);
-        }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         self.prune_highest_qc_missing_defer_markers(committed_height);
         self.init_collector_plan(topology, proposal_height, view);
@@ -1024,7 +1008,6 @@ impl Actor {
             Vec::new();
         let mut removed_for_frame_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
             Vec::new();
-
         let assembly_result: Result<()> = (|| {
             if tx_sizes.len() < tx_batch.len() {
                 for tx in tx_batch.iter().skip(tx_sizes.len()) {
@@ -1360,10 +1343,6 @@ impl Actor {
                     view,
                     proposal_epoch,
                 );
-                self.subsystems
-                    .propose
-                    .proposal_cache
-                    .insert_proposal(proposal);
 
                 let proposal_hint = super::message::ProposalHint {
                     block_hash,
@@ -1371,10 +1350,6 @@ impl Actor {
                     view,
                     highest_qc,
                 };
-                self.subsystems
-                    .propose
-                    .proposal_cache
-                    .insert_hint(proposal_hint);
                 let Some(block_created) =
                     self.frontier_block_created_for_proposal_wire(&signed_block, &proposal)
                 else {
@@ -1446,6 +1421,28 @@ impl Actor {
                 &block_created_msg,
                 BlockMessage::BlockCreated(created) if created.frontier.is_some()
             );
+            if let Some(existing_vote) =
+                self.local_conflicting_slot_vote(proposal_height, proposal_epoch, block_hash)
+            {
+                warn!(
+                    height = proposal_height,
+                    view,
+                    epoch = proposal_epoch,
+                    candidate_block = %block_hash,
+                    voted_view = existing_vote.view,
+                    voted_phase = ?existing_vote.phase,
+                    voted_block = %existing_vote.block_hash,
+                    "assembled candidate conflicts with local same-height vote history; broadcasting anyway so later views still have a live proposal path"
+                );
+            }
+            self.subsystems
+                .propose
+                .proposal_cache
+                .insert_hint(proposal_hint);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .insert_proposal(proposal);
             let mut rbc_plan = if frontier_block_created_ready {
                 None
             } else {
@@ -1479,6 +1476,11 @@ impl Actor {
             ));
             if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
                 self.handle_block_created(block_msg, None)?;
+                if frontier_block_created_ready {
+                    // Exact frontier proposals can skip handle_proposal(), so record the locally
+                    // assembled view as observed here to avoid immediate no-proposal churn.
+                    self.note_proposal_seen(proposal_height, view, payload_hash);
+                }
             }
             if !frontier_block_created_ready {
                 self.handle_proposal(proposal)?;
@@ -1599,7 +1601,6 @@ impl Actor {
             }
             return Err(err);
         }
-
         tx_guards.clear();
         for (tx, routing) in std::mem::take(&mut overflow_transactions) {
             if crate::tx::is_heartbeat_transaction(tx.as_ref()) {
@@ -2656,6 +2657,7 @@ impl Actor {
                 view_idx,
                 now,
                 "missing_qc",
+                true,
             );
         }
 
@@ -2692,6 +2694,31 @@ impl Actor {
                     height,
                     view = view_idx,
                     "proposal already observed for this slot; deferring reassembly"
+                );
+            }
+            return false;
+        }
+
+        if let Some((owner_hash, owner_view)) = self
+            .frontier_slot_live_local_owner_for_round(height, view_idx)
+            .filter(|(_, owner_view)| *owner_view < view_idx)
+        {
+            if pending_queue_len > 0 {
+                debug!(
+                    height,
+                    view = view_idx,
+                    owner = %owner_hash,
+                    owner_view,
+                    queue_len = pending_queue_len,
+                    "same-height frontier owner is still locally live for this round; deferring reassembly"
+                );
+            } else {
+                trace!(
+                    height,
+                    view = view_idx,
+                    owner = %owner_hash,
+                    owner_view,
+                    "same-height frontier owner is still locally live for this round; deferring reassembly"
                 );
             }
             return false;

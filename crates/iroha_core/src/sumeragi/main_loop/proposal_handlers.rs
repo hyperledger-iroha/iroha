@@ -495,12 +495,7 @@ impl Actor {
         self.record_phase_sample(PipelinePhase::Propose, hint.height, hint.view);
         let hint_block = hint.block_hash;
         self.subsystems.propose.proposal_cache.insert_hint(hint);
-        if self
-            .subsystems
-            .propose
-            .proposals_seen
-            .insert((height, view))
-        {
+        if self.slot_tracker.proposals_seen.insert((height, view)) {
             iroha_logger::info!(
                 height,
                 view,
@@ -940,11 +935,8 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> Option<HashOf<BlockHeader>> {
-        self.subsystems
-            .propose
-            .authoritative_block_slots
-            .get(&(height, view))
-            .copied()
+        self.slot_tracker
+            .authoritative_slot_owner_hash(height, view)
     }
 
     pub(super) fn note_authoritative_slot_owner(
@@ -953,16 +945,8 @@ impl Actor {
         view: u64,
         block_hash: HashOf<BlockHeader>,
     ) {
-        self.subsystems
-            .propose
-            .authoritative_block_slots
-            .insert((height, view), block_hash);
-        self.subsystems
-            .propose
-            .authoritative_block_frontiers
-            .retain(|(entry_height, entry_view, entry_hash), _| {
-                *entry_height != height || *entry_view != view || *entry_hash == block_hash
-            });
+        self.slot_tracker
+            .note_authoritative_slot_owner(height, view, block_hash);
         let _ = self.maybe_release_committed_edge_conflict_owner("authoritative_slot_owner");
     }
 
@@ -972,11 +956,8 @@ impl Actor {
         view: u64,
         block_hash: HashOf<BlockHeader>,
     ) -> Option<super::message::BlockCreatedFrontierInfo> {
-        self.subsystems
-            .propose
-            .authoritative_block_frontiers
-            .get(&(height, view, block_hash))
-            .cloned()
+        self.slot_tracker
+            .authoritative_slot_frontier_info(height, view, block_hash)
     }
 
     fn note_authoritative_slot_frontier_info(
@@ -986,16 +967,8 @@ impl Actor {
         block_hash: HashOf<BlockHeader>,
         frontier: super::message::BlockCreatedFrontierInfo,
     ) {
-        self.subsystems
-            .propose
-            .authoritative_block_frontiers
-            .retain(|(entry_height, entry_view, entry_hash), _| {
-                *entry_height != height || *entry_view != view || *entry_hash == block_hash
-            });
-        self.subsystems
-            .propose
-            .authoritative_block_frontiers
-            .insert((height, view, block_hash), frontier);
+        self.slot_tracker
+            .note_authoritative_slot_frontier_info(height, view, block_hash, frontier);
     }
 
     fn note_frontier_block_created(
@@ -1007,6 +980,48 @@ impl Actor {
         sender: Option<&PeerId>,
         now: Instant,
     ) {
+        self.note_frontier_block_created_with_owner_policy(
+            block_hash,
+            height,
+            view,
+            frontier_info,
+            sender,
+            now,
+            false,
+        );
+    }
+
+    fn note_frontier_block_created_authoritatively(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
+        sender: Option<&PeerId>,
+        now: Instant,
+    ) {
+        self.note_frontier_block_created_with_owner_policy(
+            block_hash,
+            height,
+            view,
+            frontier_info,
+            sender,
+            now,
+            true,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn note_frontier_block_created_with_owner_policy(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
+        sender: Option<&PeerId>,
+        now: Instant,
+        authoritative_supersede: bool,
+    ) {
         if let Some(frontier) = frontier_info.clone() {
             self.note_authoritative_slot_frontier_info(height, view, block_hash, frontier);
         }
@@ -1014,19 +1029,37 @@ impl Actor {
             .cloned()
             .filter(|peer| peer != self.common_config.peer.id());
         let voters = leader.iter().cloned().collect();
-        if self.update_frontier_slot(
-            block_hash,
-            height,
-            view,
-            leader,
-            voters,
-            /*block_created_seen*/ true,
-            /*exact_fetch_armed*/ true,
-            true,
-            frontier_info,
-            None,
-            now,
-        ) {
+        let updated = if authoritative_supersede {
+            let advance = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnAuthoritativeSupersede {
+                    block_hash,
+                    view,
+                    frontier_info,
+                    leader,
+                    voters,
+                    body_present: true,
+                    requester: None,
+                },
+            );
+            !matches!(advance, super::FrontierRecoveryAdvance::None)
+                || self.frontier_slot_has_active_owner_state(height)
+        } else {
+            self.update_frontier_slot(
+                block_hash,
+                height,
+                view,
+                leader,
+                voters,
+                /*block_created_seen*/ true,
+                /*exact_fetch_armed*/ true,
+                true,
+                frontier_info,
+                None,
+                now,
+            )
+        };
+        if updated {
             self.clear_missing_block_request(
                 &block_hash,
                 MissingBlockClearReason::PayloadAvailable,
@@ -1034,6 +1067,45 @@ impl Actor {
             self.clear_missing_block_view_change(&block_hash);
         }
         let _ = self.maybe_release_committed_edge_conflict_owner("frontier_block_created");
+    }
+
+    fn drop_superseded_contiguous_frontier_owner_state(
+        &mut self,
+        incoming_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return;
+        }
+        let mut superseded = BTreeSet::new();
+        if let Some(slot) = self.frontier_slot.as_ref()
+            && slot.height == height
+            && slot.block_hash != incoming_hash
+        {
+            superseded.insert((slot.block_hash, slot.view));
+        }
+        if let Some(owner_hash) = self.authoritative_slot_owner_hash(height, view)
+            && owner_hash != incoming_hash
+        {
+            superseded.insert((owner_hash, view));
+        }
+        for (hash, old_view) in superseded {
+            self.pending.pending_blocks.remove(&hash);
+            let _ = self.supersede_validation_inflight(hash);
+            self.pending.pending_fetch_requests.remove(&hash);
+            self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
+            self.clear_missing_block_view_change(&hash);
+            self.clean_rbc_sessions_for_block(hash, height);
+            debug!(
+                height,
+                incoming_view = view,
+                superseded_view = old_view,
+                incoming_block = %incoming_hash,
+                superseded_block = %hash,
+                "dropping superseded contiguous-frontier owner after stronger same-height evidence"
+            );
+        }
     }
 
     pub(super) fn note_proposal_seen(&mut self, height: u64, view: u64, payload_hash: Hash) {
@@ -1051,12 +1123,7 @@ impl Actor {
             );
             self.subsystems.propose.proposal_liveness = None;
         }
-        if self
-            .subsystems
-            .propose
-            .proposals_seen
-            .insert((height, view))
-        {
+        if self.slot_tracker.proposals_seen.insert((height, view)) {
             iroha_logger::info!(
                 height,
                 view,
@@ -1070,11 +1137,7 @@ impl Actor {
 
     pub(super) fn slot_has_proposal_evidence(&self, height: u64, view: u64) -> bool {
         self.slot_has_authoritative_payload(height, view)
-            || self
-                .subsystems
-                .propose
-                .proposals_seen
-                .contains(&(height, view))
+            || self.slot_tracker.proposals_seen.contains(&(height, view))
             || self
                 .subsystems
                 .propose
@@ -1259,8 +1322,7 @@ impl Actor {
         let current_view = self.phase_tracker.current_view(active_height);
         let max_view =
             current_view.map(|view| view.saturating_add(super::PROPOSALS_SEEN_VIEW_WINDOW));
-        self.subsystems
-            .propose
+        self.slot_tracker
             .proposals_seen
             .retain(|(entry_height, entry_view)| {
                 if *entry_height <= committed_height
@@ -1283,22 +1345,17 @@ impl Actor {
                 }
                 true
             });
-        self.subsystems
-            .propose
+        let min_authoritative_height =
+            active_height.saturating_sub(super::AUTHORITATIVE_FRONTIER_WIRE_HEIGHT_WINDOW);
+        self.slot_tracker
             .authoritative_block_slots
-            .retain(|(entry_height, _), _| {
-                *entry_height
-                    >= active_height
-                        .saturating_sub(super::AUTHORITATIVE_FRONTIER_WIRE_HEIGHT_WINDOW)
-            });
-        self.subsystems
-            .propose
+            .retain(|(entry_height, _), _| *entry_height >= min_authoritative_height);
+        self.slot_tracker
             .authoritative_block_frontiers
-            .retain(|(entry_height, _, _), _| {
-                *entry_height
-                    >= active_height
-                        .saturating_sub(super::AUTHORITATIVE_FRONTIER_WIRE_HEIGHT_WINDOW)
-            });
+            .retain(|(entry_height, _, _), _| *entry_height >= min_authoritative_height);
+        self.slot_tracker
+            .retained_branches
+            .retain(|(entry_height, _, _), _| *entry_height >= min_authoritative_height);
     }
 
     pub(super) fn missing_proposal_context(
@@ -1354,7 +1411,7 @@ impl Actor {
         if height <= 1 {
             return;
         }
-        if self.slot_has_proposal_evidence(height, view) {
+        if self.slot_has_round_liveness(height, view) {
             return;
         }
         let context = self.missing_proposal_context(height, view);
@@ -1489,7 +1546,7 @@ impl Actor {
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
     ) -> Result<()> {
-        self.handle_block_created_with_preserve_policy(msg, sender, true)
+        self.handle_block_created_with_preserve_policy(msg, sender, true, false)
     }
 
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -1498,11 +1555,13 @@ impl Actor {
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
         allow_frontier_owner_preserve_on_payload_mismatch: bool,
+        allow_authoritative_frontier_owner_supersede: bool,
     ) -> Result<()> {
         self.handle_block_created_with_preserve_policy(
             msg,
             sender,
             allow_frontier_owner_preserve_on_payload_mismatch,
+            allow_authoritative_frontier_owner_supersede,
         )
     }
 
@@ -1535,6 +1594,7 @@ impl Actor {
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
         allow_frontier_owner_preserve_on_payload_mismatch: bool,
+        allow_authoritative_frontier_owner_supersede: bool,
     ) -> Result<()> {
         if crate::sumeragi::status::local_peer_removed() {
             debug!(
@@ -1634,6 +1694,40 @@ impl Actor {
                         && pending.height == height
                         && pending.view == view
                 });
+        let authoritative_frontier_owner_supersede = allow_authoritative_frontier_owner_supersede
+            && height == committed_height.saturating_add(1);
+        let passive_conflicting_same_height_vote = !authoritative_frontier_owner_supersede
+            && self
+                .local_conflicting_frontier_vote(height, block_hash)
+                .is_some();
+        let passive_conflicting_same_height_owner = !authoritative_frontier_owner_supersede
+            && self
+                .frontier_slot_conflicts_with_live_local_owner(height, block_hash)
+                .is_some();
+        let passive_conflicting_same_height =
+            passive_conflicting_same_height_vote || passive_conflicting_same_height_owner;
+        if authoritative_frontier_owner_supersede {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "accepting BlockCreated as authoritative same-height supersede for the contiguous frontier"
+            );
+        } else if passive_conflicting_same_height_vote {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "accepting BlockCreated as passive retained branch because local same-height vote history conflicts"
+            );
+        } else if passive_conflicting_same_height_owner {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "accepting BlockCreated as passive retained branch because the current same-height frontier owner is still locally live"
+            );
+        }
         if let Some(local_view) = stale_view {
             if !allow_stale_block_created(missing_request, stale_retired_match) {
                 debug!(
@@ -1818,7 +1912,7 @@ impl Actor {
                 pending.commit_qc_observed(),
             )
         });
-        let stale_payload_only = stale_view.is_some();
+        let stale_payload_only = stale_view.is_some() || passive_conflicting_same_height;
         let revive_aborted = !stale_payload_only
             && pending_status.is_some_and(|(aborted, _, status, commit_qc_seen)| {
                 aborted && commit_qc_seen && !matches!(status, ValidationStatus::Invalid)
@@ -3133,7 +3227,20 @@ impl Actor {
                 vac.insert(pending);
             }
         }
+        if stale_payload_only {
+            self.slot_tracker.note_retained_branch(
+                height,
+                view,
+                block_hash,
+                frontier.clone(),
+                true,
+                Instant::now(),
+            );
+        }
         if !stale_payload_only {
+            if authoritative_frontier_owner_supersede {
+                self.drop_superseded_contiguous_frontier_owner_state(block_hash, height, view);
+            }
             if let Some(hint) = inline_hint {
                 self.subsystems.propose.proposal_cache.insert_hint(hint);
             }
@@ -3153,14 +3260,25 @@ impl Actor {
             );
             self.clear_missing_block_view_change(&block_hash);
         } else {
-            self.note_frontier_block_created(
-                block_hash,
-                height,
-                view,
-                frontier.clone(),
-                sender.as_ref(),
-                Instant::now(),
-            );
+            if authoritative_frontier_owner_supersede {
+                self.note_frontier_block_created_authoritatively(
+                    block_hash,
+                    height,
+                    view,
+                    frontier.clone(),
+                    sender.as_ref(),
+                    Instant::now(),
+                );
+            } else {
+                self.note_frontier_block_created(
+                    block_hash,
+                    height,
+                    view,
+                    frontier.clone(),
+                    sender.as_ref(),
+                    Instant::now(),
+                );
+            }
             if height == committed_height.saturating_add(1) {
                 self.note_view_change_from_block(height, view);
             }

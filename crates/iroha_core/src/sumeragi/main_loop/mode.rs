@@ -182,12 +182,7 @@ impl Actor {
         self.subsystems.da_rbc.rbc.outbound_cursor = None;
         self.subsystems.propose.proposal_cache =
             ProposalCache::new(self.recovery_pending_proposal_cap());
-        self.subsystems.propose.authoritative_block_slots.clear();
-        self.subsystems
-            .propose
-            .authoritative_block_frontiers
-            .clear();
-        self.subsystems.propose.proposals_seen.clear();
+        self.slot_tracker.clear();
         self.qc_cache.clear();
         self.vote_log.clear();
         self.vote_validation_cache.clear();

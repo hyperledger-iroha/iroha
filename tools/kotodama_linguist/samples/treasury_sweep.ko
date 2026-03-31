@@ -1,0 +1,30 @@
+// Representative trigger and localization sample for Kotodama grammar validation.
+seiyaku TreasurySweep {
+  meta {
+    abi_version: 1,
+    features: ["zk", "simd"],
+    max_cycles: 0,
+  }
+
+  kotoba {
+    "E_LOW_BALANCE": { en: "treasury balance is below the sweep threshold"; }
+  }
+
+  state LastSweepHeight: int;
+
+  register_trigger settle_block {
+    call sweep;
+    on pipeline block;
+    repeats 1;
+    authority "authority@example";
+    metadata { tag: "treasury"; enabled: true; }
+  }
+
+  #[access(read="state:LastSweepHeight", write="state:LastSweepHeight")]
+  kotoage fn sweep() permission(Admin) {
+    let balance = 1_000_000;
+    assert(balance > 0, "treasury empty");
+    LastSweepHeight = LastSweepHeight + 1;
+    info("treasury_swept");
+  }
+}

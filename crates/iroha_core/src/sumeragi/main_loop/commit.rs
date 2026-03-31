@@ -2189,11 +2189,12 @@ impl Actor {
                 .local_conflicting_slot_vote(pending_height, lock.epoch, block_hash)
                 .is_some();
             if pending.is_retired_same_height() {
-                if pending.commit_qc_observed() && extends_tip && !conflicting_local_vote {
+                if pending.commit_qc_observed() && extends_tip {
                     debug!(
                         height = pending_height,
                         view = pending_view,
                         block = %block_hash,
+                        conflicting_local_vote,
                         "finalizing retired same-height pending block with matching commit QC"
                     );
                 } else {
@@ -3190,6 +3191,7 @@ impl Actor {
                     pending_roots,
                 ) {
                     pending.note_local_commit_vote_emitted();
+                    self.note_frontier_owner_local_vote_emitted(hash, pending_height, pending_view);
                     let _ = self.maybe_replay_known_block_commit_evidence(
                         hash,
                         pending_height,
@@ -3582,6 +3584,7 @@ impl Actor {
         if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) {
             pending.note_local_commit_vote_emitted();
         }
+        self.note_frontier_owner_local_vote_emitted(block_hash, height, view);
         let _ = self.maybe_replay_known_block_commit_evidence(
             block_hash,
             height,
@@ -5678,6 +5681,7 @@ impl Actor {
         self.refresh_roster_validation_cache();
         self.subsystems.propose.new_view_tracker.prune(height);
         self.prune_proposals_seen_horizon(height);
+        self.slot_tracker.prune_committed(height);
         self.prune_vote_caches_horizon(height);
         self.subsystems.propose.forced_view_after_timeout = self
             .subsystems
@@ -6178,13 +6182,11 @@ impl Actor {
         self.block_signer_cache.clear();
         self.voting_block = None;
         if !preserve_proposals_seen {
-            self.subsystems.propose.proposals_seen.clear();
+            self.slot_tracker.proposals_seen.clear();
         }
-        self.subsystems.propose.authoritative_block_slots.clear();
-        self.subsystems
-            .propose
-            .authoritative_block_frontiers
-            .clear();
+        self.slot_tracker.authoritative_block_slots.clear();
+        self.slot_tracker.authoritative_block_frontiers.clear();
+        self.slot_tracker.retained_branches.clear();
         self.subsystems.propose.proposal_cache =
             ProposalCache::new(self.recovery_pending_proposal_cap());
         self.reset_collector_state();
