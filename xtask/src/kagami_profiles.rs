@@ -713,10 +713,10 @@ mod tests {
             format_toml_integer_u64(DEFAULT_TORII_MAX_CONTENT_LEN)
         );
         for profile in PROFILES {
-            let peers = build_peers(&profile);
+            let peers = build_peers(profile);
             let seed = format!("config-{}-genesis", profile.slug);
             let genesis_key = deterministic_keypair(&seed, Algorithm::Ed25519);
-            let rendered = render_config(&profile, &peers, genesis_key.public_key());
+            let rendered = render_config(profile, &peers, genesis_key.public_key());
             assert!(
                 rendered.contains(&expected),
                 "profile {} should pin the Torii body-cap default explicitly",

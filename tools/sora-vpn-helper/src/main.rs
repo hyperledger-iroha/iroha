@@ -45,6 +45,7 @@ use thiserror::Error;
 use tokio::{
     io::unix::AsyncFd,
     io::{self as tokio_io, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::lookup_host,
     signal::unix::{SignalKind, signal},
     time::timeout,
 };
@@ -71,22 +72,27 @@ const LINUX_TUNSETIFF: nix::libc::c_ulong = 0x4004_54ca;
 struct Cli {
     #[command(subcommand)]
     command: Command,
-    #[arg(long)]
+    #[arg(long, global = true)]
     json: bool,
-    payload: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
     InstallCheck,
     Status,
-    Connect,
+    Connect {
+        payload: Option<String>,
+    },
     Disconnect,
     Repair,
     #[command(hide = true)]
-    RunTunnel,
+    RunTunnel {
+        payload: Option<String>,
+    },
     #[command(hide = true)]
-    RunPacketEngine,
+    RunPacketEngine {
+        payload: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -194,9 +200,15 @@ impl IpFamily {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ParsedMultiaddrHost {
+    Ip(IpAddr),
+    Dns(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ParsedMultiaddr {
-    host: IpAddr,
+    host: ParsedMultiaddrHost,
     port: u16,
 }
 
@@ -303,18 +315,18 @@ fn run(cli: Cli) -> Result<(), ControllerError> {
             print_state(&state)?;
             Ok(())
         }
-        Command::Connect => connect_command(cli.payload.as_deref()),
+        Command::Connect { payload } => connect_command(payload.as_deref()),
         Command::Disconnect => disconnect_command("idle"),
         Command::Repair => repair_command(),
-        Command::RunTunnel => {
-            let payload = parse_connect_payload(cli.payload.as_deref())?;
+        Command::RunTunnel { payload } => {
+            let payload = parse_connect_payload(payload.as_deref())?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
             runtime.block_on(run_tunnel_command(payload))
         }
-        Command::RunPacketEngine => {
-            let payload = parse_connect_payload(cli.payload.as_deref())?;
+        Command::RunPacketEngine { payload } => {
+            let payload = parse_connect_payload(payload.as_deref())?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
@@ -569,7 +581,12 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
         payload.session_id.as_str(),
         payload.relay_endpoint.as_str(),
         "connected".to_owned(),
-    )?;
+    )
+    .map_err(|error| {
+        ControllerError::State(format!(
+            "failed to persist packet engine connected state: {error}"
+        ))
+    })?;
 
     let circuit_id = relay_session_id_from_session_id(payload.session_id.as_str());
     let flow_label = vpn_flow_label_from_session_id(circuit_id)?;
@@ -590,7 +607,12 @@ async fn run_packet_engine_command(payload: ConnectPayload) -> Result<(), Contro
         payload.session_id.as_str(),
         payload.relay_endpoint.as_str(),
         message,
-    )?;
+    )
+    .map_err(|error| {
+        ControllerError::State(format!(
+            "failed to persist packet engine disconnected state: {error}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -599,14 +621,36 @@ async fn connect_and_handshake(
 ) -> Result<(Endpoint, Connection), ControllerError> {
     let helper_ticket = decode_hex(payload.helper_ticket_hex.as_str())?;
     let relay = parse_multiaddr(payload.relay_endpoint.as_str())?;
-    let bind_addr = match relay.host {
-        IpAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-        IpAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+    let relay_addr = resolve_multiaddr_socket_addr(&relay)
+        .await
+        .map_err(|error| {
+            ControllerError::State(format!(
+                "failed to resolve packet engine relay address {}: {error}",
+                payload.relay_endpoint
+            ))
+        })?;
+    let bind_addr = match relay_addr {
+        SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+        SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
     };
-    let mut endpoint = Endpoint::client(bind_addr)?;
-    endpoint.set_default_client_config(build_client_config()?);
+    let mut endpoint = Endpoint::client(bind_addr).map_err(|error| {
+        ControllerError::State(format!(
+            "failed to create packet engine QUIC endpoint on {bind_addr}: {error}"
+        ))
+    })?;
+    endpoint.set_default_client_config(build_client_config().map_err(|error| {
+        ControllerError::State(format!(
+            "failed to build packet engine QUIC client config: {error}"
+        ))
+    })?);
 
-    let connect = endpoint.connect(SocketAddr::new(relay.host, relay.port), "soranet.local")?;
+    let connect = endpoint
+        .connect(relay_addr, "soranet.local")
+        .map_err(|error| {
+            ControllerError::State(format!(
+                "failed to start packet engine QUIC connect to {relay_addr}: {error}"
+            ))
+        })?;
     let connection = match timeout(CONNECT_TIMEOUT, connect).await {
         Ok(Ok(connection)) => connection,
         Ok(Err(error)) => return Err(ControllerError::Connection(error)),
@@ -619,6 +663,20 @@ async fn connect_and_handshake(
 
     perform_helper_handshake(&connection, helper_ticket).await?;
     Ok((endpoint, connection))
+}
+
+async fn resolve_multiaddr_socket_addr(
+    relay: &ParsedMultiaddr,
+) -> Result<SocketAddr, ControllerError> {
+    match &relay.host {
+        ParsedMultiaddrHost::Ip(host) => Ok(SocketAddr::new(*host, relay.port)),
+        ParsedMultiaddrHost::Dns(host) => lookup_host((host.as_str(), relay.port))
+            .await?
+            .next()
+            .ok_or_else(|| {
+                ControllerError::InvalidMultiaddr(format!("dns {host} did not resolve"))
+            }),
+    }
 }
 
 fn build_client_config() -> Result<ClientConfig, ControllerError> {
@@ -821,8 +879,16 @@ async fn packet_engine_loop(
     circuit_id: [u8; 16],
     flow_label: VpnFlowLabelV1,
 ) -> Result<TunnelShutdown, ControllerError> {
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate()).map_err(|error| {
+        ControllerError::State(format!(
+            "failed to register packet engine SIGTERM handler: {error}"
+        ))
+    })?;
+    let mut sigint = signal(SignalKind::interrupt()).map_err(|error| {
+        ControllerError::State(format!(
+            "failed to register packet engine SIGINT handler: {error}"
+        ))
+    })?;
     let upstream = packet_engine_to_vpn_loop(send, circuit_id, flow_label);
     let downstream = vpn_to_packet_engine_loop(recv);
     tokio::pin!(upstream);
@@ -900,7 +966,14 @@ async fn packet_engine_to_vpn_loop(
     let mut reader = tokio_io::stdin();
     let mut sequence = 0u64;
     loop {
-        let Some(packet) = read_packet_from_stream(&mut reader).await? else {
+        let Some(packet) = read_packet_from_stream(&mut reader)
+            .await
+            .map_err(|error| {
+                ControllerError::State(format!(
+                    "failed to read packet engine stdin stream: {error}"
+                ))
+            })?
+        else {
             send.finish()?;
             return Ok(());
         };
@@ -981,7 +1054,13 @@ async fn vpn_to_packet_engine_loop(recv: &mut RecvStream) -> Result<(), Controll
                     continue;
                 }
                 for packet in decoder.ingest(&cell.payload)? {
-                    write_packet_to_stream(&mut writer, &packet).await?;
+                    write_packet_to_stream(&mut writer, &packet)
+                        .await
+                        .map_err(|error| {
+                            ControllerError::State(format!(
+                                "failed to write packet engine stdout stream: {error}"
+                            ))
+                        })?;
                     add_traffic_bytes(packet.len() as u64, 0)?;
                 }
             }
@@ -1759,20 +1838,26 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr, ControllerError> {
             let raw = parts
                 .next()
                 .ok_or_else(|| ControllerError::InvalidMultiaddr(addr.to_owned()))?;
-            IpAddr::V4(
+            ParsedMultiaddrHost::Ip(IpAddr::V4(
                 raw.parse::<Ipv4Addr>()
                     .map_err(|_| ControllerError::InvalidMultiaddr(addr.to_owned()))?,
-            )
+            ))
         }
         "ip6" => {
             let raw = parts
                 .next()
                 .ok_or_else(|| ControllerError::InvalidMultiaddr(addr.to_owned()))?;
-            IpAddr::V6(
+            ParsedMultiaddrHost::Ip(IpAddr::V6(
                 raw.parse::<Ipv6Addr>()
                     .map_err(|_| ControllerError::InvalidMultiaddr(addr.to_owned()))?,
-            )
+            ))
         }
+        "dns" | "dns4" | "dns6" => ParsedMultiaddrHost::Dns(
+            parts
+                .next()
+                .ok_or_else(|| ControllerError::InvalidMultiaddr(addr.to_owned()))?
+                .to_owned(),
+        ),
         other => return Err(ControllerError::InvalidMultiaddr(other.to_owned())),
     };
 
@@ -1859,7 +1944,7 @@ mod tests {
         assert_eq!(
             parsed,
             ParsedMultiaddr {
-                host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+                host: ParsedMultiaddrHost::Ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
                 port: 7777,
             }
         );
@@ -1871,8 +1956,20 @@ mod tests {
         assert_eq!(
             parsed,
             ParsedMultiaddr {
-                host: IpAddr::V6(Ipv6Addr::LOCALHOST),
+                host: ParsedMultiaddrHost::Ip(IpAddr::V6(Ipv6Addr::LOCALHOST)),
                 port: 7777,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_multiaddr_accepts_dns_quic() {
+        let parsed = parse_multiaddr("/dns/torii/udp/9443/quic").expect("parse");
+        assert_eq!(
+            parsed,
+            ParsedMultiaddr {
+                host: ParsedMultiaddrHost::Dns("torii".to_owned()),
+                port: 9443,
             }
         );
     }
@@ -1987,5 +2084,30 @@ mod tests {
         let derived = relay_session_id_from_session_id(session_id);
         assert_eq!(derived.len(), 16);
         assert_ne!(derived, [0u8; 16]);
+    }
+
+    #[test]
+    fn cli_accepts_connect_payload_after_subcommand() {
+        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280}"#;
+        let cli = Cli::try_parse_from(["sora-vpn-controller", "connect", payload]).expect("parse");
+        match cli.command {
+            Command::Connect { payload: parsed } => {
+                assert_eq!(parsed.as_deref(), Some(payload));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_accepts_run_packet_engine_payload_after_subcommand() {
+        let payload = r#"{"sessionId":"session-1","relayEndpoint":"/ip4/127.0.0.1/udp/7777/quic","exitClass":"standard","helperTicketHex":"aa","routePushes":[],"excludedRoutes":[],"dnsServers":[],"tunnelAddresses":["10.208.0.2/32"],"mtuBytes":1280,"stateFilePath":"/tmp/state.json","packetEnginePath":"/tmp/engine","appGroupId":"group.org.sora.wallet.demo.vpn"}"#;
+        let cli = Cli::try_parse_from(["sora-vpn-controller", "run-packet-engine", payload])
+            .expect("parse");
+        match cli.command {
+            Command::RunPacketEngine { payload: parsed } => {
+                assert_eq!(parsed.as_deref(), Some(payload));
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 }

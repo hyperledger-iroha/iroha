@@ -18590,16 +18590,13 @@ impl State {
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
         nexus: &iroha_config::parameters::actual::Nexus,
-        commit_topology: &[PeerId],
+        _commit_topology: &[PeerId],
         block_height: u64,
     ) -> Vec<PeerId> {
         if let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id) {
             let present_peers: BTreeSet<PeerId> = world.peers().iter().cloned().collect();
-            let topology_peers: BTreeSet<PeerId> = commit_topology.iter().cloned().collect();
-            let enforce_topology_membership = !topology_peers.is_empty();
             bindings.retain(|binding| {
                 present_peers.contains(&binding.peer_id)
-                    && (!enforce_topology_membership || topology_peers.contains(&binding.peer_id))
                     && peer_has_live_consensus_key(world, &binding.peer_id, block_height)
             });
             bindings.sort_by(|lhs, rhs| {

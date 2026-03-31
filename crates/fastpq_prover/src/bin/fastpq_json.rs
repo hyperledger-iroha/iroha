@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    num::NonZeroU64,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -17,9 +18,10 @@ use fastpq_prover::{
 use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
+    block::{BlockHeader, consensus::LaneBlockCommitment},
     nexus::{
         AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtTouchSpec,
-        ProofBlob, TouchManifest,
+        LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob, TouchManifest,
     },
 };
 use norito::to_bytes;
@@ -117,6 +119,10 @@ struct ProofRequest {
     #[serde(default)]
     verifier_version: String,
     #[serde(default)]
+    source_lane_id: u32,
+    #[serde(default = "default_relay_block_height")]
+    relay_block_height: u64,
+    #[serde(default)]
     effect_binding: Option<EffectBindingRequest>,
 }
 
@@ -156,6 +162,16 @@ struct ProofResponse {
     touch_manifest_hex: String,
     proof_blob_hex: String,
     manifest_root_hex: String,
+    relay_envelope_hex: String,
+    relay_ref: RelayRefJson,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RelayRefJson {
+    dataspace_id: u64,
+    lane_id: u32,
+    block_height: u64,
+    settlement_hash: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -177,6 +193,10 @@ struct VerifyResponse {
 
 fn default_sample_count() -> usize {
     DEFAULT_SAMPLE_COUNT
+}
+
+fn default_relay_block_height() -> u64 {
+    1
 }
 
 fn main() -> Result<(), String> {
@@ -327,6 +347,8 @@ fn handle_prove(request: ProofRequest) -> Result<ProofResponse, String> {
         touch_manifest_hex: axt.touch_manifest,
         proof_blob_hex: axt.proof_blob,
         manifest_root_hex: axt.manifest_root,
+        relay_envelope_hex: axt.relay_envelope,
+        relay_ref: axt.relay_ref,
     })
 }
 
@@ -336,6 +358,8 @@ struct AxtArtifacts {
     touch_manifest: String,
     proof_blob: String,
     manifest_root: String,
+    relay_envelope: String,
+    relay_ref: RelayRefJson,
 }
 
 fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
@@ -418,6 +442,10 @@ fn synthetic_proof_request(
         corridor: dataspace.to_string(),
         verifier_id: verifier_id.to_string(),
         verifier_version: verifier_version.to_string(),
+        source_lane_id: u32::try_from(source_dsid).unwrap_or_default(),
+        relay_block_height: u64::try_from(sample_index)
+            .unwrap_or_default()
+            .saturating_add(1),
         effect_binding: Some(EffectBindingRequest {
             destination_domain: Some("lane".to_string()),
             destination_account_id: None,
@@ -470,13 +498,85 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
             .map_err(|err| format!("AXT proof envelope encode failed: {err}"))?,
         expiry_slot: Some(4_294_967_295),
     };
+    let relay = build_relay_artifacts(request, manifest_root, proof_blob.payload.as_slice())?;
     Ok(AxtArtifacts {
         dataspace_id: norito_hex(&dsid)?,
         descriptor: norito_hex(&descriptor)?,
         touch_manifest: norito_hex(&touch_manifest)?,
         proof_blob: norito_hex(&proof_blob)?,
         manifest_root: manifest_root_hex,
+        relay_envelope: relay.0,
+        relay_ref: relay.1,
     })
+}
+
+fn build_relay_artifacts(
+    request: &ProofRequest,
+    manifest_root: [u8; 32],
+    proof_payload: &[u8],
+) -> Result<(String, RelayRefJson), String> {
+    let lane_id = LaneId::new(request.source_lane_id);
+    let dataspace_id = DataSpaceId::new(request.source_dsid);
+    let block_height = request.relay_block_height.max(1);
+    let block_header = BlockHeader::new(
+        NonZeroU64::new(block_height)
+            .ok_or_else(|| "relay block height must be non-zero".to_string())?,
+        None,
+        None,
+        None,
+        block_height.saturating_mul(1_000),
+        0,
+    );
+    let effect_binding = request
+        .effect_binding
+        .clone()
+        .unwrap_or_else(|| EffectBindingRequest {
+            destination_domain: Some("lane".to_string()),
+            destination_account_id: None,
+            vault_account_id: None,
+            issuance_account_id: None,
+            source_asset_definition_id: Some("source_asset".to_string()),
+            destination_asset_definition_id: Some("destination_asset".to_string()),
+            source_amount_i64: Some(1),
+            destination_amount_i64: Some(1),
+        });
+    let settlement_commitment = LaneBlockCommitment {
+        block_height,
+        lane_id,
+        dataspace_id,
+        tx_count: 1,
+        total_local_micro: u128::try_from(effect_binding.source_amount_i64.unwrap_or(1).max(1))
+            .unwrap_or(1),
+        total_xor_due_micro: u128::try_from(
+            effect_binding.destination_amount_i64.unwrap_or(1).max(1),
+        )
+        .unwrap_or(1),
+        total_xor_after_haircut_micro: u128::try_from(
+            effect_binding.destination_amount_i64.unwrap_or(1).max(1),
+        )
+        .unwrap_or(1),
+        total_xor_variance_micro: 0,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    };
+    let base = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)
+        .map_err(|err| format!("failed to build lane relay envelope: {err}"))?
+        .with_manifest_root(Some(manifest_root));
+    let proof_digest = base.expected_fastpq_proof_digest(Some(block_height));
+    let envelope = base.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+        proof_digest,
+        verified_at_height: Some(block_height),
+    }));
+    let relay_ref = envelope.relay_ref();
+    let relay_envelope_hex = norito_hex(&envelope)?;
+    let relay_ref_json = RelayRefJson {
+        dataspace_id: relay_ref.dataspace_id.as_u64(),
+        lane_id: relay_ref.lane_id.as_u32(),
+        block_height: relay_ref.block_height,
+        settlement_hash: relay_ref.settlement_hash.to_string(),
+    };
+    let _ = proof_payload;
+    Ok((relay_envelope_hex, relay_ref_json))
 }
 
 fn axt_manifest_keys(request: &ProofRequest) -> (String, String) {

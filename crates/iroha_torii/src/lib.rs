@@ -266,6 +266,7 @@ use iroha_data_model::{
         pipeline::{BlockStatus, PipelineEventBox, TransactionStatus},
     },
     name::Name,
+    nexus::{DataSpaceId, LaneId},
     nft::NftId,
     peer::{Peer, PeerId},
     permission::Permission,
@@ -10463,6 +10464,20 @@ fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDec
         .any(|peer_id| peer_id == local_peer_id)
 }
 
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecision) -> bool {
+    if is_local_authoritative_for_route(app, routing_decision) {
+        return true;
+    }
+
+    routing_decision.lane_id == LaneId::SINGLE
+        && routing_decision.dataspace_id == DataSpaceId::GLOBAL
+        && app
+            .state
+            .authoritative_lane_peer_ids(routing_decision.lane_id)
+            .is_empty()
+}
+
 #[cfg(feature = "app_api")]
 fn torii_route_for_lane_id(
     app: &AppState,
@@ -11050,7 +11065,7 @@ async fn execute_torii_verified_query_for_route(
     request: iroha_data_model::query::QueryRequestWithAuthority,
     routing_decision: RoutingDecision,
 ) -> Result<iroha_data_model::query::QueryResponse, Response> {
-    if is_local_authoritative_for_route(app.as_ref(), routing_decision) {
+    if should_execute_route_locally(app.as_ref(), routing_decision) {
         routing::execute_verified_query_with_opts(
             app.query_service.clone(),
             app.state.clone(),
@@ -12983,7 +12998,7 @@ async fn execute_torii_read_for_route(
     routing_decision: RoutingDecision,
     request: ToriiReadProxyRequestV1,
 ) -> Response {
-    if is_local_authoritative_for_route(app.as_ref(), routing_decision) {
+    if should_execute_route_locally(app.as_ref(), routing_decision) {
         execute_torii_read_request_locally(app, request, routing_decision, "local").await
     } else {
         execute_torii_read_via_proxy(app, routing_decision, request).await
@@ -12994,7 +13009,7 @@ fn routed_by_for_routes(app: &SharedAppState, routes: &[RoutingDecision]) -> &'s
     if !routes.is_empty()
         && routes
             .iter()
-            .all(|route| is_local_authoritative_for_route(app.as_ref(), *route))
+            .all(|route| should_execute_route_locally(app.as_ref(), *route))
     {
         "local"
     } else {
@@ -13247,8 +13262,7 @@ async fn process_incoming_torii_proxy_request(
                                             expected_route.dataspace_id.as_u64()
                                         ),
                                     )
-                                } else if !is_local_authoritative_for_route(&app, routing_decision)
-                                {
+                                } else if !should_execute_route_locally(&app, routing_decision) {
                                     forward_incoming_torii_proxy_request(
                                         &app,
                                         &sender_peer_id,
@@ -13299,7 +13313,7 @@ async fn process_incoming_torii_proxy_request(
                                     expected_route.dataspace_id.as_u64()
                                 ),
                             )
-                        } else if !is_local_authoritative_for_route(&app, routing_decision) {
+                        } else if !should_execute_route_locally(&app, routing_decision) {
                             forward_incoming_torii_proxy_request(
                                 &app,
                                 &sender_peer_id,
@@ -13353,7 +13367,7 @@ async fn process_incoming_torii_proxy_request(
                 ) {
                     Ok(request) => {
                         let routing_decision: RoutingDecision = expected_route.into();
-                        if !is_local_authoritative_for_route(&app, routing_decision) {
+                        if !should_execute_route_locally(&app, routing_decision) {
                             forward_incoming_torii_proxy_request(
                                 &app,
                                 &sender_peer_id,
@@ -13396,7 +13410,7 @@ async fn process_incoming_torii_proxy_request(
             #[cfg(feature = "app_api")]
             ToriiProxyRequestKindV1::Read(read_request) => {
                 let routing_decision: RoutingDecision = read_request.expected_route.into();
-                if !is_local_authoritative_for_route(&app, routing_decision) {
+                if !should_execute_route_locally(&app, routing_decision) {
                     forward_incoming_torii_proxy_request(
                         &app,
                         &sender_peer_id,
@@ -19258,7 +19272,7 @@ async fn handler_post_transaction(
         .route_with_state(&accepted_tx, app.state.as_ref())
         .map_err(|error| routing_resolve_error_to_torii_error(&app, error))?;
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-    if !is_local_authoritative_for_route(app.as_ref(), routing_decision) {
+    if !should_execute_route_locally(app.as_ref(), routing_decision) {
         return Ok(execute_torii_transaction_via_proxy(&app, transaction, routing_decision).await);
     }
     let routing_decision = routing::push_accepted_transaction_for_ingress(
@@ -19844,7 +19858,7 @@ async fn handler_signed_query(
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     if let Some(routing_decision) = routing_decision
-        && !is_local_authoritative_for_route(app.as_ref(), routing_decision)
+        && !should_execute_route_locally(app.as_ref(), routing_decision)
     {
         return Ok(
             execute_torii_query_via_proxy(&app, query_request, routing_decision, format).await,
@@ -31035,6 +31049,10 @@ pub(crate) mod tests_runtime_handlers {
             !super::is_local_authoritative_for_route(app.as_ref(), route),
             "permissioned public ingress should not infer authority from commit topology"
         );
+        assert!(
+            super::should_execute_route_locally(app.as_ref(), route),
+            "the default global lane should still execute locally when no authoritative bindings exist"
+        );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -31106,6 +31124,10 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             !super::is_local_authoritative_for_route(app.as_ref(), route),
             "NPoS core-lane ingress should no longer infer authority from commit topology"
+        );
+        assert!(
+            super::should_execute_route_locally(app.as_ref(), route),
+            "the default global lane should remain locally executable without explicit bindings"
         );
     }
 
@@ -31248,6 +31270,10 @@ pub(crate) mod tests_runtime_handlers {
             !super::is_local_authoritative_for_route(app.as_ref(), route),
             "non-core NPoS routes should not treat commit topology peers as authoritative"
         );
+        assert!(
+            !super::should_execute_route_locally(app.as_ref(), route),
+            "non-core routes should continue to fail closed without explicit bindings"
+        );
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -31364,6 +31390,127 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             super::is_local_authoritative_for_route(app.as_ref(), route),
             "manifest-backed restricted lane should be routable without staking records"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn manifest_backed_admin_managed_lane_ignores_local_commit_topology_filtering() {
+        let local_validator_keypair = KeyPair::random();
+        let remote_validator_keypair = KeyPair::random();
+        let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let remote_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
+        let remote_validator = AccountId::new(remote_validator_keypair.public_key().clone());
+        let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
+        let remote_peer_id = PeerId::from(remote_peer_keypair.public_key().clone());
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(1);
+
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let (online_tx, online_rx) =
+                tokio::sync::watch::channel(std::collections::HashSet::new());
+            online_tx
+                .send(std::collections::HashSet::from([
+                    Peer::new(
+                        "127.0.0.1:10001".parse().expect("valid local address"),
+                        local_peer_keypair.public_key().clone(),
+                    ),
+                    Peer::new(
+                        "127.0.0.1:10002".parse().expect("valid remote address"),
+                        remote_peer_keypair.public_key().clone(),
+                    ),
+                ]))
+                .expect("online peers update should succeed");
+            app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+            app_mut.local_peer_id = Some(local_peer_id.clone());
+
+            let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+                NonZeroU32::new(2).expect("non-zero lane count"),
+                vec![
+                    iroha_data_model::nexus::LaneConfig::default(),
+                    iroha_data_model::nexus::LaneConfig {
+                        id: lane_id,
+                        dataspace_id,
+                        alias: format!("lane-{}", lane_id.as_u32()),
+                        visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                        ..iroha_data_model::nexus::LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+                iroha_data_model::nexus::DataSpaceMetadata::default(),
+                iroha_data_model::nexus::DataSpaceMetadata {
+                    id: dataspace_id,
+                    alias: "restricted".to_owned(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            let nexus = iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog,
+                dataspace_catalog,
+                ..iroha_config::parameters::actual::Nexus::default()
+            };
+
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            state.set_nexus(nexus.clone()).expect("apply nexus config");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &local_validator,
+                &local_peer_keypair,
+                "local",
+            );
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &remote_validator,
+                &remote_peer_keypair,
+                "remote",
+            );
+            {
+                let mut topology = state.commit_topology.block();
+                topology.clear();
+                topology.push(local_peer_id.clone());
+                topology.commit();
+            }
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    lane_id,
+                    vec![(remote_validator.clone(), remote_peer_id.clone())],
+                )],
+            );
+            let state_view = app_mut.state.view();
+            app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+        }
+
+        let route = RoutingDecision::new(lane_id, dataspace_id);
+        let authoritative = super::authoritative_lane_peers(app.as_ref(), route);
+        let candidates =
+            super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
+
+        assert_eq!(
+            authoritative.authoritative,
+            vec![remote_peer_id.clone()],
+            "manifest-backed admin-managed lanes should keep remote authorities even when the local commit topology omits them"
+        );
+        assert!(
+            !super::is_local_authoritative_for_route(app.as_ref(), route),
+            "a peer outside the lane manifest should not become authoritative just because it is local"
+        );
+        assert!(
+            !super::should_execute_route_locally(app.as_ref(), route),
+            "restricted routes without local manifest authority should still proxy"
+        );
+        assert_eq!(
+            candidates.peers,
+            vec![remote_peer_id],
+            "Torii proxy candidate discovery should route to the manifest-backed remote authority"
         );
     }
 

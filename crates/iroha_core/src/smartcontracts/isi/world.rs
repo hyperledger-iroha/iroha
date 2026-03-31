@@ -268,18 +268,13 @@ pub mod isi {
             .world()
             .smart_contract_state()
             .get(&key)
-            .ok_or_else(|| {
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verified lane relay not found".to_string(),
-                )
-            })?;
+            .ok_or(iroha_data_model::query::error::QueryExecutionFail::NotFound)?;
         norito::decode_from_bytes::<VerifiedLaneRelayRecord>(payload).map_err(|err| {
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
                 "verified lane relay decode failed: {err}"
             ))
         })
     }
-
     fn protected_contract_namespaces(
         state_transaction: &StateTransaction<'_, '_>,
     ) -> BTreeSet<String> {
@@ -10408,15 +10403,15 @@ pub mod isi {
             }
 
             let verified_at_height = state_transaction.block_height();
-            if let Some(expiry_slot) = proof_blob.expiry_slot {
-                if verified_at_height > expiry_slot {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(format!(
-                            "verified lane relay proof expired at slot {expiry_slot}"
-                        )),
-                    )
-                    .into());
-                }
+            if let Some(expiry_slot) = proof_blob.expiry_slot
+                && verified_at_height > expiry_slot
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "verified lane relay proof expired at slot {expiry_slot}"
+                    )),
+                )
+                .into());
             }
             if !proof_matches_manifest(&proof_blob, envelope.dataspace_id, manifest_root) {
                 return Err(InstructionExecutionError::InvalidParameter(
