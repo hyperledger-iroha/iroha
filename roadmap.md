@@ -1,6 +1,16 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-30
+Last updated: 2026-03-31
+
+Latest sync (2026-03-31 `iroha_test_network` genesis bootstrap compile fix):
+the genesis pre-exec bootstrap path now falls back to the default Nexus
+dataspace catalog when no explicit Nexus config is supplied, so
+`populate_genesis_results(...)` and the mirrored offline-allowance validation
+path compile cleanly again after the signature changed to
+`Option<&ActualNexus>`.
+
+Open work for this slice now remains:
+- none.
 
 Latest sync (2026-03-30 lane-relay emergency hardening):
 the emergency lane-relay override path is now lane-scoped and peer-bound, with

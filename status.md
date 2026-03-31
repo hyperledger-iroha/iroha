@@ -1,6 +1,20 @@
 # Status
 
-Last updated: 2026-03-30
+Last updated: 2026-03-31
+
+## 2026-03-31 Follow-up: `iroha_test_network` genesis pre-exec bootstrap handles missing Nexus config again
+- Fixed `crates/iroha_test_network/src/config.rs` so
+  `populate_genesis_results(...)` no longer treats
+  `Option<&iroha_config::parameters::actual::Nexus>` as a concrete config when
+  seeding genesis SNS alias bootstrap state.
+- The helper now falls back to `ActualNexus::default().dataspace_catalog` when
+  no Nexus config is supplied, matching the existing `apply_preexec_nexus_overrides`
+  behavior instead of failing to compile on `nexus_config.dataspace_catalog`.
+- Updated the offline-allowance genesis validation test bootstrap to use the
+  same default dataspace catalog when mirroring the production pre-exec path.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_test_network populate_genesis_results_accepts_block_proof_policies -- --nocapture`
 
 ## 2026-03-30 Follow-up: lane-relay emergency overrides are now lane-scoped, peer-bound, and TTL-capped
 - Hardened the Nexus emergency override path so `SetLaneRelayEmergencyValidators`
