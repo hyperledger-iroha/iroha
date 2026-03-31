@@ -769,6 +769,11 @@ impl Queue {
         rules: &GovernanceRules,
         tx: &CheckedTransaction<'_>,
     ) -> Result<(), Error> {
+        if let Executable::Instructions(instructions) = tx.as_ref().as_ref().instructions()
+            && instructions_allow_multisig_envelope_authority(instructions)
+        {
+            return Ok(());
+        }
         let Some(quorum) = rules.quorum else {
             return Ok(());
         };
@@ -1836,8 +1841,9 @@ impl Queue {
                         },
                     });
                 }
-                let quorum_required =
-                    rules.quorum.unwrap_or(0).saturating_sub(1) > 0 && !rules.validators.is_empty();
+                let quorum_required = !allows_multisig_envelope_authority
+                    && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                    && !rules.validators.is_empty();
                 let quorum_result = Self::enforce_manifest_quorum(&alias, rules, &checked);
                 if quorum_required {
                     match quorum_result {
@@ -4313,6 +4319,7 @@ pub mod tests {
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             validators: vec![validator_id.clone()],
+            quorum: Some(3),
             ..GovernanceRules::default()
         };
         let status = LaneManifestStatus {

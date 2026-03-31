@@ -9437,8 +9437,13 @@ fn build_contract_call_metadata(
     let ns_key =
         Name::from_str("contract_namespace").expect("static metadata key `contract_namespace`");
     metadata.insert(ns_key, IrohaJson::new(namespace.to_owned()));
+    let gov_ns_key = Name::from_str("gov_namespace").expect("static metadata key `gov_namespace`");
+    metadata.insert(gov_ns_key, IrohaJson::new(namespace.to_owned()));
     let cid_key = Name::from_str("contract_id").expect("static metadata key `contract_id`");
     metadata.insert(cid_key, IrohaJson::new(contract_id.to_owned()));
+    let gov_cid_key =
+        Name::from_str("gov_contract_id").expect("static metadata key `gov_contract_id`");
+    metadata.insert(gov_cid_key, IrohaJson::new(contract_id.to_owned()));
     if let Some(contract_address) = contract_address {
         let address_key =
             Name::from_str("contract_address").expect("static metadata key `contract_address`");
@@ -10704,6 +10709,51 @@ mod multisig_contract_call_tests {
 
         assert_eq!(instructions.len(), 3);
         assert_eq!(instructions_hash, HashOf::new(&instructions));
+    }
+
+    #[test]
+    fn contract_call_metadata_includes_lane_governance_keys() {
+        let manifest = manifest::ContractManifest {
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            kotoba: None,
+            provenance: None,
+        };
+
+        let metadata = build_contract_call_metadata(
+            &manifest,
+            "apps",
+            "mint_request",
+            None,
+            Some("create_mint_request"),
+            None,
+            None,
+            None,
+            300_000,
+        );
+
+        let gov_namespace = metadata
+            .get(&Name::from_str("gov_namespace").expect("static name"))
+            .expect("gov_namespace metadata");
+        let gov_contract_id = metadata
+            .get(&Name::from_str("gov_contract_id").expect("static name"))
+            .expect("gov_contract_id metadata");
+        assert_eq!(
+            gov_namespace
+                .try_into_any_norito::<String>()
+                .expect("gov namespace string"),
+            "apps"
+        );
+        assert_eq!(
+            gov_contract_id
+                .try_into_any_norito::<String>()
+                .expect("gov contract id string"),
+            "mint_request"
+        );
     }
 }
 
@@ -12987,6 +13037,17 @@ pub async fn handle_post_contract_call_multisig_propose(
         ..
     } = prepared;
     ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
+    let tx_metadata = build_contract_call_metadata(
+        &manifest,
+        &namespace,
+        &contract_id,
+        None,
+        Some(&entrypoint),
+        payload.as_ref(),
+        gas_asset_id.as_deref(),
+        fee_sponsor.as_ref(),
+        gas_limit,
+    );
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
         &multisig_account_id,
         &namespace,
@@ -13014,7 +13075,9 @@ pub async fn handle_post_contract_call_multisig_propose(
     let mut builder =
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder.with_instructions([dm::InstructionBox::from(propose_instruction)]);
+    let builder = builder
+        .with_metadata(tx_metadata)
+        .with_instructions([dm::InstructionBox::from(propose_instruction)]);
 
     let response =
         if private_key.is_some() {

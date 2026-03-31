@@ -707,18 +707,25 @@ fn parse_account_alias_label_with_catalog(
 fn resolve_alias_on_chain(
     app: &SharedAppState,
     alias_input: &str,
-) -> Result<Option<(String, AccountId)>, Error> {
+) -> Result<Option<(String, AccountId, &'static str)>, Error> {
     let nexus = app.state.nexus_snapshot();
     let (canonical, alias_label) =
         parse_account_alias_label_with_catalog(alias_input, &nexus.dataspace_catalog)?;
     let state_view = app.state.view();
+    if let Some(record) = state_view.world().account_rekey_records().get(&alias_label) {
+        return Ok(Some((
+            canonical,
+            record.active_account_id.clone(),
+            "rekey_record",
+        )));
+    }
     if let Some(account_id) = state_view
         .world()
         .account_aliases()
         .get(&alias_label)
         .cloned()
     {
-        return Ok(Some((canonical, account_id)));
+        return Ok(Some((canonical, account_id, "account_alias")));
     }
 
     let mut matched_account_id: Option<AccountId> = None;
@@ -740,7 +747,7 @@ fn resolve_alias_on_chain(
         }
     }
 
-    Ok(matched_account_id.map(|account_id| (canonical, account_id)))
+    Ok(matched_account_id.map(|account_id| (canonical, account_id, "account_label")))
 }
 
 fn resolve_alias_index_on_chain(
@@ -3164,7 +3171,7 @@ async fn handler_account_transactions_query(
             .await?;
     }
 
-    let (_, canonical_account_id) = routing::parse_account_path_segment_with_state(
+    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
         app.state.as_ref(),
         &account_id,
         &tel,
@@ -3176,10 +3183,21 @@ async fn handler_account_transactions_query(
             "failed to encode routed account transactions query: {error}"
         )))
     })?;
+    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::AccountTransactionsQuery,
+            vec![canonical_account_id.to_string()],
+            None,
+            body,
+        )
+        .await);
+    }
     Ok(execute_torii_fanout_list_read(
         &app,
         ToriiReadEndpointV1::AccountTransactionsQuery,
-        vec![canonical_account_id],
+        vec![canonical_account_id.to_string()],
         None,
         body,
     )
@@ -3208,17 +3226,28 @@ async fn handler_account_assets(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
             .await?;
     }
-    let (_, canonical_account_id) = routing::parse_account_path_segment_with_state(
+    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
         app.state.as_ref(),
         &key_hint,
         &tel,
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
     let query_string = encode_torii_proxy_query(&p)?;
+    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::AccountAssetsGet,
+            vec![canonical_account_id.to_string()],
+            query_string,
+            Vec::new(),
+        )
+        .await);
+    }
     Ok(execute_torii_fanout_list_read(
         &app,
         ToriiReadEndpointV1::AccountAssetsGet,
-        vec![canonical_account_id],
+        vec![canonical_account_id.to_string()],
         query_string,
         Vec::new(),
     )
@@ -3241,17 +3270,28 @@ async fn handler_account_permissions(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
     }
-    let (_, canonical_account_id) = routing::parse_account_path_segment_with_state(
+    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
         app.state.as_ref(),
         &key_hint,
         &tel,
         "/v1/accounts/{account_id}/permissions",
     )?;
     let query_string = encode_torii_proxy_query(&p)?;
+    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::AccountPermissionsGet,
+            vec![canonical_account_id.to_string()],
+            query_string,
+            Vec::new(),
+        )
+        .await);
+    }
     Ok(execute_torii_fanout_list_read(
         &app,
         ToriiReadEndpointV1::AccountPermissionsGet,
-        vec![canonical_account_id],
+        vec![canonical_account_id.to_string()],
         query_string,
         Vec::new(),
     )
@@ -3284,7 +3324,7 @@ async fn handler_account_assets_query(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
             .await?;
     }
-    let (_, canonical_account_id) = routing::parse_account_path_segment_with_state(
+    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
         app.state.as_ref(),
         &key_hint,
         &tel,
@@ -3295,10 +3335,21 @@ async fn handler_account_assets_query(
             "failed to encode routed account assets query: {error}"
         )))
     })?;
+    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::AccountAssetsQuery,
+            vec![canonical_account_id.to_string()],
+            None,
+            body,
+        )
+        .await);
+    }
     Ok(execute_torii_fanout_list_read(
         &app,
         ToriiReadEndpointV1::AccountAssetsQuery,
-        vec![canonical_account_id],
+        vec![canonical_account_id.to_string()],
         None,
         body,
     )
@@ -3328,7 +3379,7 @@ async fn handler_account_transactions_get(
             .await?;
     }
     let telemetry = app.telemetry.clone();
-    let (_, canonical_account_id) = routing::parse_account_path_segment_with_state(
+    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
         app.state.as_ref(),
         &key_hint,
         &telemetry,
@@ -3336,10 +3387,21 @@ async fn handler_account_transactions_get(
     )?;
     let query_string = encode_torii_proxy_query(&params)?;
     let _ = allowed_asset_definition_id;
+    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::AccountTransactionsGet,
+            vec![canonical_account_id.to_string()],
+            query_string,
+            Vec::new(),
+        )
+        .await);
+    }
     Ok(execute_torii_fanout_list_read(
         &app,
         ToriiReadEndpointV1::AccountTransactionsGet,
-        vec![canonical_account_id],
+        vec![canonical_account_id.to_string()],
         query_string,
         Vec::new(),
     )
@@ -3536,6 +3598,18 @@ async fn handler_accounts_list(
     }
 
     let query_string = encode_torii_proxy_query(&p)?;
+    let preferred_routes = torii_preferred_private_ingress_routes(app.as_ref());
+    if !preferred_routes.is_empty() {
+        return Ok(execute_torii_list_read_for_routes(
+            &app,
+            preferred_routes,
+            ToriiReadEndpointV1::AccountsList,
+            Vec::new(),
+            query_string,
+            Vec::new(),
+        )
+        .await);
+    }
     Ok(execute_torii_fanout_list_read(
         &app,
         ToriiReadEndpointV1::AccountsList,
@@ -3575,6 +3649,18 @@ async fn handler_accounts_query(
             "failed to encode routed accounts query: {error}"
         )))
     })?;
+    let preferred_routes = torii_preferred_private_ingress_routes(app.as_ref());
+    if !preferred_routes.is_empty() {
+        return Ok(execute_torii_list_read_for_routes(
+            &app,
+            preferred_routes,
+            ToriiReadEndpointV1::AccountsQuery,
+            Vec::new(),
+            None,
+            body,
+        )
+        .await);
+    }
     Ok(execute_torii_fanout_list_read(
         &app,
         ToriiReadEndpointV1::AccountsQuery,
@@ -5535,7 +5621,13 @@ fn resolve_tx_history_allowed_asset_definition_id(
     app.tx_history_access_policy
         .allowed_asset_definition_id
         .as_deref()
-        .map(|selector| parse_asset_definition_id(app, selector))
+        .map(|selector| {
+            let trimmed = selector.trim();
+            if let Ok(id) = AssetDefinitionId::parse_address_literal(trimmed) {
+                return Ok(id);
+            }
+            parse_asset_definition_id(app, selector)
+        })
         .transpose()
 }
 
@@ -10509,6 +10601,106 @@ fn torii_route_for_lane_id(
     })
 }
 
+#[cfg(feature = "app_api")]
+fn torii_route_for_dataspace_id(
+    app: &AppState,
+    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+) -> Result<RoutingDecision, Error> {
+    let state_view = app.state.view();
+    let nexus = state_view.nexus();
+    let Some(lane_id) = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| lane.dataspace_id == dataspace_id)
+        .map(|lane| lane.id)
+        .min()
+    else {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        )));
+    };
+
+    iroha_core::queue::resolve_routing_decision(
+        RoutingDecision::new(lane_id, dataspace_id),
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+    )
+    .map_err(|error| Error::PushIntoQueue {
+        source: Box::new(queue::Error::UnresolvedRoute {
+            reason: error.to_string(),
+        }),
+        backpressure: current_torii_backpressure(app),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn torii_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
+    let state_view = app.state.view();
+    let nexus = state_view.nexus();
+    let mut seen_dataspaces = BTreeSet::new();
+    let mut routes = Vec::new();
+    for lane in nexus.lane_catalog.lanes() {
+        if lane.visibility != iroha_data_model::nexus::LaneVisibility::Restricted {
+            continue;
+        }
+        if !seen_dataspaces.insert(lane.dataspace_id) {
+            continue;
+        }
+        let Ok(route) = iroha_core::queue::resolve_routing_decision(
+            RoutingDecision::new(lane.id, lane.dataspace_id),
+            &nexus.lane_catalog,
+            &nexus.dataspace_catalog,
+        ) else {
+            continue;
+        };
+        routes.push(route);
+    }
+    routes.sort_by_key(|route| (route.dataspace_id.as_u64(), route.lane_id.as_u32()));
+    routes
+}
+
+#[cfg(feature = "app_api")]
+fn torii_local_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
+    torii_restricted_routes(app)
+        .into_iter()
+        .filter(|route| is_local_authoritative_for_route(app, *route))
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn torii_preferred_private_ingress_routes(app: &AppState) -> Vec<RoutingDecision> {
+    let local_restricted_routes = torii_local_restricted_routes(app);
+    if !local_restricted_routes.is_empty() {
+        return local_restricted_routes;
+    }
+
+    let restricted_routes = torii_restricted_routes(app);
+    if restricted_routes.len() == 1 {
+        return restricted_routes;
+    }
+
+    Vec::new()
+}
+
+#[cfg(feature = "app_api")]
+fn torii_preferred_account_route(
+    app: &AppState,
+    account_id: &AccountId,
+) -> Result<Option<RoutingDecision>, Error> {
+    let state_view = app.state.view();
+    if let Some(dataspace_id) = state_view.world().dataspace_for_account(account_id) {
+        return torii_route_for_dataspace_id(app, dataspace_id).map(Some);
+    }
+
+    let preferred_private_ingress_routes = torii_preferred_private_ingress_routes(app);
+    if preferred_private_ingress_routes.len() == 1 {
+        return Ok(preferred_private_ingress_routes.into_iter().next());
+    }
+
+    Ok(None)
+}
+
 fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -12998,7 +13190,15 @@ async fn execute_torii_read_for_route(
     routing_decision: RoutingDecision,
     request: ToriiReadProxyRequestV1,
 ) -> Response {
-    if should_execute_route_locally(app.as_ref(), routing_decision) {
+    #[cfg(feature = "app_api")]
+    let private_ingress_local = {
+        let preferred_routes = torii_preferred_private_ingress_routes(app.as_ref());
+        preferred_routes.len() == 1 && preferred_routes[0] == routing_decision
+    };
+    #[cfg(not(feature = "app_api"))]
+    let private_ingress_local = false;
+
+    if should_execute_route_locally(app.as_ref(), routing_decision) || private_ingress_local {
         execute_torii_read_request_locally(app, request, routing_decision, "local").await
     } else {
         execute_torii_read_via_proxy(app, routing_decision, request).await
@@ -13020,12 +13220,12 @@ fn routed_by_for_routes(app: &SharedAppState, routes: &[RoutingDecision]) -> &'s
 #[cfg(feature = "app_api")]
 async fn execute_torii_fanout_json_payloads(
     app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
     endpoint: ToriiReadEndpointV1,
     path_args: Vec<String>,
     query_string: Option<String>,
     body: Vec<u8>,
 ) -> Result<(Vec<RoutingDecision>, Vec<Value>), Response> {
-    let routes = torii_all_dataspace_routes(app.as_ref());
     if routes.is_empty() {
         return Err(torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -13058,6 +13258,25 @@ async fn execute_torii_fanout_json_payloads(
 }
 
 #[cfg(feature = "app_api")]
+async fn execute_torii_fanout_json_payloads_all_routes(
+    app: &SharedAppState,
+    endpoint: ToriiReadEndpointV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    body: Vec<u8>,
+) -> Result<(Vec<RoutingDecision>, Vec<Value>), Response> {
+    execute_torii_fanout_json_payloads(
+        app,
+        torii_all_dataspace_routes(app.as_ref()),
+        endpoint,
+        path_args,
+        query_string,
+        body,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
 async fn execute_torii_fanout_list_read(
     app: &SharedAppState,
     endpoint: ToriiReadEndpointV1,
@@ -13065,7 +13284,35 @@ async fn execute_torii_fanout_list_read(
     query_string: Option<String>,
     body: Vec<u8>,
 ) -> Response {
-    match execute_torii_fanout_json_payloads(app, endpoint, path_args, query_string, body).await {
+    match execute_torii_fanout_json_payloads_all_routes(
+        app,
+        endpoint,
+        path_args,
+        query_string,
+        body,
+    )
+    .await
+    {
+        Ok((routes, payloads)) => {
+            merged_list_response(payloads, routed_by_for_routes(app, &routes))
+                .unwrap_or_else(|response| response)
+        }
+        Err(response) => response,
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_list_read_for_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    endpoint: ToriiReadEndpointV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    body: Vec<u8>,
+) -> Response {
+    match execute_torii_fanout_json_payloads(app, routes, endpoint, path_args, query_string, body)
+        .await
+    {
         Ok((routes, payloads)) => {
             merged_list_response(payloads, routed_by_for_routes(app, &routes))
                 .unwrap_or_else(|response| response)
@@ -13136,7 +13383,7 @@ async fn execute_torii_fanout_portfolio_read(
     uaid_literal: String,
     query_string: Option<String>,
 ) -> Response {
-    match execute_torii_fanout_json_payloads(
+    match execute_torii_fanout_json_payloads_all_routes(
         app,
         ToriiReadEndpointV1::AccountsPortfolio,
         vec![uaid_literal],
@@ -13159,7 +13406,7 @@ async fn execute_torii_fanout_dataspace_summary_read(
     account_literal: String,
     query_string: Option<String>,
 ) -> Response {
-    match execute_torii_fanout_json_payloads(
+    match execute_torii_fanout_json_payloads_all_routes(
         app,
         ToriiReadEndpointV1::NexusDataspacesAccountSummary,
         vec![account_literal],
@@ -20443,9 +20690,9 @@ async fn handler_alias_resolve(
         )));
     }
 
-    if let Some((alias, account_id)) = resolve_alias_on_chain(&app, &request.alias)? {
+    if let Some((alias, account_id, source)) = resolve_alias_on_chain(&app, &request.alias)? {
         let account_id_string = account_id.to_string();
-        return alias_resolve_ok(&alias, &account_id_string, None, "on_chain");
+        return alias_resolve_ok(&alias, &account_id_string, None, source);
     }
 
     Ok(axum::http::StatusCode::NOT_FOUND.into_response())
@@ -21010,7 +21257,7 @@ fn resolve_tx_history_alias_account_id(
     app: &SharedAppState,
     alias_input: &str,
 ) -> Result<Option<AccountId>, Error> {
-    if let Some((_, account_id)) = resolve_alias_on_chain(app, alias_input)? {
+    if let Some((_, account_id, _)) = resolve_alias_on_chain(app, alias_input)? {
         return Ok(Some(account_id));
     }
 
@@ -26810,6 +27057,92 @@ pub(crate) mod tests_runtime_handlers {
         app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
 
+    fn configure_private_ingress_routes_for_test(
+        app: &mut SharedAppState,
+    ) -> (LaneId, DataSpaceId) {
+        let local_validator_keypair = KeyPair::random();
+        let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
+        let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
+        let governance_dataspace = DataSpaceId::new(1);
+        let governance_lane = LaneId::new(1);
+        let restricted_dataspace = DataSpaceId::new(10);
+        let restricted_lane = LaneId::new(2);
+
+        let app_mut = Arc::get_mut(app).expect("unique app state");
+        let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
+        online_tx
+            .send(std::collections::HashSet::from([Peer::new(
+                "127.0.0.1:12001".parse().expect("valid local address"),
+                local_peer_keypair.public_key().clone(),
+            )]))
+            .expect("online peers update should succeed");
+        app_mut.online_peers = OnlinePeersProvider::new(online_rx);
+        app_mut.local_peer_id = Some(local_peer_id.clone());
+
+        let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            NonZeroU32::new(3).expect("nonzero lane count"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: governance_lane,
+                    dataspace_id: governance_dataspace,
+                    alias: "governance".to_owned(),
+                    visibility: iroha_data_model::nexus::LaneVisibility::Public,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+                iroha_data_model::nexus::LaneConfig {
+                    id: restricted_lane,
+                    dataspace_id: restricted_dataspace,
+                    alias: "restricted".to_owned(),
+                    visibility: iroha_data_model::nexus::LaneVisibility::Restricted,
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: governance_dataspace,
+                alias: "governance".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: restricted_dataspace,
+                alias: "restricted".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog,
+            dataspace_catalog,
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+        state.set_nexus(nexus.clone()).expect("apply nexus config");
+        ensure_runtime_peer_binding_for_test(state, &local_validator, &local_peer_keypair, "local");
+        {
+            let mut topology = state.commit_topology.block();
+            topology.clear();
+            topology.push(local_peer_id.clone());
+            topology.commit();
+        }
+        install_lane_manifest_registry_for_test(
+            state,
+            &[(restricted_lane, vec![(local_validator, local_peer_id)])],
+        );
+        let state_view = app_mut.state.view();
+        app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
+
+        (restricted_lane, restricted_dataspace)
+    }
+
     fn install_lane_manifest_registry_for_test(
         state: &IrohaState,
         lanes: &[(LaneId, Vec<(AccountId, PeerId)>)],
@@ -28075,6 +28408,82 @@ pub(crate) mod tests_runtime_handlers {
                 .get("x-iroha-route-dataspace-id")
                 .is_none(),
             "local trigger queries should not publish a routed dataspace"
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_accounts_list_prefers_local_restricted_routes_on_private_ingress() {
+        let mut app = mk_app_state_for_tests();
+        configure_private_ingress_routes_for_test(&mut app);
+
+        let response = super::handler_accounts_list(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            AxQuery(crate::routing::ListFilterParams::default()),
+        )
+        .await
+        .expect("accounts list should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("local"),
+            "private ingress account listings should stay on the local restricted lane",
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_account_assets_prefers_single_local_restricted_route_for_local_accounts() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let (restricted_lane, restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        let preferred_route = super::torii_preferred_account_route(app.as_ref(), &authority)
+            .expect("account route resolution should succeed");
+        assert_eq!(
+            preferred_route,
+            Some(RoutingDecision::new(restricted_lane, restricted_dataspace)),
+            "local account assets should resolve to the single local restricted route",
+        );
+
+        let response = super::handler_account_assets(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            AxPath(authority.to_string()),
+            AxQuery(crate::routing::AccountAssetsGetParams::default()),
+        )
+        .await
+        .expect("account assets should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("local"),
+            "private ingress account assets should not fan out through public lanes",
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-route-lane-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(restricted_lane.as_u32().to_string().as_str()),
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(restricted_dataspace.as_u64().to_string().as_str()),
         );
     }
 
@@ -36062,6 +36471,34 @@ mod tests {
                 .build(&authority);
         let world = World::with([domain], [authority_account, account], []);
         let app = mk_app_state_for_tests_with_world(world);
+        {
+            let alias_label = iroha_data_model::account::rekey::AccountLabel::new(
+                "sbp".parse::<DomainId>().expect("domain id"),
+                "banking".parse::<Name>().expect("label"),
+            );
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = app.state.block(header);
+            let mut tx = block.transaction();
+            let world = tx.world_mut_for_testing();
+            world
+                .account_rekey_records_mut_for_testing()
+                .remove(alias_label.clone());
+            world
+                .account_aliases_mut_for_testing()
+                .remove(alias_label.clone());
+            if let Some(mut labels) = world
+                .account_aliases_by_account_mut_for_testing()
+                .get(&authority)
+                .cloned()
+            {
+                labels.remove(&alias_label);
+                world
+                    .account_aliases_by_account_mut_for_testing()
+                    .insert(authority.clone(), labels);
+            }
+            tx.apply();
+            block.commit().expect("commit rekey record removal");
+        }
         let request = routing::AliasResolveRequestDto {
             alias: alias.to_string(),
         };
@@ -36081,7 +36518,55 @@ mod tests {
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.alias, alias);
         assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.source.as_deref(), Some("on_chain"));
+        assert_eq!(dto.source.as_deref(), Some("account_label"));
+    }
+
+    #[tokio::test]
+    async fn alias_resolve_uses_rekey_record_when_alias_index_is_missing() {
+        let alias = "banking@sbp.universal";
+        let alias_label = iroha_data_model::account::rekey::AccountLabel::new(
+            "sbp".parse::<DomainId>().expect("domain id"),
+            "banking".parse::<Name>().expect("label"),
+        );
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = app.state.block(header);
+            let mut tx = block.transaction();
+            tx.world_mut_for_testing()
+                .account_rekey_records_mut_for_testing()
+                .insert(
+                    alias_label.clone(),
+                    iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                        alias_label,
+                        authority.clone(),
+                    ),
+                );
+            tx.apply();
+            block.commit().expect("commit rekey record");
+        }
+        let request = routing::AliasResolveRequestDto {
+            alias: alias.to_string(),
+        };
+        let body = norito::json::to_vec(&request).expect("encode request");
+
+        let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
+            .await
+            .expect("handler should succeed")
+            .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .expect("body")
+            .to_bytes();
+        let dto: routing::AliasResolveResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.alias, alias);
+        assert_eq!(dto.account_id, authority.to_string());
+        assert_eq!(dto.source.as_deref(), Some("rekey_record"));
     }
 
     #[cfg(feature = "app_api")]
@@ -37403,6 +37888,56 @@ mod tests {
             ),
             "unexpected error: {missing_error:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_tx_history_allowed_asset_definition_id_accepts_base58_literal_without_local_definition()
+     {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let expected = AssetDefinitionId::new(
+            domain_id.clone(),
+            Name::from_str("pkr").expect("asset name token"),
+        );
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account =
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
+        let mut app = mk_app_state_for_tests_with_world(World::with([domain], [account], []));
+        let app_state = Arc::get_mut(&mut app).expect("unique app state");
+        app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
+            allowed_asset_definition_id: Some(expected.to_string()),
+            ..TxHistoryAccessPolicy::default()
+        });
+
+        assert_eq!(
+            resolve_tx_history_allowed_asset_definition_id(app.as_ref())
+                .expect("base58 selector should not require local definition"),
+            Some(expected)
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_tx_history_allowed_asset_definition_id_keeps_alias_selectors_strict() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account =
+            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
+        let mut app = mk_app_state_for_tests_with_world(World::with([domain], [account], []));
+        let app_state = Arc::get_mut(&mut app).expect("unique app state");
+        app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
+            allowed_asset_definition_id: Some("pkr#missing".to_owned()),
+            ..TxHistoryAccessPolicy::default()
+        });
+
+        let error = resolve_tx_history_allowed_asset_definition_id(app.as_ref())
+            .expect_err("unknown alias selector must remain strict");
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound
+            ))
+        ));
     }
 
     #[tokio::test]
