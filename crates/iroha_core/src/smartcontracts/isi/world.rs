@@ -72,7 +72,7 @@ pub mod isi {
         nexus::{
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
-            ProofBlob, VerifiedLaneRelayRecord, proof_matches_manifest,
+            VerifiedLaneRelayRecord, proof_matches_manifest,
         },
         parameter::{Parameter, SumeragiParameter},
         prelude::*,
@@ -252,20 +252,6 @@ pub mod isi {
             })?,
         )?;
         build_state_path_key_norito(&block_path, relay_ref.settlement_hash.as_ref())
-    }
-
-    fn load_verified_lane_relay_record(
-        state_ro: &impl StateReadOnly,
-        relay_ref: &LaneRelayEnvelopeRef,
-    ) -> Result<VerifiedLaneRelayRecord, Error> {
-        let key = verified_lane_relay_state_key(relay_ref)?;
-        let payload = state_ro
-            .world()
-            .smart_contract_state()
-            .get(&key)
-            .ok_or_else(|| Error::Conversion("verified lane relay not found".to_string()))?;
-        norito::decode_from_bytes::<VerifiedLaneRelayRecord>(payload)
-            .map_err(|err| Error::Conversion(format!("verified lane relay decode failed: {err}")))
     }
 
     fn protected_contract_namespaces(
@@ -10317,9 +10303,8 @@ pub mod isi {
             }
 
             let verified_at_height = state_transaction.block_height();
-            if proof_blob
-                .expiry_slot
-                .is_some_and(|expiry_slot| verified_at_height > expiry_slot)
+            if let Some(expiry_slot) = proof_blob.expiry_slot
+                && verified_at_height > expiry_slot
             {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
@@ -17672,6 +17657,24 @@ pub mod isi {
                     .get(&ticket)
                     .cloned()
                     .ok_or_else(|| Error::Conversion("DA pin intent not found".to_string()))
+            }
+        }
+
+        impl ValidSingularQuery for iroha_data_model::query::nexus::prelude::FindLaneRelayEnvelopeByRef {
+            fn execute(
+                &self,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<VerifiedLaneRelayRecord, Error> {
+                let key = verified_lane_relay_state_key(&self.relay_ref)
+                    .map_err(|err| Error::Conversion(err.to_string()))?;
+                let payload = state_ro
+                    .world()
+                    .smart_contract_state()
+                    .get(&key)
+                    .ok_or(Error::NotFound)?;
+                norito::decode_from_bytes::<VerifiedLaneRelayRecord>(payload).map_err(|err| {
+                    Error::Conversion(format!("verified lane relay decode failed: {err}"))
+                })
             }
         }
 

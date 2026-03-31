@@ -1,6 +1,71 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-30
+Last updated: 2026-03-31
+
+Latest sync (2026-03-31 fresh full soaks rerun on rebuilt release binaries, but both still fail):
+the branch now has an honest current-tree release-build signal again, and the
+full permissioned and NPoS stable envelopes were rerun, but neither passes.
+
+- permissioned no longer fails in the old late committed-edge churn shape;
+  instead it now stalls much earlier at `45/46` with repeated
+  `no proposal observed for view before changing view` on `quorum_timeout`
+  while controller-side ingress pressure builds (`transaction queued`,
+  confirmation timeouts, backpressure) and no peer is lagging;
+- the new committed-edge owner is clearly active in that same permissioned run
+  and is preserving canonical frontier evidence plus bounded reanchor
+  behavior, so the remaining permissioned stop is a different liveness bug;
+- NPoS progresses much farther, to `288/289`, but then combines the same
+  proposal-evidence/liveness signature (`no proposal observed`,
+  `missing_qc`, committed-edge suppression, reanchors) with repeated
+  workload-layer `route_unavailable: no authoritative peer binding is
+  registered for lane 1 dataspace 1`; and
+- because both full soaks are still red, the deferred repo-wide verification
+  chain remains blocked.
+
+- open work for this slice is now:
+  - permissioned: debug the low-height `45/46` proposal-evidence failure,
+    especially why `pending_blocks=1` persists while proposal hints/cached
+    evidence remain absent and view change still reaches the
+    `no proposal observed` path;
+  - NPoS consensus: debug the frontier/proposal stall around `288/289`,
+    including why the committed-edge owner and committed-anchor reanchor are
+    insufficient to restore canonical slot evidence there;
+  - NPoS ingress/routing: debug the authoritative-binding loss behind
+    `route_unavailable: no authoritative peer binding is registered for lane 1 dataspace 1`,
+    and determine whether it is an independent Nexus/ingress bug or a
+    downstream symptom of the consensus stall; and
+  - only after both soak envelopes are green should the branch resume
+    `cargo test --workspace` and
+    `cargo clippy --workspace --all-targets -- -D warnings`.
+
+Latest sync (2026-03-31 committed-edge conflict owner fix landed, but full-crate validation is still branch-red outside consensus):
+the contiguous-frontier committed-edge liveness repair is now implemented in
+`iroha_core`, and the targeted consensus regressions for that slice are green,
+but the branch still is not in a state where `cargo test -p iroha_core` can
+serve as a clean validation gate.
+
+- committed-edge conflict ownership now explicitly owns `committed + 1` until
+  canonical frontier evidence is restored or commit progress moves past the
+  slot, preventing the old shared `missing_qc` / timeout / local `NEW_VIEW`
+  churn loop after committed-edge cleanup;
+- the new focused committed-edge owner regressions are green, and the adjacent
+  missing-QC / proposal-evidence / stale-reschedule / committed-edge-cleanup
+  regressions rerun green as well; but
+- broader `cargo test -p iroha_core` is still failing in many unrelated areas
+  and eventually aborts on stack overflow in
+  `state::permission_cache_tests::permission_cache_rebuilds_after_restart`.
+
+- open work for this slice is now:
+  - restore a usable branch baseline outside the consensus patch surface so
+    `cargo test -p iroha_core` becomes a meaningful gate again;
+  - once that broader baseline is green, rerun
+    `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`;
+  - then rerun fresh permissioned and NPoS soaks on the rebuilt release
+    binaries to confirm the committed-edge owner closes the remaining live
+    liveness loop; and
+  - only after those soaks pass, resume the deferred repo-wide verification
+    chain (`cargo test --workspace` and
+    `cargo clippy --workspace --all-targets -- -D warnings`).
 
 Latest sync (2026-03-30 account de-scoping compile blockers cleared):
 the repo-wide `AccountId`/alias cleanup is now through the live-code compile
@@ -87,6 +152,68 @@ stalls:
   - only after that verification chain is green, rerun the full preserved-peer
     permissioned and NPoS stable envelopes to see whether the shared liveness
     stop is actually resolved.
+Latest sync (2026-03-30 nexus lane-relay instruction compile fix):
+`iroha_data_model` now compiles cleanly again with the new Nexus lane-relay
+ISIs. `SetLaneRelayEmergencyValidators` stays on the standard `isi!` path,
+`RegisterVerifiedLaneRelay` now uses a manual instruction definition with
+canonical Norito-byte ordering instead of forcing `Ord` onto nested relay
+consensus data, and `LaneRelayEnvelopeRef` now derives `Copy` to satisfy the
+workspace lint policy.
+
+Open work for this slice now remains:
+- none.
+
+Latest sync (2026-03-30 peer-sync + light-DA follow-up):
+the remaining lease-sensitive peer-add/remove coverage is green again, and the
+1 KiB DA scenarios no longer fail by assuming that every DA-enabled commit must
+surface RBC session metrics.
+
+- the frontier block-sync path now preserves the attached commit-QC sidecar
+  even when the synced block is already known locally, which clears the
+  `register_new_peer` / `network_stable_after_add_and_after_remove_peer`
+  catch-up stall;
+- committed RBC cleanup and payload hydration now have a last-chance
+  delivered-bytes telemetry hook so completed delivered sessions do not lose
+  their payload-byte counter during runtime state drain; and
+- the `sumeragi_da` integration helper now enforces RBC payload/deliver metrics
+  only when an RBC session was actually observed (endpoint or persisted
+  snapshot with chunk metadata). Current `LARGE_PAYLOAD_BYTES = 1024`
+  scenarios commit through DA without exposing RBC session metrics on this
+  tree, so the old unconditional check was over-constraining the tests.
+
+Open work for this slice now remains:
+- rerun the heavy RBC restart-recovery / lagging-peer fetch scenarios
+  (`sumeragi_rbc_recovers_after_peer_restart`,
+  `sumeragi_rbc_recovers_after_restart_with_roster_change`,
+  `sumeragi_rbc_session_recovers_after_cold_restart`,
+  `sumeragi_rbc_unverified_roster_stash_requests_missing_block`,
+  `sumeragi_da_eviction_rehydrates_block_bodies`) against the current tree to
+  confirm whether any real persistence/recovery bug remains after the lease,
+  block-sync, and helper-alignment fixes.
+
+Latest sync (2026-03-30 integration lease alignment + committed RBC snapshot retention):
+lease-sensitive integration fixtures now provision registrar-valid SNS domain
+leases and use DNS-compatible labels, and commit cleanup no longer deletes the
+persisted RBC snapshot needed by restart/lagging-peer recovery.
+
+- `iroha_test_network` now exposes reusable helpers for runtime domain lease
+  provisioning, and the remaining failing integration tests were updated to use
+  those helpers instead of raw `Register::domain(...)` calls;
+- the leftover registrar-facing underscore fixture names were normalized to
+  accepted hyphenated labels (`looking-glass`, `domain1-blocks`,
+  `domain2-blocks`, `domain1-txs`, `kura-test`, `relay-net`);
+- committed RBC cleanup now preserves the on-disk session snapshot after commit,
+  and `cargo test -p iroha_core committed_rbc_cleanup_preserves_persisted_session_snapshot -- --nocapture`
+  locks that behavior; and
+- targeted regressions are green for the lease-sensitive pipeline/query/asset,
+  trigger-orphan, trigger-data, and multi-genesis scenarios.
+
+Open work for this slice now remains:
+- rerun the remaining heavy DA/reconfiguration integration regressions
+  (`multiple_blocks_created`, peer add/remove sync, RBC restart recovery, and
+  lagging-peer fetch scenarios) on the updated worktree to confirm the
+  snapshot-retention change clears the broader failure cluster rather than only
+  the focused unit coverage.
 
 Latest sync (2026-03-30 Nexus public-lane authoritative peer binding):
 stake-elected public-lane validators now bind an explicit `peer_id` instead of

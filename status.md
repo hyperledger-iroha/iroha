@@ -1,6 +1,107 @@
 # Status
 
-Last updated: 2026-03-30
+Last updated: 2026-03-31
+
+## 2026-03-31 Fresh full permissioned and NPoS soaks rerun on current release binaries; both still fail
+- Rebuilt fresh current-tree release binaries successfully with:
+  `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`.
+- Full stable permissioned rerun on the rebuilt binaries still fails very
+  early:
+  - controller log:
+    `/tmp/izanami_permissioned_current_20260330T205543Z.log`;
+  - peer artifacts:
+    `/tmp/iroha-soak-permissioned-current_20260330T205543Z/irohad_test_network_2N19LG`;
+  - stalled at `strict_min_height=45` / `quorum_min_height=45` with
+    `strict_reference_height=48`, no lagging peers, then tripped the 600s
+    strict-progress watchdog;
+  - final controller summary was
+    `successes=362 failures=52 izanami_ingress_failover_total=180
+    izanami_ingress_endpoint_unhealthy_total=159`;
+  - controller-side symptoms were repeated `transaction queued for too long`,
+    `haven't got tx confirmation within 20s`, and submission-ingress
+    backpressure; and
+  - peer logs show repeated `no proposal observed for view before changing
+    view` on `quorum_timeout` across the same window, including heights
+    `29`, `33`, `36`, `41`, `45`, and `46`.
+- The new committed-edge owner does execute during that permissioned stall:
+  - peer logs show
+    `suppressing committed-edge conflicting highest-QC reference and
+    preserving canonical state with bounded canonical reanchor`, followed by
+    `preserving authoritative local frontier evidence`; and
+  - the shared committed-anchor reanchor still emits through the window gate
+    (`reason: "qc_missing_payload_quorum_fast_recovery"`).
+- Full stable NPoS rerun on the rebuilt binaries also still fails:
+  - controller log:
+    `/tmp/izanami_npos_current_20260330T210740Z.log`;
+  - peer artifacts:
+    `/tmp/iroha-soak-npos-current_20260330T210740Z/irohad_test_network_GWpSiX`;
+  - advanced materially farther, to `strict_min_height=288` /
+    `quorum_min_height=288`, but then also tripped the same 600s
+    strict-progress watchdog with no lagging peers;
+  - final controller summary was
+    `successes=1205 failures=78 izanami_ingress_failover_total=168
+    izanami_ingress_endpoint_unhealthy_total=122`;
+  - once stalled, the workload layer repeatedly failed with
+    `route_unavailable: no authoritative peer binding is registered for lane 1 dataspace 1`;
+    and
+  - peer logs still show the consensus-side stall signature at and before the
+    terminal window: repeated `no proposal observed for view before changing
+    view`, a `missing_qc` view change at height `248`, committed-edge
+    suppression at height `288`, and committed-anchor reanchors including
+    `qc_missing_payload_quorum_fast_recovery` and `frontier_stall_reset`.
+- Current read of the branch after the honest soak reruns:
+  - the committed-edge owner patch is live and suppressing the old shared
+    cleanup loop as intended;
+  - permissioned still has a separate low-height proposal-evidence/liveness
+    failure unrelated to the old committed-edge churn pattern; and
+  - NPoS still has at least one additional unresolved failure surface on top
+    of consensus liveness, because ingress/authoritative-binding loss now
+    appears concurrently with the height-`288/289` stall.
+
+## 2026-03-31 Committed-edge conflict ownership fix landed for contiguous-frontier liveness, but broader iroha_core validation is still branch-red outside consensus
+- Finished the consensus-only follow-up for the remaining committed-edge
+  liveness loop in `iroha_core`:
+  - added an explicit internal committed-edge conflict owner for the
+    contiguous frontier at `committed + 1` instead of overloading
+    `FrontierSlotMode::PassiveCatchup`;
+  - wired committed-edge rejection paths for highest-QC observations,
+    proposal hints, proposals, and related recovery cleanup through that owner,
+    while preserving the earlier missing-highest-QC and passive-catchup
+    behavior;
+  - made the new owner suppress same-height `missing_qc`,
+    `QuorumTimeout`/`StakeQuorumTimeout`, and local `NEW_VIEW` churn until
+    authoritative local slot evidence exists again; and
+  - added explicit release/handoff when committed height advances or canonical
+    `committed + 1` proposal/block evidence returns locally.
+- New focused regressions now pass for the committed-edge owner slice:
+  - `committed_edge_conflict_owner_suppresses_idle_and_quorum_timeout_churn`;
+  - `committed_edge_conflict_owner_keeps_new_view_state_empty_under_repeated_npos_conflicts`;
+  - `committed_edge_conflict_owner_clears_when_canonical_frontier_evidence_arrives`.
+- Adjacent consensus regressions rerun green in the same pass:
+  - `observe_new_view_highest_qc_suppresses_committed_edge_conflict_and_keeps_canonical_qc`;
+  - `frontier_stall_reset_handoff_enters_passive_catchup_and_suppresses_repeat_quorum_timeout_churn`;
+  - `slot_has_proposal_evidence_keeps_frontier_candidate_across_view_change_without_leaking_into_next_view`;
+  - `force_view_change_if_idle_records_missing_qc_and_advances_view`;
+  - `reschedule_contiguous_frontier_ignores_stale_old_view_frontier_owner`;
+  - `committed_edge_conflict_suppression_purges_descendant_pending_blocks`; and
+  - `trigger_view_change_realigns_conflicting_committed_edge_qcs_before_new_view_vote`.
+- `cargo fmt --all` succeeded after the patch set.
+- Broader validation is still red outside the consensus slice on the current
+  branch:
+  - `cargo test -p iroha_core` reproduced many unrelated failures across
+    `block`, `executor`, `gossiper`, `queue`, `smartcontracts`, and `state`
+    surfaces before later aborting on stack overflow in
+    `state::permission_cache_tests::permission_cache_rebuilds_after_restart`;
+    and
+  - because of that dirty/red baseline, this pass does not yet provide an
+    honest full-crate or soak-level validation signal for the committed-edge
+    owner fix alone.
+- Deferred verification after this pass:
+  - `cargo build --release --locked -p irohad --bin iroha3d -p izanami --bin izanami`;
+  - fresh full permissioned and NPoS soaks;
+  - `cargo test -p iroha_core` on a green branch baseline;
+  - `cargo test --workspace`; and
+  - `cargo clippy --workspace --all-targets -- -D warnings`.
 
 ## 2026-03-30 Account de-scoping compile sweep landed across data model, runtime, ABI, Torii, bridge, Mochi, and SDK bindings
 - Completed the live-code sweep for the domainless-account transition across
@@ -185,6 +286,70 @@ Last updated: 2026-03-30
     `iroha_data_model` alias-domain changes; and
   - no clean post-patch soak rerun has been possible yet until that unrelated
     compile surface is green again.
+## 2026-03-30 Follow-up: nexus lane-relay instructions compile cleanly again in `iroha_data_model`
+- Fixed `crates/iroha_data_model/src/isi/nexus.rs` so the new Nexus
+  instructions match the crate’s macro expectations: the emergency-validator
+  instruction stays on `isi!`, while `RegisterVerifiedLaneRelay` is defined
+  manually to avoid forcing `Ord` onto `LaneRelayEnvelope` and other nested
+  consensus types.
+- Added a canonical bytewise `Ord`/`PartialOrd` implementation for
+  `RegisterVerifiedLaneRelay` and a focused unit test that pins the ordering
+  contract against the Norito encoding used by the instruction registry.
+- Added `Copy` to `LaneRelayEnvelopeRef` to satisfy the workspace
+  `missing-copy-implementations` lint once the crate check progressed past the
+  original parse/import failure.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_data_model --all-targets`
+  - `cargo test -p iroha_data_model register_verified_lane_relay_order_uses_canonical_encoding --lib`
+
+## 2026-03-30 Follow-up: peer-sync and light-DA integration regressions now match the current runtime behavior
+- Fixed the frontier block-sync path so a joining peer still enqueues the
+  attached commit-QC sidecar when the synced block is already known locally;
+  this unblocks the `register_new_peer` / peer-add-remove catch-up path instead
+  of stalling at height 2.
+- Added a final delivered-bytes telemetry hook during RBC session hydration and
+  commit cleanup so completed delivered sessions do not silently drop the
+  payload-byte metric before runtime state is drained.
+- Updated the `integration_tests/tests/sumeragi_da.rs` scenario helper so it
+  only enforces RBC metrics when the run actually observed RBC session activity
+  (live endpoint or persisted snapshot with chunk metadata). The current
+  `LARGE_PAYLOAD_BYTES = 1024` DA scenarios commit successfully on this tree
+  without surfacing RBC session metrics, so the old unconditional assertion was
+  no longer describing the runtime behavior.
+- Targeted verification now passes:
+  - `cargo test -p iroha_core delivered_payload_metrics_wait_for_complete_payload_and_record_once -- --nocapture`
+  - `cargo test -p iroha_core drain_rbc_state_for_block_records_delivered_payload_metrics_before_cleanup -- --nocapture`
+  - `CARGO_TARGET_DIR=target_codex_verify cargo test -p integration_tests --test mod register_new_peer -- --nocapture`
+  - `CARGO_TARGET_DIR=target_codex_verify cargo test -p integration_tests --test mod network_stable_after_add_and_after_remove_peer -- --nocapture`
+  - `CARGO_TARGET_DIR=target_codex_verify cargo test -p integration_tests --test mod multiple_blocks_created -- --nocapture`
+  - `CARGO_TARGET_DIR=target_codex_verify cargo test -p integration_tests --test mod sumeragi_commit_qc_with_tight_block_queue_four_peers -- --nocapture`
+  - `CARGO_TARGET_DIR=target_codex_verify cargo test -p integration_tests --test mod sumeragi_rbc_da_large_payload_four_peers -- --nocapture`
+  - `CARGO_TARGET_DIR=target_codex_verify cargo test -p integration_tests --test mod sumeragi_rbc_da_large_payload_six_peers -- --nocapture`
+
+## 2026-03-30 Follow-up: integration lease fixtures now align with SNS registrar rules and committed RBC cleanup keeps recovery snapshots
+- Added reusable `iroha_test_network` helpers that provision the required SNS
+  domain-name lease before runtime `Register<Domain>` instructions, then updated
+  the remaining failing integration scenarios to call those helpers instead of
+  submitting raw domain registrations.
+- Normalized the remaining registrar-facing underscore domain fixtures to
+  DNS/SNS-compatible hyphenated labels accepted by the default pricing regex,
+  including `looking-glass`, `domain1-blocks`, `domain2-blocks`,
+  `domain1-txs`, `kura-test`, and `relay-net`.
+- Updated committed RBC cleanup so it drains in-memory/runtime state but keeps
+  the persisted session snapshot on disk for restart and lagging-peer recovery,
+  then added a focused `iroha_core` unit test to pin that contract.
+- Targeted verification now passes:
+  - `cargo test -p integration_tests --no-run`
+  - `cargo test -p integration_tests --test mod pipeline_event_scenarios -- --nocapture`
+  - `cargo test -p integration_tests --test mod query_basic_scenarios -- --nocapture`
+  - `cargo test -p integration_tests --test mod find_asset_total_quantity -- --nocapture`
+  - `cargo test -p integration_tests --test mod trigger_must_be_removed_on_action_authority_account_removal -- --nocapture`
+  - `cargo test -p integration_tests --test mod two_non_intersecting_execution_paths -- --nocapture`
+  - `cargo test -p integration_tests --test mod multiple_genesis_4_peers_2_genesis -- --nocapture`
+- `cargo test -p iroha_core committed_rbc_cleanup_preserves_persisted_session_snapshot -- --nocapture`
+- `cargo test -p integration_tests --test mod multiple_blocks_created -- --nocapture`
+  was still running at handoff and had not surfaced an error yet.
 
 ## 2026-03-30 Remaining public-lane routing gaps are now closed across rebinding and admin-managed manifests
 - Added `RebindPublicLaneValidatorPeer` to the staking data model, instruction

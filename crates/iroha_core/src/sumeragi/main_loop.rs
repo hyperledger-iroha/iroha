@@ -6438,6 +6438,239 @@ impl Actor {
             )
     }
 
+    fn committed_edge_conflict_owner_shared_window_emission_token(
+        &self,
+        frontier_height: u64,
+    ) -> Option<u64> {
+        self.canonical_frontier_reanchor_window_gates
+            .get(&(frontier_height, frontier_height))
+            .and_then(|state| state.last_action_window_index)
+    }
+
+    fn committed_edge_conflict_owner_has_local_evidence(&self, frontier_height: u64) -> bool {
+        self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == frontier_height
+                && !matches!(
+                    slot.mode,
+                    FrontierSlotMode::PassiveCatchup | FrontierSlotMode::Finalized
+                )
+                && (slot.body_present
+                    || slot.block_created_seen
+                    || slot.frontier_info.is_some()
+                    || slot.quorum_progress.votes_observed
+                    || slot.quorum_progress.commit_qc_observed
+                    || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc))
+        }) || self
+            .subsystems
+            .propose
+            .proposal_cache
+            .hints
+            .keys()
+            .any(|(height, _)| *height == frontier_height)
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .proposals
+                .keys()
+                .any(|(height, _)| *height == frontier_height)
+            || self
+                .subsystems
+                .propose
+                .proposals_seen
+                .iter()
+                .any(|(height, _)| *height == frontier_height)
+            || self
+                .subsystems
+                .propose
+                .authoritative_block_slots
+                .keys()
+                .any(|(height, _)| *height == frontier_height)
+            || self
+                .subsystems
+                .propose
+                .authoritative_block_frontiers
+                .keys()
+                .any(|(height, _, _)| *height == frontier_height)
+            || self.pending.pending_blocks.values().any(|pending| {
+                !pending.aborted
+                    && pending.validation_status != ValidationStatus::Invalid
+                    && pending.height == frontier_height
+            })
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    !inflight.pending.aborted
+                        && inflight.pending.validation_status != ValidationStatus::Invalid
+                        && inflight.pending.height == frontier_height
+                })
+    }
+
+    fn committed_edge_conflict_owner_present_at_height(&self, frontier_height: u64) -> bool {
+        self.committed_edge_conflict_owner.is_some_and(|owner| {
+            owner.frontier_height == frontier_height
+                && self.committed_height_snapshot() < owner.frontier_height
+        })
+    }
+
+    fn committed_edge_conflict_owner_blocks_height(&self, frontier_height: u64) -> bool {
+        self.committed_edge_conflict_owner_present_at_height(frontier_height)
+            && !self.committed_edge_conflict_owner_has_local_evidence(frontier_height)
+    }
+
+    fn maybe_release_committed_edge_conflict_owner(&mut self, reason: &'static str) -> bool {
+        let Some(owner) = self.committed_edge_conflict_owner else {
+            return false;
+        };
+        let committed_advanced = self.committed_height_snapshot() >= owner.frontier_height;
+        let local_evidence_restored =
+            self.committed_edge_conflict_owner_has_local_evidence(owner.frontier_height);
+        if !committed_advanced && !local_evidence_restored {
+            return false;
+        }
+        self.committed_edge_conflict_owner = None;
+        debug!(
+            frontier_height = owner.frontier_height,
+            committed_height = owner.committed_height,
+            committed_hash = %owner.committed_hash,
+            conflicting_highest_height = owner.conflicting_highest_height,
+            conflicting_highest_view = owner.conflicting_highest_view,
+            conflicting_highest_hash = %owner.conflicting_highest_hash,
+            owner_age_ms = Instant::now()
+                .saturating_duration_since(owner.entered_at)
+                .as_millis(),
+            reason,
+            committed_advanced,
+            local_evidence_restored,
+            "released committed-edge conflict owner"
+        );
+        true
+    }
+
+    fn activate_committed_edge_conflict_owner(
+        &mut self,
+        frontier_height: u64,
+        committed_height: u64,
+        committed_hash: HashOf<BlockHeader>,
+        conflicting_highest: crate::sumeragi::consensus::QcHeaderRef,
+        now: Instant,
+    ) {
+        let dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(frontier_height);
+        let shared_window_emission_token =
+            self.committed_edge_conflict_owner_shared_window_emission_token(frontier_height);
+        let mut owner = self
+            .committed_edge_conflict_owner
+            .filter(|owner| owner.frontier_height == frontier_height)
+            .unwrap_or(CommittedEdgeConflictOwnerState {
+                frontier_height,
+                committed_height,
+                committed_hash,
+                conflicting_highest_height: conflicting_highest.height,
+                conflicting_highest_view: conflicting_highest.view,
+                conflicting_highest_hash: conflicting_highest.subject_block_hash,
+                entered_at: now,
+                last_dependency_progress_at: dependency_progress_at,
+                shared_window_emission_token,
+            });
+        owner.committed_height = committed_height;
+        owner.committed_hash = committed_hash;
+        owner.conflicting_highest_height = conflicting_highest.height;
+        owner.conflicting_highest_view = conflicting_highest.view;
+        owner.conflicting_highest_hash = conflicting_highest.subject_block_hash;
+        owner.last_dependency_progress_at =
+            match (owner.last_dependency_progress_at, dependency_progress_at) {
+                (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
+                (Some(value), None) | (None, Some(value)) => Some(value),
+                (None, None) => None,
+            };
+        if shared_window_emission_token.is_some() {
+            owner.shared_window_emission_token = shared_window_emission_token;
+        }
+        self.committed_edge_conflict_owner = Some(owner);
+        self.frontier_recovery = None;
+    }
+
+    fn refresh_committed_edge_conflict_owner_bookkeeping(&mut self, frontier_height: u64) -> bool {
+        let dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(frontier_height);
+        let shared_window_emission_token =
+            self.committed_edge_conflict_owner_shared_window_emission_token(frontier_height);
+        let Some(owner) = self.committed_edge_conflict_owner.as_mut() else {
+            return false;
+        };
+        if owner.frontier_height != frontier_height {
+            return false;
+        }
+        owner.last_dependency_progress_at =
+            match (owner.last_dependency_progress_at, dependency_progress_at) {
+                (Some(lhs), Some(rhs)) => Some(lhs.max(rhs)),
+                (Some(value), None) | (None, Some(value)) => Some(value),
+                (None, None) => None,
+            };
+        if shared_window_emission_token.is_some() {
+            owner.shared_window_emission_token = shared_window_emission_token;
+        }
+        true
+    }
+
+    fn maybe_emit_committed_edge_conflict_owner_reanchor(
+        &mut self,
+        frontier_height: u64,
+        now: Instant,
+    ) -> bool {
+        if !self.committed_edge_conflict_owner_blocks_height(frontier_height) {
+            return false;
+        }
+        let emitted = self.request_range_pull_from_anchor(
+            frontier_height,
+            "highest_qc_committed_conflict",
+            now,
+        );
+        let _ = self.refresh_committed_edge_conflict_owner_bookkeeping(frontier_height);
+        emitted
+    }
+
+    fn suppress_contiguous_frontier_owned_by_committed_edge_conflict(
+        &mut self,
+        height: u64,
+        view: u64,
+        trigger: &'static str,
+        now: Instant,
+        attempt_reanchor: bool,
+    ) -> bool {
+        let _ = self.maybe_release_committed_edge_conflict_owner(trigger);
+        let frontier_height = self.committed_height_snapshot().saturating_add(1);
+        if height != frontier_height || !self.committed_edge_conflict_owner_blocks_height(height) {
+            return false;
+        }
+        let _ = self.refresh_committed_edge_conflict_owner_bookkeeping(height);
+        let reanchor_emitted =
+            attempt_reanchor && self.maybe_emit_committed_edge_conflict_owner_reanchor(height, now);
+        let owner = self
+            .committed_edge_conflict_owner
+            .expect("committed-edge owner must remain active while suppressing the frontier");
+        debug!(
+            height,
+            view,
+            trigger,
+            committed_height = owner.committed_height,
+            committed_hash = %owner.committed_hash,
+            conflicting_highest_height = owner.conflicting_highest_height,
+            conflicting_highest_view = owner.conflicting_highest_view,
+            conflicting_highest_hash = %owner.conflicting_highest_hash,
+            owner_age_ms = now.saturating_duration_since(owner.entered_at).as_millis(),
+            dependency_progress_seen = owner.last_dependency_progress_at.is_some(),
+            shared_window_emission_token = ?owner.shared_window_emission_token,
+            reanchor_emitted,
+            "suppressing lower-priority contiguous-frontier rotation while committed-edge conflict owner remains unresolved"
+        );
+        true
+    }
+
     fn should_preserve_live_contiguous_frontier_cleanup(
         &self,
         frontier_height: u64,
@@ -6468,6 +6701,16 @@ impl Actor {
         let frontier_height = self.committed_height_snapshot().saturating_add(1);
         if height != frontier_height {
             return false;
+        }
+
+        if self.suppress_contiguous_frontier_owned_by_committed_edge_conflict(
+            height,
+            view,
+            cause.as_str(),
+            now,
+            false,
+        ) {
+            return true;
         }
 
         if self.frontier_slot_passive_catchup_owns_height(height) {
@@ -6809,6 +7052,15 @@ impl Actor {
         view: u64,
         now: Instant,
     ) -> bool {
+        if self.suppress_contiguous_frontier_owned_by_committed_edge_conflict(
+            frontier_height,
+            view,
+            "quorum_timeout",
+            now,
+            false,
+        ) {
+            return false;
+        }
         if self.frontier_slot_passive_catchup_owns_height(frontier_height) {
             return false;
         }
@@ -8608,6 +8860,19 @@ struct CommittedEdgeConflictWindowGateState {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct CommittedEdgeConflictOwnerState {
+    frontier_height: u64,
+    committed_height: u64,
+    committed_hash: HashOf<BlockHeader>,
+    conflicting_highest_height: u64,
+    conflicting_highest_view: u64,
+    conflicting_highest_hash: HashOf<BlockHeader>,
+    entered_at: Instant,
+    last_dependency_progress_at: Option<Instant>,
+    shared_window_emission_token: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct LockRejectedBlockSinkState {
     height: u64,
     block_hash: HashOf<BlockHeader>,
@@ -9099,6 +9364,7 @@ pub(super) struct Actor {
         BTreeMap<(u64, HashOf<BlockHeader>, &'static str), HighestQcForceFetchWindowGateState>,
     committed_edge_conflict_window_gates:
         BTreeMap<(u64, &'static str), CommittedEdgeConflictWindowGateState>,
+    committed_edge_conflict_owner: Option<CommittedEdgeConflictOwnerState>,
     lock_rejected_block_sinks: BTreeMap<(u64, HashOf<BlockHeader>), LockRejectedBlockSinkState>,
     sidecar_observation_suppression_depth: u32,
     qc_missing_payload_range_pull_cooldowns: BTreeMap<(u64, u64, HashOf<BlockHeader>), Instant>,
@@ -15582,6 +15848,7 @@ impl Actor {
             sidecar_mismatch_committed_edge_gates: BTreeMap::new(),
             highest_qc_force_fetch_window_gates: BTreeMap::new(),
             committed_edge_conflict_window_gates: BTreeMap::new(),
+            committed_edge_conflict_owner: None,
             lock_rejected_block_sinks: BTreeMap::new(),
             sidecar_observation_suppression_depth: 0,
             qc_missing_payload_range_pull_cooldowns: BTreeMap::new(),
@@ -20621,7 +20888,7 @@ impl Actor {
         if first_deliver {
             status::record_round_gap_deliver(key.1, key.2, key.0);
         }
-        let delivered_bytes = session.delivered_payload_bytes();
+        let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry();
         let ready_count = session.ready_signatures.len();
         let ready_senders: Vec<_> = session
             .ready_signatures
@@ -27895,6 +28162,11 @@ impl Actor {
             );
             return FrontierRecoveryAdvance::None;
         }
+        if self.suppress_contiguous_frontier_owned_by_committed_edge_conflict(
+            height, view, reason, now, true,
+        ) {
+            return FrontierRecoveryAdvance::None;
+        }
         if self.frontier_slot_passive_catchup_owns_height(height) {
             debug!(
                 height,
@@ -28888,6 +29160,15 @@ impl Actor {
             return false;
         }
         let view = self.phase_tracker.current_view(height).unwrap_or(0);
+        if self.suppress_contiguous_frontier_owned_by_committed_edge_conflict(
+            height,
+            view,
+            "quorum_timeout",
+            now,
+            true,
+        ) {
+            return false;
+        }
         let already_forced = self
             .subsystems
             .propose
@@ -29235,6 +29516,15 @@ impl Actor {
             return false;
         }
         let contiguous_frontier_height = committed_height.saturating_add(1);
+        if self.suppress_contiguous_frontier_owned_by_committed_edge_conflict(
+            height,
+            current_view,
+            "idle_missing_qc",
+            now,
+            true,
+        ) {
+            return false;
+        }
         if height == contiguous_frontier_height
             && self.frontier_slot_passive_catchup_owns_height(height)
         {
@@ -29941,6 +30231,20 @@ impl Actor {
     }
 
     fn trigger_view_change_with_cause(&mut self, height: u64, view: u64, cause: ViewChangeCause) {
+        if matches!(
+            cause,
+            ViewChangeCause::QuorumTimeout
+                | ViewChangeCause::StakeQuorumTimeout
+                | ViewChangeCause::MissingQc
+        ) && self.suppress_contiguous_frontier_owned_by_committed_edge_conflict(
+            height,
+            view,
+            cause.as_str(),
+            Instant::now(),
+            matches!(cause, ViewChangeCause::MissingQc),
+        ) {
+            return;
+        }
         if height == self.committed_height_snapshot().saturating_add(1)
             && matches!(
                 cause,
@@ -30356,7 +30660,9 @@ fn drain_rbc_state_for_block(
     rbc_session_rosters: &mut BTreeMap<super::rbc_store::SessionKey, Vec<PeerId>>,
     rbc_session_roster_sources: &mut BTreeMap<super::rbc_store::SessionKey, RbcRosterSource>,
     rbc_status_handle: &rbc_status::Handle,
+    telemetry: Option<&crate::telemetry::Telemetry>,
     chunk_store: Option<&super::rbc_store::ChunkStore>,
+    purge_persisted_sessions: bool,
 ) -> (RbcLaneTotals, RbcDataspaceTotals) {
     let keys: Vec<_> = rbc_sessions
         .keys()
@@ -30368,15 +30674,17 @@ fn drain_rbc_state_for_block(
         pending_rbc.remove(key);
         rbc_session_rosters.remove(key);
         rbc_session_roster_sources.remove(key);
-        if let Some(store) = chunk_store {
-            if let Err(err) = store.remove(key) {
-                warn!(
-                    ?err,
-                    block = %key.0,
-                    height = key.1,
-                    view = key.2,
-                    "failed to purge persisted RBC session"
-                );
+        if purge_persisted_sessions {
+            if let Some(store) = chunk_store {
+                if let Err(err) = store.remove(key) {
+                    warn!(
+                        ?err,
+                        block = %key.0,
+                        height = key.1,
+                        view = key.2,
+                        "failed to purge persisted RBC session"
+                    );
+                }
             }
         }
     }
@@ -30385,7 +30693,12 @@ fn drain_rbc_state_for_block(
     let mut dataspace_totals: RbcDataspaceTotals = BTreeMap::new();
 
     for key in keys {
-        if let Some(session) = rbc_sessions.remove(&key) {
+        if let Some(mut session) = rbc_sessions.remove(&key) {
+            if let Some(bytes) = session.take_delivered_payload_bytes_for_telemetry() {
+                if let Some(telemetry) = telemetry {
+                    telemetry.add_rbc_payload_bytes_delivered(bytes);
+                }
+            }
             let ready_count = u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX);
             rbc_status_handle.update(
                 rbc_status::Summary {
@@ -32107,6 +32420,7 @@ pub(crate) struct RbcSession {
     deliver_signature: Option<Vec<u8>>,
     invalid: bool,
     recovered_from_disk: bool,
+    delivered_payload_bytes_recorded: bool,
     lane_allocations: Vec<LaneAllocation>,
     dataspace_allocations: Vec<DataspaceAllocation>,
 }
@@ -32162,6 +32476,7 @@ impl RbcSession {
             deliver_signature: None,
             invalid: false,
             recovered_from_disk: false,
+            delivered_payload_bytes_recorded: false,
             lane_allocations: Vec::new(),
             dataspace_allocations: Vec::new(),
         })
@@ -32622,6 +32937,7 @@ impl RbcSession {
         session.leader_signature = leader_signature;
         session.drop_mismatched_chunks();
         session.recovered_from_disk = true;
+        session.delivered_payload_bytes_recorded = session.delivered_payload_bytes().is_some();
         let _ = session.sync_progress_observations(false, None);
         Ok(session)
     }
@@ -32793,6 +33109,15 @@ impl RbcSession {
             total = total.saturating_add(entry.bytes.len() as u64);
         }
         Some(total)
+    }
+
+    pub(crate) fn take_delivered_payload_bytes_for_telemetry(&mut self) -> Option<u64> {
+        if self.delivered_payload_bytes_recorded {
+            return None;
+        }
+        let bytes = self.delivered_payload_bytes()?;
+        self.delivered_payload_bytes_recorded = true;
+        Some(bytes)
     }
 }
 

@@ -508,6 +508,7 @@ impl Actor {
             );
         }
         self.prune_proposals_seen_horizon(state_height);
+        let _ = self.maybe_release_committed_edge_conflict_owner("proposal_hint_seen");
         Ok(())
     }
 
@@ -961,6 +962,7 @@ impl Actor {
             .retain(|(entry_height, entry_view, entry_hash), _| {
                 *entry_height != height || *entry_view != view || *entry_hash == block_hash
             });
+        let _ = self.maybe_release_committed_edge_conflict_owner("authoritative_slot_owner");
     }
 
     pub(super) fn authoritative_slot_frontier_info(
@@ -1030,6 +1032,7 @@ impl Actor {
             );
             self.clear_missing_block_view_change(&block_hash);
         }
+        let _ = self.maybe_release_committed_edge_conflict_owner("frontier_block_created");
     }
 
     pub(super) fn note_proposal_seen(&mut self, height: u64, view: u64, payload_hash: Hash) {
@@ -1061,6 +1064,7 @@ impl Actor {
             );
         }
         self.prune_proposals_seen_horizon(self.last_committed_height);
+        let _ = self.maybe_release_committed_edge_conflict_owner("proposal_seen");
     }
 
     pub(super) fn slot_has_proposal_evidence(&self, height: u64, view: u64) -> bool {

@@ -28,7 +28,8 @@ use iroha_data_model::{
 };
 use iroha_primitives::addr::socket_addr;
 use iroha_test_network::{
-    BlockHeight, Network, NetworkBuilder, NetworkPeer, genesis_factory, once_blocks_sync,
+    BlockHeight, Network, NetworkBuilder, NetworkPeer,
+    ensure_domain_registration_lease_for_network, genesis_factory, once_blocks_sync,
 };
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
@@ -734,7 +735,9 @@ async fn network_starts_with_relay() -> Result<()> {
     }
 
     let client = network.client();
-    let register = Register::domain(Domain::new("relay_net".parse()?));
+    let relay_domain: DomainId = "relay-net".parse()?;
+    ensure_domain_registration_lease_for_network(&network, &relay_domain)?;
+    let register = Register::domain(Domain::new(relay_domain));
     spawn_blocking(move || client.submit(register)).await??;
     network.ensure_blocks(2).await?;
 

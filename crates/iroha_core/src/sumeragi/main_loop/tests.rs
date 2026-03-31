@@ -30392,6 +30392,48 @@ async fn hydrate_rbc_session_from_block_attributes_mismatch_to_sender() {
     harness.shutdown.send();
 }
 
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn hydrate_rbc_session_from_block_records_delivered_payload_metrics_once() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    let height = 9u64;
+    let view = 0u64;
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; 32]));
+    let key = (block_hash, height, view);
+    let epoch = actor.epoch_for_height(height);
+
+    let payload = vec![0xAC; 64];
+    let payload_hash = Hash::new(&payload);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, epoch);
+    session.test_set_delivered(true);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    actor
+        .hydrate_rbc_session_from_block(key, &payload, payload_hash, None)
+        .expect("hydrate");
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64
+    );
+
+    actor
+        .hydrate_rbc_session_from_block(key, &payload, payload_hash, None)
+        .expect("rehydrate");
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64
+    );
+
+    harness.shutdown.send();
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn handle_rbc_ready_rejects_chunk_root_mismatch() {
     let _guard = super::status::rbc_status_test_guard();
@@ -56662,6 +56704,113 @@ async fn committed_rbc_cleanup_waits_for_local_delivery() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn committed_rbc_cleanup_preserves_persisted_session_snapshot() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let mut harness = test_actor_harness_with_rbc_store(4, Some(cfg)).await;
+    let worker_join = harness
+        .actor
+        .attach_rbc_persist_worker()
+        .expect("persist worker");
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let key = Actor::session_key(&block_hash, height, view);
+
+    let payload = vec![0xCD; 32];
+    let payload_hash = Hash::new(&payload);
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload, 0);
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "roster should not be empty");
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+    actor.persist_rbc_session(key, &session);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        actor.poll_rbc_persist_results_inner();
+        if actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_full_sessions
+            .contains(&key)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for committed RBC session persistence"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    let persisted_before = crate::sumeragi::rbc_store::load_session_from_dir(
+        rbc_dir.path(),
+        &key,
+        &actor.chain_hash,
+        &actor.subsystems.da_rbc.rbc.manifest,
+    )
+    .expect("load persisted session before cleanup");
+    assert!(
+        persisted_before.is_some(),
+        "test precondition: committed session should be persisted before cleanup"
+    );
+
+    session.delivered = true;
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    assert!(
+        actor.clean_rbc_sessions_for_committed_block_if_settled(block_hash, height),
+        "delivered committed RBC sessions should still clear runtime state"
+    );
+    assert!(
+        !actor.subsystems.da_rbc.rbc.sessions.contains_key(&key),
+        "runtime RBC session should be removed after committed cleanup"
+    );
+
+    let persisted_after = crate::sumeragi::rbc_store::load_session_from_dir(
+        rbc_dir.path(),
+        &key,
+        &actor.chain_hash,
+        &actor.subsystems.da_rbc.rbc.manifest,
+    )
+    .expect("load persisted session after cleanup");
+    assert!(
+        persisted_after.is_some(),
+        "committed cleanup should retain the persisted session snapshot for restart recovery"
+    );
+
+    harness.shutdown.send();
+    drop(harness);
+    if let Err(err) = worker_join.join() {
+        panic!("persist worker panicked: {err:?}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn proposals_seen_prunes_far_future_heights() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -69902,6 +70051,451 @@ async fn committed_edge_conflict_suppression_purges_descendant_pending_blocks() 
     assert!(
         !actor.pending.pending_blocks.contains_key(&descendant_hash),
         "suppressing committed-edge conflicts should purge queued descendant pending blocks rooted at the conflicting hash"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_edge_conflict_owner_suppresses_idle_and_quorum_timeout_churn() {
+    use std::borrow::Cow;
+
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+
+    let committed_block = sample_block(1, 0, None);
+    let committed_hash = committed_block.hash();
+    actor
+        .kura
+        .store_block(committed_block)
+        .expect("store committed block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(committed_hash);
+
+    let committed_height = 1_u64;
+    let frontier_height = committed_height.saturating_add(1);
+    let conflicting_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let initial_frontier_proposal_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
+    let now = Instant::now();
+    let stalled_at = now
+        .checked_sub(
+            timeout
+                .saturating_add(initial_frontier_proposal_grace)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+
+    let missing_hash = insert_unresolved_missing_request_for_tests(
+        actor,
+        0xA2,
+        frontier_height,
+        2,
+        stalled_at,
+        stalled_at,
+    );
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        0,
+        missing_hash,
+        stalled_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+    actor
+        .phase_tracker
+        .on_view_change(frontier_height, 0, stalled_at);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height: frontier_height,
+        view: 0,
+        since: stalled_at,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+
+    assert!(
+        actor.suppress_committed_edge_conflicting_highest_qc(
+            QcHeaderRef {
+                height: committed_height,
+                view: 0,
+                epoch: actor.epoch_for_height(committed_height),
+                subject_block_hash: conflicting_hash,
+                phase: Phase::Commit,
+            },
+            "test_committed_edge_owner_permissioned",
+        ),
+        "committed-edge conflicting highest QC should activate the dedicated owner"
+    );
+    assert!(
+        actor
+            .committed_edge_conflict_owner
+            .is_some_and(|owner| owner.frontier_height == frontier_height),
+        "contiguous frontier should be explicitly owned after committed-edge cleanup"
+    );
+    assert!(
+        actor.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == frontier_height
+                && matches!(slot.mode, super::FrontierSlotMode::PassiveCatchup)
+        }),
+        "body-missing same-height slot should be demoted to passive metadata while the dedicated owner is active"
+    );
+
+    let initial_reanchor_peers = selected_reanchor_peers_for_height(actor, frontier_height);
+    assert!(
+        !initial_reanchor_peers.is_empty(),
+        "committed-edge cleanup should emit a bounded committed-anchor reanchor"
+    );
+    let initial_token = actor
+        .committed_edge_conflict_owner
+        .and_then(|owner| owner.shared_window_emission_token);
+
+    let before = super::status::snapshot();
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "idle missing_qc should stay suppressed while committed-edge ownership is unresolved"
+    );
+    actor.trigger_view_change_with_cause(frontier_height, 0, ViewChangeCause::QuorumTimeout);
+    actor.trigger_view_change_with_cause(frontier_height, 0, ViewChangeCause::StakeQuorumTimeout);
+    let committed_qc = actor
+        .latest_committed_qc()
+        .expect("committed QC available in harness");
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    assert!(
+        !actor.emit_new_view_vote(frontier_height, 1, committed_qc, &topology),
+        "local NEW_VIEW emission must remain suppressed while the committed-edge owner is unresolved"
+    );
+    let after = super::status::snapshot();
+
+    assert_eq!(
+        actor.phase_tracker.current_view(frontier_height),
+        Some(0),
+        "suppressed committed-edge ownership must keep the contiguous frontier pinned to its canonical view"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "suppressed timeout paths must not install a new forced frontier view"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "idle missing_qc suppression must not record an extra rotation"
+    );
+    assert_eq!(
+        after.view_change_causes.quorum_timeout_total,
+        before.view_change_causes.quorum_timeout_total,
+        "quorum-timeout suppression must not record an extra rotation"
+    );
+    assert!(
+        !actor
+            .vote_log
+            .values()
+            .any(|vote| { vote.phase == Phase::NewView && vote.height == frontier_height }),
+        "suppressed committed-edge ownership must not recreate local NEW_VIEW vote history for the unresolved frontier"
+    );
+    assert_eq!(
+        selected_reanchor_peers_for_height(actor, frontier_height),
+        initial_reanchor_peers,
+        "shared canonical-frontier gating should prevent duplicate committed-anchor reanchors in the same window"
+    );
+    assert_eq!(
+        actor
+            .committed_edge_conflict_owner
+            .map(|owner| owner.shared_window_emission_token),
+        Some(initial_token),
+        "same-window suppression should not advance the shared emission token"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_edge_conflict_owner_keeps_new_view_state_empty_under_repeated_npos_conflicts() {
+    let _cause_guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let committed_block = sample_block(1, 0, None);
+    let committed_hash = committed_block.hash();
+    actor
+        .kura
+        .store_block(committed_block)
+        .expect("store committed block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(committed_hash);
+
+    let committed_height = 1_u64;
+    let frontier_height = committed_height.saturating_add(1);
+    let committed_qc = actor
+        .latest_committed_qc()
+        .expect("committed QC available in harness");
+    let conflicting_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA3; Hash::LENGTH]));
+    let conflicting_qc = QcHeaderRef {
+        height: committed_height,
+        view: committed_qc.view.saturating_add(9),
+        epoch: actor.epoch_for_height(committed_height),
+        subject_block_hash: conflicting_hash,
+        phase: Phase::Commit,
+    };
+    let higher_view = 4_u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let tracker_peer = topology
+        .as_ref()
+        .first()
+        .cloned()
+        .expect("topology should include at least one peer");
+    actor.subsystems.propose.new_view_tracker.record(
+        frontier_height,
+        higher_view,
+        tracker_peer,
+        conflicting_qc,
+    );
+    assert!(
+        actor.emit_new_view_vote(frontier_height, higher_view, committed_qc, &topology),
+        "test setup should seed local NEW_VIEW vote history before committed-edge cleanup"
+    );
+
+    assert!(
+        !actor.observe_new_view_highest_qc(conflicting_qc),
+        "first conflicting NEW_VIEW highest QC should activate committed-edge ownership"
+    );
+    assert!(
+        actor
+            .committed_edge_conflict_owner
+            .is_some_and(|owner| owner.frontier_height == frontier_height),
+        "rejected NPoS NEW_VIEW highest QC should leave the frontier owned by the committed-edge conflict state"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(frontier_height, higher_view),
+        0,
+        "committed-edge cleanup must clear cached NEW_VIEW quorum tracking at the active frontier"
+    );
+    assert!(
+        !actor.vote_log.values().any(|vote| {
+            vote.phase == Phase::NewView
+                && vote.height == frontier_height
+                && vote.view == higher_view
+        }),
+        "committed-edge cleanup must clear local NEW_VIEW vote history at the active frontier"
+    );
+
+    assert!(
+        !actor.observe_new_view_highest_qc(conflicting_qc),
+        "repeated conflicting NEW_VIEW highest QC inputs must stay suppressed while ownership is unresolved"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .propose
+            .new_view_tracker
+            .count(frontier_height, higher_view),
+        0,
+        "repeated conflicting NEW_VIEW inputs must not repopulate frontier NEW_VIEW quorum tracking"
+    );
+    assert!(
+        !actor
+            .vote_log
+            .values()
+            .any(|vote| { vote.phase == Phase::NewView && vote.height == frontier_height }),
+        "repeated conflicting NEW_VIEW inputs must not recreate frontier NEW_VIEW vote history"
+    );
+
+    let before = super::status::snapshot();
+    actor.trigger_view_change_with_cause(frontier_height, 0, ViewChangeCause::MissingQc);
+    assert!(
+        !actor.emit_new_view_vote(frontier_height, 1, committed_qc, &topology),
+        "local NEW_VIEW churn must remain blocked while the committed-edge owner is unresolved"
+    );
+    let after = super::status::snapshot();
+    assert!(
+        actor
+            .phase_tracker
+            .current_view(frontier_height)
+            .is_none_or(|view| view == 0),
+        "repeated NPoS committed-edge conflicts must not reopen local frontier view churn"
+    );
+    assert!(
+        actor.subsystems.propose.forced_view_after_timeout.is_none(),
+        "suppressed committed-edge ownership must not install a forced frontier view"
+    );
+    assert_eq!(
+        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
+        "suppressed NPoS conflicts must not record a missing-qc view change"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_edge_conflict_owner_clears_when_canonical_frontier_evidence_arrives() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_block = sample_block(1, 0, None);
+    let committed_hash = committed_block.hash();
+    actor
+        .kura
+        .store_block(committed_block)
+        .expect("store committed block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(committed_hash);
+
+    let committed_height = 1_u64;
+    let frontier_height = committed_height.saturating_add(1);
+    let conflicting_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA4; Hash::LENGTH]));
+    let stalled_at = Instant::now()
+        .checked_sub(Duration::from_secs(2))
+        .unwrap_or_else(Instant::now);
+    let missing_hash = insert_unresolved_missing_request_for_tests(
+        actor,
+        0xA5,
+        frontier_height,
+        2,
+        stalled_at,
+        stalled_at,
+    );
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        frontier_height,
+        0,
+        missing_hash,
+        stalled_at,
+        actor
+            .frontier_recovery_window()
+            .max(Duration::from_millis(1)),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+
+    assert!(
+        actor.suppress_committed_edge_conflicting_highest_qc(
+            QcHeaderRef {
+                height: committed_height,
+                view: 0,
+                epoch: actor.epoch_for_height(committed_height),
+                subject_block_hash: conflicting_hash,
+                phase: Phase::Commit,
+            },
+            "test_committed_edge_owner_release",
+        ),
+        "committed-edge conflicting highest QC should activate the dedicated owner"
+    );
+    assert!(
+        actor.committed_edge_conflict_owner.is_some(),
+        "owner must remain active before canonical frontier evidence is restored"
+    );
+
+    let view = 0_u64;
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        frontier_height,
+        view,
+        Some(committed_hash),
+    );
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        actor
+            .latest_committed_qc()
+            .expect("committed QC available for canonical proposal"),
+        0,
+        view,
+        actor.epoch_for_height(frontier_height),
+    );
+    actor
+        .handle_proposal(proposal)
+        .expect("canonical proposal should be accepted after committed-edge cleanup");
+    assert!(
+        actor.committed_edge_conflict_owner.is_none(),
+        "canonical proposal evidence should release committed-edge ownership"
+    );
+    assert!(
+        actor.slot_has_proposal_evidence(frontier_height, view),
+        "canonical proposal acceptance should restore proposal evidence for the frontier"
+    );
+    assert!(
+        actor.suppress_committed_edge_conflicting_highest_qc(
+            QcHeaderRef {
+                height: committed_height,
+                view: 1,
+                epoch: actor.epoch_for_height(committed_height),
+                subject_block_hash: conflicting_hash,
+                phase: Phase::Commit,
+            },
+            "test_committed_edge_owner_release_repeat",
+        ),
+        "repeated committed-edge conflicts should stay suppressible after canonical evidence restores the frontier"
+    );
+    assert!(
+        actor.committed_edge_conflict_owner.is_none(),
+        "once canonical frontier evidence exists, repeated conflicts should not reclaim committed-edge ownership"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(frontier_height, view)
+            .is_some(),
+        "repeated committed-edge conflicts must not evict restored canonical proposal evidence"
+    );
+
+    let created = actor.frontier_block_created_for_wire(&block);
+    actor
+        .handle_block_created(created, None)
+        .expect("canonical BlockCreated should hand off to normal exact-slot repair");
+    assert!(
+        actor.authoritative_slot_owner_hash(frontier_height, view) == Some(block.hash())
+            || actor.slot_has_authoritative_payload(frontier_height, view)
+            || actor.frontier_slot_has_active_owner_state_for_view(frontier_height, view),
+        "once canonical local evidence arrives, authoritative exact-slot handling should resume"
     );
 
     harness.shutdown.send();
@@ -99208,6 +99802,12 @@ async fn block_sync_update_contiguous_frontier_requested_with_commit_qc_routes_t
             || actor.block_known_locally(block_hash),
         "committed + 1 block-sync updates with commit evidence must stay on the local frontier candidate instead of handing ownership to block sync"
     );
+    if let Some(pending) = actor.pending.pending_blocks.get(&block_hash) {
+        assert!(
+            pending.commit_qc_observed(),
+            "frontier block-sync updates carrying a commit QC must mark the local pending block ready for commit"
+        );
+    }
 
     harness.shutdown.send();
 }
@@ -101844,6 +102444,8 @@ fn drain_rbc_state_for_block_retains_status_snapshot() {
         &mut BTreeMap::new(),
         &status_handle,
         None,
+        None,
+        true,
     );
 
     assert!(sessions.is_empty());
@@ -101859,6 +102461,68 @@ fn drain_rbc_state_for_block_retains_status_snapshot() {
     assert_eq!(
         dataspace_totals.get(&(LaneId::new(8), DataSpaceId::new(22))),
         Some(&(2, 1, 4, 6))
+    );
+}
+
+#[test]
+fn drain_rbc_state_for_block_records_delivered_payload_metrics_before_cleanup() {
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x56; 32]));
+    let key = (block_hash, 5, 0);
+    let payload = vec![0xAB, 0xCD, 0xEF];
+    let payload_hash = Hash::new(&payload);
+
+    let mut sessions = BTreeMap::new();
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload.clone(), 0);
+    session.test_set_delivered(true);
+    sessions.insert(key, session);
+
+    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+    let telemetry = crate::telemetry::Telemetry::new(Arc::clone(&metrics), true);
+
+    let _ = super::drain_rbc_state_for_block(
+        block_hash,
+        &mut sessions,
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        &rbc_status::register_handle(),
+        Some(&telemetry),
+        None,
+        true,
+    );
+
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64
+    );
+}
+
+#[test]
+fn delivered_payload_metrics_wait_for_complete_payload_and_record_once() {
+    let mut session = RbcSession::test_new(2, None, None, 0);
+    session.ingest_chunk(0, vec![1, 2, 3], None);
+
+    assert!(
+        session.record_deliver(7, vec![0xAA]),
+        "first DELIVER should be recorded"
+    );
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry(),
+        None,
+        "telemetry should wait until all chunks are present"
+    );
+
+    session.ingest_chunk(1, vec![4, 5], None);
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry(),
+        Some(5),
+        "telemetry should report bytes once the payload is complete"
+    );
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry(),
+        None,
+        "telemetry should not double count the same delivered payload"
     );
 }
 

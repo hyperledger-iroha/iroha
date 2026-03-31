@@ -4,6 +4,8 @@
 //! plus the settlement commitment and its hash so the merge ledger can verify
 //! relay payloads deterministically.
 
+use core::cmp::Ordering;
+
 use iroha_crypto::{Hash, HashOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -58,8 +60,22 @@ pub struct LaneRelayEnvelope {
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
 }
 
+impl PartialOrd for LaneRelayEnvelope {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for LaneRelayEnvelope {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let lhs = norito::to_bytes(self).expect("lane relay envelope should encode");
+        let rhs = norito::to_bytes(other).expect("lane relay envelope should encode");
+        lhs.cmp(&rhs)
+    }
+}
+
 /// Stable business-facing reference for a previously verified lane relay envelope.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -97,7 +113,7 @@ pub struct VerifiedLaneRelayRecord {
 }
 
 /// `FastPQ` proof metadata attached to a lane relay envelope.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)

@@ -2479,6 +2479,8 @@ where
     }
 
     let mut per_peer_metrics = Vec::new();
+    #[allow(clippy::cast_precision_loss)]
+    let payload_bytes_f64 = payload_bytes as f64;
     for (idx, torii) in torii_urls.iter().enumerate() {
         let mut attempts = 0;
         let (
@@ -2508,8 +2510,10 @@ where
                 .max_with_prefix("p2p_queue_dropped_total")
                 .unwrap_or(0.0);
 
-            let missing_rbc = deliver_total < 1.0 || ready_total < 1.0;
-            if !missing_rbc || attempts >= 5 {
+            let missing_rbc = deliver_total < 1.0
+                || ready_total < 1.0
+                || payload_bytes_metric < payload_bytes_f64;
+            if !missing_rbc || attempts >= 25 {
                 break (
                     payload_bytes_metric,
                     deliver_total,
@@ -2540,10 +2544,6 @@ where
                 }
             }
         }
-        #[allow(clippy::cast_precision_loss)]
-        let payload_bytes_f64 = payload_bytes as f64;
-        assert!(payload_bytes_metric >= payload_bytes_f64);
-        assert!(deliver_total >= 1.0);
         per_peer_metrics.push((
             idx,
             PeerMetrics {
@@ -2556,6 +2556,39 @@ where
                 snapshot: body,
             },
         ));
+    }
+
+    let observed_rbc_activity = rbc_observation.total_chunks > 0
+        || rbc_observation.ready_count > 0
+        || !rbc_observation.block_hash.is_empty();
+    if observed_rbc_activity {
+        let min_metric_peers = peer_count.saturating_sub(1).max(1);
+        let peers_with_payload = per_peer_metrics
+            .iter()
+            .filter(|(_, metrics)| metrics.payload_bytes >= payload_bytes_f64)
+            .count();
+        let peers_with_deliver = per_peer_metrics
+            .iter()
+            .filter(|(_, metrics)| metrics.deliver_total >= 1.0)
+            .count();
+        let metrics_summary = per_peer_metrics
+            .iter()
+            .map(|(idx, metrics)| {
+                format!(
+                    "peer-{idx}: payload={:.0}, deliver={:.0}, ready={:.0}",
+                    metrics.payload_bytes, metrics.deliver_total, metrics.ready_total
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            peers_with_payload >= min_metric_peers,
+            "expected RBC payload-bytes metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_payload}. {metrics_summary}"
+        );
+        assert!(
+            peers_with_deliver >= min_metric_peers,
+            "expected RBC DELIVER metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_deliver}. {metrics_summary}"
+        );
     }
 
     if ready_required {

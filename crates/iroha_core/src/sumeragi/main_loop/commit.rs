@@ -3974,6 +3974,15 @@ impl Actor {
             );
             return false;
         }
+        if self.suppress_contiguous_frontier_owned_by_committed_edge_conflict(
+            height,
+            view,
+            "new_view_vote",
+            Instant::now(),
+            false,
+        ) {
+            return false;
+        }
         let epoch = self.epoch_for_height(height);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
@@ -5412,16 +5421,18 @@ impl Actor {
         }
     }
 
-    pub(super) fn clean_rbc_sessions_for_block(
+    fn clean_rbc_sessions_for_block_inner(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
+        purge_persisted_sessions: bool,
     ) {
         let chunk_store = if self.ensure_rbc_chunk_store() {
             self.subsystems.da_rbc.rbc.chunk_store.as_ref()
         } else {
             None
         };
+        let telemetry = self.telemetry_handle().cloned();
         let (lane_totals, dataspace_totals) = super::drain_rbc_state_for_block(
             block_hash,
             &mut self.subsystems.da_rbc.rbc.sessions,
@@ -5429,7 +5440,9 @@ impl Actor {
             &mut self.subsystems.da_rbc.rbc.session_rosters,
             &mut self.subsystems.da_rbc.rbc.session_roster_sources,
             &self.subsystems.da_rbc.rbc.status_handle,
+            telemetry.as_ref(),
             chunk_store,
+            purge_persisted_sessions,
         );
         self.deferred_votes.remove(&block_hash);
         self.deferred_qcs
@@ -5470,6 +5483,14 @@ impl Actor {
         self.publish_rbc_backlog_snapshot();
     }
 
+    pub(super) fn clean_rbc_sessions_for_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+    ) {
+        self.clean_rbc_sessions_for_block_inner(block_hash, height, true);
+    }
+
     pub(super) fn should_retain_rbc_sessions_after_commit(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -5500,7 +5521,9 @@ impl Actor {
             return false;
         }
 
-        self.clean_rbc_sessions_for_block(block_hash, height);
+        // Keep the persisted RBC snapshot after commit so lagging peers and restart recovery
+        // can still hydrate block bodies from disk even after runtime session state is drained.
+        self.clean_rbc_sessions_for_block_inner(block_hash, height, false);
         true
     }
 
@@ -5649,6 +5672,7 @@ impl Actor {
         self.prune_stale_missing_requests_for_committed_height(height, now);
         self.clear_missing_block_recovery_for_height(height, now);
         self.clear_sidecar_mismatch_for_height(height);
+        let _ = self.maybe_release_committed_edge_conflict_owner("committed_height_advanced");
         self.prune_missing_block_recovery_state(now);
         self.refresh_p2p_topology();
         if let Some(baseline_roster) = self.recovery_pending_baseline_restore.remove(&height) {

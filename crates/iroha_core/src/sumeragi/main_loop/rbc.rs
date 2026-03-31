@@ -2067,8 +2067,12 @@ impl Actor {
             return Ok(());
         };
         if session.delivered_payload_matches(&payload_hash) {
+            let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry();
             // Restore the session before returning so future RBC traffic can reuse it.
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+            if let (Some(bytes), Some(telemetry)) = (delivered_bytes, self.telemetry_handle()) {
+                telemetry.add_rbc_payload_bytes_delivered(bytes);
+            }
             return Ok(());
         }
 
@@ -2173,7 +2177,11 @@ impl Actor {
         if invalidated {
             self.clear_pending_rbc(&key);
         }
+        let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry();
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+        if let (Some(bytes), Some(telemetry)) = (delivered_bytes, self.telemetry_handle()) {
+            telemetry.add_rbc_payload_bytes_delivered(bytes);
+        }
         if should_update_status {
             self.publish_rbc_backlog_snapshot();
         }
@@ -3902,6 +3910,18 @@ impl Actor {
             );
         }
         self.maybe_emit_rbc_ready(key)?;
+        if accepted_chunk {
+            let delivered_bytes = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get_mut(&key)
+                .and_then(super::RbcSession::take_delivered_payload_bytes_for_telemetry);
+            if let (Some(bytes), Some(telemetry)) = (delivered_bytes, self.telemetry_handle()) {
+                telemetry.add_rbc_payload_bytes_delivered(bytes);
+            }
+        }
         let authoritative_after =
             self.subsystems
                 .da_rbc
@@ -4787,7 +4807,7 @@ impl Actor {
                         session.record_deliver(deliver.sender, deliver.signature.clone());
                     if first_deliver {
                         status::record_round_gap_deliver(key.1, key.2, key.0);
-                        delivered_bytes = session.delivered_payload_bytes();
+                        delivered_bytes = session.take_delivered_payload_bytes_for_telemetry();
                     }
                 }
             }

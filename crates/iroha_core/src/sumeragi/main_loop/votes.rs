@@ -1186,6 +1186,26 @@ impl Actor {
         self.clear_sidecar_mismatch_for_height(highest.height);
         let now = Instant::now();
         let contiguous_height = committed_height.saturating_add(1);
+        let local_frontier_evidence_restored =
+            self.committed_edge_conflict_owner_has_local_evidence(contiguous_height);
+        if local_frontier_evidence_restored {
+            let _ =
+                self.maybe_release_committed_edge_conflict_owner("highest_qc_committed_conflict");
+            warn!(
+                height = highest.height,
+                view = highest.view,
+                committed_height,
+                incoming_hash = %highest.subject_block_hash,
+                committed_hash = %committed_hash,
+                source,
+                obsolete_request_present,
+                obsolete_request_actionable,
+                contiguous_height,
+                local_frontier_evidence_restored,
+                "suppressing committed-edge conflicting highest-QC reference while preserving authoritative local frontier evidence"
+            );
+            return true;
+        }
         let active_frontier_round = self.phase_tracker.round_height == Some(contiguous_height);
         let active_frontier_view = self
             .phase_tracker
@@ -1256,6 +1276,23 @@ impl Actor {
         if forced_view_reset {
             self.subsystems.propose.forced_view_after_timeout = None;
         }
+        let canonical_committed_hash = self
+            .latest_committed_qc()
+            .map(|qc| qc.subject_block_hash)
+            .or_else(|| self.state.latest_block_hash_fast())
+            .unwrap_or(committed_hash);
+        self.activate_committed_edge_conflict_owner(
+            contiguous_height,
+            committed_height,
+            canonical_committed_hash,
+            highest,
+            now,
+        );
+        let passive_metadata_only = self.handoff_contiguous_frontier_to_passive_catchup(
+            contiguous_height,
+            now,
+            "highest_qc_committed_conflict",
+        );
         let recovery_allowed = self.allow_committed_edge_conflict_recovery_action(
             highest.height,
             "highest_qc_committed_conflict",
@@ -1263,32 +1300,14 @@ impl Actor {
         );
         let actionable_frontier_dependency =
             self.frontier_catchup_has_unresolved_dependency(contiguous_height);
-        let storm_view = self
-            .phase_tracker
-            .current_view(contiguous_height)
-            .unwrap_or(0);
-        let recovery_action = if recovery_allowed {
-            self.advance_frontier_recovery(
-                "highest_qc_committed_conflict",
-                contiguous_height,
-                storm_view,
-                false,
-                actionable_frontier_dependency,
-                true,
-                now,
-            )
+        let recovery_reanchor_requested = if recovery_allowed {
+            self.maybe_emit_committed_edge_conflict_owner_reanchor(contiguous_height, now)
         } else {
-            super::FrontierRecoveryAdvance::None
+            false
         };
-        let recovery_reanchor_requested =
-            matches!(recovery_action, super::FrontierRecoveryAdvance::CatchUp);
-        let no_proposal_storm_count =
-            self.same_height_no_proposal_storm_count_for_height(contiguous_height);
-        let no_proposal_storm_force_break_allowed =
-            no_proposal_storm_count >= super::NO_PROPOSAL_STORM_FORCE_BREAK_STREAK;
-        let no_proposal_storm_broken =
-            matches!(recovery_action, super::FrontierRecoveryAdvance::CatchUp)
-                && no_proposal_storm_force_break_allowed;
+        let owner_shared_window_emission_token = self
+            .committed_edge_conflict_owner
+            .and_then(|owner| owner.shared_window_emission_token);
         warn!(
             height = highest.height,
             view = highest.view,
@@ -1301,10 +1320,9 @@ impl Actor {
             recovery_allowed,
             actionable_frontier_dependency,
             contiguous_height,
+            passive_metadata_only,
             recovery_reanchor_requested,
-            no_proposal_storm_count,
-            no_proposal_storm_force_break_allowed,
-            no_proposal_storm_broken,
+            owner_shared_window_emission_token = ?owner_shared_window_emission_token,
             votes_removed,
             qcs_removed,
             qc_tally_removed,

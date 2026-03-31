@@ -1262,6 +1262,53 @@ impl Actor {
                     has_checkpoint = validator_checkpoint.is_some(),
                     "ignoring frontier-lane BlockSyncUpdate sidecars for a locally known block"
                 );
+                if let Some(qc) = incoming_qc.take() {
+                    let world_view = self.state.world_view();
+                    let consensus_mode = super::effective_consensus_mode_for_height_from_world(
+                        &world_view,
+                        block_height,
+                        self.config.consensus_mode,
+                    );
+                    let mode_tag = match consensus_mode {
+                        ConsensusMode::Permissioned => PERMISSIONED_TAG,
+                        ConsensusMode::Npos => NPOS_TAG,
+                    };
+                    let prf_seed = Some(super::prf_seed_for_height_from_world(
+                        &world_view,
+                        &self.common_config.chain,
+                        block_height,
+                    ));
+                    drop(world_view);
+                    let checkpoint = validator_checkpoint.clone().unwrap_or_else(|| {
+                        ValidatorSetCheckpoint::new(
+                            qc.height,
+                            qc.view,
+                            qc.subject_block_hash,
+                            qc.parent_state_root,
+                            qc.post_state_root,
+                            qc.validator_set.clone(),
+                            qc.aggregate.signers_bitmap.clone(),
+                            qc.aggregate.bls_aggregate_signature.clone(),
+                            qc.validator_set_hash_version,
+                            None,
+                        )
+                    });
+                    self.state
+                        .record_commit_roster(&qc, &checkpoint, stake_snapshot.clone());
+                    let topology = super::network_topology::Topology::new(qc.validator_set.clone());
+                    if let Some(work) = self.prepare_known_block_qc_work(
+                        qc,
+                        Arc::new(block),
+                        topology,
+                        stake_snapshot.clone(),
+                        consensus_mode,
+                        mode_tag,
+                        prf_seed,
+                        true,
+                    ) {
+                        self.enqueue_known_block_qc_work(work);
+                    }
+                }
                 return Ok(());
             }
             info!(
@@ -1273,7 +1320,7 @@ impl Actor {
                 has_checkpoint = validator_checkpoint.is_some(),
                 "routing frontier-lane BlockSyncUpdate through BlockCreated owner"
             );
-            return self.handle_block_created_from_block_sync(
+            let result = self.handle_block_created_from_block_sync(
                 super::message::BlockCreated {
                     block,
                     frontier: None,
@@ -1281,6 +1328,58 @@ impl Actor {
                 sender,
                 true,
             );
+            if result.is_ok()
+                && self.block_known_locally(block_hash)
+                && let Some(qc) = incoming_qc.take()
+            {
+                let world_view = self.state.world_view();
+                let consensus_mode = super::effective_consensus_mode_for_height_from_world(
+                    &world_view,
+                    block_height,
+                    self.config.consensus_mode,
+                );
+                let mode_tag = match consensus_mode {
+                    ConsensusMode::Permissioned => PERMISSIONED_TAG,
+                    ConsensusMode::Npos => NPOS_TAG,
+                };
+                let prf_seed = Some(super::prf_seed_for_height_from_world(
+                    &world_view,
+                    &self.common_config.chain,
+                    block_height,
+                ));
+                drop(world_view);
+                let checkpoint = validator_checkpoint.clone().unwrap_or_else(|| {
+                    ValidatorSetCheckpoint::new(
+                        qc.height,
+                        qc.view,
+                        qc.subject_block_hash,
+                        qc.parent_state_root,
+                        qc.post_state_root,
+                        qc.validator_set.clone(),
+                        qc.aggregate.signers_bitmap.clone(),
+                        qc.aggregate.bls_aggregate_signature.clone(),
+                        qc.validator_set_hash_version,
+                        None,
+                    )
+                });
+                self.state
+                    .record_commit_roster(&qc, &checkpoint, stake_snapshot.clone());
+                let topology = super::network_topology::Topology::new(qc.validator_set.clone());
+                if let Some(work) = self.prepare_known_block_qc_work(
+                    qc,
+                    self.local_signed_block_for_hash(block_hash)
+                        .expect("accepted frontier block must be available locally"),
+                    topology,
+                    stake_snapshot.clone(),
+                    consensus_mode,
+                    mode_tag,
+                    prf_seed,
+                    true,
+                ) {
+                    self.enqueue_known_block_qc_work(work);
+                }
+            }
+            return result;
         }
         if frontier_lane_deep_catchup {
             info!(
