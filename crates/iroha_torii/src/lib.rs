@@ -26324,6 +26324,20 @@ pub enum Error {
         /// Human-readable error message.
         message: String,
     },
+    /// Forbidden error for app-facing operation `{code}`: {message}
+    AppForbidden {
+        /// Stable machine-readable code.
+        code: &'static str,
+        /// Human-readable error message.
+        message: String,
+    },
+    /// Not-found error for app-facing operation `{code}`: {message}
+    AppNotFound {
+        /// Stable machine-readable code.
+        code: &'static str,
+        /// Human-readable error message.
+        message: String,
+    },
     /// Conflict error for app-facing operation `{code}`: {message}
     AppConflict {
         /// Stable machine-readable code.
@@ -26513,6 +26527,14 @@ impl IntoResponse for Error {
                     StatusCode::BAD_REQUEST
                 };
                 (status, utils::NoritoBody(payload)).into_response()
+            }
+            Self::AppForbidden { code, message } => {
+                let payload = ErrorEnvelope::new(code, message);
+                (StatusCode::FORBIDDEN, utils::NoritoBody(payload)).into_response()
+            }
+            Self::AppNotFound { code, message } => {
+                let payload = ErrorEnvelope::new(code, message);
+                (StatusCode::NOT_FOUND, utils::NoritoBody(payload)).into_response()
             }
             Self::AppConflict { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
@@ -34518,6 +34540,8 @@ impl Error {
                 ErrorEnvelope::new("queue_error", "queue request rejected")
             }
             Self::AppQueryValidation { code, message } => ErrorEnvelope::new(code, message),
+            Self::AppForbidden { code, message } => ErrorEnvelope::new(code, message),
+            Self::AppNotFound { code, message } => ErrorEnvelope::new(code, message),
             Self::AppConflict { code, message } => ErrorEnvelope::new(code, message),
             Self::ProofRateLimited {
                 endpoint,
@@ -34580,6 +34604,8 @@ impl Error {
             ApiVersion(err) => err.status(),
             AcceptTransaction(_) => StatusCode::BAD_REQUEST,
             AppQueryValidation { .. } => StatusCode::BAD_REQUEST,
+            AppForbidden { .. } => StatusCode::FORBIDDEN,
+            AppNotFound { .. } => StatusCode::NOT_FOUND,
             AppConflict { .. } => StatusCode::CONFLICT,
             LaneLifecycle { .. } => StatusCode::BAD_REQUEST,
             Config(_) | StatusSegmentNotFound(_) => StatusCode::NOT_FOUND,

@@ -4,7 +4,7 @@
 
 use std::{num::NonZeroU64, sync::Arc};
 
-use axum::http::Request;
+use axum::{extract::connect_info::ConnectInfo, http::Request};
 use http::StatusCode;
 use iroha_core::{
     kiso::KisoHandle,
@@ -368,23 +368,32 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
         ),
     ]);
     let body = norito::json::to_json(&body).expect("serialize multisig onboarding request");
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/v1/accounts/onboard/multisig")
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(std::net::SocketAddr::from((
+        [127, 0, 0, 1],
+        0,
+    ))));
+
     let resp = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/accounts/onboard/multisig")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(body))
-                .unwrap(),
-        )
+        .oneshot(req)
         .await
         .expect("multisig onboarding response");
-    assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
+    let status = resp.status();
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .expect("read response body");
+    assert_eq!(
+        status,
+        StatusCode::ACCEPTED,
+        "unexpected body: {}",
+        String::from_utf8_lossy(&bytes)
+    );
     let payload: norito::json::Value =
         norito::json::from_slice(&bytes).expect("decode response json");
     let multisig_id = payload

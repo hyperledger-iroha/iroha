@@ -2,6 +2,21 @@
 
 Last updated: 2026-03-31
 
+Latest sync (2026-03-31 Kotodama GitHub Linguist upstream bundle):
+a self-contained `tools/kotodama_linguist/` bundle now exists with a TextMate
+grammar scaffold, a proposed `languages.yml` entry, a ready-to-fill Linguist
+PR body/checklist, and representative `.ko` samples for eventual upstream
+submission.
+
+Open work for this slice now remains:
+- follow up on the external Kotodama draft submission now that the concrete
+  grammar repo and upstream draft PR exist:
+  - grammar repo: `https://github.com/takemiyamakoto/language-kotodama`
+  - draft PR: `https://github.com/github-linguist/linguist/pull/7889`
+- improve real-world public Kotodama adoption before expecting merge; the
+  authenticated counts gathered during PR prep (`67`/`62`/`2` for the current
+  search queries) remain well below Linguist's published new-language bar.
+
 Latest sync (2026-03-31 `iroha_test_network` genesis bootstrap compile fix):
 the genesis pre-exec bootstrap path now falls back to the default Nexus
 dataspace catalog when no explicit Nexus config is supplied, so

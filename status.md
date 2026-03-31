@@ -2,6 +2,33 @@
 
 Last updated: 2026-03-31
 
+## 2026-03-31 Follow-up: Kotodama GitHub Linguist bundle now exists for upstream syntax-highlighting work
+- Added a self-contained `tools/kotodama_linguist/` bundle so Kotodama can be
+  proposed to `github-linguist/linguist` as an official GitHub language rather
+  than only being force-mapped with repo-local `.gitattributes`.
+- The bundle includes:
+  - a standalone TextMate grammar repo scaffold under
+    `tools/kotodama_linguist/grammar-repo/`
+  - a proposed `languages.yml` entry plus upstream PR checklist/body under
+    `tools/kotodama_linguist/linguist/`
+  - representative `.ko` samples under `tools/kotodama_linguist/samples/`
+- The remaining blocker is external to this checkout: Linguist requires public
+  GitHub usage evidence for `.ko`, and anonymous GitHub code search no longer
+  exposes those counts. The bundle documents the authenticated search queries
+  needed before opening the upstream PR.
+- Since the initial bundle landed, the work has been pushed further externally:
+  - published grammar repo: `https://github.com/takemiyamakoto/language-kotodama`
+  - opened draft upstream Linguist PR:
+    `https://github.com/github-linguist/linguist/pull/7889`
+  - authenticated GitHub API counts captured while drafting the PR were still
+    far below the published new-language threshold (`67` for `seiyaku`, `62`
+    for `kotoage`, `2` for `register_trigger`), so the PR body leaves the
+    adoption checkbox unchecked and treats the submission as a concrete draft
+    rather than claiming acceptance readiness.
+- Verification:
+  - `python3 -m json.tool tools/kotodama_linguist/grammar-repo/package.json`
+  - `python3 -m json.tool tools/kotodama_linguist/grammar-repo/syntaxes/kotodama.tmLanguage.json`
+
 ## 2026-03-31 Follow-up: `iroha_test_network` genesis pre-exec bootstrap handles missing Nexus config again
 - Fixed `crates/iroha_test_network/src/config.rs` so
   `populate_genesis_results(...)` no longer treats
