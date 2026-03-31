@@ -121,6 +121,7 @@ macro_rules! declare_permissions {
 
 declare_permissions! {
     iroha_executor_data_model::permission::peer::{CanManagePeers},
+    iroha_executor_data_model::permission::peer::{CanManageLaneRelayEmergency},
 
     iroha_executor_data_model::permission::domain::{CanRegisterDomain},
     iroha_executor_data_model::permission::domain::{CanUnregisterDomain},
@@ -427,11 +428,27 @@ mod soranet {
 }
 
 mod peer {
-    use iroha_executor_data_model::permission::peer::CanManagePeers;
+    use iroha_executor_data_model::permission::peer::{
+        CanManageLaneRelayEmergency, CanManagePeers,
+    };
 
     use super::*;
 
     impl ValidateGrantRevoke for CanManagePeers {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
+
+    impl ValidateGrantRevoke for CanManageLaneRelayEmergency {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             OnlyGenesis::from(self).validate(authority, host, context)
         }

@@ -2,6 +2,24 @@
 
 Last updated: 2026-03-30
 
+Latest sync (2026-03-30 lane-relay emergency hardening):
+the emergency lane-relay override path is now lane-scoped and peer-bound, with
+dedicated authorization, TTL caps, and live consensus-key checks.
+
+- `SetLaneRelayEmergencyValidators` now targets a single `lane_id` plus a peer
+  roster, requires `CanManageLaneRelayEmergency`, and rejects non-empty
+  overrides without an expiry or with a TTL beyond the configured
+  `nexus.lane_relay_emergency.max_ttl_blocks`;
+- runtime relay admission now validates aggregate QC signers against live peer
+  consensus keys, and emergency peers only fill the missing committee deficit
+  instead of replacing or resampling the whole authoritative roster; and
+- stale emergency overrides are pruned when lanes disappear from the active
+  lane catalog, while account-unregister guards no longer treat peer-based
+  emergency state as an account reference.
+
+Open work for this slice now remains:
+- none.
+
 Latest sync (2026-03-30 nexus lane-relay instruction compile fix):
 `iroha_data_model` now compiles cleanly again with the new Nexus lane-relay
 ISIs. `SetLaneRelayEmergencyValidators` stays on the standard `isi!` path,

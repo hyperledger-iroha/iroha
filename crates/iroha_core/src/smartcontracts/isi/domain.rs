@@ -1741,24 +1741,6 @@ pub mod isi {
                 )
                 .into());
             }
-            if let Some((dataspace_id, _)) = state_transaction
-                .world
-                .lane_relay_emergency_validators
-                .iter()
-                .find(|(_, set)| {
-                    set.validators
-                        .iter()
-                        .any(|validator| validator == &account_id)
-                })
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is present in lane-relay emergency validator override state (dataspace {dataspace_id}); rotate emergency validators first"
-                    )
-                    .into(),
-                )
-                .into());
-            }
             if let Some((proposal_id, _)) = state_transaction
                 .world
                 .governance_proposals
@@ -6556,7 +6538,7 @@ mod tests {
     }
 
     #[test]
-    fn unregister_account_rejects_when_account_has_lane_relay_emergency_validator_state() {
+    fn unregister_account_allows_peer_based_lane_relay_emergency_state() {
         let mut state = test_state();
         let domain_id: DomainId = "owner.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
@@ -6573,26 +6555,29 @@ mod tests {
         .execute(&authority, &mut tx)
         .expect("register account");
 
+        let peer = PeerId::new(
+            KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
         tx.world.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
-                validators: vec![account_id.clone()],
-                expires_at_height: None,
+                peers: vec![peer],
+                expires_at_height: 10,
                 metadata: Metadata::default(),
             },
         );
 
-        let err = Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("account in lane relay emergency validator state must not be unregistered");
-        let err_string = err.to_string();
         assert!(
-            err_string.contains("lane-relay emergency validator override state"),
-            "error should explain lane relay emergency validator conflict: {err_string}"
+            Unregister::account(account_id.clone())
+                .execute(&authority, &mut tx)
+                .is_ok(),
+            "peer-based emergency override state should not block account unregister"
         );
         assert!(
-            tx.world.accounts.get(&account_id).is_some(),
-            "account should remain after rejected unregister"
+            tx.world.accounts.get(&account_id).is_none(),
+            "account should be removed when lane-relay override stores peers instead"
         );
     }
 

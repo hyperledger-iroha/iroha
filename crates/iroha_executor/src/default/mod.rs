@@ -451,7 +451,7 @@ pub mod staking {
 
 /// Permission-checked visitors for Nexus lane relay recovery instructions.
 pub mod nexus {
-    use iroha_executor_data_model::permission::peer::CanManagePeers;
+    use iroha_executor_data_model::permission::peer::CanManageLaneRelayEmergency;
 
     use super::*;
 
@@ -463,7 +463,7 @@ pub mod nexus {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
+        if CanManageLaneRelayEmergency.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
         deny!(executor, "Can't set lane relay emergency validators");
@@ -905,6 +905,7 @@ pub mod domain {
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
             | AnyPermission::CanManagePeers(_)
+            | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageRoles(_)
@@ -1107,6 +1108,7 @@ pub mod account {
             | AnyPermission::CanResolveAccountAlias(_)
             | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanManagePeers(_)
+            | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
@@ -1339,6 +1341,7 @@ pub mod asset_definition {
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
             | AnyPermission::CanManagePeers(_)
+            | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
@@ -2499,6 +2502,7 @@ pub mod trigger {
             }
             AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanManagePeers(_)
+            | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)

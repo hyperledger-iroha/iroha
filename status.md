@@ -2,6 +2,29 @@
 
 Last updated: 2026-03-30
 
+## 2026-03-30 Follow-up: lane-relay emergency overrides are now lane-scoped, peer-bound, and TTL-capped
+- Hardened the Nexus emergency override path so `SetLaneRelayEmergencyValidators`
+  now stores a per-lane peer roster instead of a dataspace-wide account list.
+  The setter requires the dedicated `CanManageLaneRelayEmergency` permission,
+  enforces the configured multisig policy, rejects non-empty rosters without an
+  expiry, caps TTL with `nexus.lane_relay_emergency.max_ttl_blocks`, and only
+  accepts peers that are currently registered and have a live consensus key.
+- Moved runtime relay verification onto peer-bound committees end to end:
+  emergency overrides are keyed by `LaneId`, only fill a committee deficit, do
+  not displace the authoritative base peers, and use live consensus-key PoP
+  checks during aggregate QC verification instead of account-signatory lookup.
+- Added `LaneId` JSON key support for snapshots, pruned stale emergency
+  overrides when lanes disappear from the active lane catalog, and updated the
+  account-unregister guard/tests so peer-based emergency state no longer blocks
+  unrelated account deletion.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core -p iroha_data_model -p iroha_executor -p iroha_executor_data_model -p iroha_schema_gen -p iroha_config --all-targets`
+  - `cargo test -p iroha_config nexus_lane_relay_emergency --test fixtures`
+  - `cargo test -p iroha_core set_lane_relay_emergency_validators --lib`
+  - `cargo test -p iroha_core emergency_override --lib`
+  - `cargo test -p iroha_core unregister_account_allows_peer_based_lane_relay_emergency_state --lib`
+
 ## 2026-03-30 Follow-up: nexus lane-relay instructions compile cleanly again in `iroha_data_model`
 - Fixed `crates/iroha_data_model/src/isi/nexus.rs` so the new Nexus
   instructions match the crate’s macro expectations: the emergency-validator

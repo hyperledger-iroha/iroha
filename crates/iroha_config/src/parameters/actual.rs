@@ -2392,6 +2392,8 @@ pub struct LaneRelayEmergency {
     pub multisig_threshold: NonZeroU16,
     /// Minimum multisig member count required for override transactions.
     pub multisig_members: NonZeroU16,
+    /// Maximum number of blocks an emergency override may remain active.
+    pub max_ttl_blocks: NonZeroU32,
 }
 
 impl Default for LaneRelayEmergency {
@@ -2406,6 +2408,8 @@ impl Default for LaneRelayEmergency {
                 defaults::nexus::lane_relay_emergency::MULTISIG_MEMBERS,
             )
             .expect("default member count must be non-zero"),
+            max_ttl_blocks: NonZeroU32::new(defaults::nexus::lane_relay_emergency::MAX_TTL_BLOCKS)
+                .expect("default emergency TTL must be non-zero"),
         }
     }
 }
