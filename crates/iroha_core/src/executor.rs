@@ -5361,7 +5361,6 @@ mod tests {
     #[test]
     fn bench_profile_runs_without_logger() {
         let authority = ALICE_ID.clone();
-        let authority_domain_id: DomainId = "wonderland".parse().expect("domain id");
         let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([], [account], []);
         let kura = Kura::blank_kura_for_testing();

@@ -11,7 +11,7 @@ use std::{
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
-    client::{Client, UaidManifestQuery, UaidManifestStatus, UaidManifestStatusFilter},
+    client::Client,
     crypto::{Hash, HashOf},
     data_model::{
         Level, ValidationFail,
@@ -76,7 +76,6 @@ const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const COMMITTED_TX_OUTCOME_TIMEOUT: Duration = Duration::from_secs(45);
-const MANIFEST_QUERY_LIMIT: u32 = 16;
 const ALICE_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE * 2;
 const BOB_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE;
 
@@ -650,111 +649,6 @@ fn wait_for_account_permissions_absence(
     Err(eyre!(
         "{context}: timed out waiting for permissions on {account_id} to exclude {forbidden_permissions:?}; last observed {last_observed:?}{suffix}"
     ))
-}
-
-fn wait_for_manifest_status(
-    client: &Client,
-    uaid_literal: &str,
-    dataspace: DataSpaceId,
-    expected_status: UaidManifestStatus,
-    context: &str,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_error = String::new();
-    let mut last_statuses = Vec::<String>::new();
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let query = UaidManifestQuery {
-            dataspace_id: Some(dataspace.as_u64()),
-            status: Some(UaidManifestStatusFilter::All),
-            limit: Some(MANIFEST_QUERY_LIMIT),
-            offset: Some(0),
-        };
-        match client.get_uaid_manifests(uaid_literal, Some(query)) {
-            Ok(response) => {
-                last_statuses = response
-                    .manifests
-                    .iter()
-                    .map(|record| format!("{}:{:?}", record.dataspace_id, record.status))
-                    .collect();
-                if response.manifests.iter().any(|record| {
-                    record.dataspace_id == dataspace.as_u64() && record.status == expected_status
-                }) {
-                    return Ok(());
-                }
-                last_error.clear();
-            }
-            Err(err) => {
-                last_error = err.to_string();
-            }
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-
-    if last_error.is_empty() {
-        Err(eyre!(
-            "{context}: timed out waiting for UAID {uaid_literal} dataspace {} status {:?}; last statuses {last_statuses:?}",
-            dataspace.as_u64(),
-            expected_status
-        ))
-    } else {
-        Err(eyre!(
-            "{context}: timed out waiting for UAID {uaid_literal} dataspace {} status {:?}; last statuses {last_statuses:?}; last error: {last_error}",
-            dataspace.as_u64(),
-            expected_status
-        ))
-    }
-}
-
-fn wait_for_manifest_absence(
-    client: &Client,
-    uaid_literal: &str,
-    dataspace: DataSpaceId,
-    context: &str,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_error = String::new();
-    let mut last_statuses = Vec::<String>::new();
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let query = UaidManifestQuery {
-            dataspace_id: Some(dataspace.as_u64()),
-            status: Some(UaidManifestStatusFilter::All),
-            limit: Some(MANIFEST_QUERY_LIMIT),
-            offset: Some(0),
-        };
-        match client.get_uaid_manifests(uaid_literal, Some(query)) {
-            Ok(response) => {
-                last_statuses = response
-                    .manifests
-                    .iter()
-                    .map(|record| format!("{}:{:?}", record.dataspace_id, record.status))
-                    .collect();
-                if response
-                    .manifests
-                    .iter()
-                    .all(|record| record.dataspace_id != dataspace.as_u64())
-                {
-                    return Ok(());
-                }
-                last_error.clear();
-            }
-            Err(err) => {
-                last_error = err.to_string();
-            }
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-
-    if last_error.is_empty() {
-        Err(eyre!(
-            "{context}: timed out waiting for UAID {uaid_literal} dataspace {} absence; last statuses {last_statuses:?}",
-            dataspace.as_u64()
-        ))
-    } else {
-        Err(eyre!(
-            "{context}: timed out waiting for UAID {uaid_literal} dataspace {} absence; last statuses {last_statuses:?}; last error: {last_error}",
-            dataspace.as_u64()
-        ))
-    }
 }
 
 fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {

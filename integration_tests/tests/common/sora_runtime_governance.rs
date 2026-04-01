@@ -904,7 +904,6 @@ pub async fn setup_runtime_governance_fixture(
     let citizens: Vec<_> = (0..CITIZEN_COUNT)
         .map(|_| gen_account_in("wonderland"))
         .collect();
-    let wonderland_domain: DomainId = "wonderland".parse()?;
     let unique_citizens: BTreeSet<_> = citizens.iter().map(|(id, _)| id.clone()).collect();
     assert_eq!(
         unique_citizens.len(),

@@ -14,6 +14,129 @@ Last updated: 2026-04-01
     passes; the build still emits pre-existing unrelated dead-code warnings in
     `iroha_crypto` and `ivm`
 
+## 2026-04-01 Follow-up: workspace clippy is green again after domainless-account cleanup
+- Cleared the remaining workspace-wide `clippy` backlog caused by stale
+  domain-qualified account assumptions and schema drift across examples,
+  benches, helpers, integration tests, and UI/test telemetry fixtures.
+- Local cleanup in this pass included:
+  - updating stale `ivm` examples/benches/tests to the domainless
+    `AccountId::new(public_key)` shape and removing redundant
+    `AccountId::from(...)` conversions;
+  - removing unused domain scaffolding and restoring missing `#[test]`
+    annotations across `iroha_core`, `integration_tests`, `izanami`, and
+    `mochi-*`; and
+  - refreshing `TelemetryStatus` fixtures to include the new rejection-metrics
+    fields.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo clippy --workspace --all-targets -- -D warnings` (pass)
+
+## 2026-04-01 Follow-up: broad workspace verification is blocked by unrelated domainless-account cleanup
+- Narrow verification for the current Torii/client/CLI slice is green on a
+  fresh isolated target directory:
+  - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_workspace_closeout cargo test -p iroha_data_model --lib --no-run`
+  - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_workspace_closeout cargo test -p iroha_cli --test cli_smoke -- --nocapture`
+- The broad `cargo clippy --workspace --all-targets -- -D warnings` sweep is
+  still red, but the failures are no longer in the Torii/client/pk-deploy work
+  itself. The reruns exposed a wider backlog of domainless-account migration
+  cleanup across unrelated tests, examples, benches, and helper code.
+- Local cleanup completed in this pass:
+  - fixed the `iroha_data_model` test-target import break in
+    `crates/iroha_data_model/src/account.rs`;
+  - updated stale canonical-account assumptions in
+    `crates/iroha_config/tests/fixtures.rs`,
+    `crates/iroha_core/tests/runtime_upgrade_admission.rs`,
+    `crates/iroha_core/tests/ivm_host_mapping.rs`,
+    `crates/iroha_core/tests/isi_gas_fees.rs`,
+    `crates/iroha_core/tests/asset_total_amount.rs`,
+    `crates/iroha_core/benches/queries_client.rs`,
+    `crates/iroha_core/src/smartcontracts/isi/world.rs`,
+    `crates/ivm/tests/axt_host_flow.rs`,
+    `crates/ivm/tests/kotodama_state_map_lowering.rs`,
+    `crates/ivm/tests/wsv_host_{state_syscalls,input_publish_tlv,register_domain_tlv,decode_syscalls,pointer_tlv,nft_unregister_positive}.rs`,
+    `crates/ivm/tests/wsv_host.rs`,
+    `crates/ivm/examples/koto_lending_demo.rs`,
+    `crates/iroha_kagami/samples/codec/generate.rs`,
+    `crates/iroha_kagami/src/localnet.rs`,
+    `crates/connect_norito_bridge/src/lib.rs`,
+    `crates/iroha_js_host/src/lib.rs`, and
+    `crates/iroha/examples/tutorial.rs`.
+- The latest broad clippy replay still stops on unrelated backlog outside this
+  slice, including:
+  - `crates/ivm/examples/koto_domain_demo.rs` still using the removed
+    two-argument `AccountId::new(domain, key)` shape and redundant
+    `AccountId::from(&...)` conversions; and
+  - additional unused domain scaffolding in untouched `iroha_core` modules
+    such as `crates/iroha_core/src/block.rs`,
+    `crates/iroha_core/src/executor.rs`,
+    `crates/iroha_core/src/query/snapshot/mod.rs`,
+    `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`, and
+    `crates/iroha_core/src/smartcontracts/isi/asset.rs`.
+- Because the broad workspace gate is still red, the live SBP/AED artifact
+  rebuild and `scripts/pk topology preflight/deploy/settlement-smoke/verify`
+  run were not started from this tree in this pass.
+
+## 2026-04-01 Follow-up: Nexus local storage auto-budget is now persisted per filesystem
+- `iroha_config` now models Nexus storage budget provenance explicitly:
+  `Unset`, `OperatorExplicit`, or `AutoDerived`.
+- `nexus.storage.local_budget_bytes` remains the canonical aggregate knob, and
+  `nexus.storage.max_disk_usage_bytes` still parses as a legacy
+  operator-explicit alias.
+- When the aggregate budget is unset, `irohad` now requires a writable config
+  path and persists both `nexus.storage.local_budget_bytes` and a new internal
+  `nexus.storage.auto_default` subtable before startup continues.
+- Auto-derived defaults are now computed per filesystem across the effective
+  Nexus storage roots after `--sora` and runtime root defaults are applied:
+  Kura, tiered-state cold/DA storage, SoraFS, SoraNet spool, and SoraVPN
+  spool. Each filesystem gets `80%` of its current available bytes, and the
+  persisted aggregate is the sum of those per-filesystem budgets.
+- Unix hosts group those storage roots by device id, Windows hosts now group
+  them by the canonical volume GUID path returned by Win32, and rarer
+  non-Unix/non-Windows targets fail auto-derivation conservatively instead of
+  falling back to path-string grouping.
+- Later starts reuse the persisted `auto_default` metadata when the stored
+  filesystem identity map still matches the live storage layout. If the layout
+  changes, the daemon regenerates the per-filesystem budgets from current free
+  space and rewrites both the aggregate budget and the internal metadata.
+- Manual operator ownership still works: if `local_budget_bytes` exists without
+  matching `auto_default` metadata, or if the top-level aggregate no longer
+  matches the stored auto-derived aggregate, the daemon treats the budget as
+  operator-explicit and ignores the persisted auto-derived metadata.
+- Startup warnings are now per filesystem and remain non-fatal:
+  auto-derived configs warn when a stored filesystem budget exceeds current
+  free space, and operator-explicit configs warn when the effective assigned
+  component caps on a filesystem exceed current free space.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --lib`
+  - `cargo test -p irohad budget -- --nocapture`
+  - `cargo test -p irohad read_config_regenerates_auto_default_when_storage_layout_changes -- --nocapture`
+
+## 2026-04-01 Follow-up: Nexus account reads are now ingress-independent, caller-visible fanouts
+- Recorded and verified the Nexus account-read routing split already present in
+  `iroha_torii`:
+  - `GET /v1/accounts/{account_id}` now fans out across all configured
+    dataspaces and returns the shared canonical account payload
+    ingress-independently;
+  - `GET/POST /v1/accounts/{account_id}/assets` and
+    `/v1/accounts/{account_id}/assets/query` now merge balances across the
+    caller-visible dataspaces while preserving the existing per-bucket `scope`
+    values; and
+  - dataspace-aware reads (`/permissions`, `/transactions`,
+    `/transactions/query`) now merge only the caller-visible dataspaces and
+    silently omit inaccessible private-dataspace state.
+- Recorded the operator-facing storage-budget knob already wired in
+  `iroha_config`: `nexus.storage.local_budget_bytes` is now the documented
+  node-local storage budget input, while the older
+  `nexus.storage.max_disk_usage_bytes` name remains accepted as a compatibility
+  alias.
+- Updated the public OpenAPI descriptions for the affected account endpoints so
+  the generated contract matches the shipped Torii behavior, and removed stale
+  dead helpers from the Nexus wrong-ingress integration regression harness.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test mod tx_query_cross_dataspace_routing_localnet --no-run`
+
 ## 2026-04-01 Follow-up: `iroha_config` governance account defaults parse under chain overrides again
 - Fixed the `iroha_config` fixture/compile break caused by the removed
   domain-qualified `AccountId::to_account_id(...)` path in

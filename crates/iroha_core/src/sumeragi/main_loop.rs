@@ -3882,6 +3882,7 @@ impl Actor {
         self.vote_roster_cache.remove(&block_hash);
         self.block_signer_cache.remove_block(&block_hash);
         self.pending.pending_fetch_requests.remove(&block_hash);
+        self.pending.pending_block_body_requests.remove(&block_hash);
         self.clear_missing_payload_fetch_window_gate_for_block(height, block_hash);
         self.clear_missing_block_view_change(&block_hash);
         let pending_removed =
@@ -7421,6 +7422,12 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         bytes: u64,
     ) {
+        let telemetry_enabled = self
+            .telemetry_handle()
+            .is_some_and(crate::telemetry::Telemetry::is_enabled);
+        if bytes == 0 || !telemetry_enabled {
+            return;
+        }
         if self
             .subsystems
             .da_rbc
@@ -9882,6 +9889,7 @@ struct PendingBlockState {
     missing_block_requests: BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     pending_fetch_requests:
         BTreeMap<HashOf<BlockHeader>, BTreeMap<PeerId, PendingFetchRequestMeta>>,
+    pending_block_body_requests: BTreeMap<HashOf<BlockHeader>, BTreeSet<PeerId>>,
     pending_processing: Cell<Option<HashOf<BlockHeader>>>,
     pending_processing_parent: Cell<Option<HashOf<BlockHeader>>>,
     last_commit_pipeline_run: Instant,
@@ -15879,6 +15887,7 @@ impl Actor {
                 pending_blocks: BTreeMap::new(),
                 missing_block_requests: BTreeMap::new(),
                 pending_fetch_requests: BTreeMap::new(),
+                pending_block_body_requests: BTreeMap::new(),
                 pending_processing: Cell::new(None),
                 pending_processing_parent: Cell::new(None),
                 last_commit_pipeline_run: initial_commit_pipeline_run,
@@ -23486,6 +23495,7 @@ impl Actor {
             cleared_heights.insert(request_height);
             self.clear_missing_payload_fetch_window_gate_for_block(request_height, hash);
             self.pending.pending_fetch_requests.remove(&hash);
+            self.pending.pending_block_body_requests.remove(&hash);
 
             if self
                 .pending
@@ -25265,6 +25275,7 @@ impl Actor {
                 self.subsystems.validation.inflight.remove(&hash);
                 self.subsystems.validation.superseded_results.remove(&hash);
                 self.pending.pending_fetch_requests.remove(&hash);
+                self.pending.pending_block_body_requests.remove(&hash);
                 self.clean_rbc_sessions_for_block(hash, pending.height);
                 pending_removed = pending_removed.saturating_add(1);
             }
@@ -25496,6 +25507,7 @@ impl Actor {
             self.subsystems.validation.inflight.remove(&hash);
             self.subsystems.validation.superseded_results.remove(&hash);
             self.pending.pending_fetch_requests.remove(&hash);
+            self.pending.pending_block_body_requests.remove(&hash);
             self.clean_rbc_sessions_for_block(hash, height);
         }
 
@@ -25512,6 +25524,7 @@ impl Actor {
                 missing_removed = missing_removed.saturating_add(1);
                 cleared_heights.insert(height);
                 self.pending.pending_fetch_requests.remove(&hash);
+                self.pending.pending_block_body_requests.remove(&hash);
             }
         }
 
@@ -31089,11 +31102,15 @@ fn drain_rbc_state_for_block(
             if let Some(bytes) = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
                 delivered_payload_bytes_fallback,
             ) {
-                let should_record = payload_metric_recorded_sessions
-                    .as_mut()
-                    .is_none_or(|recorded| recorded.insert(key));
-                if should_record && let Some(telemetry) = telemetry {
-                    telemetry.add_rbc_payload_bytes_delivered(bytes);
+                let telemetry_enabled =
+                    telemetry.is_some_and(crate::telemetry::Telemetry::is_enabled);
+                if bytes > 0 && telemetry_enabled {
+                    let should_record = payload_metric_recorded_sessions
+                        .as_mut()
+                        .is_none_or(|recorded| recorded.insert(key));
+                    if should_record && let Some(telemetry) = telemetry {
+                        telemetry.add_rbc_payload_bytes_delivered(bytes);
+                    }
                 }
             }
             let ready_count = u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX);
@@ -33774,7 +33791,7 @@ impl RbcSession {
             return Err(PersistedLoadError::PayloadHashMismatch);
         }
         session.recovered_from_disk = true;
-        session.delivered_payload_bytes_recorded = session.delivered_payload_bytes().is_some();
+        session.delivered_payload_bytes_recorded = false;
         let _ = session.sync_progress_observations(false, None);
         Ok(session)
     }

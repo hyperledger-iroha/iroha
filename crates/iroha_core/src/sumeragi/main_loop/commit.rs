@@ -2023,6 +2023,8 @@ impl Actor {
                     }
                 }
                 self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
+                self.flush_pending_fetch_requests_if_ready(committed_block.as_ref());
+                self.flush_pending_block_body_requests_if_ready(committed_block.as_ref());
                 if pending_height == 1 {
                     // Seed the genesis roster after the block is durably persisted.
                     self.ensure_genesis_commit_roster();
@@ -6258,6 +6260,7 @@ impl Actor {
         self.subsystems.validation.inflight.clear();
         self.subsystems.validation.superseded_results.clear();
         self.pending.pending_fetch_requests.clear();
+        self.pending.pending_block_body_requests.clear();
         self.pending.missing_block_requests.clear();
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);

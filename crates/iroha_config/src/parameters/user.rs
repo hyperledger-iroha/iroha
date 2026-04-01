@@ -33,10 +33,8 @@ use std::{
 };
 
 use error_stack::{Report, ResultExt};
-#[cfg(test)]
-use iroha_config_base::ParameterId;
 use iroha_config_base::{
-    ParameterOrigin, ReadConfig, WithOrigin,
+    ParameterId, ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     env::FromEnvStr,
     read::{ConfigReader, FinalWrap, ReadConfig as ReadConfigTrait},
@@ -11015,7 +11013,7 @@ impl Default for Nexus {
 }
 
 /// User-level configuration container for Nexus storage budgets.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     ///
@@ -11025,7 +11023,9 @@ pub struct NexusStorage {
     pub local_budget_bytes: Option<Bytes<u64>>,
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     #[config(default = "defaults::nexus::storage::MAX_DISK_USAGE_BYTES")]
-    pub max_disk_usage_bytes: Bytes<u64>,
+    pub max_disk_usage_bytes: WithOrigin<Bytes<u64>>,
+    /// Internal persisted metadata backing auto-derived per-filesystem budget defaults.
+    pub auto_default: Option<NexusStorageAutoDefault>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     #[config(default = "defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS")]
     pub budget_enforce_interval_blocks: u64,
@@ -11041,7 +11041,15 @@ impl Default for NexusStorage {
     fn default() -> Self {
         Self {
             local_budget_bytes: None,
-            max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+            max_disk_usage_bytes: WithOrigin::new(
+                defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+                ParameterOrigin::default(ParameterId::from([
+                    "nexus",
+                    "storage",
+                    "max_disk_usage_bytes",
+                ])),
+            ),
+            auto_default: None,
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
@@ -11053,12 +11061,131 @@ impl Default for NexusStorage {
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
-        let max_disk_usage_bytes = self.local_budget_bytes.unwrap_or(self.max_disk_usage_bytes);
+        let (legacy_budget, legacy_origin) = self.max_disk_usage_bytes.into_tuple();
+        let legacy_budget_explicit = !matches!(legacy_origin, ParameterOrigin::Default { .. });
+        let local_budget_bytes = self.local_budget_bytes.map(Bytes::get);
+        let auto_default = self
+            .auto_default
+            .and_then(|auto_default| auto_default.parse(emitter));
+        let max_disk_usage_bytes = Bytes(local_budget_bytes.unwrap_or_else(|| legacy_budget.get()));
+        let budget_source = if legacy_budget_explicit {
+            actual::NexusStorageBudgetSource::OperatorExplicit
+        } else if let Some(local_budget_bytes) = local_budget_bytes {
+            if auto_default.as_ref().is_some_and(|auto_default| {
+                auto_default.matches_aggregate_budget(local_budget_bytes)
+            }) {
+                actual::NexusStorageBudgetSource::AutoDerived
+            } else {
+                actual::NexusStorageBudgetSource::OperatorExplicit
+            }
+        } else {
+            actual::NexusStorageBudgetSource::Unset
+        };
         Some(actual::NexusStorage {
             max_disk_usage_bytes,
+            budget_source,
+            auto_default,
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             disk_budget_weights: weights,
+            configured_component_caps: None,
+        })
+    }
+}
+
+/// Internal persisted auto-derived Nexus storage metadata.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+pub struct NexusStorageAutoDefault {
+    /// Metadata schema version.
+    pub version: u32,
+    /// Aggregate budget derived across all filesystem groups.
+    pub aggregate_budget_bytes: Bytes<u64>,
+    /// Persisted filesystem groups in deterministic order.
+    pub filesystem_groups: Vec<NexusStorageAutoDefaultFilesystemGroup>,
+}
+
+impl NexusStorageAutoDefault {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorageAutoDefault> {
+        let mut filesystem_groups = Vec::with_capacity(self.filesystem_groups.len());
+        let mut seen_components = BTreeSet::new();
+        for filesystem_group in self.filesystem_groups {
+            let filesystem_group = filesystem_group.parse(emitter)?;
+            for component in &filesystem_group.components {
+                if !seen_components.insert(*component) {
+                    emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                        "nexus.storage.auto_default reuses component `{}` across filesystem groups",
+                        component.as_str()
+                    )));
+                    return None;
+                }
+            }
+            filesystem_groups.push(filesystem_group);
+        }
+
+        Some(actual::NexusStorageAutoDefault {
+            version: self.version,
+            aggregate_budget_bytes: self.aggregate_budget_bytes.get(),
+            filesystem_groups,
+        })
+    }
+}
+
+/// Internal persisted auto-derived filesystem group metadata.
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+pub struct NexusStorageAutoDefaultFilesystemGroup {
+    /// Stable filesystem identity recorded when the budget was derived.
+    pub filesystem_id: String,
+    /// Budget derived for the filesystem group.
+    pub budget_bytes: Bytes<u64>,
+    /// Components assigned to the filesystem group.
+    pub components: Vec<String>,
+}
+
+impl NexusStorageAutoDefaultFilesystemGroup {
+    fn parse(
+        self,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::NexusStorageAutoDefaultFilesystemGroup> {
+        if self.filesystem_id.trim().is_empty() {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.storage.auto_default.filesystem_groups[].filesystem_id must not be empty",
+            ));
+            return None;
+        }
+
+        if self.components.is_empty() {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.storage.auto_default.filesystem_groups[].components must not be empty",
+            ));
+            return None;
+        }
+
+        let mut components = Vec::with_capacity(self.components.len());
+        let mut seen_components = BTreeSet::new();
+        for component_label in self.components {
+            let Some(component) = actual::NexusStorageBudgetComponent::from_str(&component_label)
+            else {
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "unknown nexus.storage.auto_default component `{component_label}`"
+                )));
+                return None;
+            };
+            if !seen_components.insert(component) {
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.storage.auto_default filesystem `{}` repeats component `{}`",
+                    self.filesystem_id,
+                    component.as_str()
+                )));
+                return None;
+            }
+            components.push(component);
+        }
+        components.sort_unstable();
+
+        Some(actual::NexusStorageAutoDefaultFilesystemGroup {
+            filesystem_id: self.filesystem_id,
+            budget_bytes: self.budget_bytes.get(),
+            components,
         })
     }
 }
@@ -18301,6 +18428,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         nexus.insert("storage".into(), Value::Table(storage));
 
         let actual = load_root(table);
+        assert_eq!(
+            actual.nexus.storage.budget_source,
+            actual::NexusStorageBudgetSource::OperatorExplicit
+        );
         assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_000);
         assert!(actual.tiered_state.enabled);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 256);
@@ -18327,9 +18458,128 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         nexus.insert("storage".into(), Value::Table(storage));
 
         let actual = load_root(table);
+        assert_eq!(
+            actual.nexus.storage.budget_source,
+            actual::NexusStorageBudgetSource::OperatorExplicit
+        );
         assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
         assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_024);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 128);
+    }
+
+    #[test]
+    fn storage_budget_is_not_explicit_when_left_unset() {
+        let actual = load_root(base_table());
+        assert_eq!(
+            actual.nexus.storage.budget_source,
+            actual::NexusStorageBudgetSource::Unset
+        );
+    }
+
+    #[test]
+    fn storage_local_budget_with_matching_auto_default_parses_as_auto_derived() {
+        let mut table = base_table();
+        let nexus = table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table");
+        let mut storage = Table::new();
+        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
+        storage.insert("max_wsv_memory_bytes".into(), Value::Integer(128));
+        let mut auto_default = Table::new();
+        auto_default.insert(
+            "version".into(),
+            Value::Integer(i64::from(actual::NexusStorageAutoDefault::VERSION)),
+        );
+        auto_default.insert("aggregate_budget_bytes".into(), Value::Integer(1_024));
+        let mut filesystem_group = Table::new();
+        filesystem_group.insert("filesystem_id".into(), Value::String("dev:1".into()));
+        filesystem_group.insert("budget_bytes".into(), Value::Integer(1_024));
+        filesystem_group.insert(
+            "components".into(),
+            Value::Array(vec![
+                Value::String("kura".into()),
+                Value::String("wsv_cold".into()),
+                Value::String("sorafs".into()),
+                Value::String("soranet_spool".into()),
+                Value::String("soravpn_spool".into()),
+            ]),
+        );
+        auto_default.insert(
+            "filesystem_groups".into(),
+            Value::Array(vec![Value::Table(filesystem_group)]),
+        );
+        storage.insert("auto_default".into(), Value::Table(auto_default));
+        nexus.insert("storage".into(), Value::Table(storage));
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual.nexus.storage.budget_source,
+            actual::NexusStorageBudgetSource::AutoDerived
+        );
+        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
+        assert!(
+            actual.nexus.storage.auto_default.is_some(),
+            "matching metadata should be preserved"
+        );
+    }
+
+    #[test]
+    fn storage_local_budget_without_auto_default_is_operator_explicit() {
+        let mut table = base_table();
+        let nexus = table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table");
+        let mut storage = Table::new();
+        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
+        nexus.insert("storage".into(), Value::Table(storage));
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual.nexus.storage.budget_source,
+            actual::NexusStorageBudgetSource::OperatorExplicit
+        );
+    }
+
+    #[test]
+    fn storage_local_budget_mismatch_disables_auto_default_reuse() {
+        let mut table = base_table();
+        let nexus = table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table");
+        let mut storage = Table::new();
+        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
+        let mut auto_default = Table::new();
+        auto_default.insert(
+            "version".into(),
+            Value::Integer(i64::from(actual::NexusStorageAutoDefault::VERSION)),
+        );
+        auto_default.insert("aggregate_budget_bytes".into(), Value::Integer(2_048));
+        let mut filesystem_group = Table::new();
+        filesystem_group.insert("filesystem_id".into(), Value::String("dev:1".into()));
+        filesystem_group.insert("budget_bytes".into(), Value::Integer(2_048));
+        filesystem_group.insert(
+            "components".into(),
+            Value::Array(vec![Value::String("kura".into())]),
+        );
+        auto_default.insert(
+            "filesystem_groups".into(),
+            Value::Array(vec![Value::Table(filesystem_group)]),
+        );
+        storage.insert("auto_default".into(), Value::Table(auto_default));
+        nexus.insert("storage".into(), Value::Table(storage));
+
+        let actual = load_root(table);
+        assert_eq!(
+            actual.nexus.storage.budget_source,
+            actual::NexusStorageBudgetSource::OperatorExplicit
+        );
+        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
     }
 
     #[test]

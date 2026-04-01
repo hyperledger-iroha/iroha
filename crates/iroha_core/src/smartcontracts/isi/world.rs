@@ -11705,7 +11705,7 @@ pub mod isi {
             new_dummy_block_at_height(NonZeroU64::new(2).unwrap())
         }
 
-        fn new_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> NewAccount {
+        fn new_account_in_domain(account_id: &AccountId) -> NewAccount {
             NewAccount::new(account_id.clone())
         }
 
@@ -12352,12 +12352,9 @@ pub mod isi {
             Register::domain(Domain::new(domain_id))
                 .execute(&ALICE_ID, stx)
                 .expect("register wonderland domain");
-            Register::account(new_account_in_domain(
-                &ALICE_ID,
-                &"wonderland".parse().expect("domain id parses"),
-            ))
-            .execute(&ALICE_ID, stx)
-            .expect("register ALICE account");
+            Register::account(new_account_in_domain(&ALICE_ID))
+                .execute(&ALICE_ID, stx)
+                .expect("register ALICE account");
         }
 
         fn configure_global_dataspace(stx: &mut StateTransaction<'_, '_>) {
@@ -12437,7 +12434,6 @@ pub mod isi {
                 members.push(member);
             }
             let policy = MultisigPolicy::new(threshold, members).expect("multisig policy");
-            let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
             let multisig_id = AccountId::new_multisig(policy);
             Register::account(Account::new(multisig_id.clone()))
                 .execute(&ALICE_ID, stx)
@@ -12477,7 +12473,7 @@ pub mod isi {
             let keypair = KeyPair::random();
             let account_id = AccountId::new(keypair.public_key().clone());
             Register::account(
-                new_account_in_domain(&account_id, &domain_id)
+                new_account_in_domain(&account_id)
                     .with_label(Some(account_label.clone()))
                     .with_uaid(Some(uaid)),
             )
@@ -12582,7 +12578,7 @@ pub mod isi {
                 .expect("register holder domain");
 
             let (holder_id, _) = gen_account_in(&holder_domain);
-            Register::account(new_account_in_domain(&holder_id, &holder_domain))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -12648,7 +12644,7 @@ pub mod isi {
                 .expect("register foreign domain");
 
             let (account_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&account_id, &domain_id))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
             stx.world
@@ -12718,7 +12714,7 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let (account_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&account_id, &domain_id))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
             stx.gov.bond_escrow_account = account_id.clone();
@@ -12777,11 +12773,11 @@ pub mod isi {
                 .expect("register holder domain");
 
             let account_id = AccountId::new(KeyPair::random().public_key().clone());
-            Register::account(new_account_in_domain(&account_id, &remove_domain))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup-domain account");
             let (holder_id, _) = gen_account_in(&holder_domain);
-            Register::account(new_account_in_domain(&holder_id, &holder_domain))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -12844,10 +12840,10 @@ pub mod isi {
 
             let (initiator, _) = gen_account_in(&foreign_domain);
             let (counterparty, _) = gen_account_in(&foreign_domain);
-            Register::account(new_account_in_domain(&initiator, &foreign_domain))
+            Register::account(new_account_in_domain(&initiator))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register foreign initiator");
-            Register::account(new_account_in_domain(&counterparty, &foreign_domain))
+            Register::account(new_account_in_domain(&counterparty))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register foreign counterparty");
 
@@ -13325,7 +13321,7 @@ pub mod isi {
                 .expect("register external domain");
 
             let (account_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&account_id, &domain_id))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
@@ -13578,7 +13574,7 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let (account_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&account_id, &domain_id))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
@@ -13789,7 +13785,7 @@ pub mod isi {
 
             let owner_domain: DomainId = "wonderland".parse().expect("domain id parses");
             let (bob_id, _) = gen_account_in(&owner_domain);
-            Register::account(new_account_in_domain(&bob_id, &owner_domain))
+            Register::account(new_account_in_domain(&bob_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register bob account");
 
@@ -13867,13 +13863,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let (target_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&target_id, &domain_id))
+            Register::account(new_account_in_domain(&target_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
             let owner_domain: DomainId = "wonderland".parse().expect("domain id parses");
             let (holder_id, _) = gen_account_in(&owner_domain);
-            Register::account(new_account_in_domain(&holder_id, &owner_domain))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -13952,13 +13948,13 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let (target_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&target_id, &domain_id))
+            Register::account(new_account_in_domain(&target_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
             let owner_domain: DomainId = "wonderland".parse().expect("domain id parses");
             let (holder_id, _) = gen_account_in(&owner_domain);
-            Register::account(new_account_in_domain(&holder_id, &owner_domain))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -14045,12 +14041,12 @@ pub mod isi {
 
             let keypair = KeyPair::random();
             let target_id = AccountId::new(keypair.public_key().clone());
-            Register::account(new_account_in_domain(&target_id, &domain_id))
+            Register::account(new_account_in_domain(&target_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
             let (holder_id, _) = gen_account_in(&holder_domain_id);
-            Register::account(new_account_in_domain(&holder_id, &holder_domain_id))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -14135,12 +14131,12 @@ pub mod isi {
                 .expect("register holder domain");
 
             let (target_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&target_id, &domain_id))
+            Register::account(new_account_in_domain(&target_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
             let (holder_id, _) = gen_account_in(&holder_domain_id);
-            Register::account(new_account_in_domain(&holder_id, &holder_domain_id))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 

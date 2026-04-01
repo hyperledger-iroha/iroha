@@ -3287,7 +3287,6 @@ mod tests {
         stx.nexus.staking.max_validators = nonzero!(1u32);
 
         let (validator, _, _escrow, asset_def_id) = prepare_accounts(&mut stx);
-        let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _kp) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
             .execute(&ALICE_ID, &mut stx)
@@ -3409,7 +3408,6 @@ mod tests {
         let mut stx = state_block.transaction();
         stx.nexus.staking.max_validators = nonzero!(1u32);
 
-        let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _kp) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
             .execute(&ALICE_ID, &mut stx)
@@ -3610,7 +3608,6 @@ mod tests {
         let mut state_block = state.block(block2.as_ref().header());
         let replacement = {
             let mut stx = state_block.transaction();
-            let domain_id: DomainId = "nexus".parse().expect("domain id");
             let (replacement, _kp) = gen_account_in("nexus");
             Register::account(Account::new(replacement.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -4320,7 +4317,6 @@ mod tests {
         setup_tx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         setup_tx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         setup_tx.nexus.staking.slash_sink_account_id = escrow.to_string();
-        let domain_id: DomainId = "nexus".parse().expect("domain id");
         let (replacement, _replacement_kp) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
             .execute(&ALICE_ID, &mut setup_tx)

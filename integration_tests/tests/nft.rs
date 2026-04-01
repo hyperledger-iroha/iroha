@@ -98,7 +98,6 @@ fn nft_lifecycle_scenarios() -> Result<()> {
     // nft_owner_cant_modify_nft
     {
         let (account_id, account_keypair) = gen_account_in("wonderland");
-        let wonderland: DomainId = "wonderland".parse()?;
         let nft_id: NftId = "nft_owner_modify$wonderland".parse()?;
 
         let create_account = Register::account(Account::new(account_id.clone()));
@@ -126,7 +125,6 @@ fn nft_lifecycle_scenarios() -> Result<()> {
     // nft_owner_can_transfer_nft
     {
         let (account_id, account_keypair) = gen_account_in("wonderland");
-        let wonderland: DomainId = "wonderland".parse()?;
         let nft_id: NftId = "nft_owner_transfer$wonderland".parse()?;
 
         let create_account = Register::account(Account::new(account_id.clone()));

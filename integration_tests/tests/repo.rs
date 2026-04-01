@@ -440,7 +440,6 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
         AssetDefinitionId::new("wonderland".parse()?, "bond".parse()?);
 
     let outsider_keypair = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
-    let outsider_domain: DomainId = "wonderland".parse()?;
     let outsider_id = AccountId::new(outsider_keypair.public_key().clone());
 
     let setup_instructions: Vec<InstructionBox> = vec![
@@ -566,7 +565,6 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
 
     let metadata = Metadata::default();
     let custodian_keypair = KeyPair::random();
-    let custodian_domain: DomainId = "wonderland".parse()?;
     let custodian_id = AccountId::new(custodian_keypair.public_key().clone());
     let cash_def_id: AssetDefinitionId =
         AssetDefinitionId::new("wonderland".parse()?, "usd".parse()?);

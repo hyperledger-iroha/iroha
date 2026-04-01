@@ -10390,7 +10390,6 @@ mod tests {
         validator: &AccountId,
         escrow_balance: u64,
     ) -> Result<AssetDefinitionId, eyre::Report> {
-        let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
         Register::account(Account::new(validator.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
         let asset_definition_id = AssetDefinitionId::new(
@@ -12765,8 +12764,6 @@ mod tests {
             let mut state_block = state.block(block_header);
             let mut stx = state_block.transaction();
             let capability = sample_model_host_capability(ALICE_ID.clone(), 1, 1_000_000);
-            let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
-
             Register::account(Account::new(BOB_ID.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Grant::account_permission(

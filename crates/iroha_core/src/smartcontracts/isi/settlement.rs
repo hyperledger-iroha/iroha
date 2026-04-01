@@ -13,11 +13,13 @@ use iroha_data_model::{
         },
     },
     prelude::*,
+    query::error::FindError,
 };
 use iroha_primitives::numeric::{Numeric, NumericSpec};
 
 use super::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
+use crate::smartcontracts::isi::error::MathError;
 #[cfg(feature = "telemetry")]
 use crate::sumeragi::status::SettlementOutcomeKind;
 
@@ -162,8 +164,50 @@ fn ensure_leg_accounts(stx: &StateTransaction<'_, '_>, leg: &SettlementLeg) -> R
     Ok(())
 }
 
+fn resolve_settlement_leg_source_asset_id(
+    stx: &StateTransaction<'_, '_>,
+    leg: &SettlementLeg,
+) -> Result<AssetId, Error> {
+    if let Some(scoped_asset_id) = stx
+        .world
+        .assets
+        .iter()
+        .find_map(|(asset_id, balance)| {
+            (asset_id.definition() == leg.asset_definition_id()
+                && asset_id.account() == leg.from()
+                && balance
+                    .as_ref()
+                    .clone()
+                    .checked_sub(leg.quantity().clone())
+                    .is_some_and(|remaining| !remaining.mantissa().is_negative()))
+            .then(|| asset_id.clone())
+        })
+    {
+        return Ok(scoped_asset_id);
+    }
+
+    stx.world
+        .resolve_asset_id_for_current_scope(&AssetId::new(
+            leg.asset_definition_id().clone(),
+            leg.from().clone(),
+        ))
+}
+
+fn resolve_settlement_leg_asset_ids(
+    stx: &StateTransaction<'_, '_>,
+    leg: &SettlementLeg,
+) -> Result<(AssetId, AssetId), Error> {
+    let withdraw = resolve_settlement_leg_source_asset_id(stx, leg)?;
+    let deposit = AssetId::with_scope(
+        leg.asset_definition_id().clone(),
+        leg.to().clone(),
+        withdraw.scope().clone(),
+    );
+    Ok((withdraw, deposit))
+}
+
 fn ensure_leg_funding(stx: &StateTransaction<'_, '_>, leg: &SettlementLeg) -> Result<(), Error> {
-    let asset_id = AssetId::new(leg.asset_definition_id().clone(), leg.from().clone());
+    let asset_id = resolve_settlement_leg_source_asset_id(stx, leg)?;
     let available = stx
         .world
         .assets
@@ -210,13 +254,9 @@ fn apply_settlement_leg(
     spec: NumericSpec,
 ) -> Result<(), Error> {
     assert_numeric_spec_with(leg.quantity(), spec)?;
-
-    let withdraw = AssetId::new(leg.asset_definition_id().clone(), leg.from().clone());
-    let deposit = AssetId::new(leg.asset_definition_id().clone(), leg.to().clone());
-
-    stx.world
-        .withdraw_numeric_asset(&withdraw, leg.quantity())?;
-    stx.world.deposit_numeric_asset(&deposit, leg.quantity())?;
+    let (withdraw, deposit) = resolve_settlement_leg_asset_ids(stx, leg)?;
+    withdraw_numeric_asset_exact(stx, &withdraw, leg.quantity())?;
+    deposit_numeric_asset_exact(stx, &deposit, leg.quantity())?;
     Ok(())
 }
 
@@ -224,12 +264,48 @@ fn rollback_settlement_leg(
     stx: &mut StateTransaction<'_, '_>,
     leg: &SettlementLeg,
 ) -> Result<(), Error> {
-    let withdraw = AssetId::new(leg.asset_definition_id().clone(), leg.to().clone());
-    let deposit = AssetId::new(leg.asset_definition_id().clone(), leg.from().clone());
+    let (source, destination) = resolve_settlement_leg_asset_ids(stx, leg)?;
+    withdraw_numeric_asset_exact(stx, &destination, leg.quantity())?;
+    deposit_numeric_asset_exact(stx, &source, leg.quantity())?;
+    Ok(())
+}
 
-    stx.world
-        .withdraw_numeric_asset(&withdraw, leg.quantity())?;
-    stx.world.deposit_numeric_asset(&deposit, leg.quantity())?;
+fn withdraw_numeric_asset_exact(
+    stx: &mut StateTransaction<'_, '_>,
+    id: &AssetId,
+    amount: &Numeric,
+) -> Result<(), Error> {
+    let asset = stx
+        .world
+        .assets
+        .get_mut(id)
+        .ok_or_else(|| FindError::Asset(id.clone().into()))?;
+    let quantity: &mut Numeric = &mut *asset;
+    let candidate = quantity
+        .clone()
+        .checked_sub(amount.clone())
+        .ok_or(MathError::NotEnoughQuantity)?;
+    if candidate.mantissa().is_negative() {
+        return Err(MathError::NotEnoughQuantity.into());
+    }
+    *quantity = candidate;
+    if (**asset).is_zero() {
+        assert!(stx.world.remove_asset_and_metadata(id).is_some());
+    }
+    Ok(())
+}
+
+fn deposit_numeric_asset_exact(
+    stx: &mut StateTransaction<'_, '_>,
+    id: &AssetId,
+    amount: &Numeric,
+) -> Result<(), Error> {
+    let dst = stx.world.asset_or_insert_exact(id, Numeric::zero())?;
+    let quantity: &mut Numeric = &mut *dst;
+    *quantity = quantity
+        .clone()
+        .checked_add(amount.clone())
+        .ok_or(MathError::Overflow)?;
     Ok(())
 }
 
@@ -941,6 +1017,217 @@ mod tests {
                 (SettlementLegRole::Delivery, true),
                 (SettlementLegRole::Payment, true)
             ]
+        );
+    }
+
+    #[test]
+    fn dvp_persists_balances_after_commit_in_dataspace_context() {
+        let (state, delivery_def_id, payment_def_id) = settlement_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let dataspace = DataSpaceId::new(7);
+        stx.current_dataspace_id = Some(dataspace);
+        stx.world.current_dataspace_id = Some(dataspace);
+
+        DvpIsi {
+            settlement_id: "dvp_persisted".parse().unwrap(),
+            delivery_leg: SettlementLeg::new(
+                delivery_def_id.clone(),
+                Numeric::from(10u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            payment_leg: SettlementLeg::new(
+                payment_def_id.clone(),
+                Numeric::from(1_000u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            plan: SettlementPlan::new(
+                SettlementExecutionOrder::PaymentThenDelivery,
+                SettlementAtomicity::AllOrNothing,
+            ),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("DvP execution succeeds");
+
+        stx.apply();
+        state_block.commit().expect("commit state block");
+
+        let view = state.view();
+        let world = view.world();
+
+        let alice_bond = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
+        let bob_bond = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
+        let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
+        let bob_cash = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
+
+        assert!(
+            world.asset(&alice_bond).is_err(),
+            "seller delivery balance should stay debited after commit"
+        );
+        assert_eq!(
+            world
+                .asset(&bob_bond)
+                .expect("buyer bond balance")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(10u32),
+        );
+        assert_eq!(
+            world
+                .asset(&alice_cash)
+                .expect("seller cash balance")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(1_000u32),
+        );
+        assert!(
+            world.asset(&bob_cash).is_err(),
+            "payer cash balance should stay debited after commit"
+        );
+    }
+
+    #[test]
+    fn dvp_uses_scoped_source_buckets_for_cross_dataspace_legs() {
+        let ds1 = DataSpaceId::new(7);
+        let ds2 = DataSpaceId::new(11);
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+        let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
+
+        let delivery_def_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            "bond".parse().expect("delivery asset name"),
+        );
+        let payment_def_id = AssetDefinitionId::new(
+            domain_id,
+            "usd".parse().expect("payment asset name"),
+        );
+
+        let delivery_def = {
+            let __asset_definition_id = delivery_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted)
+        .build(&ALICE_ID);
+        let payment_def = {
+            let __asset_definition_id = payment_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .with_balance_scope_policy(iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted)
+        .build(&ALICE_ID);
+
+        let alice_delivery = Asset::new(
+            AssetId::with_scope(
+                delivery_def_id.clone(),
+                ALICE_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(ds1),
+            ),
+            Numeric::from(10u32),
+        );
+        let bob_payment = Asset::new(
+            AssetId::with_scope(
+                payment_def_id.clone(),
+                BOB_ID.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(ds2),
+            ),
+            Numeric::from(1_000u32),
+        );
+
+        let world = World::with_assets(
+            [domain],
+            [alice, bob],
+            [delivery_def, payment_def],
+            [alice_delivery, bob_payment],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.current_dataspace_id = Some(ds1);
+        stx.world.current_dataspace_id = Some(ds1);
+
+        DvpIsi {
+            settlement_id: "dvp_cross_scope".parse().unwrap(),
+            delivery_leg: SettlementLeg::new(
+                delivery_def_id.clone(),
+                Numeric::from(10u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            payment_leg: SettlementLeg::new(
+                payment_def_id.clone(),
+                Numeric::from(1_000u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            plan: SettlementPlan::new(
+                SettlementExecutionOrder::DeliveryThenPayment,
+                SettlementAtomicity::AllOrNothing,
+            ),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("cross-dataspace DvP should resolve each leg against its source bucket");
+
+        let alice_delivery_ds1 = AssetId::with_scope(
+            delivery_def_id.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(ds1),
+        );
+        let bob_delivery_ds1 = AssetId::with_scope(
+            delivery_def_id,
+            BOB_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(ds1),
+        );
+        let alice_payment_ds2 = AssetId::with_scope(
+            payment_def_id.clone(),
+            ALICE_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(ds2),
+        );
+        let bob_payment_ds2 = AssetId::with_scope(
+            payment_def_id,
+            BOB_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(ds2),
+        );
+
+        assert!(
+            stx.world.asset(&alice_delivery_ds1).is_err(),
+            "delivery source bucket should be debited in its original dataspace"
+        );
+        assert_eq!(
+            stx.world
+                .asset(&bob_delivery_ds1)
+                .expect("delivery destination bucket")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(10u32),
+        );
+        assert_eq!(
+            stx.world
+                .asset(&alice_payment_ds2)
+                .expect("payment destination bucket")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(1_000u32),
+        );
+        assert!(
+            stx.world.asset(&bob_payment_ds2).is_err(),
+            "payment source bucket should be debited in its original dataspace"
         );
     }
 

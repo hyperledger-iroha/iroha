@@ -37,6 +37,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
 
 use crate::genesis_bootstrap::GenesisBootstrapper;
 use crate::soracloud_runtime::{
@@ -49,7 +51,11 @@ use fastpq_prover::MetalOverrides;
 use iroha_config::{
     base::{WithOrigin, read::ConfigReader, util::Emitter},
     parameters::{
-        actual::{FastpqExecutionMode, FastpqPoseidonMode, Root as Config},
+        actual::{
+            FastpqExecutionMode, FastpqPoseidonMode, NexusStorageAutoDefault,
+            NexusStorageAutoDefaultFilesystemGroup, NexusStorageBudgetComponent,
+            NexusStorageBudgetSource, Root as Config,
+        },
         user::Root as UserConfig,
     },
 };
@@ -5488,6 +5494,8 @@ mod genesis_key_tests {
 pub enum ConfigError {
     /// Failed to read configuration from disk or environment.
     ReadConfig,
+    /// Failed to persist configuration updates back to disk.
+    WriteConfig,
     /// Configuration contents failed validation.
     ParseConfig,
     /// Failed to load the genesis file.
@@ -5517,6 +5525,8 @@ pub enum ConfigError {
     NexusMultilaneDisabled,
     /// Joining Sora profile is mandatory but missing.
     SoraProfileRequired,
+    /// Nexus auto-derived storage defaults require a writable config path.
+    NexusStorageBudgetPersistenceRequired,
 }
 
 impl core::fmt::Display for ConfigError {
@@ -5526,6 +5536,7 @@ impl core::fmt::Display for ConfigError {
                 f,
                 "Error occurred while reading configuration from file(s) and environment"
             ),
+            Self::WriteConfig => write!(f, "Error occurred while writing configuration to disk"),
             Self::ParseConfig => {
                 write!(f, "Error occurred while validating configuration integrity")
             }
@@ -5565,6 +5576,10 @@ impl core::fmt::Display for ConfigError {
                     "Sora Nexus features require `irohad --sora`; remove the Sora-only config overrides or rerun with the flag"
                 )
             }
+            Self::NexusStorageBudgetPersistenceRequired => write!(
+                f,
+                "Nexus auto-derived storage defaults require a writable configuration file path"
+            ),
         }
     }
 }
@@ -5680,7 +5695,6 @@ pub fn read_config_and_genesis(
     if args.sora {
         config.apply_sora_profile();
     }
-    config.apply_storage_budget();
 
     let sorafs_enabled = config.torii.sorafs_storage.enabled
         || config.torii.sorafs_discovery.discovery_enabled
@@ -5723,6 +5737,11 @@ pub fn read_config_and_genesis(
             )),
         );
     }
+
+    let storage_budget_filesystems =
+        reconcile_nexus_storage_budget(&mut config, args.config.as_deref())?;
+    config.apply_storage_budget();
+    warn_if_nexus_storage_budget_exceeds_available(&config, &storage_budget_filesystems);
 
     if let Some(mode) = args.fastpq_execution_mode {
         config.zk.fastpq.execution_mode = mode;
@@ -5802,6 +5821,652 @@ pub fn read_config_and_genesis(
     config.logger.terminal_colors = args.terminal_colors;
 
     Ok((config, genesis))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StorageBudgetFilesystemProbe {
+    filesystem_id: String,
+    path: PathBuf,
+    available_bytes: u64,
+    components: Vec<NexusStorageBudgetComponent>,
+}
+
+fn reconcile_nexus_storage_budget(
+    config: &mut Config,
+    config_path: Option<&Path>,
+) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
+    if !config.nexus.enabled {
+        return Ok(Vec::new());
+    }
+
+    match config.nexus.storage.budget_source {
+        NexusStorageBudgetSource::Unset => {
+            let config_path = require_nexus_storage_budget_config_path(
+                config_path,
+                "nexus.storage.local_budget_bytes is unset and the daemon must persist an auto-derived filesystem budget before startup can continue",
+            )?;
+            let filesystems = probe_nexus_storage_filesystems(config)?;
+            let auto_default = derive_auto_default_nexus_storage_budget(&filesystems);
+            persist_nexus_auto_storage_budget(config_path, &auto_default)?;
+            activate_auto_default_nexus_storage_budget(config, auto_default.clone());
+            iroha_logger::info!(
+                config_path = %config_path.display(),
+                aggregate_budget_bytes = auto_default.aggregate_budget_bytes,
+                filesystem_groups = auto_default.filesystem_groups.len(),
+                "persisted first-run nexus.storage.local_budget_bytes and auto-derived filesystem metadata into config"
+            );
+            Ok(filesystems)
+        }
+        NexusStorageBudgetSource::OperatorExplicit => {
+            match probe_nexus_storage_filesystems(config) {
+                Ok(filesystems) => Ok(filesystems),
+                Err(error) => {
+                    iroha_logger::warn!(
+                        ?error,
+                        "failed to probe Nexus storage filesystems for warning-only budget checks; continuing with operator-explicit budget"
+                    );
+                    Ok(Vec::new())
+                }
+            }
+        }
+        NexusStorageBudgetSource::AutoDerived => {
+            let filesystems = probe_nexus_storage_filesystems(config)?;
+            let Some(auto_default) = config.nexus.storage.auto_default.clone() else {
+                return Ok(filesystems);
+            };
+            if storage_layout_matches_auto_default(&filesystems, &auto_default) {
+                return Ok(filesystems);
+            }
+
+            let config_path = require_nexus_storage_budget_config_path(
+                config_path,
+                "the Nexus storage filesystem layout changed and the persisted auto-derived budget metadata must be rewritten",
+            )?;
+            let regenerated = derive_auto_default_nexus_storage_budget(&filesystems);
+            persist_nexus_auto_storage_budget(config_path, &regenerated)?;
+            activate_auto_default_nexus_storage_budget(config, regenerated.clone());
+            iroha_logger::info!(
+                config_path = %config_path.display(),
+                aggregate_budget_bytes = regenerated.aggregate_budget_bytes,
+                filesystem_groups = regenerated.filesystem_groups.len(),
+                "regenerated nexus.storage.auto_default after the storage filesystem layout changed"
+            );
+            Ok(filesystems)
+        }
+    }
+}
+
+fn require_nexus_storage_budget_config_path<'a>(
+    config_path: Option<&'a Path>,
+    detail: &'static str,
+) -> ReportResult<&'a Path, ConfigError> {
+    config_path.ok_or_else(|| {
+        Report::new(ConfigError::NexusStorageBudgetPersistenceRequired).attach(detail)
+    })
+}
+
+fn probe_nexus_storage_filesystems(
+    config: &Config,
+) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
+    let mut groups = BTreeMap::<String, StorageBudgetFilesystemProbe>::new();
+
+    for (component, root) in effective_nexus_storage_component_roots(config) {
+        let normalized_root = normalize_budget_probe_path(root).ok_or_else(|| {
+            Report::new(ConfigError::ParseConfig).attach(format!(
+                "failed to resolve Nexus storage root for component `{}` against the current directory",
+                component.as_str()
+            ))
+        })?;
+        let probe_path = nearest_existing_ancestor(&normalized_root).ok_or_else(|| {
+            Report::new(ConfigError::ParseConfig).attach(format!(
+                "failed to find an existing ancestor for Nexus storage root `{}` (component `{}`)",
+                normalized_root.display(),
+                component.as_str()
+            ))
+        })?;
+        let filesystem_id = filesystem_identity(&probe_path).ok_or_else(|| {
+            filesystem_probe_config_error(format!(
+                "failed to determine the filesystem identity for `{}` (component `{}`)",
+                probe_path.display(),
+                component.as_str()
+            ))
+        })?;
+        let available_bytes = filesystem_available_bytes(&probe_path).ok_or_else(|| {
+            filesystem_probe_config_error(format!(
+                "failed to determine available free space for `{}` (component `{}`)",
+                probe_path.display(),
+                component.as_str()
+            ))
+        })?;
+
+        groups
+            .entry(filesystem_id.clone())
+            .and_modify(|group| {
+                if !group.components.contains(&component) {
+                    group.components.push(component);
+                }
+            })
+            .or_insert_with(|| StorageBudgetFilesystemProbe {
+                filesystem_id,
+                path: probe_path,
+                available_bytes,
+                components: vec![component],
+            });
+    }
+
+    let mut groups: Vec<_> = groups.into_values().collect();
+    for group in &mut groups {
+        group.components.sort_unstable();
+    }
+    groups.sort_by_key(|group| {
+        group
+            .components
+            .first()
+            .map_or(usize::MAX, |component| nexus_storage_component_order(*component))
+    });
+    Ok(groups)
+}
+
+fn effective_nexus_storage_component_roots(
+    config: &Config,
+) -> Vec<(NexusStorageBudgetComponent, PathBuf)> {
+    let mut roots = vec![
+        (
+            NexusStorageBudgetComponent::Kura,
+            config.kura.store_dir.resolve_relative_path(),
+        ),
+    ];
+
+    let tiered_state_root = config
+        .tiered_state
+        .da_store_root
+        .clone()
+        .or_else(|| config.tiered_state.cold_store_root.clone())
+        .or_else(|| {
+            (config.nexus.storage.max_wsv_memory_bytes.get() > 0)
+                .then(|| PathBuf::from(iroha_config::parameters::defaults::tiered_state::DEFAULT_COLD_STORE_ROOT))
+        });
+    if let Some(tiered_state_root) = tiered_state_root {
+        roots.push((NexusStorageBudgetComponent::WsvCold, tiered_state_root));
+    }
+
+    roots.push((
+        NexusStorageBudgetComponent::Sorafs,
+        config.torii.sorafs_storage.data_dir.clone(),
+    ));
+    roots.push((
+        NexusStorageBudgetComponent::SoranetSpool,
+        config.streaming.soranet.provision_spool_dir.clone(),
+    ));
+    roots.push((
+        NexusStorageBudgetComponent::SoravpnSpool,
+        config.streaming.soravpn.provision_spool_dir.clone(),
+    ));
+    roots
+}
+
+fn derive_auto_default_nexus_storage_budget(
+    filesystems: &[StorageBudgetFilesystemProbe],
+) -> NexusStorageAutoDefault {
+    let filesystem_groups: Vec<_> = filesystems
+        .iter()
+        .map(|filesystem| NexusStorageAutoDefaultFilesystemGroup {
+            filesystem_id: filesystem.filesystem_id.clone(),
+            budget_bytes: filesystem.available_bytes.saturating_mul(80).saturating_div(100),
+            components: filesystem.components.clone(),
+        })
+        .collect();
+    let aggregate_budget_bytes = filesystem_groups
+        .iter()
+        .fold(0_u64, |total, filesystem| {
+            total.saturating_add(filesystem.budget_bytes)
+        });
+
+    NexusStorageAutoDefault {
+        version: NexusStorageAutoDefault::VERSION,
+        aggregate_budget_bytes,
+        filesystem_groups,
+    }
+}
+
+fn storage_layout_matches_auto_default(
+    filesystems: &[StorageBudgetFilesystemProbe],
+    auto_default: &NexusStorageAutoDefault,
+) -> bool {
+    let mut current_signature: Vec<_> = filesystems
+        .iter()
+        .map(|filesystem| (filesystem.filesystem_id.clone(), filesystem.components.clone()))
+        .collect();
+    let mut persisted_signature: Vec<_> = auto_default
+        .filesystem_groups
+        .iter()
+        .map(|filesystem| (filesystem.filesystem_id.clone(), filesystem.components.clone()))
+        .collect();
+
+    current_signature.sort_by(|left, right| {
+        left.1
+            .first()
+            .map_or(usize::MAX, |component| nexus_storage_component_order(*component))
+            .cmp(
+                &right
+                    .1
+                    .first()
+                    .map_or(usize::MAX, |component| nexus_storage_component_order(*component)),
+            )
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    persisted_signature.sort_by(|left, right| {
+        left.1
+            .first()
+            .map_or(usize::MAX, |component| nexus_storage_component_order(*component))
+            .cmp(
+                &right
+                    .1
+                    .first()
+                    .map_or(usize::MAX, |component| nexus_storage_component_order(*component)),
+            )
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    current_signature == persisted_signature
+}
+
+fn activate_auto_default_nexus_storage_budget(
+    config: &mut Config,
+    auto_default: NexusStorageAutoDefault,
+) {
+    config.nexus.storage.max_disk_usage_bytes =
+        iroha_config::base::util::Bytes(auto_default.aggregate_budget_bytes);
+    config.nexus.storage.budget_source = NexusStorageBudgetSource::AutoDerived;
+    config.nexus.storage.auto_default = Some(auto_default);
+}
+
+fn persist_nexus_auto_storage_budget(
+    config_path: &Path,
+    auto_default: &NexusStorageAutoDefault,
+) -> ReportResult<(), ConfigError> {
+    let config_text = fs::read_to_string(config_path)
+        .attach(format!("read config `{}` before persisting storage budget", config_path.display()))
+        .change_context(ConfigError::WriteConfig)?;
+    let mut config_table: toml::Table = toml::from_str(&config_text)
+        .attach(format!(
+            "parse config `{}` before persisting storage budget",
+            config_path.display()
+        ))
+        .change_context(ConfigError::WriteConfig)?;
+    let persisted_budget = nexus_storage_budget_toml_integer(
+        auto_default.aggregate_budget_bytes,
+        "aggregate Nexus storage budget",
+        config_path,
+    )?;
+    iroha_config::base::toml::Writer::new(&mut config_table).write(
+        ["nexus", "storage", "local_budget_bytes"],
+        persisted_budget,
+    );
+    let auto_default_table = nexus_storage_auto_default_to_toml(auto_default, config_path)?;
+    iroha_config::base::toml::Writer::new(&mut config_table).write(
+        ["nexus", "storage", "auto_default"],
+        toml::Value::Table(auto_default_table),
+    );
+    let encoded = toml::to_string(&config_table)
+        .attach(format!(
+            "encode config `{}` after persisting storage budget",
+            config_path.display()
+        ))
+        .change_context(ConfigError::WriteConfig)?;
+    write_bytes_atomic(config_path, encoded.as_bytes())
+        .attach(format!(
+            "write config `{}` after persisting storage budget",
+            config_path.display()
+        ))
+        .change_context(ConfigError::WriteConfig)?;
+    Ok(())
+}
+
+fn nexus_storage_auto_default_to_toml(
+    auto_default: &NexusStorageAutoDefault,
+    config_path: &Path,
+) -> ReportResult<toml::Table, ConfigError> {
+    let mut table = toml::Table::new();
+    table.insert(
+        "version".to_string(),
+        toml::Value::Integer(i64::from(auto_default.version)),
+    );
+    table.insert(
+        "aggregate_budget_bytes".to_string(),
+        toml::Value::Integer(nexus_storage_budget_toml_integer(
+            auto_default.aggregate_budget_bytes,
+            "aggregate Nexus storage budget",
+            config_path,
+        )?),
+    );
+
+    let filesystem_groups = auto_default
+        .filesystem_groups
+        .iter()
+        .map(|filesystem| {
+            let mut filesystem_table = toml::Table::new();
+            filesystem_table.insert(
+                "filesystem_id".to_string(),
+                toml::Value::String(filesystem.filesystem_id.clone()),
+            );
+            filesystem_table.insert(
+                "budget_bytes".to_string(),
+                toml::Value::Integer(nexus_storage_budget_toml_integer(
+                    filesystem.budget_bytes,
+                    "filesystem Nexus storage budget",
+                    config_path,
+                )?),
+            );
+            filesystem_table.insert(
+                "components".to_string(),
+                toml::Value::Array(
+                    filesystem
+                        .components
+                        .iter()
+                        .map(|component| toml::Value::String(component.as_str().to_owned()))
+                        .collect(),
+                ),
+            );
+            Ok(toml::Value::Table(filesystem_table))
+        })
+        .collect::<ReportResult<Vec<_>, ConfigError>>()?;
+    table.insert(
+        "filesystem_groups".to_string(),
+        toml::Value::Array(filesystem_groups),
+    );
+
+    Ok(table)
+}
+
+fn nexus_storage_budget_toml_integer(
+    budget_bytes: u64,
+    label: &'static str,
+    config_path: &Path,
+) -> ReportResult<i64, ConfigError> {
+    i64::try_from(budget_bytes)
+        .attach(format!(
+            "{label} {budget_bytes} does not fit into TOML integer range for `{}`",
+            config_path.display()
+        ))
+        .change_context(ConfigError::WriteConfig)
+}
+
+fn warn_if_nexus_storage_budget_exceeds_available(
+    config: &Config,
+    filesystems: &[StorageBudgetFilesystemProbe],
+) {
+    if filesystems.is_empty() || !config.nexus.enabled {
+        return;
+    }
+
+    match config.nexus.storage.budget_source {
+        NexusStorageBudgetSource::Unset => {}
+        NexusStorageBudgetSource::AutoDerived => {
+            let Some(auto_default) = config.nexus.storage.auto_default.as_ref() else {
+                return;
+            };
+            for filesystem in filesystems {
+                let Some(budget_bytes) =
+                    auto_default_budget_shortfall(auto_default, filesystem)
+                else {
+                    continue;
+                };
+                iroha_logger::warn!(
+                    filesystem_id = %filesystem.filesystem_id,
+                    path = %filesystem.path.display(),
+                    components = ?nexus_storage_component_labels(&filesystem.components),
+                    budget_bytes,
+                    available_bytes = filesystem.available_bytes,
+                    "stored auto-derived Nexus filesystem budget exceeds currently available free disk space"
+                );
+            }
+        }
+        NexusStorageBudgetSource::OperatorExplicit => {
+            for filesystem in filesystems {
+                let Some(assigned_budget) =
+                    operator_explicit_budget_shortfall(config, filesystem)
+                else {
+                    continue;
+                };
+                iroha_logger::warn!(
+                    filesystem_id = %filesystem.filesystem_id,
+                    path = %filesystem.path.display(),
+                    components = ?nexus_storage_component_labels(&filesystem.components),
+                    assigned_budget_bytes = assigned_budget,
+                    available_bytes = filesystem.available_bytes,
+                    "effective operator-configured Nexus storage caps exceed currently available free disk space on a filesystem"
+                );
+            }
+        }
+    }
+}
+
+fn auto_default_budget_shortfall(
+    auto_default: &NexusStorageAutoDefault,
+    filesystem: &StorageBudgetFilesystemProbe,
+) -> Option<u64> {
+    let stored_group = auto_default.filesystem_groups.iter().find(|stored_group| {
+        stored_group.filesystem_id == filesystem.filesystem_id
+            && stored_group.components == filesystem.components
+    })?;
+    (stored_group.budget_bytes > filesystem.available_bytes).then_some(stored_group.budget_bytes)
+}
+
+fn operator_explicit_budget_shortfall(
+    config: &Config,
+    filesystem: &StorageBudgetFilesystemProbe,
+) -> Option<u64> {
+    let assigned_budget = effective_assigned_budget_for_filesystem(config, filesystem);
+    (assigned_budget > filesystem.available_bytes).then_some(assigned_budget)
+}
+
+fn effective_assigned_budget_for_filesystem(
+    config: &Config,
+    filesystem: &StorageBudgetFilesystemProbe,
+) -> u64 {
+    filesystem
+        .components
+        .iter()
+        .fold(0_u64, |total, component| {
+            let component_budget = match component {
+                NexusStorageBudgetComponent::Kura => config.kura.max_disk_usage_bytes.get(),
+                NexusStorageBudgetComponent::WsvCold => config.tiered_state.max_cold_bytes.get(),
+                NexusStorageBudgetComponent::Sorafs => {
+                    config.torii.sorafs_storage.max_capacity_bytes.get()
+                }
+                NexusStorageBudgetComponent::SoranetSpool => {
+                    config.streaming.soranet.provision_spool_max_bytes.get()
+                }
+                NexusStorageBudgetComponent::SoravpnSpool => {
+                    config.streaming.soravpn.provision_spool_max_bytes.get()
+                }
+            };
+            total.saturating_add(component_budget)
+        })
+}
+
+fn nexus_storage_component_labels(
+    components: &[NexusStorageBudgetComponent],
+) -> Vec<&'static str> {
+    components.iter().map(|component| component.as_str()).collect()
+}
+
+fn nexus_storage_component_order(component: NexusStorageBudgetComponent) -> usize {
+    NexusStorageBudgetComponent::ORDER
+        .iter()
+        .position(|ordered| ordered == &component)
+        .unwrap_or(usize::MAX)
+}
+
+fn normalize_budget_probe_path(path: PathBuf) -> Option<PathBuf> {
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        std::env::current_dir().ok().map(|cwd| cwd.join(path))
+    }
+}
+
+fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    let mut current = path.to_path_buf();
+    loop {
+        if current.exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path must have a parent"))?;
+    fs::create_dir_all(parent)?;
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, bytes)?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+fn filesystem_probe_config_error(detail: String) -> Report<ConfigError> {
+    let report = Report::new(ConfigError::ParseConfig).attach(detail);
+    #[cfg(not(any(unix, target_os = "windows")))]
+    let report = report.attach("Nexus storage filesystem probing is unsupported on this platform");
+    report
+}
+
+#[cfg(unix)]
+fn filesystem_identity(path: &Path) -> Option<String> {
+    let stats = rustix::fs::stat(path).ok()?;
+    Some(format!("dev:{}", stats.st_dev))
+}
+
+#[cfg(target_os = "windows")]
+fn filesystem_identity(path: &Path) -> Option<String> {
+    let volume_mount_point = windows_volume_mount_point(path)?;
+    let volume_name = windows_volume_name_for_mount_point(&volume_mount_point)?;
+    Some(normalize_windows_volume_identity(&volume_name))
+}
+
+#[cfg(unix)]
+fn filesystem_available_bytes(path: &Path) -> Option<u64> {
+    let stats = rustix::fs::statvfs(path).ok()?;
+    let fragment_size = stats.f_frsize.max(stats.f_bsize);
+    Some(stats.f_bavail.saturating_mul(fragment_size))
+}
+
+#[cfg(target_os = "windows")]
+fn filesystem_available_bytes(path: &Path) -> Option<u64> {
+    let wide_path = windows_wide_path(path);
+    let mut free_bytes_available = 0_u64;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide_path.as_ptr(),
+            &mut free_bytes_available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free_bytes_available)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn filesystem_available_bytes(_path: &Path) -> Option<u64> {
+    None
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn filesystem_identity(_path: &Path) -> Option<String> {
+    None
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_volume_mount_point(volume_mount_point: &str) -> String {
+    let mut normalized = volume_mount_point.replace('/', "\\");
+    if !normalized.ends_with('\\') {
+        normalized.push('\\');
+    }
+    normalized
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_volume_identity(volume_name: &str) -> String {
+    let mut normalized = normalize_windows_volume_mount_point(volume_name);
+    normalized.make_ascii_lowercase();
+    format!("volume:{normalized}")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_string_from_wide_buffer(buffer: &[u16]) -> Option<String> {
+    let end = buffer.iter().position(|&unit| unit == 0)?;
+    Some(String::from_utf16_lossy(&buffer[..end]))
+}
+
+#[cfg(target_os = "windows")]
+const WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN: usize = 32_768;
+
+#[cfg(target_os = "windows")]
+#[allow(non_snake_case)]
+extern "system" {
+    fn GetDiskFreeSpaceExW(
+        lp_directory_name: *const u16,
+        lp_free_bytes_available_to_caller: *mut u64,
+        lp_total_number_of_bytes: *mut u64,
+        lp_total_number_of_free_bytes: *mut u64,
+    ) -> i32;
+    fn GetVolumeNameForVolumeMountPointW(
+        lpsz_volume_mount_point: *const u16,
+        lpsz_volume_name: *mut u16,
+        cch_buffer_length: u32,
+    ) -> i32;
+    fn GetVolumePathNameW(
+        lpsz_file_name: *const u16,
+        lpsz_volume_path_name: *mut u16,
+        cch_buffer_length: u32,
+    ) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+fn windows_wide_path(path: &Path) -> Vec<u16> {
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_wide_string(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_query_volume_string<F>(mut query: F) -> Option<String>
+where
+    F: FnMut(*mut u16, u32) -> i32,
+{
+    let mut buffer = vec![0_u16; WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN];
+    (query(buffer.as_mut_ptr(), buffer.len() as u32) != 0)
+        .then(|| windows_string_from_wide_buffer(&buffer))
+        .flatten()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_volume_mount_point(path: &Path) -> Option<String> {
+    let wide_path = windows_wide_path(path);
+    windows_query_volume_string(|buffer, len| unsafe {
+        GetVolumePathNameW(wide_path.as_ptr(), buffer, len)
+    })
+    .map(|mount_point| normalize_windows_volume_mount_point(&mount_point))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_volume_name_for_mount_point(volume_mount_point: &str) -> Option<String> {
+    let wide_mount_point = windows_wide_string(volume_mount_point);
+    windows_query_volume_string(|buffer, len| unsafe {
+        GetVolumeNameForVolumeMountPointW(wide_mount_point.as_ptr(), buffer, len)
+    })
 }
 
 pub(crate) fn apply_ivm_acceleration_config(
@@ -8934,13 +9599,18 @@ mod tests {
             table
         }
 
-        fn load_config_with_overrides<F>(mut adjust: F) -> eyre::Result<(Config, tempfile::TempDir)>
+        fn load_config_with_overrides<F>(
+            mut adjust: F,
+        ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>
         where
             F: FnMut(&mut toml::Table, &KeyPair),
         {
             let genesis_key_pair = KeyPair::random();
+            let chain_discriminant = iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT;
             let manifest_json = norito::json!({
                 "chain": "chain",
+                "chain_discriminant": chain_discriminant,
+                "executor": null,
                 "ivm_dir": ".",
                 "consensus_mode": "Permissioned",
                 "transactions": [
@@ -8987,7 +9657,7 @@ mod tests {
             std::fs::write(&executor_path, "")?;
 
             let (config, _genesis) = read_config_and_genesis(&Args {
-                config: Some(config_path),
+                config: Some(config_path.clone()),
                 genesis_manifest_json: None,
                 terminal_colors: false,
                 trace_config: false,
@@ -9001,7 +9671,42 @@ mod tests {
             })
             .map_err(|report| eyre::eyre!("{report:?}"))?;
 
-            Ok((config, dir))
+            Ok((config, dir, config_path))
+        }
+
+        fn parse_config_with_overrides<F>(
+            mut adjust: F,
+        ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>
+        where
+            F: FnMut(&mut toml::Table, &KeyPair),
+        {
+            let genesis_key_pair = KeyPair::random();
+            let mut config = config_factory(genesis_key_pair.public_key());
+            iroha_config::base::toml::Writer::new(&mut config)
+                .write(["kura", "store_dir"], "../storage")
+                .write(["snapshot", "store_dir"], "../snapshots")
+                .write(["dev_telemetry", "out_file"], "../logs/telemetry");
+
+            adjust(&mut config, &genesis_key_pair);
+
+            let dir = tempfile::tempdir()?;
+            let config_dir = dir.path().join("config");
+            std::fs::create_dir_all(&config_dir)?;
+
+            let config_path = config_dir.join("config.toml");
+            std::fs::write(&config_path, toml::to_string(&config)?)?;
+
+            let mut reader = ConfigReader::new();
+            reader = reader
+                .read_toml_with_extends(&config_path)
+                .map_err(|report| eyre::eyre!("{report:?}"))?;
+            let config = reader
+                .read_and_complete::<UserConfig>()
+                .map_err(|report| eyre::eyre!("{report:?}"))?
+                .parse()
+                .map_err(|report| eyre::eyre!("{report:?}"))?;
+
+            Ok((config, dir, config_path))
         }
 
         #[test]
@@ -9009,8 +9714,11 @@ mod tests {
             // Given
 
             let genesis_key_pair = KeyPair::random();
+            let chain_discriminant = iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT;
             let manifest_json = norito::json!({
                 "chain": "chain",
+                "chain_discriminant": chain_discriminant,
+                "executor": null,
                 "ivm_dir": ".",
                 "consensus_mode": "Permissioned",
                 "transactions": [
@@ -9102,6 +9810,320 @@ mod tests {
         }
 
         #[test]
+        fn read_config_persists_first_run_nexus_storage_budget() -> eyre::Result<()>
+        {
+            let (config, _dir, config_path) = load_config_with_overrides(|table, _genesis_key| {
+                iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
+            })?;
+
+            assert_eq!(
+                config.nexus.storage.budget_source,
+                NexusStorageBudgetSource::AutoDerived
+            );
+
+            let effective_budget = config.nexus.storage.max_disk_usage_bytes.get();
+            let auto_default = config
+                .nexus
+                .storage
+                .auto_default
+                .as_ref()
+                .expect("config auto_default");
+            assert_eq!(auto_default.aggregate_budget_bytes, effective_budget);
+            assert_eq!(auto_default.sum_budget_bytes(), effective_budget);
+
+            let persisted: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&config_path)?).expect("persisted config");
+            let persisted_budget = persisted
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("local_budget_bytes"))
+                .and_then(toml::Value::as_integer)
+                .expect("persisted local budget");
+            assert_eq!(persisted_budget, i64::try_from(effective_budget)?);
+            let persisted_auto_default = persisted
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("auto_default"))
+                .and_then(toml::Value::as_table)
+                .expect("persisted auto_default");
+            let persisted_auto_aggregate = persisted_auto_default
+                .get("aggregate_budget_bytes")
+                .and_then(toml::Value::as_integer)
+                .expect("persisted auto aggregate");
+            assert_eq!(persisted_auto_aggregate, persisted_budget);
+            let filesystem_groups = persisted_auto_default
+                .get("filesystem_groups")
+                .and_then(toml::Value::as_array)
+                .expect("persisted filesystem groups");
+            assert!(
+                !filesystem_groups.is_empty(),
+                "auto-derived metadata must persist at least one filesystem group"
+            );
+
+            let persisted_once = std::fs::read_to_string(&config_path)?;
+            let (_config_again, _genesis_again) = read_config_and_genesis(&Args {
+                config: Some(config_path.clone()),
+                genesis_manifest_json: None,
+                terminal_colors: false,
+                trace_config: false,
+                language: None,
+                sora: false,
+                fastpq_execution_mode: None,
+                fastpq_poseidon_mode: None,
+                fastpq_device_class: None,
+                fastpq_chip_family: None,
+                fastpq_gpu_kind: None,
+            })
+            .map_err(|report| eyre::eyre!("{report:?}"))?;
+            assert_eq!(std::fs::read_to_string(&config_path)?, persisted_once);
+
+            Ok(())
+        }
+
+        #[test]
+        fn read_config_does_not_persist_local_budget_when_legacy_alias_is_present()
+        -> eyre::Result<()> {
+            let (config, _dir, config_path) = load_config_with_overrides(|table, _genesis_key| {
+                iroha_config::base::toml::Writer::new(table)
+                    .write(["nexus", "enabled"], true)
+                    .write(["nexus", "storage", "max_disk_usage_bytes"], 4_096_i64);
+            })?;
+
+            assert_eq!(
+                config.nexus.storage.budget_source,
+                NexusStorageBudgetSource::OperatorExplicit
+            );
+            assert_eq!(config.nexus.storage.max_disk_usage_bytes.get(), 4_096);
+
+            let persisted: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&config_path)?).expect("persisted config");
+            let storage = persisted
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .expect("storage table");
+            assert!(storage.get("local_budget_bytes").is_none());
+            assert!(storage.get("auto_default").is_none());
+            assert_eq!(
+                storage
+                    .get("max_disk_usage_bytes")
+                    .and_then(toml::Value::as_integer),
+                Some(4_096)
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn reconcile_nexus_storage_budget_requires_config_path_for_first_run_auto_default()
+        -> eyre::Result<()> {
+            let (mut config, _dir, _config_path) =
+                parse_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["nexus", "enabled"], true);
+                })?;
+
+            let err = reconcile_nexus_storage_budget(&mut config, None)
+                .expect_err("auto-derived first-run budget should require a writable config path");
+            assert!(matches!(
+                err.current_context(),
+                ConfigError::NexusStorageBudgetPersistenceRequired
+            ));
+
+            Ok(())
+        }
+
+        #[test]
+        fn read_config_regenerates_auto_default_when_storage_layout_changes()
+        -> eyre::Result<()> {
+            let (config, _dir, config_path) = load_config_with_overrides(|table, _genesis_key| {
+                let mut filesystem_group = toml::Table::new();
+                filesystem_group.insert(
+                    "filesystem_id".to_string(),
+                    toml::Value::String("dev:fake".to_string()),
+                );
+                filesystem_group.insert(
+                    "budget_bytes".to_string(),
+                    toml::Value::Integer(1_024),
+                );
+                filesystem_group.insert(
+                    "components".to_string(),
+                    toml::Value::Array(vec![
+                        toml::Value::String("kura".to_string()),
+                        toml::Value::String("wsv_cold".to_string()),
+                        toml::Value::String("sorafs".to_string()),
+                        toml::Value::String("soranet_spool".to_string()),
+                        toml::Value::String("soravpn_spool".to_string()),
+                    ]),
+                );
+                let mut auto_default = toml::Table::new();
+                auto_default.insert("version".to_string(), toml::Value::Integer(1));
+                auto_default.insert(
+                    "aggregate_budget_bytes".to_string(),
+                    toml::Value::Integer(1_024),
+                );
+                auto_default.insert(
+                    "filesystem_groups".to_string(),
+                    toml::Value::Array(vec![toml::Value::Table(filesystem_group)]),
+                );
+
+                let mut storage = toml::Table::new();
+                storage.insert("local_budget_bytes".to_string(), toml::Value::Integer(1_024));
+                storage.insert("auto_default".to_string(), toml::Value::Table(auto_default));
+                let nexus = table
+                    .entry("nexus")
+                    .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                    .as_table_mut()
+                    .expect("nexus table");
+                nexus.insert("enabled".to_string(), toml::Value::Boolean(true));
+                nexus.insert("storage".to_string(), toml::Value::Table(storage));
+            })?;
+
+            assert_eq!(
+                config.nexus.storage.budget_source,
+                NexusStorageBudgetSource::AutoDerived
+            );
+            assert_ne!(
+                config
+                    .nexus
+                    .storage
+                    .auto_default
+                    .as_ref()
+                    .and_then(|auto_default| auto_default.filesystem_groups.first())
+                    .map(|filesystem| filesystem.filesystem_id.as_str()),
+                Some("dev:fake")
+            );
+
+            let persisted: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&config_path)?).expect("persisted config");
+            let persisted_auto_default = persisted
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("auto_default"))
+                .and_then(toml::Value::as_table)
+                .expect("persisted auto_default");
+            let persisted_first_filesystem_id = persisted_auto_default
+                .get("filesystem_groups")
+                .and_then(toml::Value::as_array)
+                .and_then(|groups| groups.first())
+                .and_then(toml::Value::as_table)
+                .and_then(|group| group.get("filesystem_id"))
+                .and_then(toml::Value::as_str)
+                .expect("persisted filesystem id");
+            assert_ne!(persisted_first_filesystem_id, "dev:fake");
+
+            Ok(())
+        }
+
+        #[test]
+        fn auto_default_budget_shortfall_warns_only_when_budget_exceeds_available() {
+            let filesystem = StorageBudgetFilesystemProbe {
+                filesystem_id: "dev:1".to_string(),
+                path: PathBuf::from("/tmp/storage"),
+                available_bytes: 1_000,
+                components: vec![NexusStorageBudgetComponent::Kura],
+            };
+            let auto_default = NexusStorageAutoDefault {
+                version: NexusStorageAutoDefault::VERSION,
+                aggregate_budget_bytes: 2_000,
+                filesystem_groups: vec![NexusStorageAutoDefaultFilesystemGroup {
+                    filesystem_id: "dev:1".to_string(),
+                    budget_bytes: 2_000,
+                    components: vec![NexusStorageBudgetComponent::Kura],
+                }],
+            };
+
+            assert_eq!(
+                auto_default_budget_shortfall(&auto_default, &filesystem),
+                Some(2_000)
+            );
+
+            let mut no_shortfall = filesystem.clone();
+            no_shortfall.available_bytes = 2_000;
+            assert_eq!(auto_default_budget_shortfall(&auto_default, &no_shortfall), None);
+        }
+
+        #[test]
+        fn operator_explicit_budget_shortfall_warns_only_when_assigned_caps_exceed_available()
+        -> eyre::Result<()> {
+            let (mut config, _dir, _config_path) =
+                parse_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["nexus", "enabled"], true)
+                        .write(["nexus", "storage", "local_budget_bytes"], 2_000_i64);
+                })?;
+            config.apply_storage_budget();
+
+            let filesystem = StorageBudgetFilesystemProbe {
+                filesystem_id: "dev:1".to_string(),
+                path: PathBuf::from("/tmp/storage"),
+                available_bytes: 1_000,
+                components: vec![
+                    NexusStorageBudgetComponent::Kura,
+                    NexusStorageBudgetComponent::WsvCold,
+                    NexusStorageBudgetComponent::Sorafs,
+                    NexusStorageBudgetComponent::SoranetSpool,
+                    NexusStorageBudgetComponent::SoravpnSpool,
+                ],
+            };
+
+            assert_eq!(
+                operator_explicit_budget_shortfall(&config, &filesystem),
+                Some(2_000)
+            );
+
+            let mut no_shortfall = filesystem.clone();
+            no_shortfall.available_bytes = 2_000;
+            assert_eq!(
+                operator_explicit_budget_shortfall(&config, &no_shortfall),
+                None
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn normalize_windows_volume_mount_point_adds_trailing_separator() {
+            assert_eq!(
+                normalize_windows_volume_mount_point(r"C:\nexus\storage"),
+                r"C:\nexus\storage\"
+            );
+            assert_eq!(
+                normalize_windows_volume_mount_point(
+                    r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
+                ),
+                r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
+            );
+        }
+
+        #[test]
+        fn normalize_windows_volume_identity_uses_lowercased_guid_path() {
+            assert_eq!(
+                normalize_windows_volume_identity(
+                    r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
+                ),
+                r"volume:\\?\volume{abcdef12-3456-7890-abcd-ef1234567890}\"
+            );
+        }
+
+        #[test]
+        fn windows_string_from_wide_buffer_stops_at_first_nul() {
+            let buffer: Vec<u16> = "Volume\0ignored".encode_utf16().collect();
+            assert_eq!(
+                windows_string_from_wide_buffer(&buffer).as_deref(),
+                Some("Volume")
+            );
+            assert_eq!(windows_string_from_wide_buffer(&[]), None);
+        }
+
+        #[test]
         fn fails_with_no_trusted_peers_and_submit_role() -> eyre::Result<()> {
             // Given
 
@@ -9145,7 +10167,7 @@ mod tests {
 
         #[test]
         fn validate_config_io_flags_lone_peer_and_address_conflict() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
+            let (config, _dir, _config_path) = load_config_with_overrides(|table, _genesis_key| {
                 if let Some(genesis_table) =
                     table.get_mut("genesis").and_then(toml::Value::as_table_mut)
                 {
@@ -9174,7 +10196,8 @@ mod tests {
 
         #[test]
         fn stack_budget_mismatch_warns_but_allows_config() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
+            let (config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
                 let mut cpu_balanced = toml::Table::new();
                 cpu_balanced.insert("max_cycles".to_owned(), toml::Value::Integer(10_000_000));
                 cpu_balanced.insert(
@@ -9208,7 +10231,7 @@ mod tests {
                     .write(["compute", "default_resource_profile"], "cpu-balanced")
                     .write(["ivm", "memory_budget_profile"], "cpu-balanced")
                     .write(["concurrency", "guest_stack_bytes"], 4_i64 * 1024 * 1024);
-            })?;
+                })?;
 
             validate_config(&config).map_err(|report| eyre::eyre!("{report:?}"))?;
 
@@ -9217,12 +10240,13 @@ mod tests {
 
         #[test]
         fn validator_requires_confidential_enabled() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
+            let (config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
                 iroha_config::base::toml::Writer::new(table)
                     .write(["sumeragi", "role"], "validator")
                     .write(["confidential", "enabled"], false)
                     .write(["confidential", "assume_valid"], false);
-            })?;
+                })?;
 
             let report = validate_config(&config).unwrap_err();
             assert_contains!(
@@ -9235,12 +10259,13 @@ mod tests {
 
         #[test]
         fn validate_config_runtime_rejects_validator_confidential_disabled() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
+            let (config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
                 iroha_config::base::toml::Writer::new(table)
                     .write(["sumeragi", "role"], "validator")
                     .write(["confidential", "enabled"], false)
                     .write(["confidential", "assume_valid"], false);
-            })?;
+                })?;
 
             let mut emitter = Emitter::new();
             validate_config_runtime(&mut emitter, &config);
@@ -9257,12 +10282,13 @@ mod tests {
 
         #[test]
         fn validator_cannot_assume_valid_confidential() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
+            let (config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
                 iroha_config::base::toml::Writer::new(table)
                     .write(["sumeragi", "role"], "validator")
                     .write(["confidential", "enabled"], true)
                     .write(["confidential", "assume_valid"], true);
-            })?;
+                })?;
 
             let report = validate_config(&config).unwrap_err();
             assert_contains!(

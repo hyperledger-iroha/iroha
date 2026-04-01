@@ -7,7 +7,7 @@ use iroha_data_model::prelude::Name;
 use ivm::{
     CoreHost, IVM, PointerType, encoding, instruction,
     kotodama::{compiler::Compiler as KotodamaCompiler, ir, parser, semantic},
-    mock_wsv::{AccountId, DomainId, MockWorldStateView, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
 use norito::{decode_from_bytes, to_bytes};
@@ -29,8 +29,7 @@ fn encoded_state_path(name: &str, key: impl std::fmt::Display) -> String {
     format!("{name}/{}", key)
 }
 
-fn account(domain: &str, public_key: &str) -> AccountId {
-    let domain: DomainId = domain.parse().expect("domain id");
+fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
 }

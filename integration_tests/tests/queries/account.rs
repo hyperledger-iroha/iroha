@@ -49,8 +49,6 @@ fn find_accounts_with_asset() -> Result<()> {
             gen_account_in("wonderland").0,
             gen_account_in("wonderland").0,
         ];
-        let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
-
         // Registering accounts
         let register_accounts = accounts
             .iter()

@@ -834,6 +834,7 @@ mod account_id_parsing_tests {
     use norito::{core::decode_from_bytes, to_bytes};
 
     use super::*;
+    use crate::DomainId;
 
     fn guard_chain_discriminant() -> MutexGuard<'static, ()> {
         static CHAIN_DISCRIMINANT_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));

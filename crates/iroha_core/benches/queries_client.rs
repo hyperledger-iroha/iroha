@@ -22,7 +22,6 @@ struct MockExec {
 
 impl MockExec {
     fn new(total: usize, page: usize) -> Self {
-        let domain: DomainId = "bench".parse().expect("domain");
         let mut v = Vec::with_capacity(total);
         for _ in 0..total {
             let kp = KeyPair::random();

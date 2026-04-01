@@ -1052,7 +1052,6 @@ mod prefetch_tests {
 
     #[test]
     fn parse_account_literal_resolves_aliases_in_non_default_dataspaces() {
-        let domain_id: DomainId = "ops".parse().expect("domain");
         let account_id = (*ALICE_ID).clone();
         let alias = AccountAlias::domainless(
             Name::from_str("treasury").expect("alias name"),

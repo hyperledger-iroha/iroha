@@ -1309,6 +1309,8 @@ fn minimal_config_snapshot() {
                     max_disk_usage_bytes: Bytes(
                         274877906944,
                     ),
+                    budget_source: Unset,
+                    auto_default: None,
                     budget_enforce_interval_blocks: 10,
                     max_wsv_memory_bytes: Bytes(
                         8589934592,
@@ -3191,6 +3193,14 @@ fn parse_applies_default_account_domain_override_during_config_parse() {
     assert_eq!(
         config.gov.slash_receiver_account,
         defaults::governance::slash_receiver_account_id()
+    );
+    assert_eq!(
+        iroha_data_model::account::address::default_domain_name().as_ref(),
+        "sora"
+    );
+    assert_eq!(
+        iroha_data_model::account::address::chain_discriminant(),
+        0x02F1
     );
 }
 

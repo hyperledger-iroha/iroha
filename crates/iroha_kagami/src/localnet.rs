@@ -1868,7 +1868,7 @@ fn extend_genesis(
         if asset.quantity > 0 {
             builder = builder.append_instruction(Mint::asset_numeric(
                 asset.quantity,
-                AssetId::new(asset_def, asset.mint_to.clone().into()),
+                AssetId::new(asset_def, asset.mint_to.clone()),
             ));
         }
     }

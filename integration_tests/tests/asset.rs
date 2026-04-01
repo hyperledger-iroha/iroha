@@ -1090,7 +1090,7 @@ mod register {
         Register::domain(Domain::new(id.parse().expect("should parse to DomainId")))
     }
 
-    pub fn account(id: AccountId, domain: DomainId) -> Register<Account> {
+    pub fn account(id: AccountId, _domain: DomainId) -> Register<Account> {
         Register::account(Account::new(id.clone()))
     }
 }

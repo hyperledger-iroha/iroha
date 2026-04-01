@@ -40,7 +40,6 @@ fn find_asset_total_quantity() -> Result<()> {
             gen_account_in("looking-glass").0,
         ];
         let wonderland_domain: DomainId = "wonderland".parse()?;
-        let looking_glass_domain: DomainId = "looking-glass".parse()?;
         let quantity_definition =
             AssetDefinitionId::new(wonderland_domain.clone(), "quantity".parse()?);
         let fixed_definition = AssetDefinitionId::new(wonderland_domain.clone(), "fixed".parse()?);
@@ -50,14 +49,7 @@ fn find_asset_total_quantity() -> Result<()> {
             .iter()
             .enumerate()
             .skip(1) // Alice has already been registered in genesis
-            .map(|(index, account_id)| {
-                let domain = if index == accounts.len() - 1 {
-                    looking_glass_domain.clone()
-                } else {
-                    wonderland_domain.clone()
-                };
-                Register::account(Account::new(account_id.clone()))
-            })
+            .map(|(_index, account_id)| Register::account(Account::new(account_id.clone())))
             .collect::<Vec<_>>();
         test_client.submit_all_blocking(register_accounts)?;
 

@@ -23,6 +23,25 @@ fn allow_uncertified_block_sync_roster(
 }
 
 impl Actor {
+    fn should_defer_canonical_committed_fetch_response(
+        &self,
+        block: &SignedBlock,
+        msg: &BlockMessage,
+    ) -> bool {
+        let block_hash = block.hash();
+        let block_height = block.header().height().get();
+        if self.committed_block_hash_for_height(block_height) != Some(block_hash) {
+            return false;
+        }
+        match msg {
+            BlockMessage::BlockCreated(_) => true,
+            BlockMessage::BlockSyncUpdate(update) => {
+                update.commit_qc.is_none() && update.validator_checkpoint.is_none()
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn block_sync_qc_is_missing_context_error(err: &QcValidationError) -> bool {
         matches!(
             err,
@@ -469,14 +488,13 @@ impl Actor {
         self.enqueue_fetch_pending_block_response(peer, msg);
     }
 
-    pub(super) fn block_body_response_for_wire(
-        &self,
-        block: &SignedBlock,
+    fn block_body_response_from_payload(
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        body: BlockMessage,
     ) -> super::message::BlockBodyResponse {
-        let block_hash = block.hash();
-        let height = block.header().height().get();
-        let view = block.header().view_change_index();
-        let body = match self.build_fetch_pending_block_payload(block) {
+        let body = match body {
             BlockMessage::BlockCreated(created) => {
                 super::message::BlockBodyData::BlockCreated(created)
             }
@@ -494,6 +512,17 @@ impl Actor {
             view,
             body,
         }
+    }
+
+    pub(super) fn block_body_response_for_wire(
+        &self,
+        block: &SignedBlock,
+    ) -> super::message::BlockBodyResponse {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let body = self.build_fetch_pending_block_payload(block);
+        Self::block_body_response_from_payload(block_hash, height, view, body)
     }
 
     fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
@@ -851,6 +880,16 @@ impl Actor {
             .unwrap_or_default()
     }
 
+    fn take_pending_block_body_requesters(
+        &mut self,
+        block_hash: &HashOf<BlockHeader>,
+    ) -> BTreeSet<PeerId> {
+        self.pending
+            .pending_block_body_requests
+            .remove(block_hash)
+            .unwrap_or_default()
+    }
+
     fn stash_pending_fetch_request(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -874,6 +913,14 @@ impl Actor {
                 stored.requester_roster_proof_known |= meta.requester_roster_proof_known;
             })
             .or_insert(meta);
+    }
+
+    fn stash_pending_block_body_request(&mut self, block_hash: HashOf<BlockHeader>, peer: PeerId) {
+        self.pending
+            .pending_block_body_requests
+            .entry(block_hash)
+            .or_default()
+            .insert(peer);
     }
 
     fn send_fetch_pending_block_responses(
@@ -990,6 +1037,53 @@ impl Actor {
             /*allow_highest_qc_bypass*/ false,
             /*allow_hintless_block_sync_bypass*/ false,
         );
+    }
+
+    pub(super) fn flush_pending_fetch_requests_if_ready(&mut self, block: &SignedBlock) -> bool {
+        let block_hash = block.hash();
+        if !self
+            .pending
+            .pending_fetch_requests
+            .contains_key(&block_hash)
+        {
+            return false;
+        }
+        let msg = self.build_fetch_pending_block_payload(block);
+        if self.should_defer_canonical_committed_fetch_response(block, &msg) {
+            return false;
+        }
+        self.flush_pending_fetch_requests(block);
+        true
+    }
+
+    pub(super) fn flush_pending_block_body_requests_if_ready(
+        &mut self,
+        block: &SignedBlock,
+    ) -> bool {
+        let block_hash = block.hash();
+        if !self
+            .pending
+            .pending_block_body_requests
+            .contains_key(&block_hash)
+        {
+            return false;
+        }
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let payload = self.build_fetch_pending_block_payload(block);
+        if self.should_defer_canonical_committed_fetch_response(block, &payload) {
+            return false;
+        }
+        let response = Self::block_body_response_from_payload(block_hash, height, view, payload);
+        let requesters = self.take_pending_block_body_requesters(&block_hash);
+        for peer in requesters {
+            self.dispatch_fetch_pending_block_response(
+                peer,
+                BlockMessage::BlockBodyResponse(response.clone()),
+                /*bypass_queue*/ true,
+            );
+        }
+        true
     }
 
     pub(super) fn should_drop_future_block_sync_update(
@@ -1280,7 +1374,10 @@ impl Actor {
             && frontier_lane_owned
             && has_commit_evidence
             && (requested_missing_block || block_known_locally);
-        if frontier_lane_owned && !frontier_lane_deep_catchup {
+        let frontier_lane_fast_path = frontier_lane_owned
+            && !frontier_lane_deep_catchup
+            && (block_known_locally || incoming_qc.is_some() || validator_checkpoint.is_some());
+        if frontier_lane_fast_path {
             let mut processed_votes = 0usize;
             let mut dropped_votes = 0usize;
             for vote in commit_votes {
@@ -3679,6 +3776,25 @@ impl Actor {
                             request_meta.requester_roster_proof_known;
                     })
                     .or_insert(request_meta);
+                let response = self.build_fetch_pending_block_payload(block);
+                if self.should_defer_canonical_committed_fetch_response(block, &response) {
+                    debug!(
+                        height = block.header().height().get(),
+                        view = block.header().view_change_index(),
+                        block = %block_hash,
+                        peer = %peer,
+                        "deferring exact-tip fetch response until commit proof is available"
+                    );
+                    self.pending
+                        .pending_fetch_requests
+                        .insert(block_hash, requesters);
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::FetchPendingBlock,
+                        super::status::ConsensusMessageOutcome::Deferred,
+                        super::status::ConsensusMessageReason::NotFound,
+                    );
+                    return Ok(());
+                }
                 self.send_fetch_pending_block_responses(
                     requesters,
                     block,
@@ -3724,7 +3840,35 @@ impl Actor {
             let header = block.header();
             if header.height().get() == request.height && header.view_change_index() == request.view
             {
-                self.send_block_body_response(peer, block.as_ref());
+                let payload = self.build_fetch_pending_block_payload(block.as_ref());
+                if self.should_defer_canonical_committed_fetch_response(block.as_ref(), &payload) {
+                    debug!(
+                        height = request.height,
+                        view = request.view,
+                        block = %block_hash,
+                        peer = %peer,
+                        "deferring exact body response until commit proof is available"
+                    );
+                    self.stash_pending_block_body_request(block_hash, peer);
+                    self.release_block_payload_dedup(&dedup_key);
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::FetchBlockBody,
+                        super::status::ConsensusMessageOutcome::Deferred,
+                        super::status::ConsensusMessageReason::NotFound,
+                    );
+                    return Ok(());
+                }
+                let response = Self::block_body_response_from_payload(
+                    block_hash,
+                    request.height,
+                    request.view,
+                    payload,
+                );
+                self.dispatch_fetch_pending_block_response(
+                    peer,
+                    BlockMessage::BlockBodyResponse(response),
+                    /*bypass_queue*/ true,
+                );
                 self.release_block_payload_dedup(&dedup_key);
                 return Ok(());
             }

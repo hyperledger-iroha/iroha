@@ -3155,6 +3155,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn set_account_label_relabels_existing_single_key_account() {
         let mut state = test_state();
         let domain_id: DomainId = "label.world".parse().expect("domain id");
