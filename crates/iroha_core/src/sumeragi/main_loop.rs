@@ -3871,11 +3871,11 @@ impl Actor {
                 *entry_height != height || *entry_view != view || *entry_hash != block_hash
             },
         );
-        self.slot_tracker
-            .authoritative_block_frontiers
-            .retain(|(entry_height, entry_view, entry_hash), _| {
+        self.slot_tracker.authoritative_block_frontiers.retain(
+            |(entry_height, entry_view, entry_hash), _| {
                 *entry_height != height || *entry_view != view || *entry_hash != block_hash
-            });
+            },
+        );
         if self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.height == height && slot.view == view && slot.block_hash == block_hash
         }) {
@@ -4859,6 +4859,17 @@ impl Actor {
             return (quorum_timeout / 2).max(Duration::from_millis(1));
         }
         fast_timeout
+    }
+
+    fn commit_validation_inline_fallback_timeout(&self) -> Duration {
+        const DA_INLINE_VALIDATION_FLOOR: Duration = Duration::from_millis(750);
+
+        let timeout = self.pending_fast_path_timeout_current();
+        if self.runtime_da_enabled() {
+            timeout.max(DA_INLINE_VALIDATION_FLOOR)
+        } else {
+            timeout
+        }
     }
 
     fn pending_fast_path_timeout(&self, _view: &StateView<'_>, _mode: ConsensusMode) -> Duration {
@@ -6360,16 +6371,16 @@ impl Actor {
                             tip_hash,
                         )
                 });
-        let exact_owner_view = slot.view == requested_view;
-        let locally_voted =
-            exact_owner_view && matches!(slot.lock_state, FrontierOwnerLockState::LocallyVoted);
+        let owner_view_covers_request = requested_view <= slot.view;
+        let locally_voted = owner_view_covers_request
+            && matches!(slot.lock_state, FrontierOwnerLockState::LocallyVoted);
         pending_live
             || commit_inflight_live
             // Preserve same-height owner protection after the pending wrapper is cleaned up but a
             // frontier commit QC has already anchored the contiguous slot.
             || slot.quorum_progress.commit_qc_observed
             || locally_voted
-            || (exact_owner_view && self.frontier_slot_has_local_vote_history_in_slot(slot))
+            || (owner_view_covers_request && self.frontier_slot_has_local_vote_history_in_slot(slot))
     }
 
     fn frontier_slot_live_local_owner_for_round(
@@ -8607,6 +8618,7 @@ enum RecoveryFsmReason {
     FrontierStallReset,
     MissingBlockHeightHardCap,
     IdleMissingQcReacquire,
+    LockLagHighestQcDefer,
     LockLagFuturePrune,
     SidecarMismatch,
     HighestQcCommittedConflict,
@@ -8620,6 +8632,7 @@ impl RecoveryFsmReason {
             "frontier_stall_reset" => Self::FrontierStallReset,
             "missing_block_height_hard_cap" => Self::MissingBlockHeightHardCap,
             "idle_missing_qc_reacquire" => Self::IdleMissingQcReacquire,
+            "lock_lag_highest_qc_defer" => Self::LockLagHighestQcDefer,
             "lock_lag_future_prune" => Self::LockLagFuturePrune,
             "sidecar_mismatch" => Self::SidecarMismatch,
             "highest_qc_committed_conflict" => Self::HighestQcCommittedConflict,
@@ -8633,10 +8646,11 @@ impl RecoveryFsmReason {
             Self::FrontierStallReset => 1,
             Self::MissingBlockHeightHardCap => 2,
             Self::IdleMissingQcReacquire => 3,
-            Self::LockLagFuturePrune => 4,
-            Self::SidecarMismatch => 5,
-            Self::HighestQcCommittedConflict => 6,
-            Self::Other => 7,
+            Self::LockLagHighestQcDefer => 4,
+            Self::LockLagFuturePrune => 5,
+            Self::SidecarMismatch => 6,
+            Self::HighestQcCommittedConflict => 7,
+            Self::Other => 8,
         }
     }
 }
@@ -9921,16 +9935,20 @@ struct CommitInFlight {
 
 struct CommitState {
     inflight: Option<CommitInFlight>,
+    work_tx: Option<mpsc::SyncSender<commit::CommitWork>>,
     result_rx: Option<mpsc::Receiver<commit::CommitResult>>,
     next_id: u64,
+    worker_disconnect_logged: bool,
 }
 
 impl CommitState {
     fn new() -> Self {
         Self {
             inflight: None,
+            work_tx: None,
             result_rx: None,
             next_id: 0,
+            worker_disconnect_logged: false,
         }
     }
 
@@ -10202,6 +10220,22 @@ impl Actor {
         self.subsystems.validation.work_txs = validation_handle.work_txs;
         self.subsystems.validation.result_rx = Some(validation_handle.result_rx);
         validation_handle.join_handles
+    }
+
+    pub(super) fn attach_commit_worker(&mut self) -> std::thread::JoinHandle<()> {
+        let handle = commit::spawn_commit_worker(
+            Arc::clone(&self.state),
+            Arc::clone(&self.kura),
+            self.common_config.chain.clone(),
+            self.genesis_account.clone(),
+            self.wake_tx.clone(),
+            self.config.persistence.commit_work_queue_cap,
+            self.config.persistence.commit_result_queue_cap,
+        );
+        self.subsystems.commit.work_tx = Some(handle.work_tx);
+        self.subsystems.commit.result_rx = Some(handle.result_rx);
+        self.subsystems.commit.worker_disconnect_logged = false;
+        handle.join_handle
     }
 
     pub(super) fn attach_qc_verify_worker(&mut self) -> Vec<std::thread::JoinHandle<()>> {
@@ -23684,7 +23718,8 @@ impl Actor {
     fn reason_is_lock_lag_frontier_reanchor(reason: &'static str) -> bool {
         matches!(
             reason,
-            "lock_lag_future_prune"
+            "lock_lag_highest_qc_defer"
+                | "lock_lag_future_prune"
                 | "frontier_gap_realign"
                 | "frontier_stall_reset"
                 | "missing_block_height_hard_cap"
@@ -23706,6 +23741,7 @@ impl Actor {
                 | "missing_block_range_pull_no_progress"
                 | "missing_block_attempt_streak"
                 | "missing_block_hash_miss_streak"
+                | "lock_lag_highest_qc_defer"
                 | "no_roster_bootstrap"
                 | "no_roster_frontier_realign"
                 | "idle_missing_qc_reacquire"
@@ -23720,6 +23756,7 @@ impl Actor {
         matches!(
             reason,
             "idle_missing_qc_reacquire"
+                | "lock_lag_highest_qc_defer"
                 | "qc_missing_payload_quorum_fast_recovery"
                 | "missing_block_height_hard_cap"
                 | "highest_qc_committed_conflict"
@@ -23738,6 +23775,7 @@ impl Actor {
             "frontier_gap_realign"
                 | "frontier_stall_reset"
                 | "missing_block_height_hard_cap"
+                | "lock_lag_highest_qc_defer"
                 | "lock_lag_future_prune"
                 | "sidecar_mismatch"
                 | "highest_qc_committed_conflict"
@@ -23784,6 +23822,7 @@ impl Actor {
             self.lock_lag_range_pull_scope_for_height(height);
         let local_height = self.committed_height_snapshot();
         if height == local_height.saturating_add(1)
+            && reason != "lock_lag_highest_qc_defer"
             && !self.frontier_slot_allows_deep_catchup(height, reason)
         {
             if self.frontier_slot_lag_window_expired(height, now) {

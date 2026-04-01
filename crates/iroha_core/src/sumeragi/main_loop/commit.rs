@@ -976,6 +976,43 @@ impl Actor {
         })
     }
 
+    fn clear_commit_worker_state(&mut self) {
+        self.subsystems.commit.work_tx = None;
+        self.subsystems.commit.result_rx = None;
+    }
+
+    fn warn_commit_worker_disconnected_once(&mut self, message: &'static str) {
+        if self.subsystems.commit.worker_disconnect_logged {
+            return;
+        }
+        self.subsystems.commit.worker_disconnect_logged = true;
+        warn!("{message}");
+    }
+
+    fn execute_commit_job_inline(&mut self, inflight: CommitInFlight, work: CommitWork) -> bool {
+        super::status::record_commit_inflight_start(
+            inflight.id,
+            inflight.pending.height,
+            inflight.pending.view,
+            inflight.block_hash,
+        );
+        self.subsystems.commit.inflight = Some(inflight);
+        let (outcome, timings) = execute_commit_work(
+            self.state.as_ref(),
+            self.kura.as_ref(),
+            &self.common_config.chain,
+            &self.genesis_account,
+            work,
+        );
+        let inflight = self
+            .subsystems
+            .commit
+            .inflight
+            .take()
+            .expect("inline commit must retain inflight marker");
+        self.apply_commit_outcome(inflight, outcome, timings)
+    }
+
     pub(super) fn drain_commit_results(&mut self) -> CommitDrainSummary {
         let mut summary = CommitDrainSummary::default();
         while let Some(recv_result) = self
@@ -1013,8 +1050,10 @@ impl Actor {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    warn!("commit result channel closed; falling back to inline commit");
-                    self.subsystems.commit.result_rx = None;
+                    self.warn_commit_worker_disconnected_once(
+                        "commit result channel closed; falling back to inline commit",
+                    );
+                    self.clear_commit_worker_state();
                     if let Some(inflight) = self.subsystems.commit.inflight.take() {
                         let persist_required = !inflight.pending.kura_persisted;
                         let local_outside_commit_topology = inflight
@@ -1057,7 +1096,7 @@ impl Actor {
         summary
     }
 
-    fn start_commit_job(&mut self, inflight: CommitInFlight, work: CommitWork) -> bool {
+    pub(super) fn start_commit_job(&mut self, inflight: CommitInFlight, work: CommitWork) -> bool {
         let pending_height = inflight.pending.height;
         let pending_view = inflight.pending.view;
         let block_hash = inflight.block_hash;
@@ -1082,27 +1121,44 @@ impl Actor {
                 .insert(block_hash, inflight.pending);
             return false;
         }
-        super::status::record_commit_inflight_start(
-            inflight.id,
-            pending_height,
-            pending_view,
-            block_hash,
-        );
-        self.subsystems.commit.inflight = Some(inflight);
-        let (outcome, timings) = execute_commit_work(
-            self.state.as_ref(),
-            self.kura.as_ref(),
-            &self.common_config.chain,
-            &self.genesis_account,
-            work,
-        );
-        let inflight = self
-            .subsystems
-            .commit
-            .inflight
-            .take()
-            .expect("inline commit must retain inflight marker");
-        self.apply_commit_outcome(inflight, outcome, timings)
+
+        let worker_tx = self.subsystems.commit.work_tx.clone();
+        let worker_ready = worker_tx.is_some() && self.subsystems.commit.result_rx.is_some();
+        if !worker_ready {
+            return self.execute_commit_job_inline(inflight, work);
+        }
+
+        match worker_tx.expect("worker readiness checked").try_send(work) {
+            Ok(()) => {
+                super::status::record_commit_inflight_start(
+                    inflight.id,
+                    pending_height,
+                    pending_view,
+                    block_hash,
+                );
+                self.subsystems.commit.inflight = Some(inflight);
+                true
+            }
+            Err(mpsc::TrySendError::Full(_work)) => {
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %block_hash,
+                    "commit worker queue full; keeping pending block queued"
+                );
+                self.pending
+                    .pending_blocks
+                    .insert(block_hash, inflight.pending);
+                false
+            }
+            Err(mpsc::TrySendError::Disconnected(work)) => {
+                self.warn_commit_worker_disconnected_once(
+                    "commit worker channel disconnected; falling back to inline commit",
+                );
+                self.clear_commit_worker_state();
+                self.execute_commit_job_inline(inflight, work)
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -2799,66 +2855,38 @@ impl Actor {
                 );
                 continue;
             }
-            let fast_timeout = self.pending_fast_path_timeout_current();
+            let inline_fallback_timeout = self.commit_validation_inline_fallback_timeout();
             // Prefer validating via background workers to keep the tick loop responsive under load.
             // Inline validation can take hundreds of milliseconds and risks stalling vote/proposal
             // handling, which in turn causes view changes and reschedules.
             let mut validation_outcome =
                 self.validate_pending_block_for_voting(hash, &commit_topology);
             if matches!(validation_outcome, ValidationGateOutcome::Deferred) {
-                if let Some((
-                    pending_height_snapshot,
-                    pending_view_snapshot,
-                    pending_age,
-                    priority_reason,
-                )) = self.pending.pending_blocks.get(&hash).map(|pending| {
-                    (
-                        pending.height,
-                        pending.view,
-                        pending.age(),
-                        self.pending_block_validation_priority_reason(hash, pending),
-                    )
-                }) {
+                if let Some((pending_height_snapshot, pending_view_snapshot, pending_age)) = self
+                    .pending
+                    .pending_blocks
+                    .get(&hash)
+                    .map(|pending| (pending.height, pending.view, pending.age()))
+                {
                     let mut should_inline_validation = false;
-                    if let Some(reason) = priority_reason {
-                        if let Some(inflight_elapsed) = self.validation_inflight_elapsed(hash) {
-                            if self.supersede_validation_inflight(hash).is_some() {
-                                info!(
-                                    height = pending_height_snapshot,
-                                    view = pending_view_snapshot,
-                                    block = %hash,
-                                    reason,
-                                    inflight_elapsed_ms = inflight_elapsed.as_millis(),
-                                    "near-tip commit readiness superseded background validation; forcing inline pre-vote validation"
-                                );
-                            }
-                        } else {
-                            debug!(
-                                height = pending_height_snapshot,
-                                view = pending_view_snapshot,
-                                block = %hash,
-                                reason,
-                                "forcing inline pre-vote validation for near-tip commit-ready block"
-                            );
-                        }
-                        should_inline_validation = true;
-                    } else if let Some(inflight_elapsed) = self.validation_inflight_elapsed(hash) {
-                        if inflight_elapsed >= fast_timeout {
+                    if let Some(inflight_elapsed) = self.validation_inflight_elapsed(hash) {
+                        if inflight_elapsed >= inline_fallback_timeout {
                             if self.supersede_validation_inflight(hash).is_some() {
                                 warn!(
                                     height = pending_height_snapshot,
                                     view = pending_view_snapshot,
                                     block = %hash,
                                     inflight_elapsed_ms = inflight_elapsed.as_millis(),
-                                    fast_timeout_ms = fast_timeout.as_millis(),
-                                    "validation inflight exceeded fast timeout; forcing inline pre-vote validation"
+                                    inline_fallback_timeout_ms =
+                                        inline_fallback_timeout.as_millis(),
+                                    "validation inflight exceeded inline fallback timeout; forcing inline pre-vote validation"
                                 );
                             }
                             should_inline_validation = true;
                         }
-                    } else if pending_age >= fast_timeout {
+                    } else if pending_age >= inline_fallback_timeout {
                         // No worker accepted the validation task (typically queue-full); avoid
-                        // indefinite deferral by validating inline after fast-timeout.
+                        // indefinite deferral by validating inline after the fallback timeout.
                         should_inline_validation = true;
                     }
 
@@ -2878,7 +2906,7 @@ impl Actor {
                 ValidationGateOutcome::Deferred => {
                     if let Some(pending) = self.pending.pending_blocks.get(&hash) {
                         let pending_age = pending.age();
-                        if pending_age >= fast_timeout {
+                        if pending_age >= inline_fallback_timeout {
                             let rbc_log = {
                                 let key: super::rbc_store::SessionKey =
                                     (hash, pending_height, pending_view);
@@ -2907,7 +2935,8 @@ impl Actor {
                                 view = pending.view,
                                 block = %hash,
                                 pending_age_ms = pending_age.as_millis(),
-                                fast_timeout_ms = fast_timeout.as_millis(),
+                                inline_fallback_timeout_ms =
+                                    inline_fallback_timeout.as_millis(),
                                 validation_status = ?pending.validation_status,
                                 inflight_validations = self.subsystems.validation.inflight.len(),
                                 validation_workers = self.subsystems.validation.work_txs.len(),
@@ -2921,7 +2950,7 @@ impl Actor {
                                 rbc_sent_ready = rbc_log.as_ref().map(|entry| entry.5),
                                 rbc_invalid = rbc_log.as_ref().map(|entry| entry.6),
                                 trigger = ?trigger,
-                                "commit pipeline defers validation past fast timeout"
+                                "commit pipeline defers validation past inline fallback timeout"
                             );
                         }
                     }
@@ -3167,6 +3196,7 @@ impl Actor {
             }
 
             let finalize_start = Instant::now();
+            let fast_timeout = self.pending_fast_path_timeout_current();
             if enable_qc_pipeline && emit_precommit {
                 let parent_hash = pending.block.header().prev_block_hash();
                 let pending_roots = pending.parent_state_root.zip(pending.post_state_root);

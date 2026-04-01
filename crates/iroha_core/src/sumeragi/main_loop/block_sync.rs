@@ -1282,14 +1282,23 @@ impl Actor {
             }
             if block_known_locally {
                 debug!(
-                    height = block_height,
-                    view = block_view,
-                    block = %block_hash,
+                        height = block_height,
+                        view = block_view,
+                        block = %block_hash,
                     processed_votes,
                     has_commit_qc = incoming_qc.is_some(),
                     has_checkpoint = validator_checkpoint.is_some(),
                     "ignoring frontier-lane BlockSyncUpdate sidecars for a locally known block"
                 );
+                if incoming_qc.is_some() || validator_checkpoint.is_some() {
+                    let _ = self.try_replay_deferred_qcs();
+                    let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
+                    self.request_commit_pipeline_for_pending(
+                        block_hash,
+                        super::status::RoundEventCauseTrace::BlockSyncUpdated,
+                        None,
+                    );
+                }
                 if let Some(qc) = incoming_qc.take() {
                     let world_view = self.state.world_view();
                     let consensus_mode = super::effective_consensus_mode_for_height_from_world(
@@ -1354,16 +1363,20 @@ impl Actor {
                     block,
                     frontier: None,
                 },
-                sender,
+                sender.clone(),
                 incoming_qc.is_none() && validator_checkpoint.is_none(),
                 incoming_qc.is_some() || validator_checkpoint.is_some(),
             );
-            if result.is_ok()
+            let payload_materialized = result.is_ok()
                 && self.materialize_frontier_block_sync_payload_for_qc_recovery(
                     &recovery_block,
                     incoming_qc.as_ref().map(|qc| qc.epoch),
-                )
-            {
+                );
+            let mut local_block_for_qc = result
+                .is_ok()
+                .then(|| self.local_signed_block_for_hash(block_hash))
+                .flatten();
+            if payload_materialized || local_block_for_qc.is_some() {
                 let _ = self.try_replay_deferred_qcs();
                 let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
                 self.request_commit_pipeline_for_pending(
@@ -1371,9 +1384,12 @@ impl Actor {
                     super::status::RoundEventCauseTrace::BlockSyncUpdated,
                     None,
                 );
+                if local_block_for_qc.is_none() {
+                    local_block_for_qc = self.local_signed_block_for_hash(block_hash);
+                }
             }
             if result.is_ok()
-                && let Some(local_block) = self.local_signed_block_for_hash(block_hash)
+                && let Some(local_block) = local_block_for_qc
                 && let Some(qc) = incoming_qc.take()
             {
                 let world_view = self.state.world_view();

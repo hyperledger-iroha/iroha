@@ -13252,6 +13252,7 @@ impl SumeragiWorker {
             }
         };
         let validation_worker_joins = actor.attach_validation_worker();
+        let commit_worker_join = actor.attach_commit_worker();
         let qc_verify_worker_joins = actor.attach_qc_verify_worker();
         let vote_verify_worker_joins = actor.attach_vote_verify_worker();
         let rbc_persist_worker_join: Option<std::thread::JoinHandle<()>> =
@@ -13346,6 +13347,9 @@ impl SumeragiWorker {
             if let Err(err) = join.join() {
                 iroha_logger::warn!(?err, "sumeragi validation worker thread exited with error");
             }
+        }
+        if let Err(err) = commit_worker_join.join() {
+            iroha_logger::warn!(?err, "sumeragi commit worker thread exited with error");
         }
         for join in qc_verify_worker_joins {
             if let Err(err) = join.join() {

@@ -636,6 +636,10 @@ impl Actor {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         self.prune_highest_qc_missing_defer_markers(committed_height);
         self.init_collector_plan(topology, proposal_height, view);
+        let _lock_lag_highest_qc_deferred = !self.highest_qc_extends_locked(highest_qc)
+            && self.defer_highest_qc_update_for_lock_catchup(
+                height, view, highest_qc, now, "proposal",
+            );
         if proposal_height > 1 && !self.block_known_locally(highest_qc.subject_block_hash) {
             if self.mark_highest_qc_missing_defer_for_round(proposal_height, view, highest_qc) {
                 self.observe_new_view_highest_qc(highest_qc);
@@ -2883,11 +2887,15 @@ impl Actor {
                         return false;
                     }
                     if !locked_missing {
+                        let lock_lag_deferred = self.defer_highest_qc_update_for_lock_catchup(
+                            height, view_idx, highest_qc, now, "proposal",
+                        );
                         iroha_logger::info!(
                             ?reason,
                             height,
                             view = view_idx,
                             queue_len = pending_queue_len,
+                            lock_lag_deferred,
                             "deferring proposal: locked QC prevents proposal"
                         );
                         return false;
@@ -2926,6 +2934,9 @@ impl Actor {
         self.maybe_realign_locked_to_committed_tip();
 
         if !self.highest_qc_extends_locked(highest_qc) {
+            let _ = self.defer_highest_qc_update_for_lock_catchup(
+                height, view_idx, highest_qc, now, "proposal",
+            );
             if let Some(lock) = self.locked_qc
                 && (highest_qc.height, highest_qc.view) <= (lock.height, lock.view)
             {

@@ -469,6 +469,7 @@ impl Actor {
                 height,
                 view,
                 highest_qc,
+                Instant::now(),
                 "proposal_hint",
             ) {
                 debug!(
@@ -521,23 +522,31 @@ impl Actor {
         }
     }
 
-    fn defer_highest_qc_update_for_lock_catchup(
+    pub(super) fn defer_highest_qc_update_for_lock_catchup(
         &mut self,
         height: u64,
         view: u64,
         highest_qc: super::consensus::QcHeaderRef,
+        now: Instant,
         source: &'static str,
     ) -> bool {
         let Some(catchup_height) = self.lock_lag_catchup_frontier_for_highest(highest_qc) else {
             return false;
         };
-        let marked = self.mark_highest_qc_missing_defer_for_round(height, view, highest_qc);
+        let marked = if self.block_known_locally(highest_qc.subject_block_hash) {
+            self.subsystems
+                .propose
+                .highest_qc_missing_defer_markers
+                .retain(|(marker_height, _, marker_hash)| {
+                    *marker_height != height || *marker_hash != highest_qc.subject_block_hash
+                });
+            false
+        } else {
+            self.mark_highest_qc_missing_defer_for_round(height, view, highest_qc)
+        };
         let requested_highest = self.request_missing_block_for_highest_qc_force(highest_qc, source);
-        let requested_range = self.request_range_pull_from_anchor(
-            catchup_height,
-            "lock_lag_highest_qc_defer",
-            Instant::now(),
-        );
+        let requested_range =
+            self.request_range_pull_from_anchor(catchup_height, "lock_lag_highest_qc_defer", now);
         debug!(
             height,
             view,
@@ -561,7 +570,13 @@ impl Actor {
         highest_qc: super::consensus::QcHeaderRef,
         source: &'static str,
     ) -> bool {
-        if self.defer_highest_qc_update_for_lock_catchup(height, view, highest_qc, source) {
+        if self.defer_highest_qc_update_for_lock_catchup(
+            height,
+            view,
+            highest_qc,
+            Instant::now(),
+            source,
+        ) {
             return true;
         }
         let marked = self.mark_highest_qc_missing_defer_for_round(height, view, highest_qc);
@@ -937,7 +952,13 @@ impl Actor {
             incoming > existing || promotes_phase
         });
         if should_update_highest {
-            if self.defer_highest_qc_update_for_lock_catchup(height, view, highest_qc, "proposal") {
+            if self.defer_highest_qc_update_for_lock_catchup(
+                height,
+                view,
+                highest_qc,
+                Instant::now(),
+                "proposal",
+            ) {
                 debug!(
                     height,
                     view,

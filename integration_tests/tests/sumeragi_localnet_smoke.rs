@@ -959,10 +959,10 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                 .write(["network", "p2p_queue_cap_high"], 16384_i64)
                 .write(["network", "p2p_queue_cap_low"], 65536_i64)
                 .write(["network", "disconnect_on_post_overflow"], false)
-                // Give DA quorum extra breathing room under sustained load.
+                // Match the sustained-load DA quorum profile used by the other soak cases.
                 .write(
                     ["sumeragi", "advanced", "da", "quorum_timeout_multiplier"],
-                    1_i64,
+                    7_i64,
                 )
                 .write(
                     [
@@ -971,7 +971,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
                         "da",
                         "availability_timeout_multiplier",
                     ],
-                    1_i64,
+                    3_i64,
                 )
                 .write(
                     [

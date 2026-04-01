@@ -235,16 +235,16 @@ impl Actor {
     }
 
     fn validation_queue_full_inline_cutover(&self) -> Duration {
-        let fast_timeout = self.pending_fast_path_timeout_current();
+        let inline_fallback_timeout = self.commit_validation_inline_fallback_timeout();
         let divisor = self
             .config
             .worker
             .validation_queue_full_inline_cutover_divisor
             .max(1);
-        if fast_timeout == Duration::ZERO {
+        if inline_fallback_timeout == Duration::ZERO {
             Duration::ZERO
         } else {
-            (fast_timeout / divisor).max(Duration::from_millis(1))
+            (inline_fallback_timeout / divisor).max(Duration::from_millis(1))
         }
     }
 
@@ -501,7 +501,7 @@ impl Actor {
                 self.subsystems.validation.superseded_results.clear();
             } else {
                 let pending_age = pending.age();
-                let fast_timeout = self.pending_fast_path_timeout_current();
+                let inline_fallback_timeout = self.commit_validation_inline_fallback_timeout();
                 let inline_cutover = self.validation_queue_full_inline_cutover();
                 if pending_age < inline_cutover {
                     warn!(
@@ -509,7 +509,7 @@ impl Actor {
                         view = pending.view,
                         block = %hash,
                         pending_age_ms = pending_age.as_millis(),
-                        fast_timeout_ms = fast_timeout.as_millis(),
+                        inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
                         inline_cutover_ms = inline_cutover.as_millis(),
                         "validation worker queue full; deferring pre-vote validation"
                     );
@@ -522,7 +522,7 @@ impl Actor {
                     view = pending.view,
                     block = %hash,
                     pending_age_ms = pending_age.as_millis(),
-                    fast_timeout_ms = fast_timeout.as_millis(),
+                    inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
                     inline_cutover_ms = inline_cutover.as_millis(),
                     "validation worker queue saturated; running pre-vote validation inline"
                 );
