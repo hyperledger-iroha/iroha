@@ -37,6 +37,8 @@ use std::{
     },
     time::{Duration, Instant},
 };
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
 
 use crate::genesis_bootstrap::GenesisBootstrapper;
 use crate::soracloud_runtime::{
@@ -5923,14 +5925,14 @@ fn probe_nexus_storage_filesystems(
             ))
         })?;
         let filesystem_id = filesystem_identity(&probe_path).ok_or_else(|| {
-            Report::new(ConfigError::ParseConfig).attach(format!(
+            filesystem_probe_config_error(format!(
                 "failed to determine the filesystem identity for `{}` (component `{}`)",
                 probe_path.display(),
                 component.as_str()
             ))
         })?;
         let available_bytes = filesystem_available_bytes(&probe_path).ok_or_else(|| {
-            Report::new(ConfigError::ParseConfig).attach(format!(
+            filesystem_probe_config_error(format!(
                 "failed to determine available free space for `{}` (component `{}`)",
                 probe_path.display(),
                 component.as_str()
@@ -6328,15 +6330,24 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
+fn filesystem_probe_config_error(detail: String) -> Report<ConfigError> {
+    let report = Report::new(ConfigError::ParseConfig).attach(detail);
+    #[cfg(not(any(unix, target_os = "windows")))]
+    let report = report.attach("Nexus storage filesystem probing is unsupported on this platform");
+    report
+}
+
 #[cfg(unix)]
 fn filesystem_identity(path: &Path) -> Option<String> {
     let stats = rustix::fs::stat(path).ok()?;
     Some(format!("dev:{}", stats.st_dev))
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
 fn filesystem_identity(path: &Path) -> Option<String> {
-    Some(format!("path:{}", path.display()))
+    let volume_mount_point = windows_volume_mount_point(path)?;
+    let volume_name = windows_volume_name_for_mount_point(&volume_mount_point)?;
+    Some(normalize_windows_volume_identity(&volume_name))
 }
 
 #[cfg(unix)]
@@ -6346,9 +6357,116 @@ fn filesystem_available_bytes(path: &Path) -> Option<u64> {
     Some(stats.f_bavail.saturating_mul(fragment_size))
 }
 
-#[cfg(not(unix))]
+#[cfg(target_os = "windows")]
+fn filesystem_available_bytes(path: &Path) -> Option<u64> {
+    let wide_path = windows_wide_path(path);
+    let mut free_bytes_available = 0_u64;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide_path.as_ptr(),
+            &mut free_bytes_available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free_bytes_available)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
 fn filesystem_available_bytes(_path: &Path) -> Option<u64> {
     None
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn filesystem_identity(_path: &Path) -> Option<String> {
+    None
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_volume_mount_point(volume_mount_point: &str) -> String {
+    let mut normalized = volume_mount_point.replace('/', "\\");
+    if !normalized.ends_with('\\') {
+        normalized.push('\\');
+    }
+    normalized
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_volume_identity(volume_name: &str) -> String {
+    let mut normalized = normalize_windows_volume_mount_point(volume_name);
+    normalized.make_ascii_lowercase();
+    format!("volume:{normalized}")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_string_from_wide_buffer(buffer: &[u16]) -> Option<String> {
+    let end = buffer.iter().position(|&unit| unit == 0)?;
+    Some(String::from_utf16_lossy(&buffer[..end]))
+}
+
+#[cfg(target_os = "windows")]
+const WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN: usize = 32_768;
+
+#[cfg(target_os = "windows")]
+#[allow(non_snake_case)]
+extern "system" {
+    fn GetDiskFreeSpaceExW(
+        lp_directory_name: *const u16,
+        lp_free_bytes_available_to_caller: *mut u64,
+        lp_total_number_of_bytes: *mut u64,
+        lp_total_number_of_free_bytes: *mut u64,
+    ) -> i32;
+    fn GetVolumeNameForVolumeMountPointW(
+        lpsz_volume_mount_point: *const u16,
+        lpsz_volume_name: *mut u16,
+        cch_buffer_length: u32,
+    ) -> i32;
+    fn GetVolumePathNameW(
+        lpsz_file_name: *const u16,
+        lpsz_volume_path_name: *mut u16,
+        cch_buffer_length: u32,
+    ) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+fn windows_wide_path(path: &Path) -> Vec<u16> {
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_wide_string(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_query_volume_string<F>(mut query: F) -> Option<String>
+where
+    F: FnMut(*mut u16, u32) -> i32,
+{
+    let mut buffer = vec![0_u16; WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN];
+    (query(buffer.as_mut_ptr(), buffer.len() as u32) != 0)
+        .then(|| windows_string_from_wide_buffer(&buffer))
+        .flatten()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_volume_mount_point(path: &Path) -> Option<String> {
+    let wide_path = windows_wide_path(path);
+    windows_query_volume_string(|buffer, len| unsafe {
+        GetVolumePathNameW(wide_path.as_ptr(), buffer, len)
+    })
+    .map(|mount_point| normalize_windows_volume_mount_point(&mount_point))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_volume_name_for_mount_point(volume_mount_point: &str) -> Option<String> {
+    let wide_mount_point = windows_wide_string(volume_mount_point);
+    windows_query_volume_string(|buffer, len| unsafe {
+        GetVolumeNameForVolumeMountPointW(wide_mount_point.as_ptr(), buffer, len)
+    })
 }
 
 pub(crate) fn apply_ivm_acceleration_config(
@@ -9969,6 +10087,40 @@ mod tests {
             );
 
             Ok(())
+        }
+
+        #[test]
+        fn normalize_windows_volume_mount_point_adds_trailing_separator() {
+            assert_eq!(
+                normalize_windows_volume_mount_point(r"C:\nexus\storage"),
+                r"C:\nexus\storage\"
+            );
+            assert_eq!(
+                normalize_windows_volume_mount_point(
+                    r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
+                ),
+                r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
+            );
+        }
+
+        #[test]
+        fn normalize_windows_volume_identity_uses_lowercased_guid_path() {
+            assert_eq!(
+                normalize_windows_volume_identity(
+                    r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
+                ),
+                r"volume:\\?\volume{abcdef12-3456-7890-abcd-ef1234567890}\"
+            );
+        }
+
+        #[test]
+        fn windows_string_from_wide_buffer_stops_at_first_nul() {
+            let buffer: Vec<u16> = "Volume\0ignored".encode_utf16().collect();
+            assert_eq!(
+                windows_string_from_wide_buffer(&buffer).as_deref(),
+                Some("Volume")
+            );
+            assert_eq!(windows_string_from_wide_buffer(&[]), None);
         }
 
         #[test]

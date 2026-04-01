@@ -78,6 +78,10 @@ Last updated: 2026-04-01
   Kura, tiered-state cold/DA storage, SoraFS, SoraNet spool, and SoraVPN
   spool. Each filesystem gets `80%` of its current available bytes, and the
   persisted aggregate is the sum of those per-filesystem budgets.
+- Unix hosts group those storage roots by device id, Windows hosts now group
+  them by the canonical volume GUID path returned by Win32, and rarer
+  non-Unix/non-Windows targets fail auto-derivation conservatively instead of
+  falling back to path-string grouping.
 - Later starts reuse the persisted `auto_default` metadata when the stored
   filesystem identity map still matches the live storage layout. If the layout
   changes, the daemon regenerates the per-filesystem budgets from current free

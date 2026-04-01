@@ -58,6 +58,9 @@ roots instead of treating the storage budget as absent or keying only off
   warning is now emitted once per filesystem: auto-derived configs compare the
   stored per-filesystem budget against current free space, and operator-explicit
   configs compare the effective assigned component caps on that filesystem.
+- filesystem grouping now uses real platform filesystem identities on both Unix
+  and Windows (device ids on Unix, volume GUID paths on Windows); only
+  unsupported non-Unix/non-Windows targets remain conservative probe failures.
 
 Open work for this slice now remains:
 - rerun the broader `iroha_config` fixture/workspace gates after the unrelated

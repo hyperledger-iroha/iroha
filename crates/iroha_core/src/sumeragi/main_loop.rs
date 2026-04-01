@@ -7422,6 +7422,12 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         bytes: u64,
     ) {
+        let telemetry_enabled = self
+            .telemetry_handle()
+            .is_some_and(crate::telemetry::Telemetry::is_enabled);
+        if bytes == 0 || !telemetry_enabled {
+            return;
+        }
         if self
             .subsystems
             .da_rbc
@@ -31096,11 +31102,15 @@ fn drain_rbc_state_for_block(
             if let Some(bytes) = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
                 delivered_payload_bytes_fallback,
             ) {
-                let should_record = payload_metric_recorded_sessions
-                    .as_mut()
-                    .is_none_or(|recorded| recorded.insert(key));
-                if should_record && let Some(telemetry) = telemetry {
-                    telemetry.add_rbc_payload_bytes_delivered(bytes);
+                let telemetry_enabled =
+                    telemetry.is_some_and(crate::telemetry::Telemetry::is_enabled);
+                if bytes > 0 && telemetry_enabled {
+                    let should_record = payload_metric_recorded_sessions
+                        .as_mut()
+                        .is_none_or(|recorded| recorded.insert(key));
+                    if should_record && let Some(telemetry) = telemetry {
+                        telemetry.add_rbc_payload_bytes_delivered(bytes);
+                    }
                 }
             }
             let ready_count = u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX);
@@ -33781,7 +33791,7 @@ impl RbcSession {
             return Err(PersistedLoadError::PayloadHashMismatch);
         }
         session.recovered_from_disk = true;
-        session.delivered_payload_bytes_recorded = session.delivered_payload_bytes().is_some();
+        session.delivered_payload_bytes_recorded = false;
         let _ = session.sync_progress_observations(false, None);
         Ok(session)
     }
