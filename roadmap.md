@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-01
 
+Latest sync (2026-04-01 lock-rejected sink payload-ingress fix):
+the deterministic sink for exact-frontier lock-rejected branch hashes no
+longer self-deactivates when the node already has the rejected block body
+locally or through authoritative RBC ingress, so contiguous child recovery can
+no longer re-request that rejected parent through the exact-frontier body-owner
+path.
+
+- lock-rejected sink activity/pruning now depend on lock continuity,
+  committed-height advancement, and the existing TTL/max-dwell expiry instead
+  of local payload presence for the rejected hash; and
+- focused regressions are green both for the new authoritative-payload
+  suppression case and for the earlier missing-request / slot-owner cleanup
+  paths.
+
+Open work for this slice now remains:
+- build a fresh manifest-backed artifact bundle from this updated tree and run
+  a new `pk-deploy` doctor/reset cycle
+- confirm the reroll clears the current split state where public/SBP are stuck
+  at height `4` while AED has advanced, and verify dataspace-directory
+  publication plus retail bootstrap complete on the redeployed topology
+- broader workspace verification (`cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`) has not been rerun
+  after this sink fix tranche
+
 Latest sync (2026-04-01 exact-frontier lock-reject cleanup):
 the exact-frontier recovery path now fully forgets same-slot branches already
 rejected by the lock rule, so stale slot ownership or missing-parent state can

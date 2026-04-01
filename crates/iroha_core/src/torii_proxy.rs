@@ -51,6 +51,8 @@ pub enum ToriiProxyResponseFormatV1 {
 /// Supported read endpoints forwarded over the Torii control plane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiReadEndpointV1 {
+    /// `GET /v1/accounts/{account_id}`
+    AccountGet,
     /// `GET /v1/accounts/{account_id}/assets`
     AccountAssetsGet,
     /// `POST /v1/accounts/{account_id}/assets/query`

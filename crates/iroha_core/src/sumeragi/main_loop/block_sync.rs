@@ -468,15 +468,35 @@ impl Actor {
         self.enqueue_fetch_pending_block_response(peer, msg);
     }
 
-    fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
-        let response = super::message::BlockBodyResponse {
-            block_hash: block.hash(),
-            height: block.header().height().get(),
-            view: block.header().view_change_index(),
-            body: super::message::BlockBodyData::BlockCreated(
-                self.frontier_block_created_for_wire(block),
+    pub(super) fn block_body_response_for_wire(
+        &self,
+        block: &SignedBlock,
+    ) -> super::message::BlockBodyResponse {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let body = match self.build_fetch_pending_block_payload(block) {
+            BlockMessage::BlockCreated(created) => {
+                super::message::BlockBodyData::BlockCreated(created)
+            }
+            BlockMessage::BlockSyncUpdate(update) => {
+                super::message::BlockBodyData::BlockSyncUpdate(update)
+            }
+            other => unreachable!(
+                "exact body fetch payload builder returned unexpected variant: {}",
+                Self::block_message_kind(&other)
             ),
         };
+        super::message::BlockBodyResponse {
+            block_hash,
+            height,
+            view,
+            body,
+        }
+    }
+
+    fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
+        let response = self.block_body_response_for_wire(block);
         self.dispatch_fetch_pending_block_response(
             peer,
             BlockMessage::BlockBodyResponse(response),
@@ -3644,24 +3664,43 @@ impl Actor {
             self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
-        let super::message::BlockBodyData::BlockCreated(block_created) = response.body;
-        let header = block_created.block.header();
-        if block_created.block.hash() != response.block_hash
-            || header.height().get() != response.height
-            || header.view_change_index() != response.view
-        {
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::BlockBodyResponse,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::InvalidPayload,
-            );
-            self.release_block_payload_dedup(&dedup_key);
-            return Ok(());
-        }
         let sender_for_slot = sender
             .clone()
             .filter(|peer| peer != self.common_config.peer.id());
-        let result = self.handle_block_created(block_created, sender);
+        let result = match response.body {
+            super::message::BlockBodyData::BlockCreated(block_created) => {
+                let header = block_created.block.header();
+                if block_created.block.hash() != response.block_hash
+                    || header.height().get() != response.height
+                    || header.view_change_index() != response.view
+                {
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockBodyResponse,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidPayload,
+                    );
+                    self.release_block_payload_dedup(&dedup_key);
+                    return Ok(());
+                }
+                self.handle_block_created(block_created, sender)
+            }
+            super::message::BlockBodyData::BlockSyncUpdate(update) => {
+                let header = update.block.header();
+                if update.block.hash() != response.block_hash
+                    || header.height().get() != response.height
+                    || header.view_change_index() != response.view
+                {
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::BlockBodyResponse,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::InvalidPayload,
+                    );
+                    self.release_block_payload_dedup(&dedup_key);
+                    return Ok(());
+                }
+                self.handle_block_sync_update(update, sender)
+            }
+        };
         let body_materialized = self.frontier_block_materialized_locally(response.block_hash);
         if body_materialized {
             let _ = self.handle_frontier_slot_event(

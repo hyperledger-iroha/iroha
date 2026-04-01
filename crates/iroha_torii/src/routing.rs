@@ -22667,6 +22667,8 @@ const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
 #[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNTS_GET: &str = "/v1/accounts/{account_id}";
+#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
@@ -40838,6 +40840,20 @@ fn account_from_world_entry(
 }
 
 #[cfg(feature = "app_api")]
+fn account_read_response_from_world_entry(
+    entry: iroha_data_model::account::AccountEntry<'_>,
+) -> iroha_torii_shared::AccountReadResponse {
+    let details = entry.value().clone().into_inner();
+    iroha_torii_shared::AccountReadResponse {
+        account_id: entry.id().clone(),
+        label: details.label,
+        uaid: details.uaid,
+        opaque_ids: details.opaque_ids,
+        linked_domains: details.linked_domains.into_iter().collect(),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn collect_subject_accounts(world: &impl WorldReadOnly) -> Vec<iroha_data_model::account::Account> {
     use std::collections::{BTreeMap, btree_map::Entry};
 
@@ -41924,6 +41940,37 @@ pub async fn handle_v1_accounts_onboard_multisig(
         header::HeaderValue::from_static("application/json"),
     );
     Ok((StatusCode::ACCEPTED, resp))
+}
+
+/// GET /v1/accounts — List accounts with basic pagination.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_account_get(
+    state: Arc<CoreState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+    accept: Option<axum::http::HeaderValue>,
+    telemetry: MaybeTelemetry,
+) -> Result<Response, Error> {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let (account_id, _) = parse_account_path_segment_with_state(
+        state.as_ref(),
+        &account_id,
+        &telemetry,
+        ENDPOINT_ACCOUNTS_GET,
+    )?;
+    let world = state.world_view();
+    let response = world
+        .account(&account_id)
+        .map(account_read_response_from_world_entry)
+        .map_err(|_| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    Ok(crate::utils::respond_with_format(response, format))
 }
 
 /// GET /v1/accounts — List accounts with basic pagination.

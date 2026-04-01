@@ -2,7 +2,7 @@
 //! End-to-end check that privacy proofs attached to transactions can satisfy
 //! lane compliance policies requiring advertised commitments.
 
-use std::{collections::BTreeSet, str::FromStr, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc};
 
 use eyre::Result;
 use iroha_core::{

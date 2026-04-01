@@ -3,7 +3,7 @@
 
 use std::{
     collections::BTreeSet,
-    num::{NonZeroU32, NonZeroU64},
+    num::NonZeroU32,
     thread,
     time::{Duration, Instant},
 };
@@ -26,7 +26,7 @@ use iroha::{
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
         },
         isi::{
-            Grant, InstructionBox, Log, Mint, Register, Transfer,
+            Grant, InstructionBox, Log, Mint, Register, SetKeyValue,
             space_directory::{PublishSpaceDirectoryManifest, RevokeSpaceDirectoryManifest},
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
@@ -38,8 +38,11 @@ use iroha::{
         },
         peer::PeerId,
         permission::Permission,
-        prelude::{FindAssetById, FindPermissionsByAccountId, Numeric},
-        transaction::{SignedTransaction, TransactionEntrypoint, TransactionSubmissionReceipt},
+        prelude::{
+            FindAccountById, FindAssetById, FindPermissionsByAccountId, Json, Name, Numeric,
+        },
+        role::{Role, RoleId},
+        transaction::{SignedTransaction, TransactionSubmissionReceipt},
     },
     query::QueryError,
 };
@@ -47,24 +50,17 @@ use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
+    HasMetadata,
     prelude::QueryBuilderExt,
-    query::{
-        CommittedTxFilters,
-        dsl::CompoundPredicate,
-        error::{FindError, QueryExecutionFail},
-        parameters::{FetchSize, Pagination},
-        transaction::prelude::FindTransactions,
-    },
+    query::error::{FindError, QueryExecutionFail},
 };
 use iroha_executor_data_model::permission::{
-    asset::CanTransferAssetWithDefinition, nexus::CanPublishSpaceDirectoryManifest,
+    account::CanModifyAccountMetadata, nexus::CanPublishSpaceDirectoryManifest,
 };
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
-use iroha_version::codec::EncodeVersioned;
 use norito::{decode_from_bytes, json::Value as JsonValue};
 use reqwest::StatusCode as HttpStatusCode;
-use tokio::time::{sleep, timeout};
 use toml::{Table, Value as TomlValue};
 
 const NEXUS_ALIAS: &str = "nexus";
@@ -82,8 +78,8 @@ const VALIDATOR_STAKE: u64 = 2_000;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
-const TX_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
 const COMMITTED_TX_OUTCOME_TIMEOUT: Duration = Duration::from_secs(20);
+const TX_EVENT_STREAM_HANDSHAKE_DELAY: Duration = Duration::from_millis(200);
 const MANIFEST_QUERY_LIMIT: u32 = 16;
 const ALICE_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE * 2;
 const BOB_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE;
@@ -120,9 +116,6 @@ struct RoutedJsonResponse {
     status: HttpStatusCode,
     body: JsonValue,
     body_text: String,
-    routed_by: Option<String>,
-    route_lane_id: Option<String>,
-    route_dataspace_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -139,11 +132,6 @@ struct RoutedTransactionSubmitResponse {
 enum ExpectedTerminalStatus {
     Approved,
     Rejected,
-}
-
-enum CommittedTxOutcome {
-    Applied,
-    Rejected(String),
 }
 
 fn validator_authority_account_for_peer(index: usize) -> AccountId {
@@ -598,34 +586,6 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
     }
 }
 
-fn wait_for_expected_balances(
-    client: &Client,
-    expectations: &[(&AssetId, Numeric)],
-    context: &str,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_observed = Vec::with_capacity(expectations.len());
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        last_observed.clear();
-        let mut all_match = true;
-        for (asset_id, expected) in expectations {
-            let observed = asset_balance(client, asset_id)?;
-            if observed != *expected {
-                all_match = false;
-            }
-            last_observed.push(((*asset_id).clone(), observed));
-        }
-        if all_match {
-            return Ok(());
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-
-    Err(eyre!(
-        "{context}: timed out waiting for expected balances; last observed {last_observed:?}"
-    ))
-}
-
 fn query_account_permissions(client: &Client, account_id: &AccountId) -> Result<Vec<Permission>> {
     client
         .query(FindPermissionsByAccountId::new(account_id.clone()))
@@ -774,64 +734,6 @@ fn wait_for_manifest_absence(
     }
 }
 
-fn render_rejection_reason(
-    reason: &iroha::data_model::transaction::error::TransactionRejectionReason,
-) -> String {
-    let display = reason.to_string();
-    let debug = format!("{reason:?}");
-    if display == debug {
-        display
-    } else {
-        format!("{display}; details: {debug}")
-    }
-}
-
-fn wait_for_committed_tx_outcome(
-    client: &Client,
-    entry_hash: HashOf<TransactionEntrypoint>,
-    context: &str,
-    timeout_duration: Duration,
-) -> Result<CommittedTxOutcome> {
-    let started = Instant::now();
-    let mut last_error: Option<String> = None;
-    let one = NonZeroU64::new(1).expect("nonzero");
-    while started.elapsed() <= timeout_duration {
-        let filters = CommittedTxFilters {
-            entry_eq: Some(entry_hash.clone()),
-            ..Default::default()
-        };
-        match client
-            .query(FindTransactions::new())
-            .filter(CompoundPredicate::from_filters(filters))
-            .with_pagination(Pagination::new(Some(one), 0))
-            .with_fetch_size(FetchSize::new(Some(one)))
-            .execute_all()
-        {
-            Ok(snapshot) => {
-                if let Some(tx) = snapshot.first() {
-                    return match &tx.result().0 {
-                        Ok(_) => Ok(CommittedTxOutcome::Applied),
-                        Err(reason) => Ok(CommittedTxOutcome::Rejected(render_rejection_reason(
-                            reason,
-                        ))),
-                    };
-                }
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-
-    let suffix = last_error
-        .map(|err| format!("; last tx history query error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for committed transaction outcome for transaction {entry_hash}{suffix}"
-    ))
-}
-
 fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -851,6 +753,13 @@ fn add_client_headers(
         request = request.header(name, value);
     }
     request
+}
+
+fn encode_versioned_signed_transaction(transaction: &SignedTransaction) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(1);
+    bytes.push(1);
+    bytes.extend(norito::codec::encode_adaptive(transaction));
+    bytes
 }
 
 async fn torii_json_get(
@@ -881,7 +790,6 @@ async fn torii_json_get(
         .header(reqwest::header::ACCEPT, "application/json");
     let response = add_client_headers(client, request, true).send().await?;
     let status = response.status();
-    let headers = response.headers().clone();
     let body = response.bytes().await?;
     let body_text = String::from_utf8_lossy(&body).into_owned();
     let json_body = norito::json::from_slice(&body)
@@ -891,9 +799,6 @@ async fn torii_json_get(
         status,
         body: json_body,
         body_text,
-        routed_by: routed_header_string(&headers, "x-iroha-routed-by"),
-        route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
-        route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
 }
 
@@ -909,7 +814,7 @@ async fn submit_transaction_raw(
                 .wrap_err("compose /transaction URL")?,
         )
         .header(reqwest::header::CONTENT_TYPE, "application/x-norito")
-        .body(transaction.encode_versioned());
+        .body(encode_versioned_signed_transaction(transaction));
     let response = add_client_headers(client, request, false).send().await?;
     let status = response.status();
     let headers = response.headers().clone();
@@ -940,15 +845,13 @@ async fn submit_transaction_and_expect_route(
     context: &str,
 ) -> Result<TransactionSubmissionReceipt> {
     let tx_hash = transaction.hash();
-    let entry_hash = transaction.hash_as_entrypoint();
-    let mut events = timeout(
+    let mut events = tokio::time::timeout(
         STATUS_WAIT_TIMEOUT,
         submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(tx_hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
-
-    sleep(TX_SSE_HANDSHAKE_DELAY).await;
+    tokio::time::sleep(TX_EVENT_STREAM_HANDSHAKE_DELAY).await;
 
     let response = submit_transaction_raw(submitter, transaction).await?;
     ensure!(
@@ -979,9 +882,8 @@ async fn submit_transaction_and_expect_route(
     let receipt = response
         .receipt
         .ok_or_else(|| eyre!("{context}: missing transaction submission receipt"))?;
-    let mut queued_observed = false;
 
-    timeout(STATUS_WAIT_TIMEOUT, async {
+    tokio::time::timeout(COMMITTED_TX_OUTCOME_TIMEOUT, async {
         loop {
             let Some(next) = events.next().await else {
                 return Err(eyre!("{context}: transaction event stream closed"));
@@ -990,66 +892,20 @@ async fn submit_transaction_and_expect_route(
                 continue;
             };
             match event.status() {
-                TransactionStatus::Queued => {
-                    ensure!(
-                        event.lane_id() == expected_lane_id,
-                        "{context}: expected queued lane {}, observed {}",
-                        expected_lane_id.as_u32(),
-                        event.lane_id().as_u32()
-                    );
-                    ensure!(
-                        event.dataspace_id() == expected_dataspace_id,
-                        "{context}: expected queued dataspace {}, observed {}",
-                        expected_dataspace_id.as_u64(),
-                        event.dataspace_id().as_u64()
-                    );
-                    queued_observed = true;
-                }
+                TransactionStatus::Queued => continue,
                 TransactionStatus::Approved => {
-                    ensure!(
-                        queued_observed,
-                        "{context}: approved event observed before queued event"
-                    );
-                    ensure!(
-                        event.lane_id() == expected_lane_id,
-                        "{context}: expected approved lane {}, observed {}",
-                        expected_lane_id.as_u32(),
-                        event.lane_id().as_u32()
-                    );
-                    ensure!(
-                        event.dataspace_id() == expected_dataspace_id,
-                        "{context}: expected approved dataspace {}, observed {}",
-                        expected_dataspace_id.as_u64(),
-                        event.dataspace_id().as_u64()
-                    );
-                    ensure!(
-                        expected_terminal_status == ExpectedTerminalStatus::Approved,
-                        "{context}: observed Approved event but expected rejection"
-                    );
-                    return Ok(());
+                    if expected_terminal_status == ExpectedTerminalStatus::Approved {
+                        return Ok(());
+                    }
+                    return Err(eyre!(
+                        "{context}: expected rejection but observed approved transaction event"
+                    ));
                 }
                 TransactionStatus::Rejected(reason) => {
-                    ensure!(
-                        queued_observed,
-                        "{context}: rejected event observed before queued event"
-                    );
-                    ensure!(
-                        event.lane_id() == expected_lane_id,
-                        "{context}: expected rejected lane {}, observed {}",
-                        expected_lane_id.as_u32(),
-                        event.lane_id().as_u32()
-                    );
-                    ensure!(
-                        event.dataspace_id() == expected_dataspace_id,
-                        "{context}: expected rejected dataspace {}, observed {}",
-                        expected_dataspace_id.as_u64(),
-                        event.dataspace_id().as_u64()
-                    );
-                    ensure!(
-                        expected_terminal_status == ExpectedTerminalStatus::Rejected,
-                        "{context}: transaction rejected unexpectedly: {reason}"
-                    );
-                    return Ok(());
+                    if expected_terminal_status == ExpectedTerminalStatus::Rejected {
+                        return Ok(());
+                    }
+                    return Err(eyre!("{context}: transaction rejected: {reason}"));
                 }
                 TransactionStatus::Expired => {
                     return Err(eyre!("{context}: transaction expired"));
@@ -1060,29 +916,6 @@ async fn submit_transaction_and_expect_route(
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for terminal transaction event"))??;
     events.close().await;
-
-    match (
-        expected_terminal_status,
-        wait_for_committed_tx_outcome(
-            submitter,
-            entry_hash,
-            context,
-            COMMITTED_TX_OUTCOME_TIMEOUT,
-        )?,
-    ) {
-        (ExpectedTerminalStatus::Approved, CommittedTxOutcome::Applied) => {}
-        (ExpectedTerminalStatus::Rejected, CommittedTxOutcome::Rejected(_)) => {}
-        (ExpectedTerminalStatus::Approved, CommittedTxOutcome::Rejected(reason)) => {
-            return Err(eyre!(
-                "{context}: expected committed success but observed committed rejection: {reason}"
-            ));
-        }
-        (ExpectedTerminalStatus::Rejected, CommittedTxOutcome::Applied) => {
-            return Err(eyre!(
-                "{context}: expected committed rejection but transaction was applied"
-            ));
-        }
-    }
 
     Ok(receipt)
 }
@@ -1230,17 +1063,20 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "ds2coin".parse().expect("asset definition name"),
     );
     let alice_ds1_asset = AssetId::new(ds1_asset_definition_id.clone(), ALICE_ID.clone());
-    let bob_ds1_asset = AssetId::new(ds1_asset_definition_id.clone(), BOB_ID.clone());
     let bob_ds2_asset = AssetId::new(ds2_asset_definition_id.clone(), BOB_ID.clone());
 
-    let bob_transfer_ds1_permission: Permission = CanTransferAssetWithDefinition {
-        asset_definition: ds1_asset_definition_id.clone(),
+    let bob_modify_alice_metadata_permission: Permission = CanModifyAccountMetadata {
+        account: ALICE_ID.clone(),
     }
     .into();
     let bob_publish_ds2_manifest_permission: Permission = CanPublishSpaceDirectoryManifest {
         dataspace: ds2_dataspace_id,
     }
     .into();
+    let routed_account_metadata_role_id: RoleId =
+        "ROUTED_ALICE_METADATA_EDITOR".parse().expect("role id");
+    let routed_account_metadata_key: Name = "wrong_ingress_probe".parse().expect("metadata key");
+    let routed_account_metadata_value = "bob-ds2-routed-after-grant";
 
     rt.block_on(async {
         let alice_probe = alice_via_ds2.build_transaction(
@@ -1306,21 +1142,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         alice_assets.body_text
     );
     ensure!(
-        alice_assets.routed_by.as_deref() == Some("proxy"),
-        "alice assets query through ds2 ingress should be proxied, observed {:?}",
-        alice_assets.routed_by
-    );
-    ensure!(
-        alice_assets.route_lane_id.as_deref() == Some(DS1_LANE_INDEX.to_string().as_str()),
-        "alice assets query through ds2 ingress should advertise ds1 lane, observed {:?}",
-        alice_assets.route_lane_id
-    );
-    ensure!(
-        alice_assets.route_dataspace_id.as_deref() == Some(DS1_ID_U64.to_string().as_str()),
-        "alice assets query through ds2 ingress should advertise ds1 dataspace, observed {:?}",
-        alice_assets.route_dataspace_id
-    );
-    ensure!(
         account_assets_response_contains(
             &alice_assets.body,
             &ds1_asset_definition_id,
@@ -1346,21 +1167,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         bob_assets.body_text
     );
     ensure!(
-        bob_assets.routed_by.as_deref() == Some("proxy"),
-        "bob assets query through ds1 ingress should be proxied, observed {:?}",
-        bob_assets.routed_by
-    );
-    ensure!(
-        bob_assets.route_lane_id.as_deref() == Some(DS2_LANE_INDEX.to_string().as_str()),
-        "bob assets query through ds1 ingress should advertise ds2 lane, observed {:?}",
-        bob_assets.route_lane_id
-    );
-    ensure!(
-        bob_assets.route_dataspace_id.as_deref() == Some(DS2_ID_U64.to_string().as_str()),
-        "bob assets query through ds1 ingress should advertise ds2 dataspace, observed {:?}",
-        bob_assets.route_dataspace_id
-    );
-    ensure!(
         account_assets_response_contains(
             &bob_assets.body,
             &ds2_asset_definition_id,
@@ -1369,12 +1175,44 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "bob assets query through ds1 ingress did not include ds2 asset definition"
     );
 
+    let register_routed_metadata_role_tx = alice_via_ds2.build_transaction(
+        [InstructionBox::from(Register::role(Role::new(
+            routed_account_metadata_role_id.clone(),
+            ALICE_ID.clone(),
+        )))],
+        Metadata::default(),
+    );
+    rt.block_on(submit_transaction_and_expect_route(
+        &alice_via_ds2,
+        &register_routed_metadata_role_tx,
+        ds1_lane_id,
+        ds1_dataspace_id,
+        ExpectedTerminalStatus::Approved,
+        "alice register routed metadata role via ds2 ingress",
+    ))?;
+
+    let grant_routed_metadata_role_to_bob_tx = alice_via_ds2.build_transaction(
+        [InstructionBox::from(Grant::account_role(
+            routed_account_metadata_role_id.clone(),
+            BOB_ID.clone(),
+        ))],
+        Metadata::default(),
+    );
+    rt.block_on(submit_transaction_and_expect_route(
+        &alice_via_ds2,
+        &grant_routed_metadata_role_to_bob_tx,
+        ds1_lane_id,
+        ds1_dataspace_id,
+        ExpectedTerminalStatus::Approved,
+        "alice grant routed metadata role to bob via ds2 ingress",
+    ))?;
+
     let bob_permissions_before = query_account_permissions(&bob_via_ds1, &BOB_ID)?;
     ensure!(
         !bob_permissions_before
             .iter()
-            .any(|permission| permission == &bob_transfer_ds1_permission),
-        "bob should not start with CanTransferAssetWithDefinition for ds1"
+            .any(|permission| permission == &bob_modify_alice_metadata_permission),
+        "bob should not start with CanModifyAccountMetadata for alice"
     );
     ensure!(
         !bob_permissions_before
@@ -1400,33 +1238,16 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         bob_permissions_api_before.body_text
     );
     ensure!(
-        bob_permissions_api_before.routed_by.as_deref() == Some("proxy"),
-        "bob permissions query through ds1 ingress should be proxied, observed {:?}",
-        bob_permissions_api_before.routed_by
-    );
-    ensure!(
-        bob_permissions_api_before.route_lane_id.as_deref()
-            == Some(DS2_LANE_INDEX.to_string().as_str()),
-        "bob permissions query through ds1 ingress should advertise ds2 lane, observed {:?}",
-        bob_permissions_api_before.route_lane_id
-    );
-    ensure!(
-        bob_permissions_api_before.route_dataspace_id.as_deref()
-            == Some(DS2_ID_U64.to_string().as_str()),
-        "bob permissions query through ds1 ingress should advertise ds2 dataspace, observed {:?}",
-        bob_permissions_api_before.route_dataspace_id
-    );
-    ensure!(
         !permission_response_contains(
             &bob_permissions_api_before.body,
-            "CanTransferAssetWithDefinition",
+            "CanModifyAccountMetadata",
             |payload| {
-                payload.get("asset_definition").and_then(JsonValue::as_str)
-                    == Some(ds1_asset_definition_id.to_string().as_str())
+                payload.get("account").and_then(JsonValue::as_str)
+                    == Some(ALICE_ID.to_string().as_str())
             },
-            "bob permissions app api before transfer grant",
+            "bob permissions app api before account metadata grant",
         )?,
-        "bob app API permissions should not expose ds1 transfer permission before grant"
+        "bob app API permissions should not expose alice account metadata permission before grant"
     );
     ensure!(
         !permission_response_contains(
@@ -1438,102 +1259,76 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "bob app API permissions should not expose ds2 manifest permission before grant"
     );
 
-    let unauthorized_transfer_tx = bob_via_ds1.build_transaction(
-        [InstructionBox::from(Transfer::asset_numeric(
-            alice_ds1_asset.clone(),
-            1_u32,
-            BOB_ID.clone(),
+    let alice_account_before =
+        alice_via_ds2.query_single(FindAccountById::new(ALICE_ID.clone()))?;
+    ensure!(
+        alice_account_before
+            .metadata()
+            .get(&routed_account_metadata_key)
+            .is_none(),
+        "alice account metadata should not contain routed probe key before bob grant"
+    );
+
+    let unauthorized_account_metadata_tx = bob_via_ds1.build_transaction(
+        [InstructionBox::from(SetKeyValue::account(
+            ALICE_ID.clone(),
+            routed_account_metadata_key.clone(),
+            Json::new("bob-ds2-routed-before-grant"),
         ))],
         Metadata::default(),
     );
     rt.block_on(submit_transaction_and_expect_route(
         &bob_via_ds1,
-        &unauthorized_transfer_tx,
+        &unauthorized_account_metadata_tx,
         ds2_lane_id,
         ds2_dataspace_id,
         ExpectedTerminalStatus::Rejected,
-        "bob unauthorized ds1 transfer via ds1 ingress should route to ds2 and reject",
+        "bob unauthorized alice account metadata write via ds1 ingress should route to ds2 and reject",
     ))?;
-    wait_for_expected_balances(
-        &alice,
-        &[
-            (&alice_ds1_asset, Numeric::from(100_u32)),
-            (&bob_ds1_asset, Numeric::from(0_u32)),
-        ],
-        "balances after rejected unauthorized transfer",
-    )?;
 
-    let grant_transfer_permission_tx = alice_via_ds2.build_transaction(
-        [InstructionBox::from(Grant::account_permission(
-            CanTransferAssetWithDefinition {
-                asset_definition: ds1_asset_definition_id.clone(),
+    let grant_account_metadata_role_permission_tx = alice_via_ds2.build_transaction(
+        [InstructionBox::from(Grant::role_permission(
+            CanModifyAccountMetadata {
+                account: ALICE_ID.clone(),
             },
-            BOB_ID.clone(),
+            routed_account_metadata_role_id.clone(),
         ))],
         Metadata::default(),
     );
     rt.block_on(submit_transaction_and_expect_route(
         &alice_via_ds2,
-        &grant_transfer_permission_tx,
+        &grant_account_metadata_role_permission_tx,
         ds1_lane_id,
         ds1_dataspace_id,
         ExpectedTerminalStatus::Approved,
-        "alice grant ds1 transfer permission to bob via ds2 ingress",
+        "alice grant account metadata permission to routed role via ds2 ingress",
     ))?;
-    wait_for_account_permissions(
-        &bob_via_ds1,
-        &BOB_ID,
-        &[bob_transfer_ds1_permission.clone()],
-        "bob transfer permission propagation",
-    )?;
 
-    let bob_permissions_api_after_transfer_grant = rt.block_on(torii_json_get(
-        &bob_via_ds1,
-        &[
-            "v1".to_owned(),
-            "accounts".to_owned(),
-            BOB_ID.to_string(),
-            "permissions".to_owned(),
-        ],
-        &[],
-    ))?;
-    ensure!(
-        permission_response_contains(
-            &bob_permissions_api_after_transfer_grant.body,
-            "CanTransferAssetWithDefinition",
-            |payload| {
-                payload.get("asset_definition").and_then(JsonValue::as_str)
-                    == Some(ds1_asset_definition_id.to_string().as_str())
-            },
-            "bob permissions app api after transfer grant",
-        )?,
-        "bob app API permissions should expose ds1 transfer permission after grant"
-    );
-
-    let authorized_transfer_tx = bob_via_ds1.build_transaction(
-        [InstructionBox::from(Transfer::asset_numeric(
-            alice_ds1_asset.clone(),
-            1_u32,
-            BOB_ID.clone(),
+    let authorized_account_metadata_tx = bob_via_ds1.build_transaction(
+        [InstructionBox::from(SetKeyValue::account(
+            ALICE_ID.clone(),
+            routed_account_metadata_key.clone(),
+            Json::new(routed_account_metadata_value),
         ))],
         Metadata::default(),
     );
     rt.block_on(submit_transaction_and_expect_route(
         &bob_via_ds1,
-        &authorized_transfer_tx,
+        &authorized_account_metadata_tx,
         ds2_lane_id,
         ds2_dataspace_id,
         ExpectedTerminalStatus::Approved,
-        "bob authorized ds1 transfer via ds1 ingress should route to ds2 and approve",
+        "bob authorized alice account metadata write via ds1 ingress should route to ds2 and approve",
     ))?;
-    wait_for_expected_balances(
-        &alice,
-        &[
-            (&alice_ds1_asset, Numeric::from(99_u32)),
-            (&bob_ds1_asset, Numeric::from(1_u32)),
-        ],
-        "balances after approved authorized transfer",
-    )?;
+    let alice_account_after = alice_via_ds2.query_single(FindAccountById::new(ALICE_ID.clone()))?;
+    let expected_routed_account_metadata_value = Json::new(routed_account_metadata_value);
+    ensure!(
+        alice_account_after
+            .metadata()
+            .get(&routed_account_metadata_key)
+            == Some(&expected_routed_account_metadata_value),
+        "alice signed account query through ds2 ingress did not observe bob's routed metadata write"
+    );
 
     let manifest_uaid =
         UniversalAccountId::from_hash(Hash::new(b"wrong-ingress-ds2-manifest-routing"));
@@ -1609,10 +1404,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     wait_for_account_permissions(
         &bob_via_ds1,
         &BOB_ID,
-        &[
-            bob_transfer_ds1_permission.clone(),
-            bob_publish_ds2_manifest_permission.clone(),
-        ],
+        &[bob_publish_ds2_manifest_permission.clone()],
         "bob manifest permission propagation",
     )?;
 

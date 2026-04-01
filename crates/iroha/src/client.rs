@@ -39,8 +39,11 @@ use iroha_data_model::{
 };
 use iroha_logger::prelude::*;
 pub use iroha_telemetry::metrics::{Status, TxGossipSnapshot, Uptime};
-use iroha_torii_shared::{ErrorEnvelope, QueueErrorEnvelope, uri as torii_uri};
-use iroha_version::{DecodeAll, codec::EncodeVersioned};
+use iroha_torii_shared::{
+    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatusResponse, QueueErrorEnvelope,
+    uri as torii_uri,
+};
+use iroha_version::codec::EncodeVersioned;
 use norito::{
     decode_from_bytes,
     derive::{JsonDeserialize, JsonSerialize},
@@ -2538,6 +2541,49 @@ impl Client {
         Ok(norito::json::from_slice(response.body())?)
     }
 
+    fn response_content_type(response: &Response<Vec<u8>>) -> &str {
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+    }
+
+    fn is_json_content_type(content_type: &str) -> bool {
+        let media_type = content_type
+            .split(';')
+            .next()
+            .map(str::trim)
+            .unwrap_or_default();
+        media_type.eq_ignore_ascii_case(APPLICATION_JSON)
+            || media_type.eq_ignore_ascii_case("text/json")
+            || media_type.to_ascii_lowercase().ends_with("+json")
+    }
+
+    fn parse_typed_json_ok_response<T>(
+        response: &Response<Vec<u8>>,
+        context: &'static str,
+    ) -> Result<T>
+    where
+        T: norito::json::JsonDeserializeOwned,
+    {
+        if response.status() != StatusCode::OK && response.status() != StatusCode::ACCEPTED {
+            return Err(eyre!(
+                "{context}: {} {}",
+                response.status(),
+                std::str::from_utf8(response.body()).unwrap_or("")
+            ));
+        }
+        let content_type = Self::response_content_type(response);
+        if !Self::is_json_content_type(content_type) {
+            return Err(eyre!(
+                "{context}: invalid content-type `{content_type}` (expected application/json)"
+            ));
+        }
+        norito::json::from_slice(response.body())
+            .map_err(|error| eyre!("{context}: failed to decode JSON payload: {error}"))
+    }
+
     fn build_evidence_request_body(evidence_hex: &str) -> Result<Vec<u8>> {
         let mut payload = norito::json::Map::new();
         payload.insert(
@@ -3399,6 +3445,13 @@ mod evidence_http_tests {
             sorafs_rollout_phase: SorafsRolloutPhase::Canary,
         };
         Client::new(config)
+    }
+
+    pub(super) fn mark_data_model_compatible(client: &Client) {
+        *client
+            .data_model_compatibility
+            .lock()
+            .expect("data model compatibility lock") = DataModelCompatibility::Compatible;
     }
 
     pub(super) fn base_url() -> Url {
@@ -4326,6 +4379,7 @@ mod evidence_http_tests {
 
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
             let hash =
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x11; Hash::LENGTH]),
@@ -4375,6 +4429,7 @@ mod evidence_http_tests {
 
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
             let hash =
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x22; Hash::LENGTH]),
@@ -4401,7 +4456,10 @@ mod evidence_http_tests {
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
-            "content": { "status": { "kind": "Queued" } },
+            "hash": "deadbeef",
+            "status": { "kind": "Queued" },
+            "scope": "auto",
+            "resolved_from": "queue",
         });
         let status_body = norito::json::to_string(&payload).expect("status payload");
         let responder = {
@@ -4430,6 +4488,7 @@ mod evidence_http_tests {
 
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
             let hash =
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x23; Hash::LENGTH]),
@@ -4492,7 +4551,10 @@ mod evidence_http_tests {
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
-            "content": { "status": { "kind": "Queued" } },
+            "hash": "deadbeef",
+            "status": { "kind": "Queued" },
+            "scope": "auto",
+            "resolved_from": "queue",
         });
         let status_body = norito::json::to_string(&payload).expect("status payload");
         let responder = {
@@ -4523,6 +4585,7 @@ mod evidence_http_tests {
 
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
             client.transaction_confirmation_status(hash, entry_hash)
         });
 
@@ -4544,7 +4607,10 @@ mod evidence_http_tests {
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
-            "content": { "status": { "kind": "Approved", "block_height": 9 } },
+            "hash": "deadbeef",
+            "status": { "kind": "Approved", "block_height": 9 },
+            "scope": "auto",
+            "resolved_from": "state",
         });
         let status_body = norito::json::to_string(&payload).expect("status payload");
         let responder = {
@@ -4573,6 +4639,7 @@ mod evidence_http_tests {
 
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
             let hash =
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x24; Hash::LENGTH]),
@@ -4602,7 +4669,10 @@ mod evidence_http_tests {
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
-            "content": { "status": { "kind": "Approved" } },
+            "hash": "deadbeef",
+            "status": { "kind": "Approved" },
+            "scope": "auto",
+            "resolved_from": "state",
         });
         let status_body = norito::json::to_string(&payload).expect("status payload");
         let responder = {
@@ -4631,6 +4701,7 @@ mod evidence_http_tests {
 
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
             let hash =
                 HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
                     Hash::prehashed([0x24; Hash::LENGTH]),
@@ -4697,11 +4768,10 @@ mod evidence_http_tests {
             result,
         };
         let status_payload = norito::json!({
-            "kind": "Transaction",
-            "content": {
-                "hash": "deadbeef",
-                "status": { "kind": "Rejected" },
-            },
+            "hash": "deadbeef",
+            "status": { "kind": "Rejected" },
+            "scope": "auto",
+            "resolved_from": "state",
         });
         let status_body = norito::json::to_string(&status_payload).expect("status payload");
 
@@ -4734,6 +4804,7 @@ mod evidence_http_tests {
 
         let result = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
             client.transaction_confirmation_status(hash, entry_hash)
         });
 
@@ -4910,13 +4981,21 @@ impl From<ResponseReport> for eyre::Report {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TxConfirmationStatus {
+/// Transaction pipeline/confirmation status resolved from Torii.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize)]
+#[norito(tag = "kind", content = "content")]
+pub enum TxConfirmationStatus {
+    /// Transaction is still queued locally.
     Queued,
+    /// Transaction was approved for a block, optionally with the block height.
     Approved(Option<NonZeroU64>),
+    /// Transaction reached Kura persistence.
     Committed,
+    /// Transaction was applied successfully.
     Applied,
+    /// Transaction was rejected, optionally with a structured rejection reason.
     Rejected(Option<TransactionRejectionReason>),
+    /// Transaction expired before execution.
     Expired,
 }
 
@@ -5483,7 +5562,7 @@ impl Client {
         self.submit_transaction(&self.build_transaction_from_items(instructions, metadata))
     }
 
-    fn ensure_data_model_compatibility(&self) -> Result<()> {
+    pub(crate) fn ensure_data_model_compatibility(&self) -> Result<()> {
         let mut cached = self
             .data_model_compatibility
             .lock()
@@ -5969,15 +6048,20 @@ impl Client {
         let url = join_torii_url(&self.torii_url, "v1/pipeline/transactions/status");
         let resp = self.send_builder(
             self.default_request(HttpMethod::GET, url)
-                .param("hash", &hash_hex),
+                .param("hash", &hash_hex)
+                .header("Accept", APPLICATION_JSON),
         )?;
         match resp.status() {
             StatusCode::OK | StatusCode::ACCEPTED => {
                 if resp.body().is_empty() {
                     return Ok(None);
                 }
-                let payload: JsonValue = norito::json::from_slice(resp.body())?;
-                Ok(tx_confirmation_status_from_pipeline_payload(&payload))
+                let payload: PipelineTransactionStatusResponse =
+                    Self::parse_typed_json_ok_response(
+                        &resp,
+                        "Failed to get pipeline transaction status",
+                    )?;
+                Ok(tx_confirmation_status_from_pipeline_response(&payload))
             }
             StatusCode::NO_CONTENT => Ok(None),
             StatusCode::NOT_FOUND => {
@@ -5987,6 +6071,43 @@ impl Client {
                 );
                 self.transaction_committed(hash, entry_hash)
             }
+            status => Err(eyre!(
+                "Failed to get pipeline transaction status: {} {}",
+                status,
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            )),
+        }
+    }
+
+    /// GET `/v1/pipeline/transactions/status` — typed pipeline status lookup by signed transaction hash.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
+    /// or the typed JSON payload cannot be decoded.
+    pub fn get_transaction_status(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<TxConfirmationStatus>> {
+        let hash_hex = bytes_to_hex(hash.as_ref());
+        let url = join_torii_url(&self.torii_url, "v1/pipeline/transactions/status");
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .param("hash", &hash_hex)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        match resp.status() {
+            StatusCode::OK | StatusCode::ACCEPTED => {
+                if resp.body().is_empty() {
+                    return Ok(None);
+                }
+                let payload: PipelineTransactionStatusResponse =
+                    Self::parse_typed_json_ok_response(
+                        &resp,
+                        "Failed to get pipeline transaction status",
+                    )?;
+                Ok(tx_confirmation_status_from_pipeline_response(&payload))
+            }
+            StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(None),
             status => Err(eyre!(
                 "Failed to get pipeline transaction status: {} {}",
                 status,
@@ -9125,6 +9246,21 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
+    /// GET `/v1/accounts/{account_id}` — canonical account materialization read.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, the response is not
+    /// typed JSON, or JSON deserialization fails.
+    pub fn get_account_read(&self, account_id: &AccountId) -> Result<AccountReadResponse> {
+        let path = format!("v1/accounts/{account_id}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        Self::parse_typed_json_ok_response(&resp, "account get request")
+    }
+
     /// GET `/v1/accounts/{uaid}/portfolio` — aggregated holdings for a UAID.
     ///
     /// # Errors
@@ -9620,67 +9756,14 @@ impl Client {
     }
 }
 
-fn tx_confirmation_status_from_pipeline_payload(
-    payload: &JsonValue,
+fn tx_confirmation_status_from_pipeline_response(
+    payload: &PipelineTransactionStatusResponse,
 ) -> Option<TxConfirmationStatus> {
-    let status_value = payload
-        .get("content")
-        .and_then(|content| content.get("status"))
-        .or_else(|| payload.get("status"))?;
-    let block_height = pipeline_status_block_height(payload, status_value);
-    match status_value {
-        JsonValue::String(kind) => tx_confirmation_status_from_kind(kind, None, block_height),
-        JsonValue::Object(map) => {
-            let kind = map.get("kind").and_then(JsonValue::as_str)?;
-            let rejection = if kind == "Rejected" {
-                map.get("content").and_then(decode_rejection_reason_value)
-            } else {
-                None
-            };
-            tx_confirmation_status_from_kind(kind, rejection, block_height)
-        }
-        _ => None,
-    }
-}
-
-fn pipeline_status_block_height(
-    payload: &JsonValue,
-    status_value: &JsonValue,
-) -> Option<NonZeroU64> {
-    let from_status = match status_value {
-        JsonValue::Object(map) => map
-            .get("block_height")
-            .and_then(JsonValue::as_u64)
-            .and_then(NonZeroU64::new),
-        _ => None,
-    };
-    let from_content = payload
-        .get("content")
-        .and_then(|content| content.get("block_height"))
-        .and_then(JsonValue::as_u64)
-        .and_then(NonZeroU64::new);
-    let from_payload = payload
-        .get("block_height")
-        .and_then(JsonValue::as_u64)
-        .and_then(NonZeroU64::new);
-    from_status.or(from_content).or(from_payload)
-}
-
-fn decode_rejection_reason_value(value: &JsonValue) -> Option<TransactionRejectionReason> {
-    match value {
-        JsonValue::String(encoded) => decode_rejection_reason_base64(encoded)
-            .or_else(|| norito::json::from_value(value.clone()).ok()),
-        _ => norito::json::from_value(value.clone()).ok(),
-    }
-}
-
-fn decode_rejection_reason_base64(encoded: &str) -> Option<TransactionRejectionReason> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(encoded.trim())
-        .ok()?;
-    decode_from_bytes::<TransactionRejectionReason>(&bytes)
-        .ok()
-        .or_else(|| TransactionRejectionReason::decode_all(&mut bytes.as_slice()).ok())
+    tx_confirmation_status_from_kind(
+        &payload.status.kind,
+        payload.status.rejection_reason.clone(),
+        payload.status.block_height.and_then(NonZeroU64::new),
+    )
 }
 
 fn tx_confirmation_status_from_kind(
@@ -10634,25 +10717,25 @@ mod tx_hash_tests {
     }
 
     #[test]
-    fn tx_confirmation_status_from_pipeline_payload_decodes_rejection_reason() {
+    fn tx_confirmation_status_from_pipeline_response_decodes_rejection_reason() {
         use crate::data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
+        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
         let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "nope".to_string(),
         ));
-        let reason_value = norito::json::to_value(&reason).expect("encode rejection reason");
-        let payload = norito::json!({
-            "kind": "Transaction",
-            "content": {
-                "hash": "deadbeef",
-                "status": {
-                    "kind": "Rejected",
-                    "content": reason_value,
-                },
+        let payload = PipelineTransactionStatusResponse {
+            hash: "deadbeef".to_owned(),
+            status: PipelineTransactionStatus {
+                kind: "Rejected".to_owned(),
+                block_height: None,
+                rejection_reason: Some(reason.clone()),
             },
-        });
+            scope: "auto".to_owned(),
+            resolved_from: "state".to_owned(),
+        };
 
-        let status = super::tx_confirmation_status_from_pipeline_payload(&payload);
+        let status = super::tx_confirmation_status_from_pipeline_response(&payload);
         assert_eq!(
             status,
             Some(super::TxConfirmationStatus::Rejected(Some(reason)))
@@ -10660,69 +10743,71 @@ mod tx_hash_tests {
     }
 
     #[test]
-    fn tx_confirmation_status_from_pipeline_payload_decodes_base64_rejection_reason() {
-        use crate::data_model::{ValidationFail, transaction::error::TransactionRejectionReason};
-        use base64::Engine as _;
+    fn tx_confirmation_status_from_pipeline_response_accepts_terminal_kinds() {
+        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
-        let reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-            "nope".to_string(),
-        ));
-        let bytes = norito::to_bytes(&reason).expect("encode rejection reason");
-        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-        let payload = norito::json!({
-            "kind": "Transaction",
-            "content": {
-                "hash": "deadbeef",
-                "status": {
-                    "kind": "Rejected",
-                    "content": encoded,
-                },
+        let committed_payload = PipelineTransactionStatusResponse {
+            hash: "deadbeef".to_owned(),
+            status: PipelineTransactionStatus {
+                kind: "Committed".to_owned(),
+                block_height: None,
+                rejection_reason: None,
             },
-        });
-
-        let status = super::tx_confirmation_status_from_pipeline_payload(&payload);
-        assert_eq!(
-            status,
-            Some(super::TxConfirmationStatus::Rejected(Some(reason)))
-        );
-    }
-
-    #[test]
-    fn tx_confirmation_status_from_pipeline_payload_accepts_terminal_kinds() {
-        let committed_payload = norito::json!({
-            "content": { "status": { "kind": "Committed" } },
-        });
-        let applied_payload = norito::json!({
-            "status": "Applied",
-        });
+            scope: "auto".to_owned(),
+            resolved_from: "state".to_owned(),
+        };
+        let applied_payload = PipelineTransactionStatusResponse {
+            hash: "deadbeef".to_owned(),
+            status: PipelineTransactionStatus {
+                kind: "Applied".to_owned(),
+                block_height: None,
+                rejection_reason: None,
+            },
+            scope: "auto".to_owned(),
+            resolved_from: "state".to_owned(),
+        };
 
         assert_eq!(
-            super::tx_confirmation_status_from_pipeline_payload(&committed_payload),
+            super::tx_confirmation_status_from_pipeline_response(&committed_payload),
             Some(super::TxConfirmationStatus::Committed)
         );
         assert_eq!(
-            super::tx_confirmation_status_from_pipeline_payload(&applied_payload),
+            super::tx_confirmation_status_from_pipeline_response(&applied_payload),
             Some(super::TxConfirmationStatus::Applied)
         );
     }
 
     #[test]
-    fn tx_confirmation_status_from_pipeline_payload_accepts_non_terminal_kinds() {
-        let queued_payload = norito::json!({
-            "content": { "status": { "kind": "Queued" } },
-        });
-        let approved_payload = norito::json!({
-            "content": {
-                "status": { "kind": "Approved", "block_height": 7 },
+    fn tx_confirmation_status_from_pipeline_response_accepts_non_terminal_kinds() {
+        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
+
+        let queued_payload = PipelineTransactionStatusResponse {
+            hash: "deadbeef".to_owned(),
+            status: PipelineTransactionStatus {
+                kind: "Queued".to_owned(),
+                block_height: None,
+                rejection_reason: None,
             },
-        });
+            scope: "auto".to_owned(),
+            resolved_from: "queue".to_owned(),
+        };
+        let approved_payload = PipelineTransactionStatusResponse {
+            hash: "deadbeef".to_owned(),
+            status: PipelineTransactionStatus {
+                kind: "Approved".to_owned(),
+                block_height: Some(7),
+                rejection_reason: None,
+            },
+            scope: "auto".to_owned(),
+            resolved_from: "state".to_owned(),
+        };
 
         assert_eq!(
-            super::tx_confirmation_status_from_pipeline_payload(&queued_payload),
+            super::tx_confirmation_status_from_pipeline_response(&queued_payload),
             Some(super::TxConfirmationStatus::Queued)
         );
         assert_eq!(
-            super::tx_confirmation_status_from_pipeline_payload(&approved_payload),
+            super::tx_confirmation_status_from_pipeline_response(&approved_payload),
             Some(super::TxConfirmationStatus::Approved(
                 std::num::NonZeroU64::new(7)
             ))

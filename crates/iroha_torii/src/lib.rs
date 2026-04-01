@@ -280,7 +280,10 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_primitives::addr::SocketAddr;
-use iroha_torii_shared::{ErrorEnvelope, QueueErrorEnvelope, QueueErrorSnapshot, uri};
+use iroha_torii_shared::{
+    AccountReadResponse, ErrorEnvelope, PipelineTransactionStatus,
+    PipelineTransactionStatusResponse, QueueErrorEnvelope, QueueErrorSnapshot, uri,
+};
 use ivm::iso20022::{MsgError, parse_message};
 #[cfg(feature = "app_api")]
 use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey, Validation, decode};
@@ -3141,6 +3144,44 @@ async fn handler_gov_unlock_stats(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/gov/unlocks/stats").await?;
     crate::gov::handle_gov_unlock_stats(app.state.clone()).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_account_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    AxPath(account_id): AxPath<String>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let key_hint = account_id.clone();
+    let telemetry = app.telemetry_handle();
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
+    }
+    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        &key_hint,
+        &telemetry,
+        routing::ENDPOINT_ACCOUNTS_GET,
+    )?;
+    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
+        return Ok(execute_torii_single_route_account_read(
+            &app,
+            route,
+            canonical_account_id,
+            format,
+        )
+        .await);
+    }
+    Ok(execute_torii_fanout_account_read(&app, canonical_account_id, format).await)
 }
 
 #[cfg(feature = "app_api")]
@@ -11635,9 +11676,37 @@ async fn torii_json_body_value(response: Response) -> Result<Value, Response> {
 }
 
 #[cfg(feature = "app_api")]
+async fn torii_json_body<T>(response: Response, label: &str) -> Result<T, Response>
+where
+    T: norito::json::JsonDeserializeOwned,
+{
+    let status = response.status();
+    if !status.is_success() {
+        return Err(response);
+    }
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .map_err(|error| {
+            torii_internal_json_error(format!("failed to read proxied JSON response: {error}"))
+        })?;
+    decode_torii_proxy_json_body(&body, label)
+}
+
+#[cfg(feature = "app_api")]
 fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, Response> {
     norito::json::to_vec(value).map_err(|error| {
         torii_internal_json_error(format!("failed to encode merged JSON: {error}"))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_norito_bytes<T>(value: &T) -> Result<Vec<u8>, Response>
+where
+    T: norito::core::NoritoSerialize,
+{
+    norito::to_bytes(value).map_err(|error| {
+        torii_internal_json_error(format!("failed to encode merged typed payload: {error}"))
     })
 }
 
@@ -11671,6 +11740,42 @@ fn merged_list_response(
         crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
+}
+
+#[cfg(feature = "app_api")]
+fn merged_account_read_response(
+    payloads: Vec<AccountReadResponse>,
+    format: ResponseFormat,
+    routed_by: &'static str,
+) -> Result<Response, Response> {
+    let mut unique_payloads = BTreeMap::<Vec<u8>, AccountReadResponse>::new();
+    for payload in payloads {
+        unique_payloads
+            .entry(canonical_norito_bytes(&payload)?)
+            .or_insert(payload);
+    }
+
+    match unique_payloads.len() {
+        0 => Err(torii_proxy_error_response(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no dataspace returned a matching result",
+        )),
+        1 => {
+            let payload = unique_payloads
+                .into_values()
+                .next()
+                .expect("singleton map length should be one");
+            let mut response = crate::utils::respond_with_format(payload, format);
+            insert_routed_by_header(&mut response, routed_by);
+            Ok(response)
+        }
+        _ => Err(torii_proxy_error_response(
+            StatusCode::CONFLICT,
+            "route_conflict",
+            "multiple dataspaces returned conflicting singleton results",
+        )),
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -12669,6 +12774,16 @@ fn torii_read_request(
 }
 
 #[cfg(feature = "app_api")]
+fn torii_proxy_accept_header(format: ToriiProxyResponseFormatV1) -> HeaderValue {
+    match format {
+        ToriiProxyResponseFormatV1::Norito => {
+            HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)
+        }
+        ToriiProxyResponseFormatV1::Json => HeaderValue::from_static("application/json"),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn torii_proxy_path_arg(
     request: &ToriiReadProxyRequestV1,
     index: usize,
@@ -12691,6 +12806,23 @@ async fn execute_torii_read_request_locally(
     routed_by: &'static str,
 ) -> Response {
     match request.endpoint {
+        ToriiReadEndpointV1::AccountGet => {
+            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
+                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
+            };
+            let accept = Some(torii_proxy_accept_header(request.response_format));
+            finish_torii_read_result(
+                routing::handle_v1_account_get(
+                    app.state.clone(),
+                    AxPath(account_id),
+                    accept,
+                    app.telemetry_handle(),
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
         ToriiReadEndpointV1::AccountAssetsGet => {
             let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
                 return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
@@ -13377,6 +13509,91 @@ async fn execute_torii_fanout_singleton_read(
     }
 
     merged_singleton_response(payloads, routed_by_for_routes(app, &routes))
+        .unwrap_or_else(|response| response)
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_single_route_account_read(
+    app: &SharedAppState,
+    route: RoutingDecision,
+    canonical_account_id: String,
+    format: ResponseFormat,
+) -> Response {
+    match torii_json_body::<AccountReadResponse>(
+        execute_torii_single_route_read(
+            app,
+            route,
+            ToriiReadEndpointV1::AccountGet,
+            vec![canonical_account_id],
+            None,
+            Vec::new(),
+        )
+        .await,
+        "account get response",
+    )
+    .await
+    {
+        Ok(payload) => {
+            let mut response = crate::utils::respond_with_format(payload, format);
+            insert_routing_headers(
+                &mut response,
+                route,
+                routed_by_for_routes(app, std::slice::from_ref(&route)),
+            );
+            response
+        }
+        Err(response) => response,
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_fanout_account_read(
+    app: &SharedAppState,
+    canonical_account_id: String,
+    format: ResponseFormat,
+) -> Response {
+    let routes = torii_all_dataspace_routes(app.as_ref());
+    if routes.is_empty() {
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            "no Nexus dataspace routes are configured",
+        );
+    }
+
+    let mut payloads = Vec::new();
+    let mut last_not_found = None;
+    for route in &routes {
+        let response = execute_torii_single_route_read(
+            app,
+            *route,
+            ToriiReadEndpointV1::AccountGet,
+            vec![canonical_account_id.clone()],
+            None,
+            Vec::new(),
+        )
+        .await;
+        if response.status() == StatusCode::NOT_FOUND {
+            last_not_found = Some(response);
+            continue;
+        }
+        match torii_json_body::<AccountReadResponse>(response, "account get response").await {
+            Ok(payload) => payloads.push(payload),
+            Err(response) => return response,
+        }
+    }
+
+    if payloads.is_empty() {
+        return last_not_found.unwrap_or_else(|| {
+            torii_proxy_error_response(
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "no dataspace returned a matching result",
+            )
+        });
+    }
+
+    merged_account_read_response(payloads, format, routed_by_for_routes(app, &routes))
         .unwrap_or_else(|response| response)
 }
 
@@ -19769,51 +19986,22 @@ fn parse_signed_transaction_hash(raw: &str) -> Result<HashOf<SignedTransaction>,
         .map_err(|_| conversion_error("invalid signed transaction hash".to_owned()))
 }
 
-fn pipeline_status_payload(
+fn pipeline_status_response(
     hash: &HashOf<SignedTransaction>,
     entry: &PipelineStatusEntry,
     scope: PipelineStatusReadScope,
     resolved_from: &'static str,
-) -> norito::json::Value {
-    let mut status = norito::json::Map::new();
-    status.insert(
-        "kind".into(),
-        norito::json::Value::from(entry.kind.as_str()),
-    );
-    if let Some(height) = entry.block_height {
-        status.insert(
-            "block_height".into(),
-            norito::json::Value::from(height.get()),
-        );
+) -> PipelineTransactionStatusResponse {
+    PipelineTransactionStatusResponse {
+        hash: hash.to_string(),
+        status: PipelineTransactionStatus {
+            kind: entry.kind.as_str().to_owned(),
+            block_height: entry.block_height.map(NonZeroU64::get),
+            rejection_reason: entry.rejection.clone(),
+        },
+        scope: scope.as_str().to_owned(),
+        resolved_from: resolved_from.to_owned(),
     }
-    let rejection = match entry.kind {
-        PipelineStatusKind::Rejected => entry.rejection.as_ref().and_then(|reason| {
-            norito::to_bytes(reason)
-                .ok()
-                .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
-        }),
-        _ => None,
-    };
-    status.insert(
-        "content".into(),
-        rejection
-            .map(norito::json::Value::from)
-            .unwrap_or(norito::json::Value::Null),
-    );
-
-    let mut content = norito::json::Map::new();
-    content.insert("hash".into(), norito::json::Value::from(hash.to_string()));
-    content.insert("status".into(), norito::json::Value::Object(status));
-    content.insert("scope".into(), norito::json::Value::from(scope.as_str()));
-    content.insert(
-        "resolved_from".into(),
-        norito::json::Value::from(resolved_from),
-    );
-
-    let mut envelope = norito::json::Map::new();
-    envelope.insert("kind".into(), norito::json::Value::from("Transaction"));
-    envelope.insert("content".into(), norito::json::Value::Object(content));
-    norito::json::Value::Object(envelope)
 }
 
 fn pipeline_status_from_state(
@@ -19872,8 +20060,8 @@ async fn handler_pipeline_transaction_status(
     app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
 
     if let Some(entry) = app.pipeline_status_cache.lookup(&hash) {
-        return Ok(crate::utils::respond_value_with_format(
-            pipeline_status_payload(&hash, &entry, read_scope, "cache"),
+        return Ok(crate::utils::respond_with_format(
+            pipeline_status_response(&hash, &entry, read_scope, "cache"),
             format,
         ));
     }
@@ -19882,16 +20070,16 @@ async fn handler_pipeline_transaction_status(
     if queued {
         let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
         app.pipeline_status_cache.record_entry(hash, entry.clone());
-        return Ok(crate::utils::respond_value_with_format(
-            pipeline_status_payload(&hash, &entry, read_scope, "queue"),
+        return Ok(crate::utils::respond_with_format(
+            pipeline_status_response(&hash, &entry, read_scope, "queue"),
             format,
         ));
     }
 
     if let Some(entry) = pipeline_status_from_state(&app, &hash) {
         app.pipeline_status_cache.record_entry(hash, entry.clone());
-        return Ok(crate::utils::respond_value_with_format(
-            pipeline_status_payload(&hash, &entry, read_scope, "state"),
+        return Ok(crate::utils::respond_with_format(
+            pipeline_status_response(&hash, &entry, read_scope, "state"),
             format,
         ));
     }
@@ -23044,6 +23232,7 @@ impl Torii {
         builder.apply(|router| {
             // App-facing endpoints
             let aa_group = Router::new()
+                .route("/v1/accounts/{account_id}", get(handler_account_get))
                 .route(
                     "/v1/accounts/{account_id}/transactions/query",
                     post(handler_account_transactions_query),

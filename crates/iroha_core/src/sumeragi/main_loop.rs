@@ -17943,6 +17943,39 @@ impl Actor {
         false
     }
 
+    fn trim_block_body_response_for_frame_cap(
+        &self,
+        response: &mut super::message::BlockBodyResponse,
+    ) -> bool {
+        let origin = self.common_config.peer.id();
+        let payload_cap = self.consensus_payload_frame_cap;
+        let response_wire_len = |response: &super::message::BlockBodyResponse| {
+            consensus_block_wire_len(origin, &BlockMessage::BlockBodyResponse(response.clone()))
+        };
+
+        if response_wire_len(response) <= payload_cap {
+            return true;
+        }
+
+        let downgrade_block = {
+            let super::message::BlockBodyData::BlockSyncUpdate(update) = &mut response.body else {
+                return false;
+            };
+            let _ = self.trim_block_sync_update_for_frame_cap(update);
+            update.block.clone()
+        };
+
+        if response_wire_len(response) <= payload_cap {
+            return true;
+        }
+
+        response.body = super::message::BlockBodyData::BlockCreated(super::message::BlockCreated {
+            block: downgrade_block,
+            frontier: None,
+        });
+        response_wire_len(response) <= payload_cap
+    }
+
     fn block_message_frame_cap(&self, msg: &BlockMessage) -> usize {
         match msg {
             BlockMessage::BlockCreated(_)
@@ -17972,25 +18005,30 @@ impl Actor {
         let origin = self.common_config.peer.id();
         let mut wire_len = consensus_block_wire_len_wire(origin, msg);
         let cap = self.block_message_frame_cap(msg.as_ref());
-        if matches!(msg.as_ref(), BlockMessage::BlockSyncUpdate(_)) && wire_len > cap {
-            let update = match msg.make_mut() {
-                BlockMessage::BlockSyncUpdate(update) => update,
-                other => {
-                    debug_assert!(
-                        !matches!(other, BlockMessage::BlockSyncUpdate(_)),
-                        "BlockSyncUpdate variant should be preserved"
-                    );
-                    return true;
+        if wire_len > cap {
+            match msg.make_mut() {
+                BlockMessage::BlockSyncUpdate(update) => {
+                    if !self.trim_block_sync_update_for_frame_cap(update) {
+                        warn!(
+                            kind = Self::block_message_kind(msg.as_ref()),
+                            wire_len, cap, "dropping consensus message over frame cap"
+                        );
+                        return false;
+                    }
+                    wire_len = consensus_block_wire_len_wire(origin, msg);
                 }
-            };
-            if !self.trim_block_sync_update_for_frame_cap(update) {
-                warn!(
-                    kind = Self::block_message_kind(msg.as_ref()),
-                    wire_len, cap, "dropping consensus message over frame cap"
-                );
-                return false;
+                BlockMessage::BlockBodyResponse(response) => {
+                    if !self.trim_block_body_response_for_frame_cap(response) {
+                        warn!(
+                            kind = Self::block_message_kind(msg.as_ref()),
+                            wire_len, cap, "dropping consensus message over frame cap"
+                        );
+                        return false;
+                    }
+                    wire_len = consensus_block_wire_len_wire(origin, msg);
+                }
+                _ => {}
             }
-            wire_len = consensus_block_wire_len_wire(origin, msg);
         }
         if wire_len > cap {
             warn!(

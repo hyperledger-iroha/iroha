@@ -10239,6 +10239,96 @@ async fn fetch_block_body_responds_with_exact_block_created() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fetch_block_body_response_for_committed_block_preserves_commit_sidecars() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(genesis_hash));
+    let block_hash = block.hash();
+    actor.kura.store_block(block.clone()).expect("store block");
+
+    let tip_block = sample_block(3, 0, Some(block_hash));
+    actor
+        .kura
+        .store_block(tip_block.clone())
+        .expect("store tip block");
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        state.push_block_hash_for_testing(block_hash);
+        state.push_block_hash_for_testing(tip_block.hash());
+    }
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..roster.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let epoch = actor.epoch_for_height(2);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        2,
+        0,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        block_hash,
+        2,
+        0,
+        epoch,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        2,
+        0,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        roster,
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(qc.clone(), checkpoint.clone(), None);
+    }
+
+    let response = actor.block_body_response_for_wire(&block);
+    match response.body {
+        super::message::BlockBodyData::BlockSyncUpdate(update) => {
+            assert_eq!(update.block.hash(), block_hash);
+            assert_eq!(update.validator_checkpoint, Some(checkpoint));
+            assert!(
+                update.commit_qc.is_some() || update.validator_checkpoint.is_some(),
+                "committed exact body response should preserve authoritative roster sidecars"
+            );
+            if let Some(commit_qc) = update.commit_qc.as_ref() {
+                assert_eq!(commit_qc.subject_block_hash, qc.subject_block_hash);
+                assert_eq!(commit_qc.height, qc.height);
+            }
+        }
+        super::message::BlockBodyData::BlockCreated(_) => {
+            panic!("committed exact body response should preserve block-sync sidecars")
+        }
+    }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_body_response_releases_dedup_when_block_created_is_rejected() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -10319,6 +10409,107 @@ async fn block_body_response_releases_dedup_when_block_created_is_rejected() {
     assert!(
         !actor.frontier_block_materialized_locally(block_hash),
         "rejected BlockBodyResponse must not materialize a local payload"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_body_response_routes_block_sync_update_through_commit_sidecar_path() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let now = Instant::now();
+
+    assert!(actor.update_frontier_slot(
+        block_hash,
+        height,
+        view,
+        None,
+        BTreeSet::new(),
+        /*block_created_seen*/ true,
+        /*exact_fetch_armed*/ true,
+        /*body_present*/ false,
+        None,
+        None,
+        now,
+    ));
+
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view,
+        block_hash,
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+
+    let sender = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote sender");
+
+    actor
+        .handle_block_body_response(
+            super::message::BlockBodyResponse {
+                block_hash,
+                height,
+                view,
+                body: super::message::BlockBodyData::BlockSyncUpdate(update),
+            },
+            Some(sender),
+        )
+        .expect("block body response handled");
+
+    assert!(
+        !actor.known_block_qc_work.is_empty(),
+        "exact BlockBodyResponse should preserve commit-QC work when it carries BlockSyncUpdate"
+    );
+    assert!(
+        actor.frontier_block_materialized_locally(block_hash),
+        "exact BlockBodyResponse should materialize the frontier payload locally"
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot retained");
+    assert!(
+        slot.body_present,
+        "exact BlockBodyResponse should mark the frontier body as present"
     );
 
     harness.shutdown.send();

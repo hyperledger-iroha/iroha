@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: lock-rejected sink now survives local payload ingress
+- Fixed the remaining exact-frontier lock-reject bypass in Sumeragi: a
+  deterministic lock-rejected branch hash no longer drops out of the
+  suppression sink just because the node already has the rejected block body
+  locally or via authoritative RBC ingress.
+- `lock_rejected_block_sink_active(...)` and sink pruning now keep the
+  rejection sink alive until the lock anchor moves, the committed height
+  passes the rejected height, or the existing TTL/max-dwell expiry fires.
+- Added a focused regression covering the live failure mode where
+  `request_missing_parent(...)` sees a lock-rejected parent hash that also has
+  locally available payload data, and verified the existing cleanup
+  regressions still pass on the patched tree.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core request_missing_parent_suppresses_ --lib -- --nocapture`
+  - `cargo test -p iroha_core lock_rejected_branch_with_known_parent_clears_missing_request --lib -- --nocapture`
+  - `cargo test -p iroha_core purge_lock_rejected_block_artifacts_clears_slot_level_owner_and_proposal_state --lib -- --nocapture`
+- Remaining gap:
+  - the fresh manifest-backed live reroll with this additional sink fix has
+    not completed yet, so the SBP/public split-brain at heights `4`/`7` still
+    needs a new deploy attempt from the updated artifact.
+
 ## 2026-04-01 Follow-up: exact-frontier lock rejection now purges rejected slot ownership before recovery
 - Fixed the exact-frontier lock-reject liveness hole in Sumeragi: when a peer
   rejects a frontier `BlockCreated` because the parent does not extend the
