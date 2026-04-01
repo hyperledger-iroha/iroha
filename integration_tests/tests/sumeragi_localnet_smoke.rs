@@ -1201,6 +1201,11 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         "IROHA_TEST_CLIENT_TTL_MS",
         THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
     );
+    let throughput_rbc_encoding =
+        std::env::var("IROHA_THROUGHPUT_RBC_ENCODING").unwrap_or_else(|_| "plain".to_owned());
+    let throughput_rbc_data_shards = env_or_default("IROHA_THROUGHPUT_RBC_DATA_SHARDS", 4);
+    let throughput_rbc_parity_shards = env_or_default("IROHA_THROUGHPUT_RBC_PARITY_SHARDS", 2);
+    let throughput_rbc_encoding_for_config = throughput_rbc_encoding.clone();
 
     let builder = NetworkBuilder::new()
         .with_peers(7)
@@ -1216,9 +1221,13 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CommitTimeMs(THROUGHPUT_COMMIT_TIME_MS),
         )))
-        .with_config_layer(|layer| {
-            layer
+        .with_config_layer(move |layer| {
+            let layer = layer
                 .write(["sumeragi", "consensus_mode"], "permissioned")
+                .write(
+                    ["sumeragi", "advanced", "rbc", "encoding"],
+                    throughput_rbc_encoding_for_config.as_str(),
+                )
                 .write(["sumeragi", "collectors", "k"], 3_i64)
                 .write(["sumeragi", "collectors", "redundant_send_r"], 2_i64)
                 .write(["network", "transaction_gossip_period_ms"], 200_i64)
@@ -1304,6 +1313,17 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
                 .write(["torii", "tx_rate_per_authority_per_sec"], 0_i64)
                 .write(["torii", "tx_burst_per_authority"], 0_i64)
                 .write(["torii", "api_high_load_tx_threshold"], 262_144_i64);
+            if throughput_rbc_encoding_for_config == "rs16" {
+                let _ = layer
+                    .write(
+                        ["sumeragi", "advanced", "rbc", "data_shards"],
+                        i64::try_from(throughput_rbc_data_shards).unwrap_or(i64::MAX),
+                    )
+                    .write(
+                        ["sumeragi", "advanced", "rbc", "parity_shards"],
+                        i64::try_from(throughput_rbc_parity_shards).unwrap_or(i64::MAX),
+                    );
+            }
         });
 
     let result: Result<()> = async {
@@ -1389,6 +1409,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             queue_soft_limit,
             payload_bytes: payload_bytes as u64,
             rng_seed,
+            rbc_encoding: throughput_rbc_encoding.clone(),
+            rbc_data_shards: throughput_rbc_data_shards,
+            rbc_parity_shards: throughput_rbc_parity_shards,
         });
 
         let slo_p95_ms = env_or_default("IROHA_THROUGHPUT_SLO_P95_MS", THROUGHPUT_SLO_P95_MS);
@@ -1420,7 +1443,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             "network must have at least one peer"
         );
         eprintln!(
-            "localnet throughput recipe: peers={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, warmup_blocks={}, steady_blocks={}, total_blocks={}, payload_bytes={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, rng_seed={}, baseline_non_empty={}, baseline_approved={}",
+            "localnet throughput recipe: peers={}, block_time_ms={}, commit_time_ms={}, block_max_txs={}, warmup_blocks={}, steady_blocks={}, total_blocks={}, payload_bytes={}, submit_batch={}, submit_parallelism={}, queue_soft_limit={}, rng_seed={}, rbc_encoding={}, rbc_data_shards={}, rbc_parity_shards={}, baseline_non_empty={}, baseline_approved={}",
             network.peers().len(),
             THROUGHPUT_BLOCK_TIME_MS,
             THROUGHPUT_COMMIT_TIME_MS,
@@ -1433,6 +1456,9 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
             submit_parallelism,
             queue_soft_limit,
             rng_seed,
+            throughput_rbc_encoding,
+            throughput_rbc_data_shards,
+            throughput_rbc_parity_shards,
             baseline_non_empty,
             baseline_approved,
         );
@@ -2026,6 +2052,9 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
             queue_soft_limit,
             payload_bytes: payload_bytes as u64,
             rng_seed,
+            rbc_encoding: "plain".to_owned(),
+            rbc_data_shards: 4,
+            rbc_parity_shards: 2,
         });
 
         let slo_p95_ms =
@@ -3251,6 +3280,9 @@ struct ThroughputArtifactRecipe {
     queue_soft_limit: u64,
     payload_bytes: u64,
     rng_seed: u64,
+    rbc_encoding: String,
+    rbc_data_shards: u64,
+    rbc_parity_shards: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -3426,6 +3458,18 @@ fn write_throughput_artifacts(
             Value::from(recipe.payload_bytes),
         );
         recipe_map.insert("rng_seed".to_string(), Value::from(recipe.rng_seed));
+        recipe_map.insert(
+            "rbc_encoding".to_string(),
+            Value::from(recipe.rbc_encoding.clone()),
+        );
+        recipe_map.insert(
+            "rbc_data_shards".to_string(),
+            Value::from(recipe.rbc_data_shards),
+        );
+        recipe_map.insert(
+            "rbc_parity_shards".to_string(),
+            Value::from(recipe.rbc_parity_shards),
+        );
         summary.insert("recipe".to_string(), Value::Object(recipe_map));
     }
 

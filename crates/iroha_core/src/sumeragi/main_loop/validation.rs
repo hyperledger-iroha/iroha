@@ -142,6 +142,41 @@ pub(super) fn spawn_validation_workers(
 impl Actor {
     const SUPERSEDED_VALIDATION_RESULT_CAP: usize = 4_096;
 
+    fn replay_cached_precommit_qc_for_valid_block(
+        &mut self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        source: &'static str,
+    ) {
+        if !self.block_known_for_lock(hash) {
+            return;
+        }
+        let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash)
+            .filter(|qc| {
+                qc.phase == crate::sumeragi::consensus::Phase::Commit && qc.height == height
+            })
+            .max_by_key(|qc| qc.view)
+            .cloned()
+        else {
+            return;
+        };
+        if self.process_precommit_qc(&qc, true, false) {
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.set_commit_qc_summary(&qc);
+            }
+            debug!(
+                height,
+                view,
+                block = %hash,
+                qc_view = qc.view,
+                source,
+                "replayed cached precommit QC after validation"
+            );
+        }
+    }
+
     fn remember_superseded_validation_result(&mut self, hash: HashOf<BlockHeader>, id: u64) {
         if self.subsystems.validation.superseded_results.len()
             >= Self::SUPERSEDED_VALIDATION_RESULT_CAP
@@ -528,8 +563,16 @@ impl Actor {
                     pending.post_state_root = None;
                     pending.validated_commit_artifact = None;
                 }
+                let pending_height = pending.height;
+                let pending_view = pending.view;
                 pending.validation_status = ValidationStatus::Valid;
                 self.pending.pending_blocks.insert(hash, pending);
+                self.replay_cached_precommit_qc_for_valid_block(
+                    hash,
+                    pending_height,
+                    pending_view,
+                    "validation_inline",
+                );
                 ValidationGateOutcome::Valid
             }
             Err(err) => {
@@ -563,8 +606,16 @@ impl Actor {
                         has_cached_qc = self.pending_block_has_qc(hash, pending.height, pending.view),
                         "accepting pending block for commit-only progression despite signature mismatch: local peer outside commit roster"
                     );
+                    let pending_height = pending.height;
+                    let pending_view = pending.view;
                     pending.validation_status = ValidationStatus::Valid;
                     self.pending.pending_blocks.insert(hash, pending);
+                    self.replay_cached_precommit_qc_for_valid_block(
+                        hash,
+                        pending_height,
+                        pending_view,
+                        "validation_inline_signature_recovery",
+                    );
                     return ValidationGateOutcome::Valid;
                 }
                 self.finalize_validation_failure(hash, pending, &err)
@@ -769,6 +820,12 @@ impl Actor {
                             }
                             pending.validation_status = ValidationStatus::Valid;
                             self.pending.pending_blocks.insert(hash, pending);
+                            self.replay_cached_precommit_qc_for_valid_block(
+                                hash,
+                                height,
+                                view,
+                                "validation_worker",
+                            );
                             let _ = self.maybe_emit_local_commit_vote_for_pending_event(
                                 hash,
                                 height,
@@ -821,6 +878,12 @@ impl Actor {
                                 );
                                 pending.validation_status = ValidationStatus::Valid;
                                 self.pending.pending_blocks.insert(hash, pending);
+                                self.replay_cached_precommit_qc_for_valid_block(
+                                    hash,
+                                    height,
+                                    view,
+                                    "validation_worker_signature_recovery",
+                                );
                                 let _ = self.maybe_emit_local_commit_vote_for_pending_event(
                                     hash,
                                     height,

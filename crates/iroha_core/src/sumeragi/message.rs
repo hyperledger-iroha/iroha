@@ -38,6 +38,10 @@ pub enum BlockMessage {
     VrfReveal(#[skip_try_from] super::consensus::VrfReveal),
     /// Execution witness with metadata for SMT recomputation.
     ExecWitness(#[skip_try_from] super::consensus::ExecWitnessMsg),
+    /// RBC INIT repair request.
+    RbcInitRequest(#[skip_try_from] super::consensus::RbcInitRequest),
+    /// RBC chunk repair request.
+    RbcChunkRequest(#[skip_try_from] super::consensus::RbcChunkRequest),
     /// RBC init (payload distribution scaffold).
     RbcInit(#[skip_try_from] super::consensus::RbcInit),
     /// RBC payload chunk.
@@ -706,6 +710,27 @@ mod tests {
         }
     }
 
+    fn sample_rbc_init_request(seed: u8) -> consensus::RbcInitRequest {
+        consensus::RbcInitRequest {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [seed.wrapping_add(9); Hash::LENGTH],
+            )),
+            height: u64::from(seed).saturating_add(4),
+            view: u64::from(seed % 5),
+        }
+    }
+
+    fn sample_rbc_chunk_request(seed: u8) -> consensus::RbcChunkRequest {
+        consensus::RbcChunkRequest {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [seed.wrapping_add(10); Hash::LENGTH],
+            )),
+            height: u64::from(seed).saturating_add(5),
+            view: u64::from(seed % 6),
+            missing_indices: vec![1, 4, 9],
+        }
+    }
+
     fn roundtrip_cached_block_message_over_network_message(
         message: BlockMessage,
     ) -> crate::NetworkMessage {
@@ -792,6 +817,26 @@ mod tests {
             Some(HashOf::new(&evidence)),
             "payload and header evidence hash must stay aligned",
         );
+    }
+
+    #[test]
+    fn rbc_repair_requests_roundtrip_over_network_wrapper() {
+        let init_request = BlockMessage::RbcInitRequest(sample_rbc_init_request(7));
+        let chunk_request = BlockMessage::RbcChunkRequest(sample_rbc_chunk_request(11));
+
+        let init_roundtrip = roundtrip_cached_block_message_over_network_message(init_request);
+        let chunk_roundtrip = roundtrip_cached_block_message_over_network_message(chunk_request);
+
+        assert!(matches!(
+            init_roundtrip,
+            crate::NetworkMessage::SumeragiBlock(wire)
+                if matches!(wire.as_message(), BlockMessage::RbcInitRequest(_))
+        ));
+        assert!(matches!(
+            chunk_roundtrip,
+            crate::NetworkMessage::SumeragiBlock(wire)
+                if matches!(wire.as_message(), BlockMessage::RbcChunkRequest(_))
+        ));
     }
 
     #[test]

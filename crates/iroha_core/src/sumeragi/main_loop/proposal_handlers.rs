@@ -73,7 +73,7 @@ impl Actor {
                 .is_some_and(|pending| pending == hash)
     }
 
-    fn should_clear_missing_request_on_locked_reject(
+    pub(crate) fn should_clear_missing_request_on_locked_reject(
         &self,
         hash: HashOf<BlockHeader>,
         height: u64,
@@ -111,12 +111,14 @@ impl Actor {
             ),
             Some(false)
         );
+        let header_proves_locked_conflict = known_parent.is_some() && locally_conflicts_with_locked;
         let locked_chain_committed = locked_height <= committed_height;
         // Lock rejection may clear requests once local evidence disproves the branch:
         // either committed history conflicts with the hash, or local ancestry proves the hash
         // does not extend a lock that is already anchored by committed history. Preserve
         // unresolved requests when lock ancestry may still legitimately realign.
         (height <= committed_height || height <= locked_height) && known_conflict
+            || header_proves_locked_conflict
             || (locked_chain_committed && locally_conflicts_with_locked)
     }
 
@@ -1959,7 +1961,11 @@ impl Actor {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
                 if self.frontier_slot_is_exact_height(height) {
-                    self.purge_rbc_state(session_key, block_hash, height, view);
+                    // The exact-frontier path already has a local pending block, so the live RBC
+                    // runtime can retire. Keep the persisted snapshot and operator summary until
+                    // commit or TTL cleanup so restart recovery still has durable payload state.
+                    self.clear_rbc_runtime_state(session_key, false);
+                    self.publish_rbc_backlog_snapshot();
                 } else {
                     let payload_hash = self
                         .pending
@@ -2008,6 +2014,7 @@ impl Actor {
                                     &self.config.rbc,
                                 ),
                                 epoch: self.epoch_for_height(height),
+                                started_at: Instant::now(),
                             };
                             match seed_tx.try_send(work) {
                                 Ok(()) => {
@@ -2133,6 +2140,7 @@ impl Actor {
                                     &self.config.rbc,
                                 ),
                                 epoch: self.epoch_for_height(height),
+                                started_at: Instant::now(),
                             };
                             match seed_tx.try_send(work) {
                                 Ok(()) => {
@@ -3016,6 +3024,7 @@ impl Actor {
                             payload_bytes: payload_bytes.clone(),
                             chunking: super::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
                             epoch: self.epoch_for_height(height),
+                            started_at: Instant::now(),
                         };
                         match seed_tx.try_send(work) {
                             Ok(()) => {
@@ -3134,6 +3143,7 @@ impl Actor {
                             payload_bytes: payload_bytes.clone(),
                             chunking: super::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
                             epoch: self.epoch_for_height(height),
+                            started_at: Instant::now(),
                         };
                         match seed_tx.try_send(work) {
                             Ok(()) => {
@@ -3202,7 +3212,13 @@ impl Actor {
             (seed_ms, hydrate_ms)
         } else {
             if da_enabled && exact_frontier_block_created {
-                self.purge_rbc_state(session_key, block_hash, height, view);
+                self.clear_rbc_runtime_state(session_key, false);
+                self.persist_exact_frontier_rbc_recovery_snapshot(
+                    session_key,
+                    &block,
+                    &payload_bytes,
+                    payload_hash,
+                )?;
             }
             (0, 0)
         };
@@ -3352,7 +3368,7 @@ impl Actor {
         }
 
         if da_enabled && !exact_frontier_block_created {
-            let mut status_update = None;
+            let mut should_update_status = false;
             let mut mismatch_expected = None;
             {
                 if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&session_key) {
@@ -3364,66 +3380,20 @@ impl Actor {
                     } else {
                         session.payload_hash = Some(payload_hash);
                     }
-                    status_update = Some((
-                        session.total_chunks(),
-                        session.received_chunks(),
-                        session.ready_signatures.len() as u64,
-                        session.delivered,
-                        session.payload_hash(),
-                        session.recovered_from_disk(),
-                        session.is_invalid(),
-                    ));
+                    should_update_status = true;
                 }
             }
-            if let Some((
-                total_chunks,
-                received_chunks,
-                ready_count,
-                delivered_flag,
-                payload_hash_opt,
-                recovered_flag,
-                invalid_flag,
-            )) = status_update
-            {
-                let (lane_backlog, dataspace_backlog) = self
+            if should_update_status {
+                if let Some(session) = self
                     .subsystems
                     .da_rbc
                     .rbc
                     .sessions
                     .get(&session_key)
-                    .map_or_else(
-                        || (Vec::new(), Vec::new()),
-                        |session| {
-                            (
-                                session.lane_backlog_entries(),
-                                session.dataspace_backlog_entries(),
-                            )
-                        },
-                    );
-                let summary = super::rbc_status::Summary {
-                    block_hash: session_key.0,
-                    height: session_key.1,
-                    view: session_key.2,
-                    total_chunks,
-                    encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
-                    data_shards: 0,
-                    parity_shards: 0,
-                    received_chunks,
-                    ready_count,
-                    delivered: delivered_flag,
-                    payload_hash: payload_hash_opt,
-                    recovered_from_disk: recovered_flag,
-                    invalid: invalid_flag,
-                    reconstructed_stripes: 0,
-                    reconstructable_stripes: 0,
-                    lane_backlog,
-                    dataspace_backlog,
-                };
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .status_handle
-                    .update(summary, SystemTime::now());
+                    .cloned()
+                {
+                    self.update_rbc_status_entry(session_key, &session, false);
+                }
                 if let Some(expected_hash) = mismatch_expected {
                     debug!(
                         height,

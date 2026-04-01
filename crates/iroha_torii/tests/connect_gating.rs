@@ -588,6 +588,10 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             },
             rbc: A::SumeragiRbc {
                 chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
+                encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                data_shards: iroha_config::parameters::defaults::sumeragi::RBC_RS16_DATA_SHARDS,
+                parity_shards:
+                    iroha_config::parameters::defaults::sumeragi::RBC_RS16_PARITY_SHARDS,
                 chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
                 pending_max_chunks:
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,

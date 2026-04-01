@@ -275,6 +275,7 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha app contracts alias release`↴](#iroha-app-contracts-alias-release)
 * [`iroha app contracts alias resolve`↴](#iroha-app-contracts-alias-resolve)
 * [`iroha app contracts deploy`↴](#iroha-app-contracts-deploy)
+* [`iroha app contracts derive-address`↴](#iroha-app-contracts-derive-address)
 * [`iroha app contracts call`↴](#iroha-app-contracts-call)
 * [`iroha app contracts view`↴](#iroha-app-contracts-view)
 * [`iroha app contracts debug-view`↴](#iroha-app-contracts-debug-view)
@@ -367,6 +368,7 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha app nexus public-lane stake`↴](#iroha-app-nexus-public-lane-stake)
 * [`iroha app staking`↴](#iroha-app-staking)
 * [`iroha app staking register`↴](#iroha-app-staking-register)
+* [`iroha app staking rebind`↴](#iroha-app-staking-rebind)
 * [`iroha app staking activate`↴](#iroha-app-staking-activate)
 * [`iroha app staking exit`↴](#iroha-app-staking-exit)
 * [`iroha app subscriptions`↴](#iroha-app-subscriptions)
@@ -470,6 +472,8 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha app kaigi`↴](#iroha-app-kaigi)
 * [`iroha app kaigi create`↴](#iroha-app-kaigi-create)
 * [`iroha app kaigi quickstart`↴](#iroha-app-kaigi-quickstart)
+* [`iroha app kaigi register-relay`↴](#iroha-app-kaigi-register-relay)
+* [`iroha app kaigi set-relay-manifest`↴](#iroha-app-kaigi-set-relay-manifest)
 * [`iroha app kaigi join`↴](#iroha-app-kaigi-join)
 * [`iroha app kaigi leave`↴](#iroha-app-kaigi-leave)
 * [`iroha app kaigi end`↴](#iroha-app-kaigi-end)
@@ -1065,11 +1069,12 @@ Retrieve details of a specific account
 
 Register an account
 
-**Usage:** `iroha ledger account register --id <ID>`
+**Usage:** `iroha ledger account register [OPTIONS] --id <ID>`
 
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Canonical global account identifier for registration (canonical I105 literal)
+* `--no-wait` — Submit without waiting for confirmation
 
 
 
@@ -5038,6 +5043,7 @@ Contracts helpers (code storage)
 * `code` — Contract code helpers
 * `alias` — Contract alias helpers
 * `deploy` — Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
+* `derive-address` — Derive a canonical contract address locally from authority, deploy nonce, and dataspace
 * `call` — Submit a contract call through Torii (POST /v1/contracts/call)
 * `view` — Execute a read-only contract view through Torii (POST /v1/contracts/view)
 * `debug-view` — Execute a read-only contract view locally against compiled bytecode and optional fixtures
@@ -5139,6 +5145,24 @@ Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
 * `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
+
+
+
+## `iroha app contracts derive-address`
+
+Derive a canonical contract address locally from authority, deploy nonce, and dataspace
+
+**Usage:** `iroha app contracts derive-address [OPTIONS] --authority <AUTHORITY> --deploy-nonce <DEPLOY_NONCE> --chain-discriminant <CHAIN_DISCRIMINANT>`
+
+###### **Options:**
+
+* `--authority <AUTHORITY>` — Authority account identifier (canonical I105 account literal)
+* `--dataspace <DATASPACE>` — Target dataspace alias or numeric dataspace id (defaults to `universal`)
+
+  Default value: `universal`
+* `--deploy-nonce <DEPLOY_NONCE>` — Successful deploy nonce consumed for address derivation
+* `--chain-discriminant <CHAIN_DISCRIMINANT>` — Explicit chain discriminant used for Bech32m contract-address derivation
+* `--dataspace-id <DATASPACE_ID>` — Optional numeric dataspace id override for non-default dataspaces
 
 
 
@@ -6803,6 +6827,7 @@ Public-lane staking helpers (register/activate/exit)
 ###### **Subcommands:**
 
 * `register` — Register a stake-elected validator on a public lane
+* `rebind` — Rebind an existing validator to a replacement consensus peer
 * `activate` — Activate a pending validator once its activation epoch is reached
 * `exit` — Schedule or finalize a validator exit
 
@@ -6812,15 +6837,30 @@ Public-lane staking helpers (register/activate/exit)
 
 Register a stake-elected validator on a public lane
 
-**Usage:** `iroha app staking register [OPTIONS] --lane-id <LANE_ID> --validator <ACCOUNT_ID> --initial-stake <AMOUNT>`
+**Usage:** `iroha app staking register [OPTIONS] --lane-id <LANE_ID> --validator <ACCOUNT_ID> --peer-id <PEER_ID> --initial-stake <AMOUNT>`
 
 ###### **Options:**
 
 * `--lane-id <LANE_ID>` — Lane id to register against
 * `--validator <ACCOUNT_ID>` — Validator account identifier (canonical I105 account literal)
+* `--peer-id <PEER_ID>` — Peer identity that will participate in consensus for this validator
 * `--stake-account <ACCOUNT_ID>` — Optional staking account (defaults to validator)
 * `--initial-stake <AMOUNT>` — Initial self-bond (integer, uses the staking asset scale)
 * `--metadata <PATH>` — Optional metadata JSON (Norito JSON object)
+
+
+
+## `iroha app staking rebind`
+
+Rebind an existing validator to a replacement consensus peer
+
+**Usage:** `iroha app staking rebind --lane-id <LANE_ID> --validator <ACCOUNT_ID> --peer-id <PEER_ID>`
+
+###### **Options:**
+
+* `--lane-id <LANE_ID>` — Lane id containing the validator
+* `--validator <ACCOUNT_ID>` — Validator account identifier (canonical I105 account literal)
+* `--peer-id <PEER_ID>` — Replacement peer identity that will participate in consensus for this validator
 
 
 
@@ -8758,6 +8798,8 @@ Kaigi session helpers
 
 * `create` — Create a new Kaigi session
 * `quickstart` — Bootstrap a Kaigi session for demos and shareable testing metadata
+* `register-relay` — Register or update a Kaigi relay descriptor
+* `set-relay-manifest` — Replace or clear the relay manifest for an existing Kaigi session
 * `join` — Join a Kaigi session
 * `leave` — Leave a Kaigi session
 * `end` — End an active Kaigi session
@@ -8799,6 +8841,12 @@ Create a new Kaigi session
 
 * `--relay-manifest <PATH>` — Path to a JSON file describing the relay manifest (optional)
 * `--metadata-json <PATH>` — Path to a JSON file providing additional metadata (object with string keys)
+* `--commitment-hex <HEX>` — Commitment hash (hex) for privacy mode creation
+* `--commitment-alias <COMMITMENT_ALIAS>` — Alias tag describing the host commitment (privacy mode)
+* `--nullifier-hex <HEX>` — Nullifier hash (hex) preventing proof replay (privacy mode)
+* `--nullifier-issued-at-ms <U64>` — Nullifier issuance timestamp (milliseconds since epoch)
+* `--roster-root-hex <HEX>` — Roster Merkle root bound into the proof transcript (privacy mode)
+* `--proof-hex <HEX>` — Proof bytes attesting ownership (hex encoding of raw bytes)
 
 
 
@@ -8834,6 +8882,35 @@ Bootstrap a Kaigi session for demos and shareable testing metadata
 * `--spool-hint <PATH>` — Root directory where `SoraNet` spool files are expected (informational only)
 
   Default value: `storage/streaming/soranet_routes`
+
+
+
+## `iroha app kaigi register-relay`
+
+Register or update a Kaigi relay descriptor
+
+**Usage:** `iroha app kaigi register-relay --relay <ACCOUNT-ID> --hpke-public-key-b64 <BASE64> --bandwidth-class <U8>`
+
+###### **Options:**
+
+* `--relay <ACCOUNT-ID>` — Relay account identifier advertising relay capabilities (canonical I105 account literal)
+* `--hpke-public-key-b64 <BASE64>` — HPKE public key bytes advertised by the relay (base64-encoded raw bytes)
+* `--bandwidth-class <U8>` — Relative bandwidth class advertised by the relay
+
+
+
+## `iroha app kaigi set-relay-manifest`
+
+Replace or clear the relay manifest for an existing Kaigi session
+
+**Usage:** `iroha app kaigi set-relay-manifest [OPTIONS] --domain <DOMAIN-ID> --call-name <NAME>`
+
+###### **Options:**
+
+* `--domain <DOMAIN-ID>` — Domain identifier hosting the call
+* `--call-name <NAME>` — Call name within the domain
+* `--relay-manifest <PATH>` — Path to a JSON file describing the relay manifest
+* `--clear` — Clear the stored relay manifest entirely
 
 
 
@@ -8887,6 +8964,12 @@ End an active Kaigi session
 * `--domain <DOMAIN-ID>` — Domain identifier hosting the call
 * `--call-name <NAME>` — Call name within the domain
 * `--ended-at-ms <U64>` — Optional timestamp in milliseconds when the call ended
+* `--commitment-hex <HEX>` — Commitment hash (hex) for privacy mode end requests
+* `--commitment-alias <COMMITMENT_ALIAS>` — Alias tag describing the host commitment (privacy mode)
+* `--nullifier-hex <HEX>` — Nullifier hash (hex) preventing proof replay (privacy mode)
+* `--nullifier-issued-at-ms <U64>` — Nullifier issuance timestamp (milliseconds since epoch)
+* `--roster-root-hex <HEX>` — Roster Merkle root bound into the proof transcript (privacy mode)
+* `--proof-hex <HEX>` — Proof bytes attesting ownership (hex encoding of raw bytes)
 
 
 

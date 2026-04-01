@@ -73,8 +73,9 @@ use super::{
     WsvEpochRosterAdapter,
     collectors::{CollectorPlan, deterministic_collectors},
     consensus::{
-        ExecWitness, ExecWitnessMsg, NPOS_TAG, PERMISSIONED_TAG, RbcDeliver, RbcInit, RbcReady,
-        ValidatorIndex, qc_signer_count, rbc_deliver_preimage, rbc_ready_preimage, vote_preimage,
+        ExecWitness, ExecWitnessMsg, NPOS_TAG, PERMISSIONED_TAG, RbcChunkRequest, RbcDeliver,
+        RbcInit, RbcInitRequest, RbcReady, ValidatorIndex, qc_signer_count, rbc_deliver_preimage,
+        rbc_ready_preimage, vote_preimage,
     },
     da::{GateReason, ManifestGateKind},
     election,
@@ -3856,6 +3857,30 @@ impl Actor {
                 .pop_proposal(height, view)
                 .is_some(),
         );
+        self.slot_tracker.proposals_seen.remove(&(height, view));
+        if self
+            .subsystems
+            .propose
+            .proposal_liveness
+            .is_some_and(|slot| slot.height == height && slot.view == view)
+        {
+            self.subsystems.propose.proposal_liveness = None;
+        }
+        self.slot_tracker.authoritative_block_slots.retain(
+            |(entry_height, entry_view), entry_hash| {
+                *entry_height != height || *entry_view != view || *entry_hash != block_hash
+            },
+        );
+        self.slot_tracker
+            .authoritative_block_frontiers
+            .retain(|(entry_height, entry_view, entry_hash), _| {
+                *entry_height != height || *entry_view != view || *entry_hash != block_hash
+            });
+        if self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height && slot.view == view && slot.block_hash == block_hash
+        }) {
+            self.frontier_slot = None;
+        }
 
         self.vote_roster_cache.remove(&block_hash);
         self.block_signer_cache.remove_block(&block_hash);
@@ -5453,6 +5478,20 @@ impl Actor {
                 .targeted_payload_rescue_last_sent
                 .iter()
                 .any(|(key, sent_at)| same_height(*key) && recent(*sent_at))
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .init_repair_last_sent
+                .iter()
+                .any(|(key, sent_at)| same_height(*key) && recent(*sent_at))
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .chunk_repair
+                .iter()
+                .any(|(key, repair)| same_height(*key) && recent(repair.last_sent))
             || self
                 .subsystems
                 .da_rbc
@@ -9633,6 +9672,8 @@ struct RbcState {
     status_handle: rbc_status::Handle,
     payload_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     targeted_payload_rescue_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
+    init_repair_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
+    chunk_repair: BTreeMap<super::rbc_store::SessionKey, RbcChunkRepairState>,
     ready_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     deliver_rebroadcast_last_sent: BTreeMap<super::rbc_store::SessionKey, Instant>,
     ready_deferral: BTreeMap<super::rbc_store::SessionKey, RbcReadyDeferral>,
@@ -9640,7 +9681,7 @@ struct RbcState {
     outbound_chunks: BTreeMap<super::rbc_store::SessionKey, RbcOutboundChunks>,
     outbound_cursor: Option<super::rbc_store::SessionKey>,
     rebroadcast_cursor: Option<super::rbc_store::SessionKey>,
-    persisted_full_sessions: BTreeSet<super::rbc_store::SessionKey>,
+    persisted_sessions: BTreeSet<super::rbc_store::SessionKey>,
     persist_tx: Option<mpsc::SyncSender<rbc::RbcPersistWork>>,
     persist_rx: Option<mpsc::Receiver<rbc::RbcPersistResult>>,
     persist_inflight: BTreeSet<super::rbc_store::SessionKey>,
@@ -9660,6 +9701,20 @@ struct RbcOutboundChunks {
 struct RbcOutboundChunkDispatch {
     stored: bool,
     sent: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RbcChunkRepairState {
+    last_sent: Instant,
+    received_chunks_snapshot: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RbcRepairAttempt {
+    NotNeeded,
+    Requested,
+    Waiting,
+    Fallback,
 }
 
 #[derive(Debug, Clone)]
@@ -12616,11 +12671,7 @@ impl Actor {
                     .session_roster_sources
                     .insert(key, source);
                 if source.is_authoritative() {
-                    self.subsystems
-                        .da_rbc
-                        .rbc
-                        .persisted_full_sessions
-                        .remove(&key);
+                    self.subsystems.da_rbc.rbc.persisted_sessions.remove(&key);
                 }
             }
             Entry::Occupied(mut entry) => {
@@ -12642,11 +12693,7 @@ impl Actor {
                             .session_roster_sources
                             .insert(key, merged);
                         if merged.is_authoritative() && !existing_source.is_authoritative() {
-                            self.subsystems
-                                .da_rbc
-                                .rbc
-                                .persisted_full_sessions
-                                .remove(&key);
+                            self.subsystems.da_rbc.rbc.persisted_sessions.remove(&key);
                         }
                     }
                     return;
@@ -12676,11 +12723,7 @@ impl Actor {
                         .rbc
                         .session_roster_sources
                         .insert(key, source);
-                    self.subsystems
-                        .da_rbc
-                        .rbc
-                        .persisted_full_sessions
-                        .remove(&key);
+                    self.subsystems.da_rbc.rbc.persisted_sessions.remove(&key);
                     if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
                         session.ready_signatures.clear();
                         session.ready_roster_hash = None;
@@ -12700,6 +12743,12 @@ impl Actor {
                         .rbc
                         .targeted_payload_rescue_last_sent
                         .remove(&key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .init_repair_last_sent
+                        .remove(&key);
+                    self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
                     self.subsystems
                         .da_rbc
                         .rbc
@@ -12733,11 +12782,7 @@ impl Actor {
                             .rbc
                             .session_roster_sources
                             .insert(key, source);
-                        self.subsystems
-                            .da_rbc
-                            .rbc
-                            .persisted_full_sessions
-                            .remove(&key);
+                        self.subsystems.da_rbc.rbc.persisted_sessions.remove(&key);
                         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
                             session.ready_signatures.clear();
                             session.ready_roster_hash = None;
@@ -12757,6 +12802,12 @@ impl Actor {
                             .rbc
                             .targeted_payload_rescue_last_sent
                             .remove(&key);
+                        self.subsystems
+                            .da_rbc
+                            .rbc
+                            .init_repair_last_sent
+                            .remove(&key);
+                        self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
                         self.subsystems
                             .da_rbc
                             .rbc
@@ -12797,11 +12848,7 @@ impl Actor {
                                 .rbc
                                 .session_roster_sources
                                 .insert(key, source);
-                            self.subsystems
-                                .da_rbc
-                                .rbc
-                                .persisted_full_sessions
-                                .remove(&key);
+                            self.subsystems.da_rbc.rbc.persisted_sessions.remove(&key);
                             if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key)
                             {
                                 session.ready_signatures.clear();
@@ -12822,6 +12869,12 @@ impl Actor {
                                 .rbc
                                 .targeted_payload_rescue_last_sent
                                 .remove(&key);
+                            self.subsystems
+                                .da_rbc
+                                .rbc
+                                .init_repair_last_sent
+                                .remove(&key);
+                            self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
                             self.subsystems
                                 .da_rbc
                                 .rbc
@@ -12880,6 +12933,12 @@ impl Actor {
                         .rbc
                         .targeted_payload_rescue_last_sent
                         .remove(&key);
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .init_repair_last_sent
+                        .remove(&key);
+                    self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
                     self.subsystems
                         .da_rbc
                         .rbc
@@ -14162,7 +14221,7 @@ impl Actor {
             "retiring near-tip RBC runtime after local BlockCreated ownership or local materialization"
         );
         self.update_rbc_status_entry(key, &session, false);
-        self.clear_rbc_runtime_state(key, false);
+        self.clear_rbc_runtime_state_preserving_snapshot(key, false);
         self.publish_rbc_backlog_snapshot();
         true
     }
@@ -15371,6 +15430,7 @@ impl Actor {
         };
 
         let mut rbc_sessions = BTreeMap::new();
+        let mut persisted_rbc_sessions = BTreeSet::new();
         let mut rbc_session_rosters = BTreeMap::new();
         let mut rbc_session_roster_sources = BTreeMap::new();
         let mut initial_rbc_store_pressure: Option<super::rbc_store::StorePressure> = None;
@@ -15419,6 +15479,7 @@ impl Actor {
                                 rbc_status_handle.update(summary, SystemTime::now());
                                 let roster = persisted.session_roster.clone();
                                 rbc_sessions.insert(key, session);
+                                persisted_rbc_sessions.insert(key);
                                 if !roster.is_empty() {
                                     rbc_session_rosters.insert(key, roster);
                                     rbc_session_roster_sources
@@ -15537,6 +15598,8 @@ impl Actor {
             status_handle: rbc_status_handle,
             payload_rebroadcast_last_sent: BTreeMap::new(),
             targeted_payload_rescue_last_sent: BTreeMap::new(),
+            init_repair_last_sent: BTreeMap::new(),
+            chunk_repair: BTreeMap::new(),
             ready_rebroadcast_last_sent: BTreeMap::new(),
             deliver_rebroadcast_last_sent: BTreeMap::new(),
             ready_deferral: BTreeMap::new(),
@@ -15544,7 +15607,7 @@ impl Actor {
             outbound_chunks: BTreeMap::new(),
             outbound_cursor: None,
             rebroadcast_cursor: None,
-            persisted_full_sessions: BTreeSet::new(),
+            persisted_sessions: persisted_rbc_sessions,
             persist_tx: None,
             persist_rx: None,
             persist_inflight: BTreeSet::new(),
@@ -16042,14 +16105,16 @@ impl Actor {
         let sumeragi = &self.config;
         let (collectors_k, redundant_send_r) = self.collector_plan_params();
         let da_enabled = sumeragi_da_enabled(&self.state);
+        let rbc_data_shards = sumeragi.rbc.effective_data_shards();
+        let rbc_parity_shards = sumeragi.rbc.effective_parity_shards();
         let config_caps = iroha_p2p::ConsensusConfigCaps {
             collectors_k: u16::try_from(collectors_k).unwrap_or(u16::MAX),
             redundant_send_r,
             da_enabled,
             rbc_chunk_max_bytes: u64::try_from(sumeragi.rbc.chunk_max_bytes).unwrap_or(u64::MAX),
             rbc_encoding: sumeragi.rbc.encoding,
-            rbc_rs16_data_shards: sumeragi.rbc.data_shards,
-            rbc_rs16_parity_shards: sumeragi.rbc.parity_shards,
+            rbc_rs16_data_shards: rbc_data_shards,
+            rbc_rs16_parity_shards: rbc_parity_shards,
             rbc_session_ttl_ms: u64::try_from(sumeragi.rbc.session_ttl.as_millis())
                 .unwrap_or(u64::MAX),
             rbc_store_max_sessions: u32::try_from(sumeragi.rbc.store_max_sessions)
@@ -16492,6 +16557,15 @@ impl Actor {
                     .payload_rebroadcast_last_sent
                     .get(key)
                     .and_then(|last| last.checked_add(payload_cooldown))
+                    .unwrap_or(now)
+                    .max(now);
+                next_due = Self::merge_deadline(next_due, Some(deadline));
+            }
+            if missing_chunks {
+                let deadline = rbc
+                    .chunk_repair
+                    .get(key)
+                    .and_then(|repair| repair.last_sent.checked_add(payload_cooldown))
                     .unwrap_or(now)
                     .max(now);
                 next_due = Self::merge_deadline(next_due, Some(deadline));
@@ -17463,6 +17537,20 @@ impl Actor {
                             super::status::ConsensusMessageReason::FutureWindow,
                         );
                     }
+                    BlockMessage::RbcInitRequest(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcInitRequest,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
+                    BlockMessage::RbcChunkRequest(_) => {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcChunkRequest,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::FutureWindow,
+                        );
+                    }
                     BlockMessage::ProposalHint(_) => {
                         self.record_consensus_message_handling(
                             super::status::ConsensusMessageKind::ProposalHint,
@@ -17594,6 +17682,10 @@ impl Actor {
             BlockMessage::ExecWitness(witness) => {
                 self.handle_exec_witness(witness);
                 Ok(())
+            }
+            BlockMessage::RbcInitRequest(request) => self.handle_rbc_init_request(request, sender),
+            BlockMessage::RbcChunkRequest(request) => {
+                self.handle_rbc_chunk_request(request, sender)
             }
             BlockMessage::RbcInit(init) => self.handle_rbc_init(init, sender),
             BlockMessage::RbcChunk(chunk) => self.handle_rbc_chunk(chunk, sender),
@@ -18060,6 +18152,8 @@ impl Actor {
             BlockMessage::FetchBlockBody(_)
             | BlockMessage::ConsensusParams(_)
             | BlockMessage::ExecWitness(_)
+            | BlockMessage::RbcInitRequest(_)
+            | BlockMessage::RbcChunkRequest(_)
             | BlockMessage::ProposalHint(_)
             | BlockMessage::Qc(_)
             | BlockMessage::QcVote(_)
@@ -18133,6 +18227,8 @@ impl Actor {
                     | BlockMessage::BlockBodyResponse(_)
                     | BlockMessage::Qc(_)
                     | BlockMessage::QcVote(_)
+                    | BlockMessage::RbcInitRequest(_)
+                    | BlockMessage::RbcChunkRequest(_)
                     | BlockMessage::RbcInit(_)
                     | BlockMessage::RbcChunk(_)
                     | BlockMessage::RbcChunkCompact(_)
@@ -18344,6 +18440,8 @@ impl Actor {
             BlockMessage::FetchBlockBody(request) => Some((request.height, request.view)),
             BlockMessage::BlockBodyResponse(response) => Some((response.height, response.view)),
             BlockMessage::ExecWitness(witness) => Some((witness.height, witness.view)),
+            BlockMessage::RbcInitRequest(request) => Some((request.height, request.view)),
+            BlockMessage::RbcChunkRequest(request) => Some((request.height, request.view)),
             BlockMessage::RbcInit(init) => Some((init.height, init.view)),
             BlockMessage::RbcChunk(chunk) => Some((chunk.height, chunk.view)),
             BlockMessage::RbcChunkCompact(chunk) => {
@@ -18380,6 +18478,8 @@ impl Actor {
             BlockMessage::VrfCommit(_) => "VrfCommit",
             BlockMessage::VrfReveal(_) => "VrfReveal",
             BlockMessage::ExecWitness(_) => "ExecWitness",
+            BlockMessage::RbcInitRequest(_) => "RbcInitRequest",
+            BlockMessage::RbcChunkRequest(_) => "RbcChunkRequest",
             BlockMessage::RbcInit(_) => "RbcInit",
             BlockMessage::RbcChunk(_) => "RbcChunk",
             BlockMessage::RbcChunkCompact(_) => "RbcChunk",
@@ -19844,6 +19944,27 @@ impl Actor {
             );
             return;
         }
+        match self.maybe_request_missing_rbc_init(key, &roster, now, cooldown) {
+            RbcRepairAttempt::Requested => {
+                debug!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    "requested RBC INIT repair before broad rebroadcast"
+                );
+                return;
+            }
+            RbcRepairAttempt::Waiting => {
+                trace!(
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    "waiting on in-flight RBC INIT repair request"
+                );
+                return;
+            }
+            RbcRepairAttempt::Fallback | RbcRepairAttempt::NotNeeded => {}
+        }
         let Some((init, chunks)) = Self::rbc_payload_bundle(key, session, &roster) else {
             debug!(
                 height = key.1,
@@ -19857,10 +19978,8 @@ impl Actor {
             height = key.1,
             view = key.2,
             block = %key.0,
-            "rebroadcasting RBC INIT after reconstructing missing INIT"
+            "rebroadcasting RBC INIT after targeted repair window expired"
         );
-        // TODO: Replace this full payload rebroadcast with shard-targeted repair once
-        // Sumeragi has an explicit missing-shard request/response control message.
         self.rebroadcast_rbc_payload_bundle(key, init, chunks, session.ready_signatures.len());
     }
 
@@ -19938,6 +20057,207 @@ impl Actor {
                 (!ready_senders.contains(&idx)).then_some(peer.clone())
             })
             .collect()
+    }
+
+    fn ordered_rbc_repair_targets(
+        roster: &[PeerId],
+        local_peer_id: &PeerId,
+        preferred_first: Option<&PeerId>,
+        limit: usize,
+    ) -> Vec<PeerId> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        let mut targets = Vec::with_capacity(limit);
+        let mut seen = BTreeSet::new();
+        if let Some(peer) = preferred_first
+            && peer != local_peer_id
+            && seen.insert(peer.clone())
+        {
+            targets.push(peer.clone());
+        }
+        for peer in roster {
+            if peer == local_peer_id || !seen.insert(peer.clone()) {
+                continue;
+            }
+            targets.push(peer.clone());
+            if targets.len() >= limit {
+                break;
+            }
+        }
+        targets
+    }
+
+    fn deterministic_rbc_repair_targets(
+        &self,
+        key: super::rbc_store::SessionKey,
+        roster: &[PeerId],
+    ) -> Vec<PeerId> {
+        if roster.is_empty() {
+            return Vec::new();
+        }
+        let local_peer_id = self.common_config.peer.id();
+        let preferred_first = {
+            let mut topology = super::network_topology::Topology::new(roster.to_vec());
+            self.leader_index_for(&mut topology, key.1, key.2)
+                .ok()
+                .and_then(|leader_index| topology.as_ref().get(leader_index))
+                .cloned()
+        };
+        let limit = crate::sumeragi::network_topology::commit_quorum_from_len(roster.len()).max(1);
+        Self::ordered_rbc_repair_targets(roster, local_peer_id, preferred_first.as_ref(), limit)
+    }
+
+    fn send_rbc_init_request_to_targets(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        targets: &[PeerId],
+    ) -> bool {
+        if targets.is_empty() {
+            return false;
+        }
+        let request = Arc::new(BlockMessage::RbcInitRequest(RbcInitRequest {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+        }));
+        let encoded = Arc::new(BlockMessageWire::encode_message(request.as_ref()));
+        for peer in targets {
+            self.schedule_background(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&request), Arc::clone(&encoded)),
+            });
+        }
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_rbc_init_requests();
+        }
+        true
+    }
+
+    fn send_rbc_chunk_request_to_targets(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        missing_indices: &[u32],
+        targets: &[PeerId],
+    ) -> bool {
+        if targets.is_empty() || missing_indices.is_empty() {
+            return false;
+        }
+        let request = Arc::new(BlockMessage::RbcChunkRequest(RbcChunkRequest {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            missing_indices: missing_indices.to_vec(),
+        }));
+        let encoded = Arc::new(BlockMessageWire::encode_message(request.as_ref()));
+        for peer in targets {
+            self.schedule_background(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&request), Arc::clone(&encoded)),
+            });
+        }
+        #[cfg(feature = "telemetry")]
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.inc_rbc_chunk_requests();
+            telemetry
+                .add_rbc_requested_chunks(u64::try_from(missing_indices.len()).unwrap_or(u64::MAX));
+        }
+        true
+    }
+
+    fn maybe_request_missing_rbc_init(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        roster: &[PeerId],
+        now: Instant,
+        cooldown: Duration,
+    ) -> RbcRepairAttempt {
+        let targets = self.deterministic_rbc_repair_targets(key, roster);
+        if targets.is_empty() {
+            return RbcRepairAttempt::NotNeeded;
+        }
+        match self
+            .subsystems
+            .da_rbc
+            .rbc
+            .init_repair_last_sent
+            .get(&key)
+            .copied()
+        {
+            None => {
+                if self.send_rbc_init_request_to_targets(key, &targets) {
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .init_repair_last_sent
+                        .insert(key, now);
+                    RbcRepairAttempt::Requested
+                } else {
+                    RbcRepairAttempt::NotNeeded
+                }
+            }
+            Some(last_sent) if now.saturating_duration_since(last_sent) < cooldown => {
+                RbcRepairAttempt::Waiting
+            }
+            Some(_) => {
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .init_repair_last_sent
+                    .remove(&key);
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_rbc_repair_fallback("init");
+                }
+                RbcRepairAttempt::Fallback
+            }
+        }
+    }
+
+    fn maybe_request_missing_rbc_chunks(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+        roster: &[PeerId],
+        now: Instant,
+        cooldown: Duration,
+    ) -> RbcRepairAttempt {
+        let missing_indices = session.missing_chunk_indices();
+        if missing_indices.is_empty() {
+            self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
+            return RbcRepairAttempt::NotNeeded;
+        }
+        let targets = self.deterministic_rbc_repair_targets(key, roster);
+        if targets.is_empty() {
+            return RbcRepairAttempt::NotNeeded;
+        }
+        if let Some(state) = self.subsystems.da_rbc.rbc.chunk_repair.get(&key).copied() {
+            if session.received_chunks() > state.received_chunks_snapshot {
+                self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
+            } else if now.saturating_duration_since(state.last_sent) < cooldown {
+                return RbcRepairAttempt::Waiting;
+            } else {
+                self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
+                #[cfg(feature = "telemetry")]
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_rbc_repair_fallback("chunk");
+                }
+                return RbcRepairAttempt::Fallback;
+            }
+        }
+        if self.send_rbc_chunk_request_to_targets(key, &missing_indices, &targets) {
+            self.subsystems.da_rbc.rbc.chunk_repair.insert(
+                key,
+                RbcChunkRepairState {
+                    last_sent: now,
+                    received_chunks_snapshot: session.received_chunks(),
+                },
+            );
+            RbcRepairAttempt::Requested
+        } else {
+            RbcRepairAttempt::NotNeeded
+        }
     }
 
     fn send_targeted_rbc_deliver_to_peers(
@@ -20269,7 +20589,17 @@ impl Actor {
             let should_rebroadcast_payload = hot_repair_allowed
                 && session.allows_payload_recovery()
                 && !authoritative_known_payload;
+            let payload_repair_attempt = if should_rebroadcast_payload {
+                self.maybe_request_missing_rbc_chunks(key, &session, &roster, now, payload_cooldown)
+            } else {
+                self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
+                RbcRepairAttempt::NotNeeded
+            };
             let payload_bundle = if should_rebroadcast_payload
+                && matches!(
+                    payload_repair_attempt,
+                    RbcRepairAttempt::NotNeeded | RbcRepairAttempt::Fallback
+                )
                 && !relay_backpressure
                 && (!queue_backpressure
                     || self.rbc_payload_backpressure_exempt_with_tip(key, tip_height, tip_hash))
@@ -20289,6 +20619,9 @@ impl Actor {
                 None
             };
 
+            if matches!(payload_repair_attempt, RbcRepairAttempt::Requested) {
+                progress = true;
+            }
             if let Some((init, chunks)) = payload_bundle {
                 self.rebroadcast_rbc_payload_bundle(key, init, chunks, ready_count);
                 progress = true;
@@ -27821,7 +28154,7 @@ impl Actor {
             self.subsystems
                 .da_rbc
                 .rbc
-                .persisted_full_sessions
+                .persisted_sessions
                 .iter()
                 .copied()
                 .filter(|key| matches_height(*key)),
@@ -27938,7 +28271,7 @@ impl Actor {
             self.subsystems
                 .da_rbc
                 .rbc
-                .persisted_full_sessions
+                .persisted_sessions
                 .iter()
                 .copied()
                 .filter(|key| matches_block(*key)),
@@ -30000,6 +30333,23 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         clear_status_summary: bool,
     ) {
+        self.clear_rbc_runtime_state_inner(key, clear_status_summary, false);
+    }
+
+    fn clear_rbc_runtime_state_preserving_snapshot(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        clear_status_summary: bool,
+    ) {
+        self.clear_rbc_runtime_state_inner(key, clear_status_summary, true);
+    }
+
+    fn clear_rbc_runtime_state_inner(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        clear_status_summary: bool,
+        preserve_persisted_snapshot: bool,
+    ) {
         self.subsystems.da_rbc.rbc.sessions.remove(&key);
         self.clear_rbc_session_roster(&key);
         if clear_status_summary {
@@ -30019,6 +30369,12 @@ impl Actor {
         self.subsystems
             .da_rbc
             .rbc
+            .init_repair_last_sent
+            .remove(&key);
+        self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
+        self.subsystems
+            .da_rbc
+            .rbc
             .ready_rebroadcast_last_sent
             .remove(&key);
         self.subsystems
@@ -30032,11 +30388,9 @@ impl Actor {
         if self.subsystems.da_rbc.rbc.outbound_cursor == Some(key) {
             self.subsystems.da_rbc.rbc.outbound_cursor = None;
         }
-        self.subsystems
-            .da_rbc
-            .rbc
-            .persisted_full_sessions
-            .remove(&key);
+        if !preserve_persisted_snapshot {
+            self.subsystems.da_rbc.rbc.persisted_sessions.remove(&key);
+        }
         self.subsystems.da_rbc.rbc.persist_inflight.remove(&key);
         self.subsystems.da_rbc.rbc.seed_inflight.remove(&key);
     }
@@ -30503,6 +30857,15 @@ fn rbc_message_committed(
     message_height <= committed_height || block_present_in_kura
 }
 
+fn rbc_status_summary_recovered_from_disk(
+    rbc_status_handle: &rbc_status::Handle,
+    key: &super::rbc_store::SessionKey,
+) -> bool {
+    rbc_status_handle
+        .get(key)
+        .is_some_and(|summary| summary.recovered_from_disk)
+}
+
 type RbcLaneTotals = BTreeMap<LaneId, (u64, u64, u64, u64)>;
 type RbcDataspaceTotals = BTreeMap<(LaneId, DataSpaceId), (u64, u64, u64, u64)>;
 
@@ -30566,7 +30929,8 @@ fn drain_rbc_state_for_block(
                     ready_count,
                     delivered: session.delivered,
                     payload_hash: session.payload_hash(),
-                    recovered_from_disk: session.recovered_from_disk(),
+                    recovered_from_disk: session.recovered_from_disk()
+                        || rbc_status_summary_recovered_from_disk(rbc_status_handle, &key),
                     invalid: session.is_invalid(),
                     reconstructed_stripes: session.reconstructed_stripes(),
                     reconstructable_stripes: session.reconstructable_stripes(),
@@ -32823,6 +33187,14 @@ impl RbcSession {
             .get(idx)?
             .as_ref()
             .map(|entry| entry.bytes.as_slice())
+    }
+
+    pub(crate) fn missing_chunk_indices(&self) -> Vec<u32> {
+        self.chunks
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| entry.is_none().then(|| u32::try_from(idx).ok()).flatten())
+            .collect()
     }
 
     pub(crate) fn chunk_digest(&self, idx: u32) -> Option<[u8; 32]> {

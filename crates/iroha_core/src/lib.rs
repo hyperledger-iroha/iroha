@@ -309,6 +309,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 BlockMessage::BlockCreated(_)
                 | BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
+                | BlockMessage::RbcInitRequest(_)
+                | BlockMessage::RbcChunkRequest(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
