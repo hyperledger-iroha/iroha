@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-01
 
+Latest sync (2026-04-01 exact-frontier lock-reject cleanup):
+the exact-frontier recovery path now fully forgets same-slot branches already
+rejected by the lock rule, so stale slot ownership or missing-parent state can
+no longer resurrect an invalid branch during recovery.
+
+- lock-rejected frontier branches now purge `proposals_seen`, authoritative
+  slot owner/frontier metadata, and their branch-local missing-request state
+  for the rejected `(height, view)`;
+- exact-frontier recovery no longer rebuilds pending/frontier ownership for a
+  branch already rejected because its parent does not extend the locked chain;
+  and
+- focused regressions are green for both the missing-request cleanup and the
+  slot-owner/proposal purge paths.
+
+Open work for this slice now remains:
+- roll a fresh manifest-backed artifact bundle through `pk-deploy`
+  doctor/reset and confirm SBP/CBUAE advance past height `3` with the patched
+  binary
+- broader workspace verification (`cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`) has not been rerun
+  after this exact-frontier fix tranche
+
 Latest sync (2026-04-01 restart-path RBC summary/root-cause fix):
 the Sumeragi restart path now preserves `recovered_from_disk` across
 exact-frontier snapshot refreshes, and commit cleanup promotes retained

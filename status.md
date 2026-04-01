@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: exact-frontier lock rejection now purges rejected slot ownership before recovery
+- Fixed the exact-frontier lock-reject liveness hole in Sumeragi: when a peer
+  rejects a frontier `BlockCreated` because the parent does not extend the
+  locked chain, the same `(height, view)` can no longer retain stale
+  `proposals_seen`, authoritative slot owner/frontier metadata, or actionable
+  missing-parent state that later re-enters exact-frontier recovery as if the
+  branch were valid.
+- `purge_lock_rejected_block_artifacts(...)` now clears the rejected branch's
+  slot-level ownership/proposal bookkeeping together with the branch-local
+  missing request, and the exact-frontier recovery path no longer rebuilds
+  pending/frontier state for a branch already rejected by the lock rule.
+- Added focused regressions covering:
+  - lock-rejected branch with known parent clears missing request; and
+  - purging lock-rejected block artifacts clears slot owner/proposal state.
+- Verification:
+  - `cargo test -p iroha_core lock_rejected_branch_with_known_parent_clears_missing_request --lib -- --nocapture`
+  - `cargo test -p iroha_core purge_lock_rejected_block_artifacts_clears_slot_level_owner_and_proposal_state --lib -- --nocapture`
+- Remaining gap:
+  - the manifest-backed live rollout through the SBP 12-node reset path has
+    not completed yet on this tree, so the private SBP/CBUAE environments
+    still need a fresh deploy with the patched artifact before live liveness
+    can be confirmed.
+
 ## 2026-04-01 Follow-up: Sumeragi RBC restart recovery now preserves recovered summaries and settles retained exact-frontier sessions on commit
 - Fixed the actual restart-path bug behind the lingering
   `sumeragi_rbc_recovers_after_peer_restart` timeout cluster:
