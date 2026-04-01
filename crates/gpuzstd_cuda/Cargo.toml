@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 default = []
 
 [dependencies]
-gpuzstd_metal = { path = "../gpuzstd_metal", default-features = false }
+zstd.workspace = true
 
 [dev-dependencies]
 zstd.workspace = true
