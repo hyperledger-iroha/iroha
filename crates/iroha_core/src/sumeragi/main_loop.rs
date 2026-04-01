@@ -14027,9 +14027,15 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         reason: &'static str,
     ) -> bool {
+        let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() else {
+            return false;
+        };
         if !self.exact_frontier_block_created_owner_active(key)
             && !self.near_tip_rbc_runtime_unneeded(key)
         {
+            return false;
+        }
+        if !session.delivered && !session.is_invalid() {
             return false;
         }
         debug!(
@@ -14040,6 +14046,7 @@ impl Actor {
             reason,
             "retiring near-tip RBC runtime after local BlockCreated ownership or local materialization"
         );
+        self.update_rbc_status_entry(key, &session, false);
         self.clear_rbc_runtime_state_preserving_snapshot(key, false);
         self.publish_rbc_backlog_snapshot();
         true

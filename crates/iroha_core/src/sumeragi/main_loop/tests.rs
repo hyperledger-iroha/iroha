@@ -16425,7 +16425,7 @@ async fn broadcast_rbc_session_plan_posts_single_chunk_immediately_before_init()
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn authoritative_exact_frontier_slot_skips_rbc_plan_install_and_broadcast() {
+async fn authoritative_exact_frontier_slot_keeps_rbc_plan_install_and_broadcast_until_delivery() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -16513,13 +16513,13 @@ async fn authoritative_exact_frontier_slot_skips_rbc_plan_install_and_broadcast(
         .install_rbc_session_plan(&plan)
         .expect("install session plan");
     assert!(
-        !actor
+        actor
             .subsystems
             .da_rbc
             .rbc
             .sessions
             .contains_key(&session_key),
-        "authoritative exact frontier owner should refuse RBC session installation",
+        "authoritative exact frontier owner should keep the RBC session installed until delivery",
     );
 
     actor
@@ -16527,26 +16527,86 @@ async fn authoritative_exact_frontier_slot_skips_rbc_plan_install_and_broadcast(
         .expect("broadcast session plan");
 
     assert!(
-        take_background_log(&background_log).is_empty(),
-        "authoritative exact frontier owner should not broadcast RBC control or chunk traffic",
+        !take_background_log(&background_log).is_empty(),
+        "authoritative exact frontier owner should still broadcast RBC control and chunk traffic",
     );
     assert!(
-        !actor
-            .subsystems
-            .da_rbc
-            .rbc
-            .outbound_chunks
-            .contains_key(&session_key),
-        "authoritative exact frontier owner should not queue outbound RBC chunks",
-    );
-    assert!(
-        !actor
+        actor
             .subsystems
             .da_rbc
             .rbc
             .payload_rebroadcast_last_sent
             .contains_key(&session_key),
-        "authoritative exact frontier owner should not arm RBC resend timers",
+        "authoritative exact frontier owner should still arm RBC resend timers while the session is active",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn delivered_exact_frontier_session_retires_runtime_but_keeps_status_summary() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let session_key = (block_hash, height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+    session.test_set_delivered(true);
+
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    actor.note_authoritative_slot_owner(height, view, block_hash);
+    actor.update_rbc_status_entry(session_key, &session, false);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, session.clone());
+
+    assert!(
+        actor.retire_exact_frontier_rbc_runtime(session_key, "test"),
+        "delivered exact-frontier session should retire after local payload convergence",
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&session_key),
+        "retirement should clear runtime RBC state",
+    );
+    let summary = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&session_key)
+        .expect("retirement should preserve the operator-facing summary");
+    assert!(
+        summary.delivered,
+        "retained summary should preserve delivery"
+    );
+    assert_eq!(
+        summary.received_chunks,
+        session.received_chunks(),
+        "retained summary should preserve chunk progress",
     );
 
     harness.shutdown.send();

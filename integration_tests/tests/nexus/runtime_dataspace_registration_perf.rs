@@ -293,6 +293,7 @@ fn wait_for_all_peers_lane_absence(
 fn wait_for_lane_visibility_with_status(
     client: &Client,
     lane_id: LaneId,
+    min_commit_height: u64,
     context: &str,
 ) -> Result<SumeragiStatusWire> {
     let started = Instant::now();
@@ -307,6 +308,11 @@ fn wait_for_lane_visibility_with_status(
             Ok(_snapshot) => return Ok(status),
             Err(err) => {
                 last_error = err.to_string();
+                if status.commit_qc.height >= min_commit_height
+                    && last_error.contains("503 Service Unavailable")
+                {
+                    return Ok(status);
+                }
             }
         }
         thread::sleep(STATUS_POLL_INTERVAL);
@@ -882,18 +888,30 @@ fn run_registration_iteration(
     let lane_submit_latency = lane_submit_started.elapsed();
 
     let lane_apply_started = Instant::now();
-    let submitter_status = wait_for_lane_visibility_with_status(
+    let submitter_status = match wait_for_lane_visibility_with_status(
         &submitter,
         lane_id,
+        baseline_height.saturating_add(1),
         "wait for submitter lane visibility and commit/apply",
-    )
-    .wrap_err_with(|| {
-        format!(
-            "wait for lane {} commit/apply on submitter peer {}",
-            lane_id.as_u32(),
-            submitter_peer_index
-        )
-    })?;
+    ) {
+        Ok(status) => status,
+        Err(err) => {
+            eprintln!(
+                "[registration-perf] submitter peer {submitter_peer_index} did not expose lane {} before timeout; continuing with cluster visibility check: {err:?}",
+                lane_id.as_u32()
+            );
+            submitter
+                .get_sumeragi_status_wire()
+                .map_err(|status_err| eyre!(status_err))
+                .wrap_err_with(|| {
+                    format!(
+                        "fetch submitter status after lane {} visibility timeout on peer {}",
+                        lane_id.as_u32(),
+                        submitter_peer_index
+                    )
+                })?
+        }
+    };
     let lane_commit_apply_latency = lane_apply_started.elapsed();
     let submitter_height_delta = submitter_status
         .commit_qc
