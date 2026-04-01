@@ -945,6 +945,78 @@ mod tests {
     }
 
     #[test]
+    fn dvp_persists_balances_after_commit_in_dataspace_context() {
+        let (state, delivery_def_id, payment_def_id) = settlement_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        let dataspace = DataSpaceId::new(7);
+        stx.current_dataspace_id = Some(dataspace);
+        stx.world.current_dataspace_id = Some(dataspace);
+
+        DvpIsi {
+            settlement_id: "dvp_persisted".parse().unwrap(),
+            delivery_leg: SettlementLeg::new(
+                delivery_def_id.clone(),
+                Numeric::from(10u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            payment_leg: SettlementLeg::new(
+                payment_def_id.clone(),
+                Numeric::from(1_000u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            plan: SettlementPlan::new(
+                SettlementExecutionOrder::PaymentThenDelivery,
+                SettlementAtomicity::AllOrNothing,
+            ),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("DvP execution succeeds");
+
+        stx.apply();
+        state_block.commit().expect("commit state block");
+
+        let view = state.view();
+        let world = view.world();
+
+        let alice_bond = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
+        let bob_bond = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
+        let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
+        let bob_cash = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
+
+        assert!(
+            world.asset(&alice_bond).is_err(),
+            "seller delivery balance should stay debited after commit"
+        );
+        assert_eq!(
+            world
+                .asset(&bob_bond)
+                .expect("buyer bond balance")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(10u32),
+        );
+        assert_eq!(
+            world
+                .asset(&alice_cash)
+                .expect("seller cash balance")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(1_000u32),
+        );
+        assert!(
+            world.asset(&bob_cash).is_err(),
+            "payer cash balance should stay debited after commit"
+        );
+    }
+
+    #[test]
     fn dvp_commit_first_keeps_delivery_on_payment_spec_error() {
         let (state, delivery_def_id, payment_def_id) =
             settlement_state_with_payment_spec(NumericSpec::fractional(2));

@@ -45,13 +45,15 @@ use iroha::{
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
-use iroha_data_model::prelude::QueryBuilderExt;
-use iroha_data_model::query::{
-    CommittedTxFilters,
-    dsl::CompoundPredicate,
-    error::{FindError, QueryExecutionFail},
-    parameters::{FetchSize, Pagination},
-    transaction::prelude::FindTransactions,
+use iroha_data_model::{
+    prelude::QueryBuilderExt,
+    query::{
+        CommittedTxFilters,
+        dsl::CompoundPredicate,
+        error::{FindError, QueryExecutionFail},
+        parameters::{FetchSize, Pagination},
+        transaction::prelude::FindTransactions,
+    },
 };
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
@@ -754,16 +756,20 @@ async fn wait_for_route_probe_approval(
 }
 
 fn wait_for_expected_balances(
-    client: &Client,
-    expectations: &[(&AssetId, Numeric)],
+    expectations: &[BalanceExpectation<'_>],
     context: &str,
 ) -> Result<()> {
-    wait_for_expected_balances_with_timeout(client, expectations, context, STATUS_WAIT_TIMEOUT)
+    wait_for_expected_balances_with_timeout(expectations, context, STATUS_WAIT_TIMEOUT)
+}
+
+struct BalanceExpectation<'a> {
+    client: &'a Client,
+    asset_id: &'a AssetId,
+    expected: Numeric,
 }
 
 fn wait_for_expected_balances_with_timeout(
-    client: &Client,
-    expectations: &[(&AssetId, Numeric)],
+    expectations: &[BalanceExpectation<'_>],
     context: &str,
     timeout_duration: Duration,
 ) -> Result<()> {
@@ -773,8 +779,8 @@ fn wait_for_expected_balances_with_timeout(
     while started.elapsed() <= timeout_duration {
         last_observed.clear();
         let mut all_match = true;
-        for (asset_id, expected) in expectations {
-            let observed = match asset_balance(client, asset_id) {
+        for expectation in expectations {
+            let observed = match asset_balance(expectation.client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
                     last_error = Some(err.to_string());
@@ -782,10 +788,10 @@ fn wait_for_expected_balances_with_timeout(
                     break;
                 }
             };
-            if observed != *expected {
+            if observed != expectation.expected {
                 all_match = false;
             }
-            last_observed.push(((*asset_id).clone(), observed));
+            last_observed.push((expectation.asset_id.clone(), observed));
         }
         if all_match {
             return Ok(());
@@ -801,13 +807,11 @@ fn wait_for_expected_balances_with_timeout(
 }
 
 fn wait_for_expected_balances_with_tick(
-    client: &Client,
     tick_submitter: &Client,
-    expectations: &[(&AssetId, Numeric)],
+    expectations: &[BalanceExpectation<'_>],
     context: &str,
 ) -> Result<()> {
     wait_for_expected_balances_with_tick_timeout(
-        client,
         tick_submitter,
         expectations,
         context,
@@ -816,9 +820,8 @@ fn wait_for_expected_balances_with_tick(
 }
 
 fn wait_for_expected_balances_with_tick_timeout(
-    client: &Client,
     tick_submitter: &Client,
-    expectations: &[(&AssetId, Numeric)],
+    expectations: &[BalanceExpectation<'_>],
     context: &str,
     timeout_duration: Duration,
 ) -> Result<()> {
@@ -829,8 +832,8 @@ fn wait_for_expected_balances_with_tick_timeout(
     while started.elapsed() <= timeout_duration {
         last_observed.clear();
         let mut all_match = true;
-        for (asset_id, expected) in expectations {
-            let observed = match asset_balance(client, asset_id) {
+        for expectation in expectations {
+            let observed = match asset_balance(expectation.client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
                     last_error = Some(err.to_string());
@@ -838,10 +841,10 @@ fn wait_for_expected_balances_with_tick_timeout(
                     break;
                 }
             };
-            if observed != *expected {
+            if observed != expectation.expected {
                 all_match = false;
             }
-            last_observed.push(((*asset_id).clone(), observed));
+            last_observed.push((expectation.asset_id.clone(), observed));
         }
         if all_match {
             return Ok(());
@@ -1533,6 +1536,34 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let bob_ds1_asset = AssetId::new(ds1_asset_def.clone(), BOB_ID.clone());
     let alice_ds2_asset = AssetId::new(ds2_asset_def.clone(), ALICE_ID.clone());
     let bob_ds2_asset = AssetId::new(ds2_asset_def.clone(), BOB_ID.clone());
+    let alice_on_ds1 = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &ALICE_ID,
+        ALICE_KEYPAIR.private_key(),
+        DS1_LANE_INDEX,
+    );
+    let bob_on_ds1 = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &BOB_ID,
+        BOB_KEYPAIR.private_key(),
+        DS1_LANE_INDEX,
+    );
+    let alice_on_ds2 = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &ALICE_ID,
+        ALICE_KEYPAIR.private_key(),
+        DS2_LANE_INDEX,
+    );
+    let bob_on_ds2 = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &BOB_ID,
+        BOB_KEYPAIR.private_key(),
+        DS2_LANE_INDEX,
+    );
 
     {
         let _phase = phase_timings.phase("route probes: wrong-dataspace query/assert");
@@ -1716,16 +1747,31 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     }
 
     let seeded_balances = [
-        (&alice_ds1_asset, Numeric::from(100_u32)),
-        (&bob_ds1_asset, Numeric::from(0_u32)),
-        (&alice_ds2_asset, Numeric::from(0_u32)),
-        (&bob_ds2_asset, Numeric::from(200_u32)),
+        BalanceExpectation {
+            client: &alice_on_ds1,
+            asset_id: &alice_ds1_asset,
+            expected: Numeric::from(100_u32),
+        },
+        BalanceExpectation {
+            client: &bob_on_ds1,
+            asset_id: &bob_ds1_asset,
+            expected: Numeric::from(0_u32),
+        },
+        BalanceExpectation {
+            client: &alice_on_ds2,
+            asset_id: &alice_ds2_asset,
+            expected: Numeric::from(0_u32),
+        },
+        BalanceExpectation {
+            client: &bob_on_ds2,
+            asset_id: &bob_ds2_asset,
+            expected: Numeric::from(200_u32),
+        },
     ];
     let setup_register_mint_retries_used = 0usize;
     {
         let _phase = phase_timings.phase("setup register+mint: query/assert");
         wait_for_expected_balances_with_tick_timeout(
-            &alice,
             &alice,
             &seeded_balances,
             "seed balances from genesis setup",
@@ -1812,12 +1858,27 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             let _phase = phase_timings.phase("execute successful swap: query/assert");
             wait_for_expected_balances_with_tick(
                 &alice,
-                &alice,
                 &[
-                    (&alice_ds1_asset, Numeric::from(70_u32)),
-                    (&bob_ds1_asset, Numeric::from(30_u32)),
-                    (&alice_ds2_asset, Numeric::from(45_u32)),
-                    (&bob_ds2_asset, Numeric::from(155_u32)),
+                    BalanceExpectation {
+                        client: &alice_on_ds1,
+                        asset_id: &alice_ds1_asset,
+                        expected: Numeric::from(70_u32),
+                    },
+                    BalanceExpectation {
+                        client: &bob_on_ds1,
+                        asset_id: &bob_ds1_asset,
+                        expected: Numeric::from(30_u32),
+                    },
+                    BalanceExpectation {
+                        client: &alice_on_ds2,
+                        asset_id: &alice_ds2_asset,
+                        expected: Numeric::from(45_u32),
+                    },
+                    BalanceExpectation {
+                        client: &bob_on_ds2,
+                        asset_id: &bob_ds2_asset,
+                        expected: Numeric::from(155_u32),
+                    },
                 ],
                 "successful swap balances",
             )?;
@@ -1898,12 +1959,27 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             let _phase = phase_timings.phase("execute reverse swap: query/assert");
             wait_for_expected_balances_with_tick(
                 &alice,
-                &alice,
                 &[
-                    (&alice_ds1_asset, Numeric::from(60_u32)),
-                    (&bob_ds1_asset, Numeric::from(40_u32)),
-                    (&alice_ds2_asset, Numeric::from(65_u32)),
-                    (&bob_ds2_asset, Numeric::from(135_u32)),
+                    BalanceExpectation {
+                        client: &alice_on_ds1,
+                        asset_id: &alice_ds1_asset,
+                        expected: Numeric::from(60_u32),
+                    },
+                    BalanceExpectation {
+                        client: &bob_on_ds1,
+                        asset_id: &bob_ds1_asset,
+                        expected: Numeric::from(40_u32),
+                    },
+                    BalanceExpectation {
+                        client: &alice_on_ds2,
+                        asset_id: &alice_ds2_asset,
+                        expected: Numeric::from(65_u32),
+                    },
+                    BalanceExpectation {
+                        client: &bob_on_ds2,
+                        asset_id: &bob_ds2_asset,
+                        expected: Numeric::from(135_u32),
+                    },
                 ],
                 "reverse swap balances",
             )?;
@@ -1912,10 +1988,26 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
 
     let soak_iterations = soak_iterations();
     let soak_baseline = [
-        (&alice_ds1_asset, Numeric::from(60_u32)),
-        (&bob_ds1_asset, Numeric::from(40_u32)),
-        (&alice_ds2_asset, Numeric::from(65_u32)),
-        (&bob_ds2_asset, Numeric::from(135_u32)),
+        BalanceExpectation {
+            client: &alice_on_ds1,
+            asset_id: &alice_ds1_asset,
+            expected: Numeric::from(60_u32),
+        },
+        BalanceExpectation {
+            client: &bob_on_ds1,
+            asset_id: &bob_ds1_asset,
+            expected: Numeric::from(40_u32),
+        },
+        BalanceExpectation {
+            client: &alice_on_ds2,
+            asset_id: &alice_ds2_asset,
+            expected: Numeric::from(65_u32),
+        },
+        BalanceExpectation {
+            client: &bob_on_ds2,
+            asset_id: &bob_ds2_asset,
+            expected: Numeric::from(135_u32),
+        },
     ];
     let mut last_soak_synced_height: Option<u64> = None;
     let mut soak_passes = 0usize;
@@ -2068,7 +2160,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     last_soak_synced_height = Some(synced_after_paired_swaps.commit_qc.height);
                     let query_started = Instant::now();
                     wait_for_expected_balances_with_timeout(
-                        &alice,
                         &soak_baseline,
                         "soak iteration net-zero balances",
                         SOAK_PHASE_WAIT_TIMEOUT,
@@ -2330,7 +2421,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "unexpected failure message: {failure_text}"
         );
         wait_for_expected_balances(
-            &alice,
             &soak_baseline,
             "rollback balances after failing swap",
         )?;

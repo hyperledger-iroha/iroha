@@ -17740,6 +17740,69 @@ async fn delivered_exact_frontier_retirement_records_payload_bytes_metric() {
 
 #[cfg(feature = "telemetry")]
 #[tokio::test(flavor = "current_thread")]
+async fn disabled_telemetry_does_not_consume_rbc_payload_metric_marker() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    telemetry.disable();
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        RbcSession::test_new(2, Some(payload_hash), None, actor.epoch_for_height(height));
+    session.test_note_chunk(0, vec![0xAA; 8], 0);
+    session.test_set_delivered(true);
+
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    actor.update_rbc_status_entry(key, &session, false);
+
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .contains(&key),
+        "disabled telemetry must not consume the once-only payload-bytes marker"
+    );
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    telemetry.enable();
+    actor.clear_rbc_runtime_state_preserving_snapshot(key, false);
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "payload-bytes telemetry should still be emitted once telemetry is enabled"
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .contains(&key),
+        "the once-only marker should be set only after the metric has actually been emitted"
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
 async fn clear_rbc_runtime_state_records_payload_bytes_from_kura_rs16() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -106970,6 +107033,33 @@ fn rbc_session_persist_roundtrip() {
 }
 
 #[test]
+fn rbc_session_from_persisted_keeps_delivered_payload_metric_available() {
+    let mut session = RbcSession::test_new(1, None, None, 42);
+    let payload = b"bytes".to_vec();
+    session.payload_hash = Some(Hash::new(&payload));
+    session.test_note_chunk(0, payload.clone(), 1);
+    session.test_set_delivered(true);
+
+    let manifest = SoftwareManifest::current();
+    let key = session_key();
+    let roster = vec![PeerId::new(KeyPair::random().public_key().clone())];
+    let persisted = session.to_persisted(key, Hash::new(b"chain"), &manifest, &roster);
+
+    let mut rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
+    assert!(rebuilt.recovered_from_disk());
+    assert_eq!(
+        rebuilt.take_delivered_payload_bytes_for_telemetry(),
+        Some(payload.len() as u64),
+        "recovered delivered sessions must still contribute payload-bytes telemetry once"
+    );
+    assert_eq!(
+        rebuilt.take_delivered_payload_bytes_for_telemetry(),
+        None,
+        "recovered sessions must still obey once-only payload telemetry semantics"
+    );
+}
+
+#[test]
 fn rbc_session_delivered_payload_matches_requires_complete_chunks() {
     let payload_hash = Hash::new(b"payload");
     let mut session = RbcSession::test_new(2, Some(payload_hash), None, 0);
@@ -108859,6 +108949,49 @@ fn drain_rbc_state_for_block_skips_payload_metric_when_session_was_already_recor
     assert!(
         payload_metric_recorded_sessions.contains(&key),
         "the once-only set should retain retired session keys for the life of the process"
+    );
+}
+
+#[test]
+fn drain_rbc_state_for_block_does_not_consume_marker_when_telemetry_disabled() {
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x59; 32]));
+    let key = (block_hash, 8, 0);
+    let payload = vec![0xAA, 0xBB, 0xCC];
+    let payload_hash = Hash::new(&payload);
+
+    let mut sessions = BTreeMap::new();
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload, 0);
+    session.test_set_delivered(true);
+    sessions.insert(key, session);
+
+    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+    let telemetry = crate::telemetry::Telemetry::new(Arc::clone(&metrics), true);
+    telemetry.disable();
+    let mut payload_metric_recorded_sessions = BTreeSet::new();
+
+    let _ = super::drain_rbc_state_for_block(
+        block_hash,
+        &mut sessions,
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        Some(&mut payload_metric_recorded_sessions),
+        &rbc_status::register_handle(),
+        Some(&telemetry),
+        None,
+        None,
+        true,
+    );
+
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        0,
+        "disabled telemetry should not emit payload-bytes metrics during commit cleanup"
+    );
+    assert!(
+        !payload_metric_recorded_sessions.contains(&key),
+        "disabled telemetry must not consume the once-only payload-bytes marker during cleanup"
     );
 }
 
