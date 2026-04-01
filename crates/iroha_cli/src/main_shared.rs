@@ -4468,7 +4468,7 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
             let status = client
-                .get_transaction_status(self.hash)?
+                .get_transaction_status_response(self.hash)?
                 .ok_or_else(|| eyre!("Transaction status not found"))?;
             context.print_data(&status)
         }
@@ -11037,6 +11037,8 @@ mod cli_integration_harness {
     use eyre::eyre;
     use iroha::crypto::KeyPair;
     use iroha::data_model::query::runtime::AbiVersion;
+    #[cfg(feature = "ids_projection")]
+    use iroha::data_model::query::{QueryItemKind, QueryWithFilter};
     use iroha::data_model::{
         account::ScopedAccountId,
         asset::{Asset, AssetId},
@@ -11046,14 +11048,11 @@ mod cli_integration_harness {
         proof::{ProofId, ProofRecord},
         query::{
             QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox,
-            SingularQueryOutputBox,
-            builder::QueryExecutor,
+            SingularQueryOutputBox, builder::QueryExecutor,
         },
         smart_contract::manifest::ContractManifest,
     };
     use iroha_crypto::{Algorithm, Hash};
-    #[cfg(feature = "ids_projection")]
-    use iroha::data_model::query::{QueryItemKind, QueryWithFilter};
     #[cfg(feature = "ids_projection")]
     use norito::codec::Decode;
 
@@ -12093,10 +12092,7 @@ mod cli_integration_harness {
 
     #[test]
     fn harness_singular_account_roundtrip() {
-        use iroha::data_model::{
-            account::Account,
-            query::account::prelude::FindAccountById,
-        };
+        use iroha::data_model::{account::Account, query::account::prelude::FindAccountById};
 
         let account_id = sample_account_id("wonderland", 15);
         let account =

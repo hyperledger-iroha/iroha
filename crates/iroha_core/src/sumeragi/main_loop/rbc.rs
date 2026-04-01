@@ -2301,8 +2301,8 @@ impl Actor {
             let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry();
             // Restore the session before returning so future RBC traffic can reuse it.
             self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-            if let (Some(bytes), Some(telemetry)) = (delivered_bytes, self.telemetry_handle()) {
-                telemetry.add_rbc_payload_bytes_delivered(bytes);
+            if let Some(bytes) = delivered_bytes {
+                self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
             }
             return Ok(());
         }
@@ -2408,10 +2408,14 @@ impl Actor {
         if invalidated {
             self.clear_pending_rbc(&key);
         }
-        let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry();
+        let delivered_payload_bytes_fallback =
+            self.rbc_session_authoritative_payload_bytes_for_telemetry(key, &session);
+        let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
+            delivered_payload_bytes_fallback,
+        );
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
-        if let (Some(bytes), Some(telemetry)) = (delivered_bytes, self.telemetry_handle()) {
-            telemetry.add_rbc_payload_bytes_delivered(bytes);
+        if let Some(bytes) = delivered_bytes {
+            self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
         }
         if should_update_status {
             self.publish_rbc_backlog_snapshot();
@@ -4394,15 +4398,28 @@ impl Actor {
             telemetry.add_rbc_reconstructed_stripes(u64::from(reconstructed_delta));
         }
         if accepted_chunk {
-            let delivered_bytes = self
+            let delivered_payload_bytes_fallback = self
                 .subsystems
                 .da_rbc
                 .rbc
                 .sessions
-                .get_mut(&key)
-                .and_then(super::RbcSession::take_delivered_payload_bytes_for_telemetry);
-            if let (Some(bytes), Some(telemetry)) = (delivered_bytes, self.telemetry_handle()) {
-                telemetry.add_rbc_payload_bytes_delivered(bytes);
+                .get(&key)
+                .and_then(|session| {
+                    self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
+                });
+            let delivered_bytes =
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get_mut(&key)
+                    .and_then(|session| {
+                        session.take_delivered_payload_bytes_for_telemetry_with_fallback(
+                            delivered_payload_bytes_fallback,
+                        )
+                    });
+            if let Some(bytes) = delivered_bytes {
+                self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
             }
         }
         let authoritative_after =
@@ -5196,6 +5213,7 @@ impl Actor {
         session: &mut RbcSession,
         key: SessionKey,
         deliver: &crate::sumeragi::consensus::RbcDeliver,
+        delivered_payload_bytes_fallback: Option<u64>,
         allow_missing_chunks: bool,
     ) -> (
         bool,
@@ -5293,7 +5311,10 @@ impl Actor {
                         session.record_deliver(deliver.sender, deliver.signature.clone());
                     if first_deliver {
                         status::record_round_gap_deliver(key.1, key.2, key.0);
-                        delivered_bytes = session.take_delivered_payload_bytes_for_telemetry();
+                        delivered_bytes = session
+                            .take_delivered_payload_bytes_for_telemetry_with_fallback(
+                                delivered_payload_bytes_fallback,
+                            );
                     }
                 }
             }
@@ -5861,6 +5882,15 @@ impl Actor {
             .is_some_and(|session| {
                 self.rbc_session_has_authoritative_payload_for_progress(key, session)
             });
+        let delivered_payload_bytes_fallback = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .and_then(|session| {
+                self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
+            });
         let allow_missing_chunks = authoritative_known_payload;
         let (
             ignored,
@@ -5888,7 +5918,14 @@ impl Actor {
             }
             let _ = session
                 .sync_progress_observations(authoritative_known_payload, Some(deliver_quorum));
-            Self::evaluate_rbc_deliver_outcome(0, session, key, &deliver, allow_missing_chunks)
+            Self::evaluate_rbc_deliver_outcome(
+                0,
+                session,
+                key,
+                &deliver,
+                delivered_payload_bytes_fallback,
+                allow_missing_chunks,
+            )
         };
         if chunk_root_mismatch {
             self.record_consensus_message_handling(
@@ -6196,9 +6233,9 @@ impl Actor {
         if first_deliver {
             if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.inc_rbc_deliver_broadcasts();
-                if let Some(bytes) = delivered_bytes {
-                    telemetry.add_rbc_payload_bytes_delivered(bytes);
-                }
+            }
+            if let Some(bytes) = delivered_bytes {
+                self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
             }
         }
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
@@ -6839,11 +6876,12 @@ impl Actor {
     }
 
     pub(super) fn update_rbc_status_entry(
-        &self,
+        &mut self,
         key: SessionKey,
         session: &RbcSession,
         recovered: bool,
     ) {
+        self.maybe_record_rbc_payload_bytes_metric_for_active_session(key, session);
         let ready_count = u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX);
         let summary = rbc_status::Summary {
             block_hash: key.0,

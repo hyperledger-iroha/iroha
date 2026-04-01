@@ -3181,6 +3181,8 @@ mod status_tests {
             commit_time_ms: 10,
             txs_approved: 3,
             txs_rejected: 1,
+            last_rejection_at_ms: Some(50),
+            txs_rejected_recent_5m: 1,
             uptime: Uptime(Duration::from_millis(1234)),
             view_changes: 0,
             queue_size: 7,
@@ -3224,6 +3226,8 @@ mod status_tests {
             commit_time_ms: 200,
             txs_approved: 10,
             txs_rejected: 2,
+            last_rejection_at_ms: Some(75),
+            txs_rejected_recent_5m: 2,
             uptime: Uptime(Duration::from_millis(5678)),
             view_changes: 1,
             queue_size: 9,
@@ -4815,6 +4819,99 @@ mod evidence_http_tests {
     }
 
     #[test]
+    fn get_transaction_status_response_requests_json_and_decodes_typed_payload() {
+        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
+
+        let hash =
+            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([0x44; Hash::LENGTH]),
+            );
+        let payload = PipelineTransactionStatusResponse {
+            hash: hash.to_string(),
+            status: PipelineTransactionStatus {
+                kind: "Queued".to_owned(),
+                block_height: None,
+                rejection_reason: None,
+            },
+            scope: "global".to_owned(),
+            resolved_from: "queue".to_owned(),
+        };
+        let body = norito::json::to_string(
+            &norito::json::to_value(&payload).expect("status payload value"),
+        )
+        .expect("status payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &body);
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client.get_transaction_status_response(hash)
+        })
+        .expect("transaction status response")
+        .expect("status payload");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("status snapshot");
+        assert_eq!(snapshot.url.path(), "/v1/pipeline/transactions/status");
+        assert!(
+            snapshot.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
+            }),
+            "request should set Accept: application/json"
+        );
+    }
+
+    #[test]
+    fn get_account_read_requests_json_and_decodes_typed_payload() {
+        use iroha_torii_shared::AccountReadResponse;
+
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let payload = AccountReadResponse {
+            account_id: account_id.clone(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+            linked_domains: Vec::new(),
+        };
+        let body = norito::json::to_string(
+            &norito::json::to_value(&payload).expect("account payload value"),
+        )
+        .expect("account payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &body);
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client.get_account_read(&account_id)
+        })
+        .expect("account read response");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("account snapshot");
+        let expected_url = join_torii_url(
+            &client_with_base_url(base_url()).torii_url,
+            &format!("v1/accounts/{account_id}"),
+        );
+        assert_eq!(snapshot.url.path(), expected_url.path());
+        assert!(
+            snapshot.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
+            }),
+            "request should set Accept: application/json"
+        );
+    }
+
+    #[test]
     fn transaction_committed_limits_query_params() {
         use iroha_data_model::query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryRequest,
@@ -6084,10 +6181,10 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response has an unexpected content type,
     /// or the typed JSON payload cannot be decoded.
-    pub fn get_transaction_status(
+    pub fn get_transaction_status_response(
         &self,
         hash: HashOf<SignedTransaction>,
-    ) -> Result<Option<TxConfirmationStatus>> {
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
         let hash_hex = bytes_to_hex(hash.as_ref());
         let url = join_torii_url(&self.torii_url, "v1/pipeline/transactions/status");
         let resp = self.send_builder(
@@ -6105,7 +6202,7 @@ impl Client {
                         &resp,
                         "Failed to get pipeline transaction status",
                     )?;
-                Ok(tx_confirmation_status_from_pipeline_response(&payload))
+                Ok(Some(payload))
             }
             StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(None),
             status => Err(eyre!(
@@ -6114,6 +6211,21 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             )),
         }
+    }
+
+    /// GET `/v1/pipeline/transactions/status` — convenience status lookup mapped to [`TxConfirmationStatus`].
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
+    /// or the typed JSON payload cannot be decoded.
+    pub fn get_transaction_status(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<TxConfirmationStatus>> {
+        Ok(self
+            .get_transaction_status_response(hash)?
+            .as_ref()
+            .and_then(tx_confirmation_status_from_pipeline_response))
     }
 
     fn transaction_committed(
@@ -14611,6 +14723,8 @@ mod tests {
             commit_time_ms: 0,
             txs_approved: 0,
             txs_rejected: 0,
+            last_rejection_at_ms: None,
+            txs_rejected_recent_5m: 0,
             uptime: Uptime(Duration::from_secs(0)),
             view_changes: 0,
             queue_size: 0,

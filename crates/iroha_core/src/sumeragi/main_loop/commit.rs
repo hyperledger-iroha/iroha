@@ -5402,14 +5402,29 @@ impl Actor {
             None
         };
         let telemetry = self.telemetry_handle().cloned();
+        let delivered_payload_fallbacks = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                ((*key).0 == block_hash).then_some(*key).and_then(|key| {
+                    self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
+                        .map(|bytes| (key, bytes))
+                })
+            })
+            .collect();
         let (lane_totals, dataspace_totals) = super::drain_rbc_state_for_block(
             block_hash,
             &mut self.subsystems.da_rbc.rbc.sessions,
             &mut self.subsystems.da_rbc.rbc.pending,
             &mut self.subsystems.da_rbc.rbc.session_rosters,
             &mut self.subsystems.da_rbc.rbc.session_roster_sources,
+            Some(&mut self.subsystems.da_rbc.rbc.payload_metric_recorded_sessions),
             &self.subsystems.da_rbc.rbc.status_handle,
             telemetry.as_ref(),
+            Some(&delivered_payload_fallbacks),
             chunk_store,
             purge_persisted_sessions,
         );

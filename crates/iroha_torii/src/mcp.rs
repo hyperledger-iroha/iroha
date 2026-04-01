@@ -4746,7 +4746,7 @@ async fn dispatch_iroha_accounts_get(
     let mut path_args = Map::new();
     path_args.insert("account_id".into(), Value::String(account_id));
     let path_value = Value::Object(path_args);
-    let route = fill_path_template("/v1/explorer/accounts/{account_id}", Some(&path_value))?;
+    let route = fill_path_template("/v1/accounts/{account_id}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -10449,9 +10449,11 @@ fn iroha_accounts_list_tool() -> ToolSpec {
 fn iroha_accounts_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.get".to_owned(),
-        description: "Fetch explorer account detail (`account_id` shortcut supported).".to_owned(),
+        description:
+            "Fetch canonical account detail from the same-route account read (`account_id` shortcut supported). Defaults to JSON; set accept=application/x-norito for typed Norito."
+                .to_owned(),
         method: Method::GET,
-        path_template: "/v1/explorer/accounts/{account_id}".to_owned(),
+        path_template: "/v1/accounts/{account_id}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -12464,7 +12466,7 @@ fn iroha_transactions_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.wait".to_owned(),
         description:
-            "Poll pipeline status for an existing transaction hash until a terminal state."
+            "Poll typed pipeline status for an existing transaction hash until a terminal state. Defaults to JSON; set status_accept=application/x-norito for typed Norito."
                 .to_owned(),
         method: Method::GET,
         path_template: "/v1/pipeline/transactions/status".to_owned(),
@@ -12522,7 +12524,7 @@ fn iroha_transactions_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.status".to_owned(),
         description:
-            "Get latest pipeline status for a submitted transaction hash (`hash`/`transaction_hash` shortcuts supported)."
+            "Get the latest typed pipeline status for a submitted transaction hash (`hash`/`transaction_hash` shortcuts supported). Defaults to JSON; set accept=application/x-norito for typed Norito."
                 .to_owned(),
         method: Method::GET,
         path_template: "/v1/pipeline/transactions/status".to_owned(),
@@ -12726,6 +12728,22 @@ mod tests {
         let write_tool = sample_tool("iroha.transactions.submit", Method::POST);
         assert!(is_tool_allowed_by_policy(&cfg, &read_tool));
         assert!(!is_tool_allowed_by_policy(&cfg, &write_tool));
+    }
+
+    #[test]
+    fn canonical_account_and_pipeline_tools_use_first_class_routes() {
+        let account_tool = iroha_accounts_get_tool();
+        assert_eq!(account_tool.path_template, "/v1/accounts/{account_id}");
+
+        let status_tool = iroha_transactions_status_tool();
+        assert_eq!(
+            status_tool.path_template,
+            "/v1/pipeline/transactions/status"
+        );
+        assert!(
+            status_tool.description.contains("typed pipeline status"),
+            "status tool description should advertise the typed contract"
+        );
     }
 
     #[test]

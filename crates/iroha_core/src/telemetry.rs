@@ -8989,6 +8989,12 @@ impl Actor {
                 .txs
                 .with_label_values(&["rejected"])
                 .inc_by(inc_txs_rejected);
+            if inc_txs_rejected != 0 {
+                let observed_at_ms =
+                    u64::try_from(self.time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX);
+                self.metrics
+                    .record_rejected_transactions(inc_txs_rejected, observed_at_ms);
+            }
             self.metrics
                 .txs
                 .with_label_values(&["total"])

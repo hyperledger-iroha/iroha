@@ -29786,6 +29786,144 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn pipeline_status_handler_returns_typed_norito_when_requested() {
+        use iroha_torii_shared::PipelineTransactionStatusResponse;
+
+        let app = mk_app_state_for_tests();
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log {
+                level: Level::INFO,
+                msg: "queued".to_string(),
+            }])
+            .sign(keypair.private_key());
+        let params = app.state.world.view().parameters().clone();
+        let max_clock_drift = params.sumeragi().max_clock_drift();
+        let tx_limits = params.transaction();
+        let crypto_cfg = app.state.crypto();
+        let accepted = AcceptedTransaction::accept(
+            tx.clone(),
+            app.chain_id.as_ref(),
+            max_clock_drift,
+            tx_limits,
+            crypto_cfg.as_ref(),
+        )
+        .expect("accepted");
+        app.queue
+            .push(accepted, app.state.view())
+            .expect("queue push");
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            Some(crate::utils::extractors::ExtractAccept(
+                HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            )),
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx.hash().to_string()),
+                scope: None,
+            }),
+        )
+        .await
+        .expect("ok");
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: PipelineTransactionStatusResponse =
+            norito::decode_from_bytes(&bytes).expect("typed norito response");
+        assert_eq!(payload.status.kind, "Queued");
+        assert_eq!(payload.resolved_from, "queue");
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn account_get_handler_supports_json_and_norito() {
+        use iroha_torii_shared::AccountReadResponse;
+
+        let keypair = KeyPair::random();
+        let account_id = AccountId::new(keypair.public_key().clone());
+        let world = world_with_account(&account_id);
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let json_resp = super::handler_account_get(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            AxPath(account_id.to_string()),
+        )
+        .await
+        .expect("json account get");
+        assert_eq!(json_resp.status(), StatusCode::OK);
+        assert_eq!(
+            json_resp
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let json_bytes = axum::body::to_bytes(json_resp.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let json_payload: AccountReadResponse =
+            norito::json::from_slice(&json_bytes).expect("json account payload");
+        assert_eq!(json_payload.account_id, account_id);
+
+        let norito_resp = super::handler_account_get(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            Some(crate::utils::extractors::ExtractAccept(
+                HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
+            )),
+            AxPath(account_id.to_string()),
+        )
+        .await
+        .expect("norito account get");
+        assert_eq!(norito_resp.status(), StatusCode::OK);
+        assert_eq!(
+            norito_resp
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some(crate::utils::NORITO_MIME_TYPE)
+        );
+        let norito_bytes = axum::body::to_bytes(norito_resp.into_body(), usize::MAX)
+            .await
+            .expect("norito body");
+        let norito_payload: AccountReadResponse =
+            norito::decode_from_bytes(&norito_bytes).expect("norito account payload");
+        assert_eq!(norito_payload.account_id, account_id);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn account_get_handler_returns_not_found_for_missing_account() {
+        let app = mk_app_state_for_tests();
+        let missing = AccountId::new(KeyPair::random().public_key().clone());
+
+        let resp = super::handler_account_get(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            AxPath(missing.to_string()),
+        )
+        .await
+        .expect("missing account response");
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn pipeline_status_handler_returns_applied_from_state() {
         let app = mk_app_state_for_tests();
         let (block, _) = make_signed_block(1, None);
@@ -35527,7 +35665,7 @@ mod tests {
         tests_runtime_handlers::{
             app_auth_test_guard, mk_app_state_for_tests, mk_app_state_for_tests_with_iso_bridge,
             mk_app_state_for_tests_with_options, mk_app_state_for_tests_with_world, negotiated,
-            record_latest_committed_header_for_test, signed_app_headers,
+            record_latest_committed_header_for_test, signed_app_headers, world_with_account,
         },
     };
     use iroha_core::smartcontracts::Execute;
