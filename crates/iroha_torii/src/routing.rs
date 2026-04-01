@@ -36716,6 +36716,30 @@ pub async fn handle_v1_sumeragi_rbc_status(
             m.sumeragi_rbc_sessions_pruned_total.get(),
         ),
         json_entry(
+            "init_requests_total",
+            m.sumeragi_rbc_init_requests_total.get(),
+        ),
+        json_entry(
+            "chunk_requests_total",
+            m.sumeragi_rbc_chunk_requests_total.get(),
+        ),
+        json_entry(
+            "requested_chunks_total",
+            m.sumeragi_rbc_requested_chunks_total.get(),
+        ),
+        json_entry(
+            "init_repair_fallback_total",
+            m.sumeragi_rbc_repair_fallback_total
+                .with_label_values(&["init"])
+                .get(),
+        ),
+        json_entry(
+            "chunk_repair_fallback_total",
+            m.sumeragi_rbc_repair_fallback_total
+                .with_label_values(&["chunk"])
+                .get(),
+        ),
+        json_entry(
             "ready_broadcasts_total",
             m.sumeragi_rbc_ready_broadcasts_total.get(),
         ),
@@ -36732,6 +36756,14 @@ pub async fn handle_v1_sumeragi_rbc_status(
         json_entry(
             "payload_bytes_delivered_total",
             m.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        ),
+        json_entry(
+            "reconstructed_stripes_total",
+            m.sumeragi_rbc_reconstructed_stripes_total.get(),
+        ),
+        json_entry(
+            "seed_latency_count",
+            m.sumeragi_rbc_seed_latency_ms.get_sample_count(),
         ),
         json_entry(
             "payload_rebroadcasts_skipped_total",

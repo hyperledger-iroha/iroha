@@ -8479,22 +8479,19 @@ mod cli_command_tests {
 }
 
 #[cfg(all(test, feature = "cli_integration_harness"))]
-mod tests {
-    use super::cli_integration_harness::MockQueryServer;
+mod cli_integration_harness_tests {
     use super::*;
     use iroha::crypto::KeyPair;
     use iroha::data_model::query::{
-        QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox,
-        SingularQueryOutputBox,
+        QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams,
         builder::{QueryBuilder, QueryExecutor},
-        parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        parameters::{FetchSize, Pagination, Sorting},
     };
-    use iroha::data_model::smart_contract::manifest::ContractManifest;
     use iroha::data_model::{
         domain::{Domain, DomainId},
         prelude::FindDomains,
     };
-    use iroha_crypto::{Algorithm, Hash};
+    use iroha_crypto::Algorithm;
     use std::cmp::Ordering as CmpOrdering;
     use std::num::NonZeroU64;
 
@@ -8544,7 +8541,7 @@ mod tests {
 
         let owner = sample_account_id("wonderland", 1);
         let raw = format!(r#"{{"op":"eq","args":[{{"FieldPath":"authority"}},"{owner}"]}}"#);
-        let predicate = super::parse_json::<CompoundPredicate<Domain>>(raw)
+        let predicate = super::parse_json::<CompoundPredicate<Domain>>(&raw)
             .expect("predicate JSON should parse");
 
         let serialized = norito::json::to_json(&predicate).expect("serialize predicate");
@@ -8583,7 +8580,7 @@ mod tests {
         fetch: usize,
     ) -> (usize, usize, usize)
     where
-        Get: Fn(&T, &Name) -> Option<&Json>,
+        Get: for<'a> Fn(&'a T, &'a Name) -> Option<&'a Json>,
     {
         if let Some(k) = key {
             items.sort_by(|a, b| {
@@ -8662,9 +8659,9 @@ mod tests {
                 kp.public_key().clone(),
             );
 
-            let mut d1 = Domain::new(domain_id1).build(&owner1);
-            let mut d2 = Domain::new(domain_id2).build(&owner2);
-            let d3 = Domain::new(domain_id3).build(&owner3);
+            let mut d1 = Domain::new(domain_id1).build(owner1.account());
+            let mut d2 = Domain::new(domain_id2).build(owner2.account());
+            let d3 = Domain::new(domain_id3).build(owner3.account());
             d1.metadata_mut()
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
             d2.metadata_mut()
@@ -8680,13 +8677,15 @@ mod tests {
                 v.sort_by(|a, b| {
                     let la = a.metadata().get(&key);
                     let lb = b.metadata().get(&key);
-                    let ord = match (la, lb) {
-                        (Some(l), Some(r)) => l.cmp(r),
+                    match (la, lb) {
+                        (Some(l), Some(r)) => {
+                            let ord = l.cmp(r);
+                            if desc { ord.reverse() } else { ord }
+                        }
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => std::cmp::Ordering::Equal,
-                    };
-                    if desc { ord.reverse() } else { ord }
+                    }
                 });
             }
 
@@ -8778,7 +8777,7 @@ mod tests {
                 .build(id1.account());
             let mut a2 = Account::new_in_domain(id2.account().clone(), id2.domain().clone())
                 .build(id1.account());
-            let mut a3 = Account::new_in_domain(id3.account().clone(), id3.domain().clone())
+            let a3 = Account::new_in_domain(id3.account().clone(), id3.domain().clone())
                 .build(id1.account());
 
             // Insert ranks: a2=1, a1=2, a3=None
@@ -8797,13 +8796,15 @@ mod tests {
                 v.sort_by(|a, b| {
                     let la = a.metadata().get(&key);
                     let lb = b.metadata().get(&key);
-                    let ord = match (la, lb) {
-                        (Some(l), Some(r)) => l.cmp(r),
+                    match (la, lb) {
+                        (Some(l), Some(r)) => {
+                            let ord = l.cmp(r);
+                            if desc { ord.reverse() } else { ord }
+                        }
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => std::cmp::Ordering::Equal,
-                    };
-                    if desc { ord.reverse() } else { ord }
+                    }
                 });
             }
 
@@ -8934,19 +8935,19 @@ mod tests {
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             }
-            .build(&owner);
+            .build(owner.account());
             let mut ad2 = {
                 let __asset_definition_id = id2;
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             }
-            .build(&owner);
+            .build(owner.account());
             let ad3 = {
                 let __asset_definition_id = id3;
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             }
-            .build(&owner);
+            .build(owner.account());
 
             // Insert ranks: ad1=2, ad2=1, ad3=None
             ad1.metadata_mut()
@@ -8963,13 +8964,15 @@ mod tests {
                 v.sort_by(|a, b| {
                     let la = a.metadata().get(&key);
                     let lb = b.metadata().get(&key);
-                    let ord = match (la, lb) {
-                        (Some(l), Some(r)) => l.cmp(r),
+                    match (la, lb) {
+                        (Some(l), Some(r)) => {
+                            let ord = l.cmp(r);
+                            if desc { ord.reverse() } else { ord }
+                        }
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => std::cmp::Ordering::Equal,
-                    };
-                    if desc { ord.reverse() } else { ord }
+                    }
                 });
             }
 
@@ -9078,7 +9081,7 @@ mod tests {
                 let name = format!("d{i}");
                 let did: DomainId = name.parse().unwrap();
                 let owner = ScopedAccountId::new(did.clone(), kp.public_key().clone());
-                domains.push(Domain::new(did).build(&owner));
+                domains.push(Domain::new(did).build(owner.account()));
             }
 
             let fetch: usize = q
@@ -9215,10 +9218,10 @@ mod tests {
             let kp = KeyPair::random();
             // Build domains d0..d4 with ranks: d0=2, d1=4, d2=None, d3=1, d4=3
             let mut domains = Vec::new();
-            let mut mk = |name: &str, rank: Option<i64>| {
+            let mk = |name: &str, rank: Option<i64>| {
                 let did: DomainId = name.parse().unwrap();
                 let owner = ScopedAccountId::new(did.clone(), kp.public_key().clone());
-                let mut d = Domain::new(did).build(&owner);
+                let mut d = Domain::new(did).build(owner.account());
                 if let Some(r) = rank {
                     d.metadata_mut()
                         .insert("rank".parse().unwrap(), Json::from(norito::json!(r)));
@@ -9335,10 +9338,10 @@ mod tests {
 
             let kp = KeyPair::random();
             let mut domains = Vec::new();
-            let mut mk = |name: &str, rank: Option<i64>| {
+            let mk = |name: &str, rank: Option<i64>| {
                 let did: DomainId = name.parse().unwrap();
                 let owner = ScopedAccountId::new(did.clone(), kp.public_key().clone());
-                let mut d = Domain::new(did).build(&owner);
+                let mut d = Domain::new(did).build(owner.account());
                 if let Some(r) = rank {
                     d.metadata_mut()
                         .insert("rank".parse().unwrap(), Json::from(norito::json!(r)));
@@ -9798,7 +9801,7 @@ mod tests {
             .iter()
             .map(|a| {
                 a.metadata()
-                    .get(&"rank".parse().unwrap())
+                    .get(&"rank".parse::<Name>().unwrap())
                     .and_then(|j| j.try_into_any_norito::<i64>().ok())
             })
             .collect();
@@ -9834,7 +9837,7 @@ mod tests {
             .iter()
             .map(|a| {
                 a.metadata()
-                    .get(&"rank".parse().unwrap())
+                    .get(&"rank".parse::<Name>().unwrap())
                     .and_then(|j| j.try_into_any_norito::<i64>().ok())
             })
             .collect();
@@ -9894,7 +9897,7 @@ mod tests {
                         AssetDefinition::numeric(__asset_definition_id.clone())
                             .with_name(__asset_definition_id.name().to_string())
                     }
-                    .build(&owner)
+                    .build(owner.account())
                 })
                 .collect();
             let key: Name = "rank".parse().unwrap();
@@ -10020,7 +10023,7 @@ mod tests {
             .iter()
             .map(|ad| {
                 ad.metadata()
-                    .get(&"rank".parse().unwrap())
+                    .get(&"rank".parse::<Name>().unwrap())
                     .and_then(|j| j.try_into_any_norito::<i64>().ok())
             })
             .collect();
@@ -10074,7 +10077,7 @@ mod tests {
                             AssetDefinition::numeric(__asset_definition_id.clone())
                                 .with_name(__asset_definition_id.name().to_string())
                         }
-                        .build(&owner)
+                        .build(owner.account())
                     })
                     .collect();
                 let key: Name = "rank".parse().unwrap();
@@ -10205,7 +10208,7 @@ mod tests {
             .iter()
             .map(|ad| {
                 ad.metadata()
-                    .get(&"rank".parse().unwrap())
+                    .get(&"rank".parse::<Name>().unwrap())
                     .and_then(|j| j.try_into_any_norito::<i64>().ok())
             })
             .collect();
@@ -10243,9 +10246,9 @@ mod tests {
             let id2: NftId = "n2$art".parse().unwrap();
             let id3: NftId = "n3$art".parse().unwrap();
 
-            let mut n1 = Nft::new(id1, Default::default()).build(&owner);
-            let mut n2 = Nft::new(id2, Default::default()).build(&owner);
-            let n3 = Nft::new(id3, Default::default()).build(&owner);
+            let mut n1 = Nft::new(id1, Default::default()).build(owner.account());
+            let mut n2 = Nft::new(id2, Default::default()).build(owner.account());
+            let n3 = Nft::new(id3, Default::default()).build(owner.account());
 
             n1.content
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
@@ -10262,13 +10265,15 @@ mod tests {
                 v.sort_by(|a, b| {
                     let la = a.content().get(&key);
                     let lb = b.content().get(&key);
-                    let ord = match (la, lb) {
-                        (Some(l), Some(r)) => l.cmp(r),
+                    match (la, lb) {
+                        (Some(l), Some(r)) => {
+                            let ord = l.cmp(r);
+                            if desc { ord.reverse() } else { ord }
+                        }
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => std::cmp::Ordering::Equal,
-                    };
-                    if desc { ord.reverse() } else { ord }
+                    }
                 });
             }
 
@@ -10378,7 +10383,7 @@ mod tests {
                 .collect();
             let mut nfts: Vec<Nft> = ids
                 .into_iter()
-                .map(|id| Nft::new(id, Default::default()).build(&owner))
+                .map(|id| Nft::new(id, Default::default()).build(owner.account()))
                 .collect();
             let key: Name = "rank".parse().unwrap();
             nfts[0]
@@ -10549,7 +10554,7 @@ mod tests {
                     .collect();
                 let mut nfts: Vec<Nft> = ids
                     .into_iter()
-                    .map(|id| Nft::new(id, Default::default()).build(&owner))
+                    .map(|id| Nft::new(id, Default::default()).build(owner.account()))
                     .collect();
                 let key: Name = "rank".parse().unwrap();
                 nfts[0]
@@ -10878,7 +10883,7 @@ mod tests {
                     AssetDefinition::numeric(__asset_definition_id.clone())
                         .with_name(__asset_definition_id.name().to_string())
                 }
-                .build(&owner);
+                .build(owner.account());
                 ad.metadata_mut()
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
                 defs.push(ad);
@@ -10996,28 +11001,33 @@ mod tests {
 // embedded state once server-side selectors/projections are fully enabled.
 // It is intentionally behind a feature and unused by default to avoid pulling
 // additional dependencies or affecting production builds.
-#[cfg(feature = "cli_integration_harness")]
+#[cfg(all(test, feature = "cli_integration_harness"))]
 mod cli_integration_harness {
     use super::*;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     use eyre::eyre;
+    use iroha::crypto::KeyPair;
     use iroha::data_model::query::runtime::AbiVersion;
     use iroha::data_model::{
+        account::ScopedAccountId,
         asset::{Asset, AssetId},
+        domain::DomainId,
         executor::ExecutorDataModel,
         parameter::Parameters,
-        proof::{ProofId, ProofRecord, ProofStatus},
+        proof::{ProofId, ProofRecord},
         query::{
             QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox,
             SingularQueryOutputBox,
             builder::QueryExecutor,
-            parameters::{FetchSize, Pagination, QueryParams, Sorting},
         },
         smart_contract::manifest::ContractManifest,
     };
-    use iroha_crypto::Hash;
-    use iroha_primitives::json::Json;
+    use iroha_crypto::{Algorithm, Hash};
+    #[cfg(feature = "ids_projection")]
+    use iroha::data_model::query::{QueryItemKind, QueryWithFilter};
+    #[cfg(feature = "ids_projection")]
+    use norito::codec::Decode;
 
     /// Minimal mock server for iterable queries; returns static payloads by type.
     pub struct MockQueryServer {
@@ -11025,7 +11035,6 @@ mod cli_integration_harness {
         pub accounts: Vec<iroha::data_model::account::Account>,
         pub triggers: Vec<iroha::data_model::trigger::Trigger>,
         pub asset_defs: Vec<iroha::data_model::asset::definition::AssetDefinition>,
-        pub params: QueryParams,
         pub executor_data_model: Option<ExecutorDataModel>,
         pub parameters: Option<Parameters>,
         pub proof_records: BTreeMap<ProofId, ProofRecord>,
@@ -11041,11 +11050,6 @@ mod cli_integration_harness {
                 accounts: vec![],
                 triggers: vec![],
                 asset_defs: vec![],
-                params: QueryParams {
-                    pagination: Pagination::default(),
-                    sorting: Sorting::default(),
-                    fetch_size: FetchSize::default(),
-                },
                 executor_data_model: None,
                 parameters: None,
                 proof_records: BTreeMap::new(),
@@ -11054,6 +11058,114 @@ mod cli_integration_harness {
                 assets: BTreeMap::new(),
             }
         }
+    }
+
+    fn sample_account_id(domain: &str, seed: u8) -> ScopedAccountId {
+        let domain_id: DomainId = domain.parse().expect("domain id");
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        ScopedAccountId::new(domain_id, key_pair.public_key().clone())
+    }
+
+    #[cfg(feature = "ids_projection")]
+    fn build_query_with_params<T, F>(
+        predicate: iroha::data_model::query::dsl::CompoundPredicate<T>,
+        selector: iroha::data_model::query::dsl::SelectorTuple<T>,
+        params: iroha::data_model::query::parameters::QueryParams,
+        _builder: F,
+    ) -> QueryWithParams
+    where
+        T: iroha::data_model::query::dsl::HasProjection<
+                iroha::data_model::query::dsl::PredicateMarker,
+            > + iroha::data_model::query::dsl::HasProjection<
+                iroha::data_model::query::dsl::SelectorMarker,
+                AtomType = (),
+            > + Send
+            + Sync
+            + 'static,
+        F: FnOnce() -> Box<dyn iroha::data_model::query::Query<Item = T> + Send + Sync + 'static>,
+    {
+        let qwf = QueryWithFilter::new_with_query((), predicate, selector);
+        let qbox: iroha::data_model::query::QueryBox<
+            iroha::data_model::query::QueryOutputBatchBox,
+        > = qwf.into();
+        QueryWithParams::new(&qbox, params)
+    }
+
+    #[cfg(feature = "ids_projection")]
+    fn query_projects_domain_ids(query: &QueryWithParams) -> bool {
+        query
+            .query_box()
+            .and_then(
+                iroha::data_model::query::iter_query_inner::<iroha::data_model::domain::Domain>,
+            )
+            .is_some_and(|erased| erased.selector().is_ids_only())
+            || query
+                .fast_dsl_parts()
+                .is_some_and(|(item_kind, _, selector_bytes, _)| {
+                    if item_kind != QueryItemKind::Domain {
+                        return false;
+                    }
+                    let mut cursor = selector_bytes;
+                    let selector: iroha::data_model::query::dsl::SelectorTuple<
+                        iroha::data_model::domain::Domain,
+                    > = match Decode::decode(&mut cursor) {
+                        Ok(selector) => selector,
+                        Err(_) => return false,
+                    };
+                    selector.is_ids_only()
+                })
+    }
+
+    #[cfg(feature = "ids_projection")]
+    fn query_projects_account_ids(query: &QueryWithParams) -> bool {
+        query
+            .query_box()
+            .and_then(
+                iroha::data_model::query::iter_query_inner::<iroha::data_model::account::Account>,
+            )
+            .is_some_and(|erased| erased.selector().is_ids_only())
+            || query
+                .fast_dsl_parts()
+                .is_some_and(|(item_kind, _, selector_bytes, _)| {
+                    if item_kind != QueryItemKind::Account {
+                        return false;
+                    }
+                    let mut cursor = selector_bytes;
+                    let selector: iroha::data_model::query::dsl::SelectorTuple<
+                        iroha::data_model::account::Account,
+                    > = match Decode::decode(&mut cursor) {
+                        Ok(selector) => selector,
+                        Err(_) => return false,
+                    };
+                    selector.is_ids_only()
+                })
+    }
+
+    #[cfg(feature = "ids_projection")]
+    fn query_projects_asset_definition_ids(query: &QueryWithParams) -> bool {
+        query
+            .query_box()
+            .and_then(
+                iroha::data_model::query::iter_query_inner::<
+                    iroha::data_model::asset::definition::AssetDefinition,
+                >,
+            )
+            .is_some_and(|erased| erased.selector().is_ids_only())
+            || query
+                .fast_dsl_parts()
+                .is_some_and(|(item_kind, _, selector_bytes, _)| {
+                    if item_kind != QueryItemKind::AssetDefinition {
+                        return false;
+                    }
+                    let mut cursor = selector_bytes;
+                    let selector: iroha::data_model::query::dsl::SelectorTuple<
+                        iroha::data_model::asset::definition::AssetDefinition,
+                    > = match Decode::decode(&mut cursor) {
+                        Ok(selector) => selector,
+                        Err(_) => return false,
+                    };
+                    selector.is_ids_only()
+                })
     }
 
     // Cursor that carries the remaining items and fetch size
@@ -11087,7 +11199,7 @@ mod cli_integration_harness {
         },
         #[cfg(feature = "ids_projection")]
         AssetDefIds {
-            ids: Vec<iroha::data_model::asset::definition::AssetDefinitionId>,
+            ids: Vec<iroha::data_model::asset::id::AssetDefinitionId>,
             idx: usize,
             fetch: usize,
         },
@@ -11138,10 +11250,10 @@ mod cli_integration_harness {
                     .ok_or_else(|| eyre!("ABI version not configured in MockQueryServer")),
                 SingularQueryBox::FindAssetById(req) => self
                     .assets
-                    .get(&req.asset_id)
+                    .get(req.asset_id())
                     .cloned()
                     .map(SingularQueryOutputBox::Asset)
-                    .ok_or_else(|| eyre!(format!("asset `{}` not found", req.asset_id))),
+                    .ok_or_else(|| eyre!(format!("asset `{}` not found", req.asset_id()))),
                 SingularQueryBox::FindTriggerById(req) => self
                     .triggers
                     .iter()
@@ -11186,13 +11298,15 @@ mod cli_integration_harness {
                     v.sort_by(|a, b| {
                         let la = a.metadata().get(&key);
                         let lb = b.metadata().get(&key);
-                        let ord = match (la, lb) {
-                            (Some(l), Some(r)) => l.cmp(r),
+                        match (la, lb) {
+                            (Some(l), Some(r)) => {
+                                let ord = l.cmp(r);
+                                if desc { ord.reverse() } else { ord }
+                            }
                             (Some(_), None) => std::cmp::Ordering::Less,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
                             (None, None) => std::cmp::Ordering::Equal,
-                        };
-                        if desc { ord.reverse() } else { ord }
+                        }
                     });
                 }
                 let start = offset.min(v.len());
@@ -11201,32 +11315,27 @@ mod cli_integration_harness {
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
                 // Detect ids-only selector for domains
-                if let Some(erased) = iroha::data_model::query::iter_query_inner::<
-                    iroha::data_model::domain::Domain,
-                >(&query.query)
-                {
-                    #[cfg(feature = "ids_projection")]
-                    if erased.selector().is_ids_only() {
-                        let first_ids: Vec<_> = first.iter().map(|d| d.id().clone()).collect();
-                        let remaining_ids: Vec<_> =
-                            v[first_end..end].iter().map(|d| d.id().clone()).collect();
-                        let next = if remaining > 0 {
-                            Some(MockCursor::DomainIds {
-                                ids: remaining_ids,
-                                idx: 0,
-                                fetch,
-                            })
-                        } else {
-                            None
-                        };
-                        return Ok((
-                            QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::DomainId(first_ids)],
-                            },
-                            remaining,
-                            next,
-                        ));
-                    }
+                #[cfg(feature = "ids_projection")]
+                if query_projects_domain_ids(&query) {
+                    let first_ids: Vec<_> = first.iter().map(|d| d.id().clone()).collect();
+                    let remaining_ids: Vec<_> =
+                        v[first_end..end].iter().map(|d| d.id().clone()).collect();
+                    let next = if remaining > 0 {
+                        Some(MockCursor::DomainIds {
+                            ids: remaining_ids,
+                            idx: 0,
+                            fetch,
+                        })
+                    } else {
+                        None
+                    };
+                    return Ok((
+                        QueryOutputBatchBoxTuple {
+                            tuple: vec![QueryOutputBatchBox::DomainId(first_ids)],
+                        },
+                        remaining,
+                        next,
+                    ));
                 }
                 let next = if remaining > 0 {
                     Some(MockCursor::Domains {
@@ -11251,13 +11360,15 @@ mod cli_integration_harness {
                     v.sort_by(|a, b| {
                         let la = a.metadata().get(&key);
                         let lb = b.metadata().get(&key);
-                        let ord = match (la, lb) {
-                            (Some(l), Some(r)) => l.cmp(r),
+                        match (la, lb) {
+                            (Some(l), Some(r)) => {
+                                let ord = l.cmp(r);
+                                if desc { ord.reverse() } else { ord }
+                            }
                             (Some(_), None) => std::cmp::Ordering::Less,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
                             (None, None) => std::cmp::Ordering::Equal,
-                        };
-                        if desc { ord.reverse() } else { ord }
+                        }
                     });
                 }
                 let start = offset.min(v.len());
@@ -11266,31 +11377,26 @@ mod cli_integration_harness {
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
                 #[cfg(feature = "ids_projection")]
-                if let Some(erased) = iroha::data_model::query::iter_query_inner::<
-                    iroha::data_model::account::Account,
-                >(&query.query)
-                {
-                    if erased.selector().is_ids_only() {
-                        let first_ids: Vec<_> = first.iter().map(|a| a.id().clone()).collect();
-                        let remaining_ids: Vec<_> =
-                            v[first_end..end].iter().map(|a| a.id().clone()).collect();
-                        let next = if remaining > 0 {
-                            Some(MockCursor::AccountIds {
-                                ids: remaining_ids,
-                                idx: 0,
-                                fetch,
-                            })
-                        } else {
-                            None
-                        };
-                        return Ok((
-                            QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::AccountId(first_ids)],
-                            },
-                            remaining,
-                            next,
-                        ));
-                    }
+                if query_projects_account_ids(&query) {
+                    let first_ids: Vec<_> = first.iter().map(|a| a.id().clone()).collect();
+                    let remaining_ids: Vec<_> =
+                        v[first_end..end].iter().map(|a| a.id().clone()).collect();
+                    let next = if remaining > 0 {
+                        Some(MockCursor::AccountIds {
+                            ids: remaining_ids,
+                            idx: 0,
+                            fetch,
+                        })
+                    } else {
+                        None
+                    };
+                    return Ok((
+                        QueryOutputBatchBoxTuple {
+                            tuple: vec![QueryOutputBatchBox::AccountId(first_ids)],
+                        },
+                        remaining,
+                        next,
+                    ));
                 }
                 let next = if remaining > 0 {
                     Some(MockCursor::Accounts {
@@ -11315,13 +11421,15 @@ mod cli_integration_harness {
                     v.sort_by(|a, b| {
                         let la = a.metadata().get(&key);
                         let lb = b.metadata().get(&key);
-                        let ord = match (la, lb) {
-                            (Some(l), Some(r)) => l.cmp(r),
+                        match (la, lb) {
+                            (Some(l), Some(r)) => {
+                                let ord = l.cmp(r);
+                                if desc { ord.reverse() } else { ord }
+                            }
                             (Some(_), None) => std::cmp::Ordering::Less,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
                             (None, None) => std::cmp::Ordering::Equal,
-                        };
-                        if desc { ord.reverse() } else { ord }
+                        }
                     });
                 }
                 let start = offset.min(v.len());
@@ -11330,31 +11438,26 @@ mod cli_integration_harness {
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
                 #[cfg(feature = "ids_projection")]
-                if let Some(erased) = iroha::data_model::query::iter_query_inner::<
-                    iroha::data_model::asset::definition::AssetDefinition,
-                >(&query.query)
-                {
-                    if erased.selector().is_ids_only() {
-                        let first_ids: Vec<_> = first.iter().map(|ad| ad.id().clone()).collect();
-                        let remaining_ids: Vec<_> =
-                            v[first_end..end].iter().map(|ad| ad.id().clone()).collect();
-                        let next = if remaining > 0 {
-                            Some(MockCursor::AssetDefIds {
-                                ids: remaining_ids,
-                                idx: 0,
-                                fetch,
-                            })
-                        } else {
-                            None
-                        };
-                        return Ok((
-                            QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::AssetDefinitionId(first_ids)],
-                            },
-                            remaining,
-                            next,
-                        ));
-                    }
+                if query_projects_asset_definition_ids(&query) {
+                    let first_ids: Vec<_> = first.iter().map(|ad| ad.id().clone()).collect();
+                    let remaining_ids: Vec<_> =
+                        v[first_end..end].iter().map(|ad| ad.id().clone()).collect();
+                    let next = if remaining > 0 {
+                        Some(MockCursor::AssetDefIds {
+                            ids: remaining_ids,
+                            idx: 0,
+                            fetch,
+                        })
+                    } else {
+                        None
+                    };
+                    return Ok((
+                        QueryOutputBatchBoxTuple {
+                            tuple: vec![QueryOutputBatchBox::AssetDefinitionId(first_ids)],
+                        },
+                        remaining,
+                        next,
+                    ));
                 }
                 let next = if remaining > 0 {
                     Some(MockCursor::AssetDefs {
@@ -11530,8 +11633,8 @@ mod cli_integration_harness {
         let owner_w2 = sample_account_id("w2", 10);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("w1".parse().unwrap()).build(&owner_w1),
-            Domain::new("w2".parse().unwrap()).build(&owner_w2),
+            Domain::new("w1".parse().unwrap()).build(owner_w1.account()),
+            Domain::new("w2".parse().unwrap()).build(owner_w2.account()),
         ];
 
         // Build and execute the query via QueryBuilder against the mock server
@@ -11553,9 +11656,9 @@ mod cli_integration_harness {
         let owner_w2 = sample_account_id("w2", 12);
         let owner_w3 = sample_account_id("w3", 13);
         let mut server = MockQueryServer::default();
-        let mut w1 = Domain::new("w1".parse().unwrap()).build(&owner_w1);
-        let mut w2 = Domain::new("w2".parse().unwrap()).build(&owner_w2);
-        let w3 = Domain::new("w3".parse().unwrap()).build(&owner_w3); // no rank
+        let mut w1 = Domain::new("w1".parse().unwrap()).build(owner_w1.account());
+        let mut w2 = Domain::new("w2".parse().unwrap()).build(owner_w2.account());
+        let w3 = Domain::new("w3".parse().unwrap()).build(owner_w3.account()); // no rank
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -11574,29 +11677,28 @@ mod cli_integration_harness {
         assert_eq!(out[2].id(), w3.id());
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection() {
         use iroha::data_model::domain::{Domain, DomainId};
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
 
         let owner_w1 = sample_account_id("w1", 1);
         let owner_w2 = sample_account_id("w2", 2);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("w1".parse().unwrap()).build(&owner_w1),
-            Domain::new("w2".parse().unwrap()).build(&owner_w2),
+            Domain::new("w1".parse().unwrap()).build(owner_w1.account()),
+            Domain::new("w2".parse().unwrap()).build(owner_w2.account()),
         ];
 
-        // Build an erased iter query with ids-only selector
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::domain::prelude::FindDomains),
+        let qwp = build_query_with_params(
             CompoundPredicate::PASS,
             SelectorTuple::<Domain>::ids_only(),
+            QueryParams::default(),
+            || Box::new(query::domain::prelude::FindDomains),
         );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
-        let qwp = QueryWithParams::new(qbox, QueryParams::default());
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
@@ -11608,12 +11710,13 @@ mod cli_integration_harness {
         assert_eq!(ids[1], DomainId::new("w2".parse().unwrap(),));
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_accounts_ids_projection() {
-        use iroha::data_model::account::{Account, ScopedAccountId};
+        use iroha::data_model::account::Account;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
 
         let alice = sample_account_id("w", 1);
         let bob = sample_account_id("w", 2);
@@ -11625,13 +11728,12 @@ mod cli_integration_harness {
                 .build(bob.account()),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::account::prelude::FindAccounts),
+        let qwp = build_query_with_params(
             CompoundPredicate::PASS,
             SelectorTuple::<Account>::ids_only(),
+            QueryParams::default(),
+            || Box::new(query::account::prelude::FindAccounts),
         );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
-        let qwp = QueryWithParams::new(qbox, QueryParams::default());
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
@@ -11643,13 +11745,14 @@ mod cli_integration_harness {
         assert!(ids.iter().any(|id| id == bob.account()));
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_asset_defs_ids_projection() {
-        use iroha::data_model::asset::definition::{AssetDefinition, AssetDefinitionId};
+        use iroha::data_model::asset::{definition::AssetDefinition, id::AssetDefinitionId};
         use iroha::data_model::prelude::NumericSpec;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
 
         let owner_w = sample_account_id("w", 1);
         let mut server = MockQueryServer::default();
@@ -11662,7 +11765,7 @@ mod cli_integration_harness {
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
                     .with_name(__asset_definition_id.name().to_string())
             }
-            .build(&owner_w),
+            .build(owner_w.account()),
             {
                 let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
                     "w".parse().unwrap(),
@@ -11671,16 +11774,15 @@ mod cli_integration_harness {
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
                     .with_name(__asset_definition_id.name().to_string())
             }
-            .build(&owner_w),
+            .build(owner_w.account()),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::asset::prelude::FindAssetsDefinitions),
+        let qwp = build_query_with_params(
             CompoundPredicate::PASS,
             SelectorTuple::<AssetDefinition>::ids_only(),
+            QueryParams::default(),
+            || Box::new(query::asset::prelude::FindAssetsDefinitions),
         );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
-        let qwp = QueryWithParams::new(qbox, QueryParams::default());
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
@@ -11698,13 +11800,14 @@ mod cli_integration_harness {
         ));
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_asset_defs_ids_projection_batched() {
-        use iroha::data_model::asset::definition::{AssetDefinition, AssetDefinitionId};
+        use iroha::data_model::asset::{definition::AssetDefinition, id::AssetDefinitionId};
         use iroha::data_model::prelude::NumericSpec;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
         use std::num::NonZeroU64;
 
         let owner_w = sample_account_id("w", 2);
@@ -11718,7 +11821,7 @@ mod cli_integration_harness {
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
                     .with_name(__asset_definition_id.name().to_string())
             }
-            .build(&owner_w),
+            .build(owner_w.account()),
             {
                 let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
                     "w".parse().unwrap(),
@@ -11727,7 +11830,7 @@ mod cli_integration_harness {
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
                     .with_name(__asset_definition_id.name().to_string())
             }
-            .build(&owner_w),
+            .build(owner_w.account()),
             {
                 let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
                     "w".parse().unwrap(),
@@ -11736,18 +11839,17 @@ mod cli_integration_harness {
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
                     .with_name(__asset_definition_id.name().to_string())
             }
-            .build(&owner_w),
+            .build(owner_w.account()),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::asset::prelude::FindAssetsDefinitions),
-            CompoundPredicate::PASS,
-            SelectorTuple::<AssetDefinition>::ids_only(),
-        );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = QueryWithParams::new(qbox, params);
+        let qwp = build_query_with_params(
+            CompoundPredicate::PASS,
+            SelectorTuple::<AssetDefinition>::ids_only(),
+            params,
+            || Box::new(query::asset::prelude::FindAssetsDefinitions),
+        );
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
@@ -11782,12 +11884,13 @@ mod cli_integration_harness {
         assert!(cur2.is_none());
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_accounts_ids_projection_batched() {
-        use iroha::data_model::account::{Account, ScopedAccountId};
+        use iroha::data_model::account::Account;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
         use std::num::NonZeroU64;
 
         let alice = sample_account_id("w", 3);
@@ -11803,15 +11906,14 @@ mod cli_integration_harness {
                 .build(carol.account()),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::account::prelude::FindAccounts),
-            CompoundPredicate::PASS,
-            SelectorTuple::<Account>::ids_only(),
-        );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = QueryWithParams::new(qbox, params);
+        let qwp = build_query_with_params(
+            CompoundPredicate::PASS,
+            SelectorTuple::<Account>::ids_only(),
+            params,
+            || Box::new(query::account::prelude::FindAccounts),
+        );
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
@@ -11837,12 +11939,13 @@ mod cli_integration_harness {
         assert!(cur2.is_none());
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection_batched() {
         use iroha::data_model::domain::{Domain, DomainId};
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
         use std::num::NonZeroU64;
 
         let owner_d1 = sample_account_id("d1", 1);
@@ -11850,20 +11953,19 @@ mod cli_integration_harness {
         let owner_d3 = sample_account_id("d3", 3);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("d1".parse().unwrap()).build(&owner_d1),
-            Domain::new("d2".parse().unwrap()).build(&owner_d2),
-            Domain::new("d3".parse().unwrap()).build(&owner_d3),
+            Domain::new("d1".parse().unwrap()).build(owner_d1.account()),
+            Domain::new("d2".parse().unwrap()).build(owner_d2.account()),
+            Domain::new("d3".parse().unwrap()).build(owner_d3.account()),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::domain::prelude::FindDomains),
-            CompoundPredicate::PASS,
-            SelectorTuple::<Domain>::ids_only(),
-        );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = QueryWithParams::new(qbox, params);
+        let qwp = build_query_with_params(
+            CompoundPredicate::PASS,
+            SelectorTuple::<Domain>::ids_only(),
+            params,
+            || Box::new(query::domain::prelude::FindDomains),
+        );
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
@@ -11871,8 +11973,8 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&DomainId::from_str("d1").unwrap()));
-        assert!(ids1.contains(&DomainId::from_str("d2").unwrap()));
+        assert!(ids1.contains(&"d1".parse::<DomainId>().unwrap()));
+        assert!(ids1.contains(&"d2".parse::<DomainId>().unwrap()));
         assert_eq!(rem, 1);
         let cur = cur.expect("should continue");
 
@@ -11884,7 +11986,7 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&DomainId::from_str("d3").unwrap()));
+        assert!(ids2.contains(&"d3".parse::<DomainId>().unwrap()));
         assert_eq!(rem2, 0);
         assert!(cur2.is_none());
     }
@@ -11902,9 +12004,9 @@ mod cli_integration_harness {
         let owner_w1 = sample_account_id("w1", 6);
         let owner_w2 = sample_account_id("w2", 7);
         let owner_w3 = sample_account_id("w3", 8);
-        let mut w1 = Domain::new("w1".parse().unwrap()).build(&owner_w1);
-        let mut w2 = Domain::new("w2".parse().unwrap()).build(&owner_w2);
-        let mut w3 = Domain::new("w3".parse().unwrap()).build(&owner_w3);
+        let mut w1 = Domain::new("w1".parse().unwrap()).build(owner_w1.account());
+        let mut w2 = Domain::new("w2".parse().unwrap()).build(owner_w2.account());
+        let mut w3 = Domain::new("w3".parse().unwrap()).build(owner_w3.account());
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -11935,24 +12037,22 @@ mod cli_integration_harness {
     #[test]
     fn harness_singular_asset_roundtrip() {
         use iroha::data_model::{
-            account::ScopedAccountId,
             asset::{Asset, AssetId, id::AssetDefinitionId},
             query::asset::prelude::FindAssetById,
         };
-        use std::str::FromStr;
 
         let mut server = MockQueryServer::default();
         let asset_def_id =
             AssetDefinitionId::new("wonderland".parse().unwrap(), "coin".parse().unwrap());
         let account_id = sample_account_id("wonderland", 14);
-        let asset_id = AssetId::new(asset_def_id, account_id);
+        let asset_id = AssetId::new(asset_def_id, account_id.account().clone());
         let asset = Asset::new(asset_id.clone(), 77_u32);
         server.assets.insert(asset_id.clone(), asset.clone());
 
         let out = server
-            .execute_singular_query(SingularQueryBox::FindAssetById(FindAssetById {
-                asset_id: asset_id.clone(),
-            }))
+            .execute_singular_query(SingularQueryBox::FindAssetById(FindAssetById::new(
+                asset_id.clone(),
+            )))
             .expect("asset present");
         match out {
             SingularQueryOutputBox::Asset(found) => {
@@ -11966,7 +12066,7 @@ mod cli_integration_harness {
     #[test]
     fn harness_singular_account_roundtrip() {
         use iroha::data_model::{
-            account::{Account, ScopedAccountId},
+            account::Account,
             query::account::prelude::FindAccountById,
         };
 
@@ -11980,7 +12080,7 @@ mod cli_integration_harness {
 
         let out = server
             .execute_singular_query(SingularQueryBox::FindAccountById(FindAccountById::new(
-                account_id.clone(),
+                account_id.account().clone(),
             )))
             .expect("account present");
         match out {
@@ -11992,7 +12092,6 @@ mod cli_integration_harness {
     #[test]
     fn harness_singular_trigger_roundtrip() {
         use iroha::data_model::{
-            account::ScopedAccountId,
             events::execute_trigger::ExecuteTriggerEventFilter,
             query::trigger::prelude::FindTriggerById,
             transaction::{Executable, IvmBytecode},

@@ -936,6 +936,8 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::Proposal(_)
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
+                | BlockMessage::RbcInitRequest(_)
+                | BlockMessage::RbcChunkRequest(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
                 BlockMessage::RbcChunk(_)
@@ -1141,12 +1143,16 @@ impl ConsensusIngressLimiter {
         };
         match block.as_ref().as_ref() {
             RbcInit(init) => Some((init.block_hash, init.height, init.view)),
+            RbcInitRequest(request) => Some((request.block_hash, request.height, request.view)),
             RbcChunk(chunk) => Some((chunk.block_hash, chunk.height, chunk.view)),
             RbcChunkCompact(chunk) => Some((
                 chunk.block_hash,
                 u64::from(chunk.height),
                 u64::from(chunk.view),
             )),
+            RbcChunkRequest(request) => {
+                Some((request.block_hash, request.height, request.view))
+            }
             RbcReady(ready) => Some((ready.block_hash, ready.height, ready.view)),
             RbcDeliver(deliver) => Some((deliver.block_hash, deliver.height, deliver.view)),
             _ => None,
@@ -1994,12 +2000,18 @@ impl NetworkRelayShared {
             VrfReveal(_) => ("VrfReveal", None, None),
             ExecWitness(witness) => ("ExecWitness", Some(witness.height), Some(witness.view)),
             RbcInit(init) => ("RbcInit", Some(init.height), Some(init.view)),
+            RbcInitRequest(request) => {
+                ("RbcInitRequest", Some(request.height), Some(request.view))
+            }
             RbcChunk(chunk) => ("RbcChunk", Some(chunk.height), Some(chunk.view)),
             RbcChunkCompact(chunk) => (
                 "RbcChunk",
                 Some(u64::from(chunk.height)),
                 Some(u64::from(chunk.view)),
             ),
+            RbcChunkRequest(request) => {
+                ("RbcChunkRequest", Some(request.height), Some(request.view))
+            }
             RbcReady(ready) => ("RbcReady", Some(ready.height), Some(ready.view)),
             RbcDeliver(deliver) => ("RbcDeliver", Some(deliver.height), Some(deliver.view)),
             FetchBlockBody(request) => ("FetchBlockBody", Some(request.height), Some(request.view)),
@@ -2210,6 +2222,8 @@ fn sumeragi_block_message_requires_blocking(
             | BlockMessage::QcVote(_)
             | BlockMessage::Qc(_)
             | BlockMessage::RbcInit(_)
+            | BlockMessage::RbcInitRequest(_)
+            | BlockMessage::RbcChunkRequest(_)
             | BlockMessage::RbcReady(_)
             | BlockMessage::RbcDeliver(_)
     )
@@ -2682,7 +2696,7 @@ mod network_relay_tests {
             roster: Vec::new(),
             roster_hash: Hash::prehashed([0x11; 32]),
             total_chunks: 1,
-            encoding: iroha_core::sumeragi::consensus::RbcEncoding::Plain,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
             chunk_size_bytes: 0,
             payload_size_bytes: 0,
             data_shards: 0,
@@ -7229,6 +7243,8 @@ fn build_consensus_config_caps(
             "sumeragi.advanced.rbc.session_ttl exceeds handshake limits (must fit into u64 milliseconds)",
         )
     })?;
+    let rbc_data_shards = sumeragi.rbc.effective_data_shards();
+    let rbc_parity_shards = sumeragi.rbc.effective_parity_shards();
 
     Ok(iroha_p2p::ConsensusConfigCaps {
         collectors_k,
@@ -7236,8 +7252,8 @@ fn build_consensus_config_caps(
         da_enabled: sumeragi.da.enabled,
         rbc_chunk_max_bytes,
         rbc_encoding: sumeragi.rbc.encoding,
-        rbc_rs16_data_shards: sumeragi.rbc.data_shards,
-        rbc_rs16_parity_shards: sumeragi.rbc.parity_shards,
+        rbc_rs16_data_shards: rbc_data_shards,
+        rbc_rs16_parity_shards: rbc_parity_shards,
         rbc_session_ttl_ms,
         rbc_store_max_sessions,
         rbc_store_soft_sessions,
@@ -8677,6 +8693,23 @@ mod tests {
                 permissioned_fp, caps_npos.consensus_fingerprint,
                 "mode cutover should change consensus fingerprint"
             );
+        }
+
+        #[test]
+        fn build_consensus_config_caps_zero_plain_rbc_erasure_profile() {
+            let mut config = sample_config();
+            config.sumeragi.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Plain;
+            config.sumeragi.rbc.data_shards = 4;
+            config.sumeragi.rbc.parity_shards = 2;
+
+            let caps =
+                build_consensus_config_caps(&config.sumeragi).expect("config caps should build");
+            assert_eq!(
+                caps.rbc_encoding,
+                iroha_data_model::block::consensus::RbcEncoding::Plain
+            );
+            assert_eq!(caps.rbc_rs16_data_shards, 0);
+            assert_eq!(caps.rbc_rs16_parity_shards, 0);
         }
 
         #[test]

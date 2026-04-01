@@ -26,6 +26,7 @@ maintenance = { status = "actively-developed" }
 # Use rustls by default to avoid OpenSSL dependency, simplifying compilation with musl.
 # Enable SM algorithm support unless downstream consumers opt out via `--no-default-features`.
 default = ["tls-rustls-native-roots", "sm"]
+ids_projection = ["iroha_data_model/ids_projection"]
 sm = [
     "iroha_crypto/sm",
     "iroha_data_model/sm",

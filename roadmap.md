@@ -1,21 +1,54 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-31
+Last updated: 2026-04-01
 
-Latest sync (2026-03-31 Sumeragi RBC layout metadata + RS16 reconstruction):
-RBC sessions now carry explicit encoding/layout metadata across config,
-handshake, wire, status, and persistence, and the session reload/hydration path
-can reconstruct missing RS16 shards before rebuilding the canonical payload.
+Latest sync (2026-04-01 restart-path RBC summary/root-cause fix):
+the Sumeragi restart path now preserves `recovered_from_disk` across
+exact-frontier snapshot refreshes, and commit cleanup promotes retained
+off-runtime exact-frontier summaries to `delivered=true` once the block has
+committed.
+
+- the restarted peer no longer loses the recovered-session flag just because
+  `BlockCreated` refresh rebuilt the deterministic RBC snapshot for the same
+  `(block_hash, height, view)`;
+- exact-frontier/persisted summaries that survive runtime cleanup now reflect
+  the block’s committed terminal state instead of sitting forever at
+  `delivered=false`; and
+- focused regressions are green for both the recovered-summary preservation and
+  the retained-summary delivery promotion paths.
 
 Open work for this slice now remains:
-- add shard-targeted repair control messages so missing-payload rescue no longer
-  falls back to full RBC payload rebroadcast when INIT or some shards are
-  missing
+- finish a fresh end-to-end rerun of
+  `sumeragi_rbc_recovers_after_peer_restart` on the patched tree and then
+  rerun the adjacent heavy restart/cold-start recovery scenarios to confirm no
+  broader integration-only regression remains
+- full workspace verification (`cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`) has not been rerun
+  after this restart-path fix tranche
+
+Latest sync (2026-03-31 Sumeragi RBC targeted repair + RS16/operator plumbing):
+the RBC control plane now has explicit targeted-repair requests
+(`RbcInitRequest` / `RbcChunkRequest`) wired through the data model, daemon,
+Sumeragi runtime, telemetry surface, and Torii status routes, and the DA /
+localnet harnesses can now run `plain` and `rs16` RBC scenarios explicitly.
+
+- missing INIT / chunk rescue now tries deterministic targeted repair before
+  the existing full rebroadcast fallback, and the aggregate RBC endpoint now
+  exports request/fallback/reconstruction/seed-latency counters;
+- `irohad` now classifies the new repair request messages alongside the rest of
+  the RBC control plane so integration-built `iroha3d` compiles/runs with the
+  expanded message set; and
+- the new `sumeragi_rbc_da_large_payload_four_peers_rs16` integration scenario
+  is green on this tree, while the throughput script can emit separate artifact
+  directories for `plain` and `rs16` runs.
+
+Open work for this slice now remains:
+- run the broader restart / lagging-peer recovery suite against the new repair
+  path and resolve the remaining `sumeragi_rbc_recovers_after_peer_restart`
+  timeout before calling targeted repair fully validated end to end
 - benchmark `plain` vs `rs16` RBC mode on the existing large-payload/localnet
-  harness and decide when `rs16` can move from opt-in to default
-- extend typed operator/status surfaces further if we want the RS16
-  reconstruction counters outside the dedicated `/v1/sumeragi/rbc/sessions`
-  endpoint
+  harness and decide when `rs16` can move from opt-in to default (the config
+  default is still `plain` on this tree)
 
 Latest sync (2026-03-31 retired offline-allowance app route alignment):
 the address-canonicalisation suite no longer treats the legacy

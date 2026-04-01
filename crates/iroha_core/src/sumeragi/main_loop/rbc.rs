@@ -45,7 +45,8 @@ use crate::{
     sumeragi::{
         BackgroundRequest, CryptoHash,
         consensus::{
-            RbcChunk, RbcDeliver, RbcInit, RbcReady, rbc_deliver_preimage, rbc_ready_preimage,
+            RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest, RbcReady,
+            rbc_deliver_preimage, rbc_ready_preimage,
         },
         message::{BlockMessage, BlockMessageWire},
         network_topology::commit_quorum_from_len,
@@ -123,6 +124,7 @@ pub(super) struct RbcSeedWork {
     pub(super) payload_bytes: Vec<u8>,
     pub(super) chunking: RbcChunkingSpec,
     pub(super) epoch: u64,
+    pub(super) started_at: Instant,
 }
 
 #[derive(Debug)]
@@ -130,6 +132,7 @@ pub(super) struct RbcSeedResult {
     pub(super) key: SessionKey,
     pub(super) payload_hash: Hash,
     pub(super) outcome: Result<RbcSession>,
+    pub(super) elapsed: Duration,
 }
 
 #[derive(Debug)]
@@ -259,6 +262,7 @@ fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<Rb
                 };
                 let key = work.key;
                 let payload_hash = work.payload_hash;
+                let started_at = work.started_at;
                 let outcome = Actor::build_rbc_session_from_payload_with_chunking(
                     &work.payload_bytes,
                     payload_hash,
@@ -271,6 +275,7 @@ fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<Rb
                         key,
                         payload_hash,
                         outcome,
+                        elapsed: started_at.elapsed(),
                     })
                     .is_err()
                 {
@@ -321,8 +326,8 @@ impl RbcChunkingSpec {
         Self {
             encoding: rbc.encoding,
             chunk_size_bytes: rbc.chunk_max_bytes,
-            data_shards: rbc.data_shards,
-            parity_shards: rbc.parity_shards,
+            data_shards: rbc.effective_data_shards(),
+            parity_shards: rbc.effective_parity_shards(),
         }
     }
 
@@ -907,6 +912,36 @@ mod tests {
             let expected = commit_quorum_from_len(roster_len).min(roster_len);
             assert_eq!(rbc_ready_rebroadcasters_count(roster_len), expected);
         }
+    }
+
+    #[test]
+    fn rbc_chunking_spec_from_plain_config_ignores_rs16_profile() {
+        let config = config_actual::SumeragiRbc {
+            chunk_max_bytes: 4096,
+            encoding: RbcEncoding::Plain,
+            data_shards: 4,
+            parity_shards: 2,
+            chunk_fanout: None,
+            pending_max_chunks: 8,
+            pending_max_bytes: 8192,
+            pending_session_limit: 8,
+            pending_ttl: std::time::Duration::from_secs(1),
+            session_ttl: std::time::Duration::from_secs(1),
+            rebroadcast_sessions_per_tick: 1,
+            payload_chunks_per_tick: 1,
+            store_max_sessions: 8,
+            store_soft_sessions: 4,
+            store_max_bytes: 8192,
+            store_soft_bytes: 4096,
+            disk_store_ttl: std::time::Duration::from_secs(1),
+            disk_store_max_bytes: 16 * 1024,
+        };
+
+        let chunking = RbcChunkingSpec::from_config(&config);
+        assert_eq!(chunking.encoding, RbcEncoding::Plain);
+        assert_eq!(chunking.data_shards, 0);
+        assert_eq!(chunking.parity_shards, 0);
+        assert_eq!(chunking.chunk_size_bytes, 4096);
     }
 
     #[test]
@@ -1746,6 +1781,7 @@ impl Actor {
         let should_rebroadcast =
             rebroadcast_missing_init || self.subsystems.da_rbc.rbc.pending.contains_key(&key);
         let payload_bytes = block_payload_bytes(block);
+        let seed_started_at = Instant::now();
         let mut session = match Self::build_rbc_session_from_payload_with_chunking(
             &payload_bytes,
             payload_hash,
@@ -1763,6 +1799,9 @@ impl Actor {
                 return Ok(());
             }
         };
+        if let Some(telemetry) = self.telemetry_handle() {
+            telemetry.observe_rbc_seed_latency(seed_started_at.elapsed());
+        }
 
         session.block_header = Some(block.header());
         let roster = self.rbc_roster_for_session(key);
@@ -1814,6 +1853,36 @@ impl Actor {
                 self.rebroadcast_rbc_payload_for_missing_init(key, &session);
             }
         }
+        Ok(())
+    }
+
+    pub(super) fn persist_exact_frontier_rbc_recovery_snapshot(
+        &mut self,
+        key: SessionKey,
+        block: &SignedBlock,
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+    ) -> Result<()> {
+        let Some(init) = self.rebuild_rbc_init_from_block(block, key) else {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                "skipping exact-frontier RBC recovery snapshot: deterministic RBC INIT unavailable"
+            );
+            return Ok(());
+        };
+        let mut session = Self::build_rbc_session_from_payload_with_chunking(
+            payload_bytes,
+            payload_hash,
+            RbcChunkingSpec::from_config(&self.config.rbc),
+            init.epoch,
+        )?;
+        session.block_header = Some(init.block_header);
+        session.leader_signature = Some(init.leader_signature.clone());
+        self.update_rbc_status_entry(key, &session, false);
+        self.persist_rbc_session_sync(key, &session, init.roster.as_slice());
+        self.publish_rbc_backlog_snapshot();
         Ok(())
     }
 
@@ -2000,6 +2069,7 @@ impl Actor {
                 payload_bytes,
                 chunking: RbcChunkingSpec::from_config(&self.config.rbc),
                 epoch: self.epoch_for_height(key.1),
+                started_at: Instant::now(),
             };
             match seed_tx.try_send(work) {
                 Ok(()) => {
@@ -2774,12 +2844,7 @@ impl Actor {
                 .rbc
                 .outbound_chunks
                 .contains_key(&key)
-            || self
-                .subsystems
-                .da_rbc
-                .rbc
-                .persisted_full_sessions
-                .contains(&key)
+            || self.subsystems.da_rbc.rbc.persisted_sessions.contains(&key)
             || self.subsystems.da_rbc.rbc.persist_inflight.contains(&key);
         if has_rbc_state {
             self.purge_rbc_state(key, key.0, key.1, key.2);
@@ -3741,6 +3806,11 @@ impl Actor {
                 self.update_rbc_status_entry(key, &session, false);
                 self.persist_rbc_session(key, &session);
             }
+            self.subsystems
+                .da_rbc
+                .rbc
+                .init_repair_last_sent
+                .remove(&key);
             self.publish_rbc_backlog_snapshot();
             self.request_commit_pipeline_for_round(
                 key.1,
@@ -3804,6 +3874,11 @@ impl Actor {
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
         }
+        self.subsystems
+            .da_rbc
+            .rbc
+            .init_repair_last_sent
+            .remove(&key);
         self.publish_rbc_backlog_snapshot();
         self.request_commit_pipeline_for_round(
             key.1,
@@ -3812,6 +3887,200 @@ impl Actor {
             super::status::RoundEventCauseTrace::BlockAvailable,
             None,
         );
+        Ok(())
+    }
+
+    fn validate_rbc_repair_request_sender(
+        &mut self,
+        key: SessionKey,
+        sender: Option<PeerId>,
+        kind: super::status::ConsensusMessageKind,
+    ) -> Option<(PeerId, Vec<PeerId>)> {
+        let Some(sender) = sender else {
+            self.record_consensus_message_handling(
+                kind,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return None;
+        };
+        let mut roster = self.rbc_session_roster(key);
+        if roster.is_empty() {
+            roster = self.ensure_rbc_session_roster(key);
+        }
+        if roster.is_empty() {
+            self.record_consensus_message_handling(
+                kind,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::RosterMissing,
+            );
+            return None;
+        }
+        if !roster.iter().any(|peer| peer == &sender) {
+            self.record_consensus_message_handling(
+                kind,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return None;
+        }
+        Some((sender, roster))
+    }
+
+    pub(super) fn handle_rbc_init_request(
+        &mut self,
+        request: RbcInitRequest,
+        sender: Option<PeerId>,
+    ) -> Result<()> {
+        if self.should_drop_stale_rbc_message(
+            request.height,
+            request.view,
+            &request.block_hash,
+            "RbcInitRequest",
+        ) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInitRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
+            return Ok(());
+        }
+        if self.rbc_message_stale(&request.block_hash, request.height) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInitRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Committed,
+            );
+            return Ok(());
+        }
+        let key = Self::session_key(&request.block_hash, request.height, request.view);
+        if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
+            && !self.ensure_rbc_session_from_pending_block(key, false)?
+        {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInitRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::NotFound,
+            );
+            return Ok(());
+        }
+        let Some((sender, _roster)) = self.validate_rbc_repair_request_sender(
+            key,
+            sender,
+            super::status::ConsensusMessageKind::RbcInitRequest,
+        ) else {
+            return Ok(());
+        };
+        let Some(init) = self.rebuild_rbc_init(key) else {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcInitRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::NotFound,
+            );
+            return Ok(());
+        };
+        let msg = Arc::new(BlockMessage::RbcInit(init));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+        self.schedule_background(BackgroundRequest::Post {
+            peer: sender,
+            msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+        });
+        Ok(())
+    }
+
+    pub(super) fn handle_rbc_chunk_request(
+        &mut self,
+        request: RbcChunkRequest,
+        sender: Option<PeerId>,
+    ) -> Result<()> {
+        if self.should_drop_stale_rbc_message(
+            request.height,
+            request.view,
+            &request.block_hash,
+            "RbcChunkRequest",
+        ) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::StaleView,
+            );
+            return Ok(());
+        }
+        if self.rbc_message_stale(&request.block_hash, request.height) {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::Committed,
+            );
+            return Ok(());
+        }
+        let key = Self::session_key(&request.block_hash, request.height, request.view);
+        if !self.subsystems.da_rbc.rbc.sessions.contains_key(&key)
+            && !self.ensure_rbc_session_from_pending_block(key, false)?
+        {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::NotFound,
+            );
+            return Ok(());
+        }
+        let Some((sender, _roster)) = self.validate_rbc_repair_request_sender(
+            key,
+            sender,
+            super::status::ConsensusMessageKind::RbcChunkRequest,
+        ) else {
+            return Ok(());
+        };
+        let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::NotFound,
+            );
+            return Ok(());
+        };
+        let mut missing_indices = request.missing_indices;
+        missing_indices.sort_unstable();
+        missing_indices.dedup();
+        missing_indices.retain(|idx| *idx < session.total_chunks());
+        if missing_indices.is_empty() {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
+        let epoch = session.epoch;
+        let chunk_payloads: Vec<_> = missing_indices
+            .into_iter()
+            .filter_map(|idx| session.chunk_bytes(idx).map(|bytes| (idx, bytes.to_vec())))
+            .collect();
+        let mut sent = false;
+        for (idx, bytes) in chunk_payloads {
+            let msg = Arc::new(BlockMessage::from_rbc_chunk(RbcChunk {
+                block_hash: key.0,
+                height: key.1,
+                view: key.2,
+                epoch,
+                idx,
+                bytes,
+            }));
+            let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+            self.schedule_background(BackgroundRequest::Post {
+                peer: sender.clone(),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+            });
+            sent = true;
+        }
+        if !sent {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::RbcChunkRequest,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::NotFound,
+            );
+        }
         Ok(())
     }
 
@@ -3905,157 +4174,162 @@ impl Actor {
             }
         }
         let mut chunk_digest_mismatch = false;
-        let (ready_sent_before, became_complete, accepted_chunk) = if let Some(session) =
-            self.subsystems.da_rbc.rbc.sessions.get_mut(&key)
-        {
-            let ready_sent_before = session.sent_ready;
-            let was_complete =
-                session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
-            let outcome = session.ingest_chunk_with_outcome(chunk.idx, chunk.bytes, None);
-            if matches!(outcome, super::ChunkIngestOutcome::DigestMismatch) {
-                chunk_digest_mismatch = true;
-            }
-            let accepted_chunk = matches!(outcome, super::ChunkIngestOutcome::Accepted);
-            let is_complete =
-                session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
-            debug!(
-                height = chunk_height,
-                view = chunk_view,
-                idx = chunk_idx,
-                block = %chunk_block,
-                sender = ?sender,
-                outcome = ?outcome,
-                accepted_chunk,
-                received_chunks = session.received_chunks(),
-                total_chunks = session.total_chunks(),
-                "ingested RBC chunk"
-            );
-            (
-                ready_sent_before,
-                !was_complete && is_complete,
-                accepted_chunk,
-            )
-        } else {
-            let (max_chunks, max_bytes) = self.pending_rbc_caps();
-            let chunk_dedup_key = BlockPayloadDedupKey::RbcChunk {
-                height: chunk_height,
-                view: chunk_view,
-                epoch: chunk.epoch,
-                block_hash: chunk_block,
-                idx: chunk_idx,
-                bytes_hash: CryptoHash::new(&chunk.bytes),
-            };
-            let Some(pending) = self.pending_rbc_slot(key) else {
-                let dropped_bytes = u64::try_from(chunk_bytes_len).unwrap_or(u64::MAX);
-                Self::record_pending_drop_counts(
-                    self.telemetry_handle(),
-                    PendingRbcDropReason::SessionLimit,
-                    1,
-                    dropped_bytes,
-                );
-                warn!(
-                    ?key,
-                    limit = self.config.rbc.pending_session_limit,
-                    dropped_bytes,
-                    "dropping pending RBC chunk: stash session limit reached"
-                );
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::RbcChunk,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::StashSessionLimit,
-                );
-                self.request_missing_block_after_rbc_drop(
-                    key,
-                    PendingRbcDropReason::SessionLimit,
-                    "rbc_chunk_stash_limit",
-                );
-                self.release_block_payload_dedup(&chunk_dedup_key);
-                return Ok(());
-            };
-            debug!(
-                ?key,
-                sender = ?sender,
-                idx = chunk_idx,
-                "stashing RBC chunk before session init"
-            );
-            let outcome =
-                pending.push_chunk_capped(chunk, sender, max_chunks, max_bytes, Instant::now());
-            match outcome {
-                PendingChunkOutcome::Inserted {
-                    pending_chunks,
-                    pending_bytes,
-                    evicted_chunks,
-                    evicted_bytes,
-                } => {
-                    status::inc_pending_rbc_stash(status::PendingRbcStashKind::Chunk, None);
-                    self.record_consensus_message_handling(
-                        super::status::ConsensusMessageKind::RbcChunk,
-                        super::status::ConsensusMessageOutcome::Deferred,
-                        super::status::ConsensusMessageReason::InitMissing,
-                    );
-                    if evicted_chunks > 0 {
-                        Self::record_pending_drop_counts(
-                            self.telemetry_handle(),
-                            PendingRbcDropReason::Cap,
-                            evicted_chunks,
-                            evicted_bytes,
-                        );
-                        self.request_missing_block_after_rbc_drop(
-                            key,
-                            PendingRbcDropReason::Cap,
-                            "rbc_chunk_stash_evicted",
-                        );
-                    }
-                    debug!(
-                        ?key,
-                        pending_chunks,
-                        pending_bytes,
-                        evicted_chunks,
-                        evicted_bytes,
-                        "stashed RBC chunk until INIT arrives"
-                    );
-                    if evicted_chunks == 0 {
-                        self.request_missing_block_for_pending_rbc(key, "rbc_chunk_stash", None);
-                    }
+        let (ready_sent_before, became_complete, accepted_chunk, reconstructed_before) =
+            if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&key) {
+                let ready_sent_before = session.sent_ready;
+                let reconstructed_before = session.reconstructed_stripes();
+                let was_complete = session.total_chunks() != 0
+                    && session.received_chunks() == session.total_chunks();
+                let outcome = session.ingest_chunk_with_outcome(chunk.idx, chunk.bytes, None);
+                if matches!(outcome, super::ChunkIngestOutcome::DigestMismatch) {
+                    chunk_digest_mismatch = true;
                 }
-                PendingChunkOutcome::Dropped {
-                    dropped_bytes,
-                    evicted_chunks,
-                    evicted_bytes,
-                } => {
-                    let dropped_chunks = evicted_chunks.saturating_add(1);
-                    let dropped_bytes_total = dropped_bytes.saturating_add(evicted_bytes);
+                let accepted_chunk = matches!(outcome, super::ChunkIngestOutcome::Accepted);
+                let is_complete = session.total_chunks() != 0
+                    && session.received_chunks() == session.total_chunks();
+                debug!(
+                    height = chunk_height,
+                    view = chunk_view,
+                    idx = chunk_idx,
+                    block = %chunk_block,
+                    sender = ?sender,
+                    outcome = ?outcome,
+                    accepted_chunk,
+                    received_chunks = session.received_chunks(),
+                    total_chunks = session.total_chunks(),
+                    "ingested RBC chunk"
+                );
+                (
+                    ready_sent_before,
+                    !was_complete && is_complete,
+                    accepted_chunk,
+                    reconstructed_before,
+                )
+            } else {
+                let (max_chunks, max_bytes) = self.pending_rbc_caps();
+                let chunk_dedup_key = BlockPayloadDedupKey::RbcChunk {
+                    height: chunk_height,
+                    view: chunk_view,
+                    epoch: chunk.epoch,
+                    block_hash: chunk_block,
+                    idx: chunk_idx,
+                    bytes_hash: CryptoHash::new(&chunk.bytes),
+                };
+                let Some(pending) = self.pending_rbc_slot(key) else {
+                    let dropped_bytes = u64::try_from(chunk_bytes_len).unwrap_or(u64::MAX);
                     Self::record_pending_drop_counts(
                         self.telemetry_handle(),
-                        PendingRbcDropReason::Cap,
-                        dropped_chunks,
-                        dropped_bytes_total,
+                        PendingRbcDropReason::SessionLimit,
+                        1,
+                        dropped_bytes,
                     );
                     warn!(
                         ?key,
-                        max_chunks,
-                        max_bytes,
+                        limit = self.config.rbc.pending_session_limit,
                         dropped_bytes,
-                        evicted_chunks,
-                        evicted_bytes,
-                        "dropping pending RBC chunk: stash limits exceeded before INIT"
+                        "dropping pending RBC chunk: stash session limit reached"
                     );
                     self.record_consensus_message_handling(
                         super::status::ConsensusMessageKind::RbcChunk,
                         super::status::ConsensusMessageOutcome::Dropped,
-                        super::status::ConsensusMessageReason::StashCap,
+                        super::status::ConsensusMessageReason::StashSessionLimit,
                     );
                     self.request_missing_block_after_rbc_drop(
                         key,
-                        PendingRbcDropReason::Cap,
-                        "rbc_chunk_stash_cap",
+                        PendingRbcDropReason::SessionLimit,
+                        "rbc_chunk_stash_limit",
                     );
                     self.release_block_payload_dedup(&chunk_dedup_key);
+                    return Ok(());
+                };
+                debug!(
+                    ?key,
+                    sender = ?sender,
+                    idx = chunk_idx,
+                    "stashing RBC chunk before session init"
+                );
+                let outcome =
+                    pending.push_chunk_capped(chunk, sender, max_chunks, max_bytes, Instant::now());
+                match outcome {
+                    PendingChunkOutcome::Inserted {
+                        pending_chunks,
+                        pending_bytes,
+                        evicted_chunks,
+                        evicted_bytes,
+                    } => {
+                        status::inc_pending_rbc_stash(status::PendingRbcStashKind::Chunk, None);
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcChunk,
+                            super::status::ConsensusMessageOutcome::Deferred,
+                            super::status::ConsensusMessageReason::InitMissing,
+                        );
+                        if evicted_chunks > 0 {
+                            Self::record_pending_drop_counts(
+                                self.telemetry_handle(),
+                                PendingRbcDropReason::Cap,
+                                evicted_chunks,
+                                evicted_bytes,
+                            );
+                            self.request_missing_block_after_rbc_drop(
+                                key,
+                                PendingRbcDropReason::Cap,
+                                "rbc_chunk_stash_evicted",
+                            );
+                        }
+                        debug!(
+                            ?key,
+                            pending_chunks,
+                            pending_bytes,
+                            evicted_chunks,
+                            evicted_bytes,
+                            "stashed RBC chunk until INIT arrives"
+                        );
+                        if evicted_chunks == 0 {
+                            self.request_missing_block_for_pending_rbc(
+                                key,
+                                "rbc_chunk_stash",
+                                None,
+                            );
+                        }
+                    }
+                    PendingChunkOutcome::Dropped {
+                        dropped_bytes,
+                        evicted_chunks,
+                        evicted_bytes,
+                    } => {
+                        let dropped_chunks = evicted_chunks.saturating_add(1);
+                        let dropped_bytes_total = dropped_bytes.saturating_add(evicted_bytes);
+                        Self::record_pending_drop_counts(
+                            self.telemetry_handle(),
+                            PendingRbcDropReason::Cap,
+                            dropped_chunks,
+                            dropped_bytes_total,
+                        );
+                        warn!(
+                            ?key,
+                            max_chunks,
+                            max_bytes,
+                            dropped_bytes,
+                            evicted_chunks,
+                            evicted_bytes,
+                            "dropping pending RBC chunk: stash limits exceeded before INIT"
+                        );
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::RbcChunk,
+                            super::status::ConsensusMessageOutcome::Dropped,
+                            super::status::ConsensusMessageReason::StashCap,
+                        );
+                        self.request_missing_block_after_rbc_drop(
+                            key,
+                            PendingRbcDropReason::Cap,
+                            "rbc_chunk_stash_cap",
+                        );
+                        self.release_block_payload_dedup(&chunk_dedup_key);
+                    }
                 }
-            }
-            self.publish_rbc_backlog_snapshot();
-            return Ok(());
-        };
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
+            };
         if accepted_chunk {
             let now = Instant::now();
             self.touch_pending_progress(chunk_block, chunk_height, chunk_view, now);
@@ -4102,6 +4376,23 @@ impl Actor {
             );
         }
         self.maybe_emit_rbc_ready(key)?;
+        let reconstructed_delta = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .map(|session| {
+                session
+                    .reconstructed_stripes()
+                    .saturating_sub(reconstructed_before)
+            })
+            .unwrap_or_default();
+        if reconstructed_delta > 0
+            && let Some(telemetry) = self.telemetry_handle()
+        {
+            telemetry.add_rbc_reconstructed_stripes(u64::from(reconstructed_delta));
+        }
         if accepted_chunk {
             let delivered_bytes = self
                 .subsystems
@@ -4124,6 +4415,9 @@ impl Actor {
                     self.rbc_session_has_authoritative_payload_for_progress(key, session)
                 });
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
+            if !session.allows_payload_recovery() {
+                self.subsystems.da_rbc.rbc.chunk_repair.remove(&key);
+            }
             self.update_rbc_status_entry(key, &session, false);
             self.persist_rbc_session(key, &session);
             if session.total_chunks() != 0
@@ -6114,7 +6408,7 @@ impl Actor {
                         self.subsystems
                             .da_rbc
                             .rbc
-                            .persisted_full_sessions
+                            .persisted_sessions
                             .insert(result.key);
                     }
                 }
@@ -6156,6 +6450,9 @@ impl Actor {
                 continue;
             };
             progress = true;
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.observe_rbc_seed_latency(result.elapsed);
+            }
             let key = result.key;
             match result.outcome {
                 Ok(mut seeded) => {
@@ -6328,9 +6625,8 @@ impl Actor {
         if total_chunks == 0 {
             return;
         }
-        if session.received_chunks() < total_chunks {
-            return;
-        }
+        // Persist authoritative partial sessions as well as completed ones so a restart can
+        // resume RBC progress from the last durable chunk set instead of only from a summary.
         let roster_source = self
             .rbc_session_roster_source(key)
             .unwrap_or(RbcRosterSource::Init);
@@ -6339,15 +6635,6 @@ impl Actor {
         }
         let session_roster = self.rbc_session_roster(key);
         if session_roster.is_empty() {
-            return;
-        }
-        if self
-            .subsystems
-            .da_rbc
-            .rbc
-            .persisted_full_sessions
-            .contains(&key)
-        {
             return;
         }
         if self.subsystems.da_rbc.rbc.persist_inflight.contains(&key) {
@@ -6389,6 +6676,15 @@ impl Actor {
                 return;
             }
         }
+        self.persist_rbc_session_sync(key, session, &session_roster);
+    }
+
+    fn persist_rbc_session_sync(
+        &mut self,
+        key: SessionKey,
+        session: &RbcSession,
+        session_roster: &[PeerId],
+    ) {
         if !self.ensure_rbc_chunk_store() {
             trace!(
                 ?key,
@@ -6409,16 +6705,12 @@ impl Actor {
             session,
             &self.chain_hash,
             &self.subsystems.da_rbc.rbc.manifest,
-            session_roster.as_slice(),
+            session_roster,
         ) {
             Ok(outcome) => {
                 self.handle_rbc_store_evictions(&outcome.removed);
                 self.update_rbc_store_pressure(outcome.pressure);
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .persisted_full_sessions
-                    .insert(key);
+                self.subsystems.da_rbc.rbc.persisted_sessions.insert(key);
             }
             Err(err) => {
                 warn!(?err, "failed to persist RBC session snapshot");
@@ -6452,11 +6744,7 @@ impl Actor {
                 .remove(key);
             self.subsystems.da_rbc.rbc.ready_deferral.remove(key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
-            self.subsystems
-                .da_rbc
-                .rbc
-                .persisted_full_sessions
-                .remove(key);
+            self.subsystems.da_rbc.rbc.persisted_sessions.remove(key);
             self.subsystems.da_rbc.rbc.persist_inflight.remove(key);
             if existed {
                 debug!(
@@ -6510,11 +6798,7 @@ impl Actor {
                 .remove(key);
             self.subsystems.da_rbc.rbc.ready_deferral.remove(key);
             self.subsystems.da_rbc.rbc.deliver_deferral.remove(key);
-            self.subsystems
-                .da_rbc
-                .rbc
-                .persisted_full_sessions
-                .remove(key);
+            self.subsystems.da_rbc.rbc.persisted_sessions.remove(key);
             self.subsystems.da_rbc.rbc.persist_inflight.remove(key);
         }
 
@@ -6573,7 +6857,12 @@ impl Actor {
             ready_count,
             delivered: session.delivered,
             payload_hash: session.payload_hash(),
-            recovered_from_disk: recovered || session.recovered_from_disk(),
+            recovered_from_disk: recovered
+                || session.recovered_from_disk()
+                || super::rbc_status_summary_recovered_from_disk(
+                    &self.subsystems.da_rbc.rbc.status_handle,
+                    &key,
+                ),
             invalid: session.is_invalid(),
             reconstructed_stripes: session.reconstructed_stripes(),
             reconstructable_stripes: session.reconstructable_stripes(),

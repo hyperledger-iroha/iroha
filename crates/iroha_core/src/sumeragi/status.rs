@@ -2483,6 +2483,10 @@ pub enum ConsensusMessageKind {
     VrfReveal,
     /// Execution witness payloads (`ExecWitness`).
     ExecWitness,
+    /// RBC INIT repair requests (`RbcInitRequest`).
+    RbcInitRequest,
+    /// RBC chunk repair requests (`RbcChunkRequest`).
+    RbcChunkRequest,
     /// RBC init payloads (`RbcInit`).
     RbcInit,
     /// RBC chunk payloads (`RbcChunk`).
@@ -2514,6 +2518,8 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::VrfCommit => "vrf_commit",
             ConsensusMessageKind::VrfReveal => "vrf_reveal",
             ConsensusMessageKind::ExecWitness => "exec_witness",
+            ConsensusMessageKind::RbcInitRequest => "rbc_init_request",
+            ConsensusMessageKind::RbcChunkRequest => "rbc_chunk_request",
             ConsensusMessageKind::RbcInit => "rbc_init",
             ConsensusMessageKind::RbcChunk => "rbc_chunk",
             ConsensusMessageKind::RbcReady => "rbc_ready",

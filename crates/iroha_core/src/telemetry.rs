@@ -6770,6 +6770,39 @@ impl Telemetry {
         }
     }
 
+    /// Increment RBC targeted INIT repair requests counter.
+    pub fn inc_rbc_init_requests(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.sumeragi_rbc_init_requests_total.inc();
+        }
+    }
+
+    /// Increment RBC targeted chunk repair requests counter.
+    pub fn inc_rbc_chunk_requests(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.sumeragi_rbc_chunk_requests_total.inc();
+        }
+    }
+
+    /// Add to the total number of encoded chunk indices requested via targeted repair.
+    pub fn add_rbc_requested_chunks(&self, count: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_rbc_requested_chunks_total
+                .inc_by(count);
+        }
+    }
+
+    /// Increment RBC targeted-repair fallback counter labeled by kind.
+    pub fn inc_rbc_repair_fallback(&self, kind: &'static str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_rbc_repair_fallback_total
+                .with_label_values(&[kind])
+                .inc();
+        }
+    }
+
     /// Increment RBC READY broadcasts counter.
     pub fn inc_rbc_ready_broadcasts(&self) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -6804,6 +6837,24 @@ impl Telemetry {
             self.metrics
                 .sumeragi_rbc_payload_bytes_delivered_total
                 .set(cur.saturating_add(bytes));
+        }
+    }
+
+    /// Add to the cumulative RS16 stripes reconstructed from parity.
+    pub fn add_rbc_reconstructed_stripes(&self, count: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_rbc_reconstructed_stripes_total
+                .inc_by(count);
+        }
+    }
+
+    /// Observe RBC seed/preprocessing latency in milliseconds.
+    pub fn observe_rbc_seed_latency(&self, duration: Duration) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_rbc_seed_latency_ms
+                .observe(duration.as_secs_f64() * 1_000.0);
         }
     }
 
