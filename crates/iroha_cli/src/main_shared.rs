@@ -6679,7 +6679,7 @@ mod settlement {
                 );
                 msg_set(
                     "CashLeg/Ccy",
-                    currency_code(isi.payment_leg.asset_definition_id()).as_bytes(),
+                    settlement_currency_code(isi.payment_leg.asset_definition_id()).as_bytes(),
                 );
                 msg_set("SttlmDt", settlement_date_string().as_bytes());
                 msg_set(
@@ -6777,7 +6777,7 @@ mod settlement {
                 }
                 msg_set(
                     "SttlmCcy",
-                    currency_code(isi.primary_leg.asset_definition_id()).as_bytes(),
+                    settlement_currency_code(isi.primary_leg.asset_definition_id()).as_bytes(),
                 );
                 msg_set(
                     "SttlmAmt",
@@ -6853,14 +6853,24 @@ mod settlement {
             format!("IROA{country}{location}")
         }
 
-        fn currency_code(asset: &AssetDefinitionId) -> String {
-            asset.name().as_ref().to_ascii_uppercase()
+        fn settlement_currency_code(asset: &AssetDefinitionId) -> String {
+            let candidate = asset.name().as_ref().to_ascii_uppercase();
+            if candidate.len() == 3 && candidate.chars().all(|ch| ch.is_ascii_uppercase()) {
+                return candidate;
+            }
+            if asset.is_opaque_canonical() {
+                // Offline previews only see the canonical asset-definition address, so
+                // preserve a schema-valid placeholder when the original currency label
+                // is no longer recoverable from the identifier alone.
+                return "XXX".to_owned();
+            }
+            candidate
         }
 
         fn counter_info(leg: &SettlementLeg) -> String {
             format!(
                 "{{\"counter_currency\":\"{}\",\"amount\":\"{}\"}}",
-                currency_code(leg.asset_definition_id()),
+                settlement_currency_code(leg.asset_definition_id()),
                 leg.quantity()
             )
         }
@@ -7072,6 +7082,63 @@ mod settlement {
                 assert!(
                     msg.contains("invalid ISO 4217 currency value for field `CashLeg/Ccy`"),
                     "unexpected error message: {msg}"
+                );
+            }
+
+            #[test]
+            fn dvp_preview_uses_placeholder_currency_for_opaque_asset_ids() {
+                let domain: DomainId = "wonderland".parse().unwrap();
+                let seller = account_with_seed(&domain, 0x11);
+                let buyer = account_with_seed(&domain, 0x22);
+                let payer = account_with_seed(&domain, 0x33);
+                let receiver = account_with_seed(&domain, 0x44);
+                let named_payment_asset = iroha_data_model::asset::AssetDefinitionId::new(
+                    "wonderland".parse().unwrap(),
+                    "usd".parse().unwrap(),
+                );
+                let opaque_payment_asset: AssetDefinitionId = named_payment_asset
+                    .to_string()
+                    .parse()
+                    .expect("canonical asset id should parse");
+                assert!(opaque_payment_asset.is_opaque_canonical());
+
+                let dvp = DvpIsi {
+                    settlement_id: "dvp_settlement".parse().unwrap(),
+                    delivery_leg: SettlementLeg::new(
+                        iroha_data_model::asset::AssetDefinitionId::new(
+                            "wonderland".parse().unwrap(),
+                            "bond".parse().unwrap(),
+                        ),
+                        Numeric::new(100, 0),
+                        seller,
+                        buyer,
+                    ),
+                    payment_leg: SettlementLeg::new(
+                        opaque_payment_asset,
+                        Numeric::new(1000, 0),
+                        payer,
+                        receiver,
+                    ),
+                    plan: SettlementPlan::new(
+                        SettlementExecutionOrder::DeliveryThenPayment,
+                        SettlementAtomicity::CommitFirstLeg,
+                    ),
+                    metadata: Metadata::default(),
+                };
+
+                let xml = dvp_to_sese023(
+                    &dvp,
+                    Some("US0378331005"),
+                    None,
+                    &SettlementPreviewOptions::default(),
+                )
+                .expect("preview succeeds for opaque currency asset ids");
+                let parsed = ivm::iso20022::parse_message("sese.023", xml.as_bytes())
+                    .expect("parse preview");
+                assert_eq!(parsed.field_text("CashLeg/Ccy"), Some("XXX"));
+                assert_eq!(
+                    parsed.field_text("Plan/Atomicity"),
+                    Some("COMMIT_FIRST_LEG")
                 );
             }
 

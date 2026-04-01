@@ -73,9 +73,8 @@ Open work for this slice now remains:
   `cargo clippy --workspace --all-targets -- -D warnings`) when the time
   budget allows; this tranche now has targeted crate/script coverage plus
   dedicated `iroha tx status` / `iroha account get` smoke coverage and a broad
-  `tests.test_pk_cli -q` pass, but the exhaustive workspace gates are still
-  pending and the full `iroha_cli --test cli_smoke` target still carries
-  unrelated pre-existing red tests outside this slice
+  `tests.test_pk_cli -q` pass, and the full `iroha_cli --test cli_smoke`
+  target is green again; the exhaustive workspace gates are still pending
 
 Latest sync (2026-04-01 restart-recovery rerun + integration_tests strict-lint fix):
 the previously open `sumeragi_rbc_recovers_after_peer_restart` rerun is green

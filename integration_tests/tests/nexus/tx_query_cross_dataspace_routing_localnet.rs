@@ -829,6 +829,57 @@ async fn torii_json_get(
     })
 }
 
+async fn torii_json_get_as_account(
+    client: &Client,
+    account: &AccountId,
+    path_segments: &[String],
+    query_pairs: &[(String, String)],
+) -> Result<RoutedJsonResponse> {
+    let mut url = client.torii_url.clone();
+    let torii_url_literal = url.to_string();
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
+        segments.pop_if_empty();
+        for segment in path_segments {
+            segments.push(segment);
+        }
+    }
+    if !query_pairs.is_empty() {
+        let mut query = url.query_pairs_mut();
+        for (key, value) in query_pairs {
+            query.append_pair(key, value);
+        }
+    }
+
+    let request = reqwest::Client::new()
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(
+            "X-Iroha-Account",
+            account
+                .canonical_i105()
+                .expect("account header should encode as canonical I105"),
+        );
+    let response = add_client_headers(client, request, true).send().await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.bytes().await?;
+    let body_text = String::from_utf8_lossy(&body).into_owned();
+    let json_body = norito::json::from_slice(&body)
+        .wrap_err_with(|| format!("decode JSON body: {body_text}"))?;
+
+    Ok(RoutedJsonResponse {
+        status,
+        body: json_body,
+        body_text,
+        routed_by: routed_header_string(&headers, "x-iroha-routed-by"),
+        route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
+        route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
+    })
+}
+
 async fn submit_transaction_raw(
     client: &Client,
     transaction: &SignedTransaction,
@@ -1208,8 +1259,9 @@ where
     let mut last_error: Option<String> = None;
 
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match torii_json_get(
+        match torii_json_get_as_account(
             client,
+            &client.account,
             &[
                 "v1".to_owned(),
                 "accounts".to_owned(),
@@ -1225,6 +1277,8 @@ where
                 if response.status == HttpStatusCode::OK {
                     if let Some((lane_id, dataspace_id)) = expected_route {
                         expect_proxy_route_headers(&response, lane_id, dataspace_id, context)?;
+                    } else {
+                        expect_proxy_fanout_headers(&response, context)?;
                     }
                     let observed = permission_response_contains(
                         &response.body,
@@ -1549,8 +1603,33 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "bob signed query through ds1 ingress did not route to ds2"
     );
 
-    let alice_assets = rt.block_on(torii_json_get(
+    let alice_account = rt.block_on(torii_json_get(
         &alice_via_ds2,
+        &["v1".to_owned(), "accounts".to_owned(), ALICE_ID.to_string()],
+        &[],
+    ))?;
+    ensure!(
+        alice_account.status == HttpStatusCode::OK,
+        "alice account GET through ds2 ingress failed with {} body `{}`",
+        alice_account.status,
+        alice_account.body_text
+    );
+    expect_proxy_fanout_headers(
+        &alice_account,
+        "alice account GET through ds2 ingress should fan out globally",
+    )?;
+    ensure!(
+        alice_account
+            .body
+            .get("account_id")
+            .and_then(JsonValue::as_str)
+            == Some(ALICE_ID.to_string().as_str()),
+        "alice account GET through ds2 ingress did not return alice's canonical account id"
+    );
+
+    let alice_assets = rt.block_on(torii_json_get_as_account(
+        &alice_via_ds2,
+        &ALICE_ID,
         &[
             "v1".to_owned(),
             "accounts".to_owned(),
@@ -1565,12 +1644,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         alice_assets.status,
         alice_assets.body_text
     );
-    expect_proxy_route_headers(
-        &alice_assets,
-        ds1_lane_id,
-        ds1_dataspace_id,
-        "alice assets query through ds2 ingress",
-    )?;
+    expect_proxy_fanout_headers(&alice_assets, "alice assets query through ds2 ingress")?;
     ensure!(
         account_assets_response_contains(
             &alice_assets.body,
@@ -1580,8 +1654,9 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "alice assets query through ds2 ingress did not include ds1 asset definition"
     );
 
-    let bob_assets = rt.block_on(torii_json_get(
+    let bob_assets = rt.block_on(torii_json_get_as_account(
         &bob_via_ds1,
+        &BOB_ID,
         &[
             "v1".to_owned(),
             "accounts".to_owned(),
@@ -1596,12 +1671,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         bob_assets.status,
         bob_assets.body_text
     );
-    expect_proxy_route_headers(
-        &bob_assets,
-        ds2_lane_id,
-        ds2_dataspace_id,
-        "bob assets query through ds1 ingress",
-    )?;
+    expect_proxy_fanout_headers(&bob_assets, "bob assets query through ds1 ingress")?;
     ensure!(
         account_assets_response_contains(
             &bob_assets.body,
@@ -1609,6 +1679,36 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "bob assets query",
         )?,
         "bob assets query through ds1 ingress did not include ds2 asset definition"
+    );
+
+    let alice_assets_hidden_from_bob = rt.block_on(torii_json_get_as_account(
+        &bob_via_ds1,
+        &BOB_ID,
+        &[
+            "v1".to_owned(),
+            "accounts".to_owned(),
+            ALICE_ID.to_string(),
+            "assets".to_owned(),
+        ],
+        &[],
+    ))?;
+    ensure!(
+        alice_assets_hidden_from_bob.status == HttpStatusCode::OK,
+        "alice assets query as bob through ds1 ingress failed with {} body `{}`",
+        alice_assets_hidden_from_bob.status,
+        alice_assets_hidden_from_bob.body_text
+    );
+    expect_proxy_fanout_headers(
+        &alice_assets_hidden_from_bob,
+        "alice assets query as bob through ds1 ingress",
+    )?;
+    ensure!(
+        !account_assets_response_contains(
+            &alice_assets_hidden_from_bob.body,
+            &ds1_asset_definition_id,
+            "alice assets query as bob",
+        )?,
+        "alice private ds1 asset should be omitted when bob lacks ds1 visibility"
     );
 
     let bob_permissions_before = query_account_permissions(&bob_via_ds1, &BOB_ID)?;
@@ -1619,8 +1719,9 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "bob should not start with CanModifyAccountMetadata for alice"
     );
 
-    let bob_permissions_api_before = rt.block_on(torii_json_get(
+    let bob_permissions_api_before = rt.block_on(torii_json_get_as_account(
         &bob_via_ds1,
+        &BOB_ID,
         &[
             "v1".to_owned(),
             "accounts".to_owned(),
@@ -1635,10 +1736,8 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         bob_permissions_api_before.status,
         bob_permissions_api_before.body_text
     );
-    expect_proxy_route_headers(
+    expect_proxy_fanout_headers(
         &bob_permissions_api_before,
-        ds2_lane_id,
-        ds2_dataspace_id,
         "bob permissions query through ds1 ingress before grant",
     )?;
     ensure!(
@@ -1685,7 +1784,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
                 == Some(ALICE_ID.to_string().as_str())
         },
         true,
-        Some((ds2_lane_id, ds2_dataspace_id)),
+        None,
         "bob permissions app api after account metadata grant",
     ))?;
 
@@ -1719,7 +1818,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
                 == Some(ALICE_ID.to_string().as_str())
         },
         false,
-        Some((ds2_lane_id, ds2_dataspace_id)),
+        None,
         "bob permissions app api after account metadata revoke",
     ))?;
 
@@ -1785,8 +1884,9 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "manifest should not exist before publish"
     );
 
-    let bob_manifest_permissions_api_before = rt.block_on(torii_json_get(
+    let bob_manifest_permissions_api_before = rt.block_on(torii_json_get_as_account(
         &bob_via_ds1,
+        &BOB_ID,
         &[
             "v1".to_owned(),
             "accounts".to_owned(),
@@ -1801,10 +1901,8 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         bob_manifest_permissions_api_before.status,
         bob_manifest_permissions_api_before.body_text
     );
-    expect_proxy_route_headers(
+    expect_proxy_fanout_headers(
         &bob_manifest_permissions_api_before,
-        ds2_lane_id,
-        ds2_dataspace_id,
         "bob manifest permissions query before grant",
     )?;
     ensure!(
@@ -1867,7 +1965,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             payload.get("dataspace").and_then(JsonValue::as_u64) == Some(ds2_dataspace_id.as_u64())
         },
         true,
-        Some((ds2_lane_id, ds2_dataspace_id)),
+        None,
         "bob permissions app api after manifest grant",
     ))?;
 
@@ -1970,7 +2068,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             payload.get("dataspace").and_then(JsonValue::as_u64) == Some(ds2_dataspace_id.as_u64())
         },
         false,
-        Some((ds2_lane_id, ds2_dataspace_id)),
+        None,
         "bob permissions app api after manifest permission revoke",
     ))?;
 

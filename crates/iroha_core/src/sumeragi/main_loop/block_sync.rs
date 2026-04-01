@@ -677,7 +677,12 @@ impl Actor {
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
         let local_committed_height = self.committed_height_snapshot();
-        if block_height >= local_committed_height {
+        if block_height > local_committed_height {
+            return BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block));
+        }
+        if block_height == local_committed_height
+            && self.committed_block_hash_for_height(block_height) != Some(block_hash)
+        {
             return BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block));
         }
         let update = super::block_sync_update_with_roster(

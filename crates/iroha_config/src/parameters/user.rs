@@ -11000,6 +11000,12 @@ impl Default for Nexus {
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
+    ///
+    /// When set, this overrides the legacy `max_disk_usage_bytes` alias and becomes the
+    /// node-local budget automatically split across Kura, tiered-state cold storage, SoraFS, and
+    /// streaming spools.
+    pub local_budget_bytes: Option<Bytes<u64>>,
+    /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     #[config(default = "defaults::nexus::storage::MAX_DISK_USAGE_BYTES")]
     pub max_disk_usage_bytes: Bytes<u64>,
     /// Block interval between disk budget enforcement scans (0 = every block).
@@ -11016,6 +11022,7 @@ pub struct NexusStorage {
 impl Default for NexusStorage {
     fn default() -> Self {
         Self {
+            local_budget_bytes: None,
             max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
@@ -11028,8 +11035,9 @@ impl Default for NexusStorage {
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
+        let max_disk_usage_bytes = self.local_budget_bytes.unwrap_or(self.max_disk_usage_bytes);
         Some(actual::NexusStorage {
-            max_disk_usage_bytes: self.max_disk_usage_bytes,
+            max_disk_usage_bytes,
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             disk_budget_weights: weights,
@@ -18221,6 +18229,32 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_000);
         assert!(actual.tiered_state.enabled);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 256);
+    }
+
+    #[test]
+    fn storage_local_budget_bytes_applies_after_parse() {
+        let mut table = base_table();
+        let nexus = table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table");
+        let mut storage = Table::new();
+        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
+        storage.insert("max_wsv_memory_bytes".into(), Value::Integer(128));
+        let mut weights = Table::new();
+        weights.insert("kura_blocks_bps".into(), Value::Integer(10_000));
+        weights.insert("wsv_snapshots_bps".into(), Value::Integer(0));
+        weights.insert("sorafs_bps".into(), Value::Integer(0));
+        weights.insert("soranet_spool_bps".into(), Value::Integer(0));
+        weights.insert("soravpn_spool_bps".into(), Value::Integer(0));
+        storage.insert("disk_budget_weights".into(), Value::Table(weights));
+        nexus.insert("storage".into(), Value::Table(storage));
+
+        let actual = load_root(table);
+        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
+        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_024);
+        assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 128);
     }
 
     #[test]
