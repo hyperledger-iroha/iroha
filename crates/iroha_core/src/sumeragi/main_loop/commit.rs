@@ -4,7 +4,7 @@ use std::{
     cmp::Reverse,
     collections::BTreeSet,
     sync::{Arc, mpsc},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
@@ -715,6 +715,49 @@ fn commit_qc_from_cache_or_history(
 }
 
 impl Actor {
+    fn promote_commit_anchor_qc(&mut self, qc: crate::sumeragi::consensus::QcHeaderRef) {
+        let new_highest = match self.highest_qc {
+            Some(current) if (current.height, current.view) > (qc.height, qc.view) => current,
+            _ => qc,
+        };
+        self.highest_qc = Some(new_highest);
+        super::status::set_highest_qc(new_highest.height, new_highest.view);
+        super::status::set_highest_qc_hash(new_highest.subject_block_hash);
+
+        let previous_lock = self.locked_qc;
+        let new_locked = match self.locked_qc {
+            Some(current) if (current.height, current.view) >= (qc.height, qc.view) => current,
+            _ => qc,
+        };
+        self.locked_qc = Some(new_locked);
+        super::status::set_locked_qc(
+            new_locked.height,
+            new_locked.view,
+            Some(new_locked.subject_block_hash),
+        );
+        if previous_lock != Some(new_locked) {
+            self.prune_precommit_votes_conflicting_with_lock(new_locked);
+        }
+
+        if let Some(lock) = self.locked_qc
+            && let Some(highest) = self.highest_qc
+            && !qc_extends_locked_with_lookup(lock, highest, |hash, height| {
+                self.parent_hash_for(hash, height)
+            })
+        {
+            info!(
+                highest_height = highest.height,
+                highest_hash = %highest.subject_block_hash,
+                locked_height = lock.height,
+                locked_hash = %lock.subject_block_hash,
+                "realigning highest QC to locked chain after commit"
+            );
+            self.highest_qc = Some(lock);
+            super::status::set_highest_qc(lock.height, lock.view);
+            super::status::set_highest_qc_hash(lock.subject_block_hash);
+        }
+    }
+
     /// Attach cached commit certificates and votes for the given block to a `BlockSyncUpdate`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_cached_qcs_to_block_sync_update(
@@ -1765,80 +1808,10 @@ impl Actor {
         }
         if committed {
             self.finalize_collector_plan(true);
-            let new_highest = match self.highest_qc {
-                Some(current) if (current.height, current.view) > (lock.height, lock.view) => {
-                    current
-                }
-                _ => lock,
-            };
-            self.highest_qc = Some(new_highest);
-            super::status::set_highest_qc(new_highest.height, new_highest.view);
-            super::status::set_highest_qc_hash(new_highest.subject_block_hash);
-            let previous_lock = self.locked_qc;
-            let new_locked = match self.locked_qc {
-                Some(current) if (current.height, current.view) >= (lock.height, lock.view) => {
-                    current
-                }
-                _ => lock,
-            };
-            self.locked_qc = Some(new_locked);
-            super::status::set_locked_qc(
-                new_locked.height,
-                new_locked.view,
-                Some(new_locked.subject_block_hash),
-            );
-            if previous_lock != Some(new_locked) {
-                self.prune_precommit_votes_conflicting_with_lock(new_locked);
-            }
-
-            if let Some(lock) = self.locked_qc
-                && let Some(highest) = self.highest_qc
-                && !qc_extends_locked_with_lookup(lock, highest, |hash, height| {
-                    self.parent_hash_for(hash, height)
-                })
-            {
-                info!(
-                    highest_height = highest.height,
-                    highest_hash = %highest.subject_block_hash,
-                    locked_height = lock.height,
-                    locked_hash = %lock.subject_block_hash,
-                    "realigning highest QC to locked chain after commit"
-                );
-                self.highest_qc = Some(lock);
-                super::status::set_highest_qc(lock.height, lock.view);
-                super::status::set_highest_qc_hash(lock.subject_block_hash);
-            }
+            self.promote_commit_anchor_qc(lock);
 
             if let Some(child_qc) = post_commit_qc {
-                let previous_lock = self.locked_qc;
-                let promoted_lock = match self.locked_qc {
-                    Some(current)
-                        if (current.height, current.view) >= (child_qc.height, child_qc.view) =>
-                    {
-                        current
-                    }
-                    _ => child_qc,
-                };
-                self.locked_qc = Some(promoted_lock);
-                super::status::set_locked_qc(
-                    promoted_lock.height,
-                    promoted_lock.view,
-                    Some(promoted_lock.subject_block_hash),
-                );
-                if previous_lock != Some(promoted_lock) {
-                    self.prune_precommit_votes_conflicting_with_lock(promoted_lock);
-                }
-                let new_highest = match self.highest_qc {
-                    Some(current)
-                        if (current.height, current.view) >= (child_qc.height, child_qc.view) =>
-                    {
-                        current
-                    }
-                    _ => child_qc,
-                };
-                self.highest_qc = Some(new_highest);
-                super::status::set_highest_qc(new_highest.height, new_highest.view);
-                super::status::set_highest_qc_hash(new_highest.subject_block_hash);
+                self.promote_commit_anchor_qc(child_qc);
             }
 
             crate::sumeragi::status::record_round_gap_unblocked(
@@ -2219,6 +2192,10 @@ impl Actor {
                 block = %block_hash,
                 "pending block already committed; skipping finalize"
             );
+            self.promote_commit_anchor_qc(lock);
+            if let Some(child_qc) = post_commit_qc {
+                self.promote_commit_anchor_qc(child_qc);
+            }
             self.clean_rbc_sessions_for_committed_block_if_settled(block_hash, pending_height);
             if let Some(parent) = pending.block.header().prev_block_hash() {
                 self.qc_cache
@@ -4333,6 +4310,14 @@ impl Actor {
         if let Some(telemetry) = self.telemetry_handle() {
             telemetry.set_commit_qc_summary(cert);
         }
+        let qc_header = crate::sumeragi::consensus::QcHeaderRef {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            height,
+            view,
+            epoch: cert.epoch,
+        };
+        self.promote_commit_anchor_qc(qc_header);
         let Some(pending) = self.pending.pending_blocks.remove(&block_hash) else {
             return;
         };
@@ -4343,13 +4328,6 @@ impl Actor {
             .remove(&block_hash);
         let mut pending = pending;
         pending.note_commit_qc_observed(cert.epoch);
-        let qc_header = crate::sumeragi::consensus::QcHeaderRef {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: block_hash,
-            height,
-            view,
-            epoch: cert.epoch,
-        };
         let _ = self.finalize_pending_block(qc_header, pending, None);
     }
 
@@ -5448,7 +5426,20 @@ impl Actor {
             .collect();
         for key in orphan_keys {
             // Commit cleanup should retain the final status summary for observability and
-            // restart recovery, while still clearing all runtime-only RBC state.
+            // restart recovery, while still clearing all runtime-only RBC state. If the live
+            // session has already retired (for example, exact-frontier snapshots), commit means
+            // the retained summary has reached the same delivered terminal state.
+            if let Some(mut summary) = self.subsystems.da_rbc.rbc.status_handle.get(&key)
+                && !summary.invalid
+                && !summary.delivered
+            {
+                summary.delivered = true;
+                self.subsystems
+                    .da_rbc
+                    .rbc
+                    .status_handle
+                    .update(summary, SystemTime::now());
+            }
             self.clear_rbc_runtime_state(key, false);
         }
 
@@ -6176,7 +6167,7 @@ impl Actor {
             .ready_rebroadcast_last_sent
             .clear();
         self.subsystems.da_rbc.rbc.deliver_deferral.clear();
-        self.subsystems.da_rbc.rbc.persisted_full_sessions.clear();
+        self.subsystems.da_rbc.rbc.persisted_sessions.clear();
         self.subsystems.da_rbc.rbc.persist_inflight.clear();
         // Preserve operator-facing RBC summaries across roster resets so sessions recovered from
         // disk remain observable while the runtime-only consensus state is cleared.

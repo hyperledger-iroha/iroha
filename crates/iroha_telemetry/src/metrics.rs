@@ -6677,6 +6677,14 @@ pub struct Metrics {
     pub sumeragi_rbc_sessions_active: GenericGauge<AtomicU64>,
     /// Sumeragi RBC: sessions pruned due to TTL (cumulative)
     pub sumeragi_rbc_sessions_pruned_total: IntCounter,
+    /// Sumeragi RBC: targeted INIT repair requests sent (cumulative)
+    pub sumeragi_rbc_init_requests_total: IntCounter,
+    /// Sumeragi RBC: targeted chunk repair requests sent (cumulative)
+    pub sumeragi_rbc_chunk_requests_total: IntCounter,
+    /// Sumeragi RBC: encoded chunk indices requested via targeted repair (cumulative)
+    pub sumeragi_rbc_requested_chunks_total: IntCounter,
+    /// Sumeragi RBC: targeted repair windows that fell back to broad rebroadcast (kind=init|chunk)
+    pub sumeragi_rbc_repair_fallback_total: IntCounterVec,
     /// Sumeragi RBC: READY broadcasts sent (cumulative)
     pub sumeragi_rbc_ready_broadcasts_total: IntCounter,
     /// Sumeragi RBC: rebroadcasts skipped (kind=payload|ready)
@@ -6685,6 +6693,10 @@ pub struct Metrics {
     pub sumeragi_rbc_deliver_broadcasts_total: IntCounter,
     /// Sumeragi RBC: total payload bytes delivered and cached (gauge)
     pub sumeragi_rbc_payload_bytes_delivered_total: GenericGauge<AtomicU64>,
+    /// Sumeragi RBC: RS16 stripes reconstructed from parity (cumulative)
+    pub sumeragi_rbc_reconstructed_stripes_total: IntCounter,
+    /// Sumeragi RBC: seed/preprocessing latency histogram (milliseconds)
+    pub sumeragi_rbc_seed_latency_ms: Histogram,
     /// Pending RBC backlog aggregated per lane (tx count).
     pub sumeragi_rbc_lane_tx_count: GenericGaugeVec<AtomicU64>,
     /// Total RBC chunks aggregated per lane.
@@ -9944,6 +9956,29 @@ impl Default for Metrics {
             "Sumeragi RBC sessions pruned due to TTL",
         )
         .expect("Infallible");
+        let sumeragi_rbc_init_requests_total = IntCounter::new(
+            "sumeragi_rbc_init_requests_total",
+            "Sumeragi RBC targeted INIT repair requests sent",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_chunk_requests_total = IntCounter::new(
+            "sumeragi_rbc_chunk_requests_total",
+            "Sumeragi RBC targeted chunk repair requests sent",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_requested_chunks_total = IntCounter::new(
+            "sumeragi_rbc_requested_chunks_total",
+            "Sumeragi RBC encoded chunk indices requested via targeted repair",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_repair_fallback_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_rbc_repair_fallback_total",
+                "Sumeragi RBC targeted repair windows that fell back to broad rebroadcast (kind=init|chunk)",
+            ),
+            &["kind"],
+        )
+        .expect("Infallible");
         let sumeragi_rbc_ready_broadcasts_total = IntCounter::new(
             "sumeragi_rbc_ready_broadcasts_total",
             "Sumeragi RBC READY broadcasts sent",
@@ -9965,6 +10000,21 @@ impl Default for Metrics {
         let sumeragi_rbc_payload_bytes_delivered_total = GenericGauge::new(
             "sumeragi_rbc_payload_bytes_delivered_total",
             "Sumeragi RBC payload bytes delivered and cached (cumulative)",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_reconstructed_stripes_total = IntCounter::new(
+            "sumeragi_rbc_reconstructed_stripes_total",
+            "Sumeragi RBC RS16 stripes reconstructed from parity",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_seed_latency_ms = Histogram::with_opts(
+            HistogramOpts::new(
+                "sumeragi_rbc_seed_latency_ms",
+                "Sumeragi RBC seed/preprocessing latency in milliseconds",
+            )
+            .buckets(vec![
+                0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+            ]),
         )
         .expect("Infallible");
         let sumeragi_rbc_lane_tx_count = GenericGaugeVec::new(
@@ -13762,6 +13812,10 @@ impl Default for Metrics {
         register!(
             registry,
             sumeragi_rbc_sessions_pruned_total,
+            sumeragi_rbc_init_requests_total,
+            sumeragi_rbc_chunk_requests_total,
+            sumeragi_rbc_requested_chunks_total,
+            sumeragi_rbc_repair_fallback_total,
             sumeragi_rbc_ready_broadcasts_total,
             sumeragi_rbc_rebroadcast_skipped_total,
             sumeragi_rbc_deliver_broadcasts_total,
@@ -13775,6 +13829,8 @@ impl Default for Metrics {
         register!(
             registry,
             sumeragi_rbc_payload_bytes_delivered_total,
+            sumeragi_rbc_reconstructed_stripes_total,
+            sumeragi_rbc_seed_latency_ms,
             sumeragi_rbc_lane_tx_count,
             sumeragi_rbc_lane_total_chunks,
             sumeragi_rbc_lane_pending_chunks,
@@ -14296,10 +14352,16 @@ impl Default for Metrics {
             sumeragi_da_pin_intent_spool_total,
             sumeragi_rbc_sessions_active,
             sumeragi_rbc_sessions_pruned_total,
+            sumeragi_rbc_init_requests_total,
+            sumeragi_rbc_chunk_requests_total,
+            sumeragi_rbc_requested_chunks_total,
+            sumeragi_rbc_repair_fallback_total,
             sumeragi_rbc_ready_broadcasts_total,
             sumeragi_rbc_rebroadcast_skipped_total,
             sumeragi_rbc_deliver_broadcasts_total,
             sumeragi_rbc_payload_bytes_delivered_total,
+            sumeragi_rbc_reconstructed_stripes_total,
+            sumeragi_rbc_seed_latency_ms,
             sumeragi_rbc_lane_tx_count,
             sumeragi_rbc_lane_total_chunks,
             sumeragi_rbc_lane_pending_chunks,

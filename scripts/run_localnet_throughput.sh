@@ -20,6 +20,7 @@ Options:
   --queue-soft-limit <N>        Submit queue soft limit
   --payload-bytes <N>           Log payload size (bytes)
   --rng-seed <N>                RNG seed for payloads
+  --rbc-encodings <MODE>        plain, rs16, or both (default: both)
   --slo-p95-ms <N>              Commit p95 SLO (ms)
   --slo-p99-ms <N>              Commit p99 SLO (ms)
   --slo-view-change-rate <N>    View-change rate SLO (per sec)
@@ -41,6 +42,7 @@ PARALLELISM=""
 QUEUE_SOFT_LIMIT=""
 PAYLOAD_BYTES=""
 RNG_SEED=""
+RBC_ENCODINGS="both"
 SLO_P95_MS=""
 SLO_P99_MS=""
 SLO_VIEW_CHANGE_RATE=""
@@ -94,6 +96,10 @@ while [[ $# -gt 0 ]]; do
       RNG_SEED="$2"
       shift 2
       ;;
+    --rbc-encodings)
+      RBC_ENCODINGS="$2"
+      shift 2
+      ;;
     --slo-p95-ms)
       SLO_P95_MS="$2"
       shift 2
@@ -135,9 +141,7 @@ if [[ -z "$ARTIFACT_DIR" ]]; then
 fi
 mkdir -p "$ARTIFACT_DIR"
 
-ENV_VARS=(
-  "IROHA_THROUGHPUT_ARTIFACT_DIR=$ARTIFACT_DIR"
-)
+ENV_VARS=()
 if [[ "$KEEP_DIRS" == true ]]; then
   ENV_VARS+=("IROHA_TEST_NETWORK_KEEP_DIRS=1")
 fi
@@ -190,6 +194,38 @@ if [[ "$PROFILE" == "release" ]]; then
   CMD=(cargo test -p integration_tests --release --test sumeragi_localnet_smoke permissioned_localnet_throughput_10k_tps -- --ignored --nocapture)
 fi
 
-echo "Artifacts: $ARTIFACT_DIR"
-echo "Command: ${ENV_VARS[*]} ${CMD[*]}"
-env "${ENV_VARS[@]}" "${CMD[@]}"
+run_one() {
+  local encoding="$1"
+  local artifact_dir="$2"
+  local -a run_env=(
+    "IROHA_THROUGHPUT_ARTIFACT_DIR=$artifact_dir"
+    "IROHA_THROUGHPUT_RBC_ENCODING=$encoding"
+  )
+  if [[ "$encoding" == "rs16" ]]; then
+    run_env+=(
+      "IROHA_THROUGHPUT_RBC_DATA_SHARDS=4"
+      "IROHA_THROUGHPUT_RBC_PARITY_SHARDS=2"
+    )
+  fi
+  for extra in ${ENV_VARS[@]+"${ENV_VARS[@]}"}; do
+    run_env+=("$extra")
+  done
+  echo "Artifacts: $artifact_dir"
+  echo "Encoding: $encoding"
+  echo "Command: ${run_env[*]} ${CMD[*]}"
+  env "${run_env[@]}" "${CMD[@]}"
+}
+
+case "$RBC_ENCODINGS" in
+  both)
+    run_one plain "$ARTIFACT_DIR/plain"
+    run_one rs16 "$ARTIFACT_DIR/rs16"
+    ;;
+  plain|rs16)
+    run_one "$RBC_ENCODINGS" "$ARTIFACT_DIR/$RBC_ENCODINGS"
+    ;;
+  *)
+    echo "Unsupported --rbc-encodings value: $RBC_ENCODINGS" >&2
+    exit 2
+    ;;
+esac

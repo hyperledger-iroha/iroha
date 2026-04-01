@@ -28,8 +28,8 @@ maintenance = { status = "actively-developed" }
 default = ["build-i3"]
 build-i2 = []
 build-i3 = []
-# Experimental selector support. Forwarded to data model when enabled.
-ids_projection = []
+# Experimental selector support. Forwarded to client/data-model crates when enabled.
+ids_projection = ["iroha/ids_projection", "iroha_data_model/ids_projection"]
 # Hooks used only by integration tests.
 cli_integration_harness = []
 bridge = []

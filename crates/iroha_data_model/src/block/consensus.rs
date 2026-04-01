@@ -2237,6 +2237,30 @@ pub struct RbcChunk {
     pub bytes: Vec<u8>,
 }
 
+/// Request the RBC INIT scaffold for a specific `(block_hash, height, view)` session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct RbcInitRequest {
+    /// Subject block hash.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Height.
+    pub height: Height,
+    /// View.
+    pub view: View,
+}
+
+/// Request missing RBC payload chunks for a specific `(block_hash, height, view)` session.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct RbcChunkRequest {
+    /// Subject block hash.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Height.
+    pub height: Height,
+    /// View.
+    pub view: View,
+    /// Missing encoded chunk indices requested from the peer.
+    pub missing_indices: Vec<u32>,
+}
+
 /// RBC READY signal.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcReady {
@@ -2534,6 +2558,23 @@ mod tests {
         }
     }
 
+    fn sample_rbc_init_request() -> RbcInitRequest {
+        RbcInitRequest {
+            block_hash: dummy_hash(),
+            height: 6,
+            view: 3,
+        }
+    }
+
+    fn sample_rbc_chunk_request() -> RbcChunkRequest {
+        RbcChunkRequest {
+            block_hash: dummy_hash(),
+            height: 6,
+            view: 3,
+            missing_indices: vec![0, 2, 5],
+        }
+    }
+
     fn sample_rbc_ready() -> RbcReady {
         let roster = sample_roster();
         RbcReady {
@@ -2626,6 +2667,21 @@ mod tests {
         let bytes = w.encode();
         let dec = ExecWitness::decode(&mut &bytes[..]).expect("decode witness");
         assert_eq!(w, dec);
+    }
+
+    #[test]
+    fn rbc_repair_requests_roundtrip_codec() {
+        let init_request = sample_rbc_init_request();
+        let init_bytes = init_request.encode();
+        let init_decoded =
+            RbcInitRequest::decode(&mut &init_bytes[..]).expect("decode RBC init request");
+        assert_eq!(init_request, init_decoded);
+
+        let chunk_request = sample_rbc_chunk_request();
+        let chunk_bytes = chunk_request.encode();
+        let chunk_decoded =
+            RbcChunkRequest::decode(&mut &chunk_bytes[..]).expect("decode RBC chunk request");
+        assert_eq!(chunk_request, chunk_decoded);
     }
 
     #[test]

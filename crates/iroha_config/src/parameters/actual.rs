@@ -4266,6 +4266,30 @@ pub struct SumeragiRbc {
     pub disk_store_max_bytes: u64,
 }
 
+impl SumeragiRbc {
+    /// Effective RS16 data shards used by the runtime.
+    ///
+    /// Plain chunking does not consume erasure shards, so plain mode normalizes the
+    /// operator-configured RS16 profile to `0/0` for runtime behavior and handshake caps.
+    pub const fn effective_data_shards(&self) -> u16 {
+        match self.encoding {
+            RbcEncoding::Plain => 0,
+            RbcEncoding::Rs16 => self.data_shards,
+        }
+    }
+
+    /// Effective RS16 parity shards used by the runtime.
+    ///
+    /// Plain chunking does not consume erasure shards, so plain mode normalizes the
+    /// operator-configured RS16 profile to `0/0` for runtime behavior and handshake caps.
+    pub const fn effective_parity_shards(&self) -> u16 {
+        match self.encoding {
+            RbcEncoding::Plain => 0,
+            RbcEncoding::Rs16 => self.parity_shards,
+        }
+    }
+}
+
 /// Finality/proof configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiFinality {

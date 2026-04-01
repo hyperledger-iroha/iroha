@@ -169,6 +169,25 @@ struct PendingRbcStashCounters {
     stash_chunk_total: u64,
 }
 
+#[derive(Clone, Copy)]
+struct RbcEncodingScenario {
+    encoding: &'static str,
+    data_shards: u16,
+    parity_shards: u16,
+}
+
+const RBC_SCENARIO_PLAIN: RbcEncodingScenario = RbcEncodingScenario {
+    encoding: "plain",
+    data_shards: 0,
+    parity_shards: 0,
+};
+
+const RBC_SCENARIO_RS16: RbcEncodingScenario = RbcEncodingScenario {
+    encoding: "rs16",
+    data_shards: 4,
+    parity_shards: 2,
+};
+
 impl PendingRbcStashCounters {
     fn total(&self) -> u64 {
         self.stash_ready_total
@@ -343,11 +362,48 @@ async fn sumeragi_rbc_da_large_payload_four_peers() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         false,
         true,
-        |_| {},
+        |layer| {
+            layer.write(
+                ["sumeragi", "advanced", "rbc", "encoding"],
+                RBC_SCENARIO_PLAIN.encoding,
+            );
+        },
         |_| Ok(()),
     )
     .await;
     if sandbox::handle_result(result, "sumeragi_rbc_da_large_payload_four_peers")?.is_none() {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_rbc_da_large_payload_four_peers_rs16() -> Result<()> {
+    let result = run_sumeragi_da_scenario_with(
+        "sumeragi_rbc_da_large_payload_four_peers_rs16",
+        4,
+        LARGE_PAYLOAD_BYTES,
+        false,
+        true,
+        |layer| {
+            let _ = layer
+                .write(
+                    ["sumeragi", "advanced", "rbc", "encoding"],
+                    RBC_SCENARIO_RS16.encoding,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "data_shards"],
+                    i64::from(RBC_SCENARIO_RS16.data_shards),
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "parity_shards"],
+                    i64::from(RBC_SCENARIO_RS16.parity_shards),
+                );
+        },
+        |_| Ok(()),
+    )
+    .await;
+    if sandbox::handle_result(result, "sumeragi_rbc_da_large_payload_four_peers_rs16")?.is_none() {
         return Ok(());
     }
     Ok(())
@@ -381,11 +437,48 @@ async fn sumeragi_rbc_da_large_payload_six_peers() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         false,
         true,
-        |_| {},
+        |layer| {
+            layer.write(
+                ["sumeragi", "advanced", "rbc", "encoding"],
+                RBC_SCENARIO_PLAIN.encoding,
+            );
+        },
         |_| Ok(()),
     )
     .await;
     if sandbox::handle_result(result, "sumeragi_rbc_da_large_payload_six_peers")?.is_none() {
+        return Ok(());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sumeragi_rbc_da_large_payload_six_peers_rs16() -> Result<()> {
+    let result = run_sumeragi_da_scenario_with(
+        "sumeragi_rbc_da_large_payload_six_peers_rs16",
+        6,
+        LARGE_PAYLOAD_BYTES,
+        false,
+        true,
+        |layer| {
+            let _ = layer
+                .write(
+                    ["sumeragi", "advanced", "rbc", "encoding"],
+                    RBC_SCENARIO_RS16.encoding,
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "data_shards"],
+                    i64::from(RBC_SCENARIO_RS16.data_shards),
+                )
+                .write(
+                    ["sumeragi", "advanced", "rbc", "parity_shards"],
+                    i64::from(RBC_SCENARIO_RS16.parity_shards),
+                );
+        },
+        |_| Ok(()),
+    )
+    .await;
+    if sandbox::handle_result(result, "sumeragi_rbc_da_large_payload_six_peers_rs16")?.is_none() {
         return Ok(());
     }
     Ok(())

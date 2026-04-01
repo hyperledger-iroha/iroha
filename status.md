@@ -1,6 +1,69 @@
 # Status
 
-Last updated: 2026-03-31
+Last updated: 2026-04-01
+
+## 2026-04-01 Follow-up: Sumeragi RBC restart recovery now preserves recovered summaries and settles retained exact-frontier sessions on commit
+- Fixed the actual restart-path bug behind the lingering
+  `sumeragi_rbc_recovers_after_peer_restart` timeout cluster:
+  exact-frontier snapshot refreshes were rebuilding a fresh RBC summary for the
+  same `(block_hash, height, view)` and silently dropping the
+  `recovered_from_disk` bit, so the restarted peer no longer advertised the
+  recovered session even though the persisted chunk snapshot had been loaded.
+- Made RBC summary recovery sticky per session key by routing summary refreshes
+  back through the shared helper and preserving an existing
+  `recovered_from_disk=true` summary during later metadata/snapshot updates.
+- Fixed the follow-on operator/test hang: when commit drained the live RBC
+  runtime but retained only the exact-frontier/persisted summary, that retained
+  summary stayed `delivered=false` forever even after the block had committed.
+  Commit cleanup now promotes that retained summary to `delivered=true` while
+  preserving `recovered_from_disk`, so recovery tests no longer need to sit in
+  the full delivery timeout waiting for an off-runtime session to self-deliver.
+- Added focused regressions covering:
+  - recovered exact-frontier snapshot refresh after restart; and
+  - committed cleanup promoting a retained summary to `delivered=true` without
+    a live RBC session.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core exact_frontier_recovery_snapshot_preserves_recovered_summary_after_restart --lib -- --nocapture`
+  - `cargo test -p iroha_core exact_frontier_block_created_persists_recovery_snapshot_without_live_rbc_runtime --lib -- --nocapture`
+  - `cargo test -p iroha_core rbc_status_summary_survives_roster_change_reset_after_restart_recovery --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-target-rbcfix cargo test -p iroha_core committed_rbc_cleanup_marks_retained_summary_delivered_without_live_session --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-target-rbcfix cargo test -p iroha_core exact_frontier_recovery_snapshot_preserves_recovered_summary_after_restart --lib -- --nocapture`
+- Remaining gap:
+  - the fresh end-to-end rerun of
+    `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+    is still in flight on this tree, so the unit/regression coverage is green
+    but the full integration confirmation has not completed yet.
+
+## 2026-03-31 Follow-up: Sumeragi RBC targeted repair, telemetry, and RS16 harness plumbing are now wired through the daemon/runtime stack
+- Added explicit RBC repair control messages end to end:
+  `RbcInitRequest` / `RbcChunkRequest` now exist in the Norito wire model,
+  Sumeragi block-message surface, daemon ingress/meta handling, and the Torii
+  RBC status endpoint/test surface.
+- Reworked the runtime RBC rescue path so missing INIT / missing chunk recovery
+  now attempts deterministic targeted repair first, with one in-flight repair
+  window per session and telemetry-backed fallback to the existing broad
+  rebroadcast path only after the targeted window expires without progress.
+- Extended RBC telemetry/status with request counters, requested-chunk totals,
+  repair fallback counters, reconstructed-stripe totals, and RBC seed latency;
+  `/v1/sumeragi/rbc` now exposes those aggregate counters, while the existing
+  per-session endpoint continues to carry encoding/reconstruction detail.
+- Extended the DA/localnet harnesses so they can select `plain` vs `rs16` RBC
+  explicitly, and added RS16 large-payload DA scenarios plus throughput script
+  support for emitting separate `plain` / `rs16` artifact directories.
+- Patched `irohad`’s consensus ingress/session-key/meta classifiers so the new
+  repair request messages are treated consistently with the rest of the RBC
+  control plane when the integration harness builds `iroha3d`.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo check -p integration_tests --tests`
+  - `cargo check -p irohad`
+  - `cargo test -p iroha_data_model rbc_repair_requests_roundtrip_codec --lib -- --nocapture`
+  - `cargo test -p iroha_core ordered_rbc_repair_targets_prefers_leader_then_roster_order --lib -- --nocapture`
+  - `cargo test -p iroha_core rbc_session_missing_chunk_indices_lists_only_absent_slots --lib -- --nocapture`
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_rbc_endpoint sumeragi_rbc_endpoint_shape -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_da_large_payload_four_peers_rs16 -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_peer_restart -- --nocapture` (fails: transaction confirmation timed out after 600s while the restarted-peer recovery scenario was still in a broader view-change/liveness loop; follow-up remains open)
 
 ## 2026-03-31 Follow-up: Sumeragi RBC sessions now advertise encoding metadata and can reconstruct RS16 shards after restart
 - Extended the RBC wire/config/handshake surface so `RbcInit`, persisted RBC

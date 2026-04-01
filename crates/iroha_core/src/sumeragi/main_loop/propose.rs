@@ -1359,9 +1359,11 @@ impl Actor {
                     .propose
                     .proposal_cache
                     .insert_hint(proposal_hint);
-                let Some(block_created) =
+                let block_created = if let Some(block_created) =
                     self.frontier_block_created_for_proposal_wire(&signed_block, &proposal)
-                else {
+                {
+                    block_created
+                } else {
                     warn!(
                         height = proposal_height,
                         view,

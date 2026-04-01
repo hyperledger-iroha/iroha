@@ -15,6 +15,17 @@ async fn sumeragi_rbc_endpoint_shape() {
         let metrics = telemetry.metrics().await;
         metrics.sumeragi_rbc_sessions_active.set(2);
         metrics.sumeragi_rbc_sessions_pruned_total.inc();
+        metrics.sumeragi_rbc_init_requests_total.inc();
+        metrics.sumeragi_rbc_chunk_requests_total.inc();
+        metrics.sumeragi_rbc_requested_chunks_total.inc_by(3);
+        metrics
+            .sumeragi_rbc_repair_fallback_total
+            .with_label_values(&["init"])
+            .inc();
+        metrics
+            .sumeragi_rbc_repair_fallback_total
+            .with_label_values(&["chunk"])
+            .inc();
         metrics.sumeragi_rbc_ready_broadcasts_total.inc();
         metrics
             .sumeragi_rbc_rebroadcast_skipped_total
@@ -22,6 +33,8 @@ async fn sumeragi_rbc_endpoint_shape() {
             .inc();
         metrics.sumeragi_rbc_deliver_broadcasts_total.inc();
         metrics.sumeragi_rbc_payload_bytes_delivered_total.set(123);
+        metrics.sumeragi_rbc_reconstructed_stripes_total.inc_by(2);
+        metrics.sumeragi_rbc_seed_latency_ms.observe(12.5);
         metrics
             .sumeragi_rbc_rebroadcast_skipped_total
             .with_label_values(&["payload"])
@@ -65,9 +78,16 @@ async fn sumeragi_rbc_endpoint_shape() {
     let v: norito::json::Value = norito::json::from_str(&s).unwrap();
     assert!(v.get("sessions_active").is_some());
     assert!(v.get("sessions_pruned_total").is_some());
+    assert!(v.get("init_requests_total").is_some());
+    assert!(v.get("chunk_requests_total").is_some());
+    assert!(v.get("requested_chunks_total").is_some());
+    assert!(v.get("init_repair_fallback_total").is_some());
+    assert!(v.get("chunk_repair_fallback_total").is_some());
     assert!(v.get("ready_broadcasts_total").is_some());
     assert!(v.get("ready_rebroadcasts_skipped_total").is_some());
     assert!(v.get("deliver_broadcasts_total").is_some());
     assert!(v.get("payload_bytes_delivered_total").is_some());
+    assert!(v.get("reconstructed_stripes_total").is_some());
+    assert!(v.get("seed_latency_count").is_some());
     assert!(v.get("payload_rebroadcasts_skipped_total").is_some());
 }

@@ -3904,7 +3904,7 @@ async fn realign_locked_qc_preserves_frontier_shared_window_gate() {
 }
 
 #[tokio::test]
-async fn rbc_session_persists_only_after_full_payload_arrives() {
+async fn rbc_session_persists_authoritative_partial_progress() {
     let rbc_dir = tempfile::tempdir().expect("tempdir");
     let cfg = crate::sumeragi::RbcStoreConfig {
         dir: rbc_dir.path().to_path_buf(),
@@ -3942,20 +3942,6 @@ async fn rbc_session_persists_only_after_full_payload_arrives() {
         "incomplete session should not be persisted"
     );
 
-    session.test_note_chunk(1, vec![0xBB; 16], 0);
-    harness.actor.persist_rbc_session(key, &session);
-    let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
-        rbc_dir.path(),
-        &key,
-        &harness.actor.chain_hash,
-        &harness.actor.subsystems.da_rbc.rbc.manifest,
-    )
-    .expect("load session");
-    assert!(
-        persisted.is_none(),
-        "full session should not persist until roster is authoritative"
-    );
-
     harness
         .actor
         .record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
@@ -3967,18 +3953,24 @@ async fn rbc_session_persists_only_after_full_payload_arrives() {
         &harness.actor.subsystems.da_rbc.rbc.manifest,
     )
     .expect("load session");
-    let persisted = persisted.expect("full session should be persisted once");
+    let persisted = persisted.expect("authoritative partial session should be persisted");
     assert_eq!(persisted.session_roster, roster);
+    assert_eq!(
+        persisted.chunks.len(),
+        1,
+        "persisted snapshot should retain the received partial chunk set"
+    );
     assert!(
         harness
             .actor
             .subsystems
             .da_rbc
             .rbc
-            .persisted_full_sessions
+            .persisted_sessions
             .contains(&key)
     );
 
+    session.test_note_chunk(1, vec![0xBB; 16], 0);
     harness.actor.persist_rbc_session(key, &session);
     let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
         rbc_dir.path(),
@@ -3987,16 +3979,18 @@ async fn rbc_session_persists_only_after_full_payload_arrives() {
         &harness.actor.subsystems.da_rbc.rbc.manifest,
     )
     .expect("load session");
-    assert!(
-        persisted.is_some(),
-        "subsequent persist attempts should be skipped"
+    let persisted = persisted.expect("updated authoritative session should stay persisted");
+    assert_eq!(
+        persisted.chunks.len(),
+        2,
+        "persisted snapshot should refresh when additional chunks arrive"
     );
 
     harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rbc_persist_worker_persists_full_session() {
+async fn rbc_persist_worker_refreshes_partial_session_progress() {
     let rbc_dir = tempfile::tempdir().expect("tempdir");
     let cfg = crate::sumeragi::RbcStoreConfig {
         dir: rbc_dir.path().to_path_buf(),
@@ -4017,10 +4011,8 @@ async fn rbc_persist_worker_persists_full_session() {
         3,
         1,
     );
-    let payload = vec![0xCD; 16];
-    let payload_hash = Hash::new(&payload);
-    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
-    session.test_note_chunk(0, payload, 0);
+    let mut session = RbcSession::test_new(2, None, None, 0);
+    session.test_note_chunk(0, vec![0xCD; 16], 0);
     let roster = harness.actor.effective_commit_topology();
     assert!(!roster.is_empty(), "roster should not be empty");
     harness
@@ -4043,7 +4035,7 @@ async fn rbc_persist_worker_persists_full_session() {
             .subsystems
             .da_rbc
             .rbc
-            .persisted_full_sessions
+            .persisted_sessions
             .contains(&key)
         {
             break;
@@ -4071,7 +4063,47 @@ async fn rbc_persist_worker_persists_full_session() {
         &harness.actor.subsystems.da_rbc.rbc.manifest,
     )
     .expect("load session");
-    assert!(persisted.is_some(), "worker should persist full session");
+    let persisted = persisted.expect("worker should persist partial session");
+    assert_eq!(
+        persisted.chunks.len(),
+        1,
+        "worker should retain the initial partial chunk set"
+    );
+
+    let stored = harness
+        .actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get_mut(&key)
+        .expect("persisted worker session");
+    stored.test_note_chunk(1, vec![0xEF; 16], 0);
+    session = stored.clone();
+    harness.actor.persist_rbc_session(key, &session);
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        harness.actor.poll_rbc_persist_results_inner();
+        let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
+            rbc_dir.path(),
+            &key,
+            &harness.actor.chain_hash,
+            &harness.actor.subsystems.da_rbc.rbc.manifest,
+        )
+        .expect("reload session");
+        if persisted
+            .as_ref()
+            .is_some_and(|persisted| persisted.chunks.len() == 2)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for refreshed RBC persistence worker snapshot"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     harness.shutdown.send();
     drop(harness);
@@ -4185,7 +4217,7 @@ async fn rbc_persist_worker_does_not_block_on_full_wake_channel() {
             .subsystems
             .da_rbc
             .rbc
-            .persisted_full_sessions
+            .persisted_sessions
             .contains(&key)
         {
             break;
@@ -10472,7 +10504,16 @@ async fn block_created_initializes_exact_frontier_slot() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn block_created_retires_exact_frontier_rbc_runtime() {
-    let mut harness = test_actor_harness(4).await;
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let mut harness = test_actor_harness_with_rbc_store(4, Some(cfg)).await;
     let actor = &mut harness.actor;
 
     let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
@@ -10483,7 +10524,9 @@ async fn block_created_retires_exact_frontier_rbc_runtime() {
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
     let session_key = (block_hash, height, view);
-    let session = RbcSession::test_new(1, Some(payload_hash), None, actor.epoch_for_height(height));
+    let mut session =
+        RbcSession::test_new(2, Some(payload_hash), None, actor.epoch_for_height(height));
+    session.test_note_chunk(0, vec![0xAA; 16], 0);
     actor
         .subsystems
         .da_rbc
@@ -10496,6 +10539,7 @@ async fn block_created_retires_exact_frontier_rbc_runtime() {
         super::RbcRosterSource::Derived,
     );
     actor.update_rbc_status_entry(session_key, &session, false);
+    actor.persist_rbc_session(session_key, &session);
     let sender = actor
         .effective_commit_topology()
         .into_iter()
@@ -10537,8 +10581,208 @@ async fn block_created_retires_exact_frontier_rbc_runtime() {
             .rbc
             .status_handle
             .get(&session_key)
-            .is_none(),
-        "exact frontier BlockCreated should clear retained RBC status for the retired slot",
+            .is_some(),
+        "exact frontier BlockCreated should retain RBC status for restart recovery",
+    );
+    let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
+        rbc_dir.path(),
+        &session_key,
+        &actor.chain_hash,
+        &actor.subsystems.da_rbc.rbc.manifest,
+    )
+    .expect("load persisted session");
+    assert!(
+        persisted.is_some(),
+        "exact frontier BlockCreated should retain the persisted RBC snapshot until commit cleanup",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exact_frontier_block_created_persists_recovery_snapshot_without_live_rbc_runtime() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+    let mut harness = test_actor_harness_with_rbc_store(4, Some(cfg)).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let sender = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote sender");
+
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block,
+                frontier: None,
+            },
+            Some(sender),
+        )
+        .expect("block created accepted");
+
+    let session_key = (block_hash, height, view);
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&session_key),
+        "exact frontier BlockCreated should keep recovery snapshot off the live RBC runtime",
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .persisted_sessions
+            .contains(&session_key),
+        "exact frontier BlockCreated should mark the persisted recovery snapshot",
+    );
+    let summary = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&session_key)
+        .expect("exact frontier summary");
+    assert_eq!(summary.height, height);
+    assert!(summary.total_chunks > 0);
+    assert!(summary.received_chunks > 0);
+    assert!(!summary.delivered);
+    assert!(!summary.recovered_from_disk);
+
+    let persisted = crate::sumeragi::rbc_store::load_session_from_dir(
+        rbc_dir.path(),
+        &session_key,
+        &actor.chain_hash,
+        &actor.subsystems.da_rbc.rbc.manifest,
+    )
+    .expect("load persisted session");
+    let persisted = persisted.expect("exact frontier recovery snapshot should be stored");
+    assert_eq!(
+        u32::try_from(persisted.chunks.len()).expect("chunk count fits u32"),
+        persisted.total_chunks,
+        "exact frontier recovery snapshot should store the deterministic full chunk set",
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exact_frontier_recovery_snapshot_preserves_recovered_summary_after_restart() {
+    let rbc_dir = tempfile::tempdir().expect("tempdir");
+    let cfg = crate::sumeragi::RbcStoreConfig {
+        dir: rbc_dir.path().to_path_buf(),
+        max_sessions: 16,
+        soft_sessions: 8,
+        max_bytes: 1 << 20,
+        soft_bytes: 1 << 20,
+        ttl: Duration::from_secs(60),
+    };
+
+    let mut harness = test_actor_harness_with_rbc_store(4, Some(cfg.clone())).await;
+    let actor = &mut harness.actor;
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let session_key = (block_hash, height, view);
+    let session = Actor::build_rbc_session_from_payload(
+        &payload,
+        payload_hash,
+        actor.config.rbc.chunk_max_bytes,
+        actor.epoch_for_height(height),
+    )
+    .expect("session");
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, session.clone());
+    actor.record_rbc_session_roster(
+        session_key,
+        actor.effective_commit_topology(),
+        super::RbcRosterSource::Derived,
+    );
+    actor.update_rbc_status_entry(session_key, &session, false);
+    actor.persist_rbc_session(session_key, &session);
+
+    harness.shutdown.send();
+    drop(harness);
+
+    let mut harness = test_actor_harness_with_rbc_store(4, Some(cfg)).await;
+    let actor = &mut harness.actor;
+    let summary_before = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&session_key)
+        .expect("recovered summary");
+    assert!(
+        summary_before.recovered_from_disk,
+        "restart should mark the persisted RBC summary as recovered",
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .contains_key(&session_key),
+        "restart should rebuild the live RBC session before exact-frontier retirement",
+    );
+
+    actor.clear_rbc_runtime_state(session_key, false);
+    actor
+        .persist_exact_frontier_rbc_recovery_snapshot(
+            session_key,
+            &block,
+            payload.as_slice(),
+            payload_hash,
+        )
+        .expect("persist exact-frontier snapshot");
+
+    let summary_after = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&session_key)
+        .expect("retained summary after exact-frontier refresh");
+    assert!(
+        summary_after.recovered_from_disk,
+        "exact-frontier snapshot refresh should preserve restart-recovery state",
+    );
+    assert_eq!(
+        summary_after.total_chunks, summary_before.total_chunks,
+        "exact-frontier refresh should preserve deterministic chunk layout",
+    );
+    assert_eq!(
+        summary_after.received_chunks, summary_after.total_chunks,
+        "exact-frontier refresh should publish the full deterministic chunk set",
     );
 
     harness.shutdown.send();
@@ -15193,6 +15437,161 @@ async fn finalize_pending_block_defers_until_tip_extends() {
         "commit certificate should stay recorded while waiting for the tip"
     );
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn finalize_pending_block_promotes_qc_state_for_already_committed_block() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = 2_u64;
+    let view = 0_u64;
+    let block_hash = seed_block_for_state(actor.state.as_ref(), height, genesis_hash);
+
+    let parent_qc = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: genesis_hash,
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+    };
+    actor.locked_qc = Some(parent_qc);
+    actor.highest_qc = Some(parent_qc);
+    super::status::set_locked_qc(1, 0, Some(genesis_hash));
+    super::status::set_highest_qc(1, 0);
+    super::status::set_highest_qc_hash(genesis_hash);
+
+    let header = BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("height must be non-zero"),
+        Some(genesis_hash),
+        None,
+        None,
+        view,
+        0,
+    );
+    let mut seed = [0u8; 8 + Hash::LENGTH];
+    seed[..8].copy_from_slice(&height.to_le_bytes());
+    seed[8..].copy_from_slice(genesis_hash.as_ref());
+    let leader = deterministic_keypair(&seed, Algorithm::BlsNormal);
+    let block = BlockBuilder::new(header).build_with_signature(0, leader.private_key());
+    assert_eq!(
+        block.hash(),
+        block_hash,
+        "test block must match committed block"
+    );
+
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    let epoch = actor.epoch_for_height(height);
+    pending.note_commit_qc_observed(epoch);
+    pending.commit_qc_epoch = Some(epoch);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch,
+    };
+
+    assert!(
+        actor.finalize_pending_block(lock, pending, None),
+        "already committed block should short-circuit finalize"
+    );
+    assert_eq!(
+        actor.locked_qc,
+        Some(lock),
+        "already committed finalize should advance the lock"
+    );
+    assert_eq!(
+        actor.highest_qc,
+        Some(lock),
+        "already committed finalize should advance highest QC"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn apply_commit_qc_promotes_qc_state_for_already_committed_block_without_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = 2_u64;
+    let view = 0_u64;
+    let block_hash = seed_block_for_state(actor.state.as_ref(), height, genesis_hash);
+
+    let parent_qc = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: genesis_hash,
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+    };
+    actor.locked_qc = Some(parent_qc);
+    actor.highest_qc = Some(parent_qc);
+    super::status::set_locked_qc(1, 0, Some(genesis_hash));
+    super::status::set_highest_qc(1, 0);
+    super::status::set_highest_qc_hash(genesis_hash);
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..topology.as_ref().len() {
+        if signers.len() >= required {
+            break;
+        }
+        signers.insert(
+            ValidatorIndex::try_from(u32::try_from(idx).expect("signer idx fits"))
+                .expect("signer idx fits"),
+        );
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        actor.epoch_for_height(height),
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    actor.apply_commit_qc(&qc, &roster, block_hash, height, view);
+
+    let expected = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+    };
+    assert_eq!(
+        actor.locked_qc,
+        Some(expected),
+        "commit QC should promote the lock even if the pending block is already gone"
+    );
+    assert_eq!(
+        actor.highest_qc,
+        Some(expected),
+        "commit QC should promote highest QC even if the pending block is already gone"
+    );
+
+    super::status::set_locked_qc(0, 0, None);
+    super::status::set_highest_qc(0, 0);
+    super::status::set_highest_qc_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
+        [0; Hash::LENGTH],
+    )));
     harness.shutdown.send();
 }
 
@@ -28916,12 +29315,7 @@ async fn record_rbc_session_roster_clears_persisted_full_session() {
     let roster = actor.effective_commit_topology();
     assert!(!roster.is_empty(), "commit roster should be available");
 
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .persisted_full_sessions
-        .insert(key);
+    actor.subsystems.da_rbc.rbc.persisted_sessions.insert(key);
     actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
 
     assert!(
@@ -28938,7 +29332,7 @@ async fn record_rbc_session_roster_clears_persisted_full_session() {
             .subsystems
             .da_rbc
             .rbc
-            .persisted_full_sessions
+            .persisted_sessions
             .contains(&key),
         "persisted sessions should be cleared so roster can be re-persisted"
     );
@@ -28987,12 +29381,7 @@ async fn record_rbc_session_roster_rejects_unverified_override() {
         usize::MAX,
         std::time::Instant::now(),
     );
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .persisted_full_sessions
-        .insert(key);
+    actor.subsystems.da_rbc.rbc.persisted_sessions.insert(key);
     actor.record_rbc_session_roster(key, roster_b.clone(), super::RbcRosterSource::Init);
 
     assert_eq!(
@@ -29014,7 +29403,7 @@ async fn record_rbc_session_roster_rejects_unverified_override() {
             .subsystems
             .da_rbc
             .rbc
-            .persisted_full_sessions
+            .persisted_sessions
             .contains(&key),
         "persisted sessions should remain for unverified override"
     );
@@ -32434,6 +32823,7 @@ async fn rbc_seed_result_merges_stub_session() {
             key: work.key,
             payload_hash: work.payload_hash,
             outcome: Ok(seeded_session),
+            elapsed: Duration::from_millis(1),
         })
         .expect("send seed result");
 
@@ -32621,7 +33011,7 @@ async fn clean_rbc_sessions_for_block_preserves_retained_status_summary() {
         .subsystems
         .da_rbc
         .rbc
-        .persisted_full_sessions
+        .persisted_sessions
         .insert(session_key);
     harness.actor.subsystems.da_rbc.rbc.seed_inflight.insert(
         session_key,
@@ -32662,7 +33052,7 @@ async fn clean_rbc_sessions_for_block_preserves_retained_status_summary() {
             .subsystems
             .da_rbc
             .rbc
-            .persisted_full_sessions
+            .persisted_sessions
             .contains(&session_key),
         "commit cleanup should clear the persisted-full-session marker"
     );
@@ -33594,6 +33984,24 @@ async fn consensus_caps_use_on_chain_collectors() {
     let caps = harness.actor.recompute_consensus_caps();
     assert_eq!(caps.collectors_k, 2);
     assert_eq!(caps.redundant_send_r, 3);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn consensus_caps_zero_plain_rbc_erasure_profile() {
+    let mut harness = test_actor_harness(3).await;
+    harness.actor.config.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Plain;
+    harness.actor.config.rbc.data_shards = 4;
+    harness.actor.config.rbc.parity_shards = 2;
+
+    let caps = harness.actor.recompute_consensus_caps();
+    assert_eq!(
+        caps.rbc_encoding,
+        iroha_data_model::block::consensus::RbcEncoding::Plain
+    );
+    assert_eq!(caps.rbc_rs16_data_shards, 0);
+    assert_eq!(caps.rbc_rs16_parity_shards, 0);
 
     harness.shutdown.send();
 }
@@ -40938,6 +41346,43 @@ async fn request_missing_parent_suppresses_active_lock_rejected_parent_hash() {
     );
 
     super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lock_rejected_branch_with_known_parent_clears_missing_request() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let locked_hash = seed_genesis_block_for_state(&actor.state);
+    let locked_height = 1_u64;
+    let rejected_height = locked_height.saturating_add(1);
+    let rejected_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD9; Hash::LENGTH]));
+    let conflicting_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; Hash::LENGTH]));
+
+    assert!(
+        actor.should_clear_missing_request_on_locked_reject(
+            rejected_hash,
+            rejected_height,
+            locked_hash,
+            locked_height,
+            Some(conflicting_parent),
+        ),
+        "a rejected block with an explicit conflicting parent should immediately clear its own missing-request state"
+    );
+    assert!(
+        !actor.should_clear_missing_request_on_locked_reject(
+            rejected_hash,
+            rejected_height,
+            locked_hash,
+            locked_height,
+            None,
+        ),
+        "unresolved parentless requests should still be preserved until local ancestry proves the conflict"
+    );
+
     harness.shutdown.send();
 }
 
@@ -56873,7 +57318,7 @@ async fn committed_rbc_cleanup_preserves_persisted_session_snapshot() {
             .subsystems
             .da_rbc
             .rbc
-            .persisted_full_sessions
+            .persisted_sessions
             .contains(&key)
         {
             break;
@@ -56926,6 +57371,71 @@ async fn committed_rbc_cleanup_preserves_persisted_session_snapshot() {
     if let Err(err) = worker_join.join() {
         panic!("persist worker panicked: {err:?}");
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn committed_rbc_cleanup_marks_retained_summary_delivered_without_live_session() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let key = Actor::session_key(&block_hash, height, view);
+
+    actor.subsystems.da_rbc.rbc.persisted_sessions.insert(key);
+    actor.subsystems.da_rbc.rbc.status_handle.update(
+        super::rbc_status::Summary {
+            block_hash,
+            height,
+            view,
+            total_chunks: 3,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 3,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: Some(Hash::prehashed([0x71; Hash::LENGTH])),
+            recovered_from_disk: true,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        },
+        SystemTime::now(),
+    );
+
+    assert!(
+        actor.clean_rbc_sessions_for_committed_block_if_settled(block_hash, height),
+        "committed cleanup should settle retained exact-frontier summaries without a live session",
+    );
+    let summary = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&key)
+        .expect("retained summary");
+    assert!(
+        summary.delivered,
+        "committed cleanup should promote retained summaries to delivered",
+    );
+    assert!(
+        summary.recovered_from_disk,
+        "committed cleanup should preserve recovered-from-disk state",
+    );
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -72200,7 +72710,7 @@ async fn assemble_proposal_skips_view_overflow() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn assemble_proposal_schedules_block_created_before_rbc_without_frontier_proposal_posts() {
+async fn assemble_proposal_uses_inline_frontier_block_created_without_rbc_or_proposal_posts() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -72263,11 +72773,9 @@ async fn assemble_proposal_schedules_block_created_before_rbc_without_frontier_p
         .expect("background request log mutex poisoned")
         .clone();
     let mut block_created_indexes = Vec::new();
-    let mut rbc_indexes = Vec::new();
     for (idx, post) in posts.iter().enumerate() {
         match post.msg_kind {
             Some("BlockCreated") => block_created_indexes.push(idx),
-            Some("RbcInit") | Some("RbcChunk") | Some("RbcReady") => rbc_indexes.push(idx),
             _ => (),
         }
     }
@@ -72275,19 +72783,96 @@ async fn assemble_proposal_schedules_block_created_before_rbc_without_frontier_p
         !block_created_indexes.is_empty(),
         "BlockCreated messages should be scheduled"
     );
-    assert!(!rbc_indexes.is_empty(), "RBC messages should be scheduled");
-    let last_block_created = *block_created_indexes
-        .iter()
-        .max()
-        .expect("BlockCreated index");
     assert!(
         posts.iter().all(|post| post.msg_kind != Some("Proposal")),
         "frontier assembly should not schedule standalone Proposal messages"
     );
-    let first_rbc = *rbc_indexes.iter().min().expect("RBC index");
     assert!(
-        first_rbc > last_block_created,
-        "RBC messages should be scheduled after BlockCreated"
+        posts.iter().all(|post| {
+            !matches!(
+                post.msg_kind,
+                Some("RbcInit") | Some("RbcChunk") | Some("RbcReady")
+            )
+        }),
+        "exact frontier proposals should not schedule RBC transport alongside inline BlockCreated"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_height_two_records_inline_frontier_manifest() {
+    use std::borrow::Cow;
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 16 * 1024;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    assert_eq!(height, 2, "test requires a seeded genesis parent");
+    let view = 0u64;
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: genesis_hash,
+        phase: Phase::Commit,
+    };
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_idx = actor
+        .local_validator_index(&actor.state.view())
+        .expect("local validator index");
+
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            usize::try_from(local_idx).expect("leader index fits usize"),
+            local_idx,
+            None,
+            Instant::now(),
+        )
+        .expect("proposal assembly should succeed at height two");
+    assert!(assembled, "proposal assembly should complete at height two");
+
+    let (block_hash, pending) = actor
+        .pending
+        .pending_blocks
+        .iter()
+        .find(|(_, pending)| !pending.aborted && pending.height == height && pending.view == view)
+        .expect("active proposal should create a pending block");
+    let frontier = actor
+        .authoritative_slot_frontier_info(height, view, *block_hash)
+        .expect("active proposal should record authoritative frontier metadata");
+
+    assert_eq!(
+        frontier.payload_hash, pending.payload_hash,
+        "frontier manifest must match the locally assembled payload"
+    );
+    assert!(
+        frontier.total_chunks > 0,
+        "frontier manifest should advertise at least one payload chunk"
+    );
+    assert_eq!(
+        frontier.chunk_digests.len(),
+        usize::try_from(frontier.total_chunks).expect("chunk count fits usize"),
+        "frontier manifest should carry the full digest set for the active proposal"
     );
 
     harness.shutdown.send();
@@ -80437,6 +81022,7 @@ session_delivered={:?} summary_delivered={:?} summary_ready_count={:?}",
             key: work.key,
             payload_hash: work.payload_hash,
             outcome: Ok(seeded_session),
+            elapsed: Duration::from_millis(1),
         })
         .expect("send seed result");
 
@@ -81285,6 +81871,85 @@ async fn block_created_with_frontier_metadata_marks_view_seen_without_proposal_m
     assert_eq!(
         cached.payload_hash, payload_hash,
         "frontier BlockCreated should seed the cached proposal payload hash"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn purge_lock_rejected_block_artifacts_clears_slot_level_owner_and_proposal_state() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let view = actor.state.view();
+    let height = u64::try_from(view.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    drop(view);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        sample_qc_ref(height.saturating_sub(1), view),
+        0,
+        view,
+        actor.epoch_for_height(height),
+    );
+    let created = actor
+        .frontier_block_created_from_proposal(&block, &proposal)
+        .expect("frontier BlockCreated");
+
+    actor
+        .handle_block_created(created, None)
+        .expect("handle BlockCreated");
+    actor.mark_proposal_liveness_state(
+        height,
+        view,
+        super::ProposalLivenessState::RecoveryAcquireDependencies,
+        Instant::now(),
+    );
+
+    assert_eq!(
+        actor.authoritative_slot_owner_hash(height, view),
+        Some(block.hash()),
+        "test setup requires authoritative owner state before lock-reject cleanup"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(height, view)),
+        "test setup requires slot-level proposal evidence before lock-reject cleanup"
+    );
+
+    let _ = actor.purge_lock_rejected_block_artifacts(height, view, block.hash());
+
+    assert!(
+        !actor
+            .subsystems
+            .propose
+            .proposals_seen
+            .contains(&(height, view)),
+        "lock-reject cleanup must drop stale proposal-seen markers for the rejected slot"
+    );
+    assert!(
+        actor.subsystems.propose.proposal_liveness.is_none(),
+        "lock-reject cleanup must reset proposal-liveness state for the rejected slot"
+    );
+    assert!(
+        actor.authoritative_slot_owner_hash(height, view).is_none(),
+        "lock-reject cleanup must drop authoritative owner state for the rejected block"
+    );
+    assert!(
+        actor
+            .authoritative_slot_frontier_info(height, view, block.hash())
+            .is_none(),
+        "lock-reject cleanup must drop authoritative frontier metadata for the rejected block"
     );
 
     harness.shutdown.send();
@@ -83240,6 +83905,215 @@ async fn validation_allows_near_tip_delivered_rbc_without_proposal_evidence() {
     );
 
     harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validation_inline_replays_cached_precommit_qc_after_block_becomes_valid() {
+    let _qc_guard = super::status::qc_status_test_guard();
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.worker.validation_worker_threads = 0;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let parent_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let parent_epoch = actor.epoch_for_height(parent_height);
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: parent_hash,
+        height: parent_height,
+        view: 0,
+        epoch: parent_epoch,
+    });
+    actor.highest_qc = actor.locked_qc;
+    super::status::set_locked_qc(parent_height, 0, Some(parent_hash));
+    super::status::set_highest_qc(parent_height, 0);
+    super::status::set_highest_qc_hash(parent_hash);
+
+    let height = parent_height.saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    let epoch = actor.epoch_for_height(height);
+    pending.note_commit_qc_observed(epoch);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let signers: BTreeSet<_> = (0..required)
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.cache_block_sync_qc_for_unknown_block(
+        qc,
+        block_hash,
+        height,
+        view,
+        &topology,
+        &signers,
+        false,
+        ConsensusMode::Permissioned,
+        None,
+        PERMISSIONED_TAG,
+        None,
+    );
+
+    assert_eq!(
+        actor.locked_qc.map(|qc| qc.height),
+        Some(parent_height),
+        "cached QC should stay parked until validation makes the block lockable"
+    );
+
+    let outcome = actor.validate_pending_block_for_voting_inline(block_hash, &commit_topology);
+    assert!(
+        matches!(outcome, ValidationGateOutcome::Valid),
+        "inline validation should succeed for the cached-QC block"
+    );
+    assert_eq!(
+        actor.locked_qc.map(|qc| qc.height),
+        Some(height),
+        "validation should replay the cached QC once the block becomes valid"
+    );
+    assert_eq!(
+        actor.highest_qc.map(|qc| qc.height),
+        Some(height),
+        "replayed cached QC should advance highest QC to the validated block"
+    );
+
+    harness.shutdown.send();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validation_worker_result_replays_cached_precommit_qc_after_block_becomes_valid() {
+    let _qc_guard = super::status::qc_status_test_guard();
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let parent_height = u64::try_from(actor.state.view().height()).unwrap_or(0);
+    let parent_epoch = actor.epoch_for_height(parent_height);
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: parent_hash,
+        height: parent_height,
+        view: 0,
+        epoch: parent_epoch,
+    });
+    actor.highest_qc = actor.locked_qc;
+    super::status::set_locked_qc(parent_height, 0, Some(parent_hash));
+    super::status::set_highest_qc(parent_height, 0);
+    super::status::set_highest_qc_hash(parent_hash);
+
+    let height = parent_height.saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    let epoch = actor.epoch_for_height(height);
+    pending.note_commit_qc_observed(epoch);
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let signers: BTreeSet<_> = (0..required)
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor.cache_block_sync_qc_for_unknown_block(
+        qc,
+        block_hash,
+        height,
+        view,
+        &topology,
+        &signers,
+        false,
+        ConsensusMode::Permissioned,
+        None,
+        PERMISSIONED_TAG,
+        None,
+    );
+
+    let validation_id = 17;
+    actor.subsystems.validation.inflight.insert(
+        block_hash,
+        super::ValidationInFlight {
+            id: validation_id,
+            started_at: Instant::now(),
+        },
+    );
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    actor.subsystems.validation.result_rx = Some(result_rx);
+    result_tx
+        .send(super::validation::ValidationResult {
+            id: validation_id,
+            hash: block_hash,
+            height,
+            view,
+            commit_topology: commit_topology.clone(),
+            outcome: Ok(Some(super::StateRoots {
+                parent_state_root: zero_state_root(),
+                post_state_root: zero_state_root(),
+            })),
+        })
+        .expect("send validation result");
+
+    assert!(
+        actor.poll_validation_results(),
+        "worker validation result should be processed"
+    );
+    assert_eq!(
+        actor.locked_qc.map(|qc| qc.height),
+        Some(height),
+        "worker validation success should replay the cached QC"
+    );
+    assert_eq!(
+        actor.highest_qc.map(|qc| qc.height),
+        Some(height),
+        "worker validation success should advance highest QC"
+    );
+
+    harness.shutdown.send();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -100930,6 +101804,31 @@ fn build_rbc_session_from_payload_ingests_chunks() {
 }
 
 #[test]
+fn rbc_session_missing_chunk_indices_lists_only_absent_slots() {
+    let mut session = RbcSession::test_new(4, Some(Hash::new(b"payload")), None, 0);
+    session.test_note_chunk(0, vec![0xAA], 0);
+    session.test_note_chunk(2, vec![0xBB], 0);
+    assert_eq!(session.missing_chunk_indices(), vec![1, 3]);
+}
+
+#[test]
+fn ordered_rbc_repair_targets_prefers_leader_then_roster_order() {
+    let local = PeerId::new(KeyPair::random().public_key().clone());
+    let leader = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let roster = vec![
+        peer_a.clone(),
+        leader.clone(),
+        local.clone(),
+        peer_b.clone(),
+    ];
+
+    let targets = Actor::ordered_rbc_repair_targets(&roster, &local, Some(&leader), 3);
+    assert_eq!(targets, vec![leader, peer_a, peer_b]);
+}
+
+#[test]
 fn rbc_payload_matches_returns_true_for_matching_session() {
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32]));
     let height = 7;
@@ -101951,17 +102850,12 @@ async fn handle_rbc_store_evictions_clears_session_caches() {
         .rbc
         .ready_rebroadcast_last_sent
         .insert(other_key, Instant::now());
+    actor.subsystems.da_rbc.rbc.persisted_sessions.insert(key);
     actor
         .subsystems
         .da_rbc
         .rbc
-        .persisted_full_sessions
-        .insert(key);
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .persisted_full_sessions
+        .persisted_sessions
         .insert(other_key);
 
     actor.subsystems.da_rbc.rbc.status_handle.update(
@@ -102093,7 +102987,7 @@ async fn handle_rbc_store_evictions_clears_session_caches() {
             .subsystems
             .da_rbc
             .rbc
-            .persisted_full_sessions
+            .persisted_sessions
             .contains(&key)
     );
     assert!(
@@ -102101,7 +102995,7 @@ async fn handle_rbc_store_evictions_clears_session_caches() {
             .subsystems
             .da_rbc
             .rbc
-            .persisted_full_sessions
+            .persisted_sessions
             .contains(&other_key)
     );
 
