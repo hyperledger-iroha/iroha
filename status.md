@@ -42,6 +42,18 @@ Last updated: 2026-04-01
     `cargo clippy --workspace --all-targets -- -D warnings`) still have not
     been rerun on this checkout.
 
+## 2026-04-01 Follow-up: test-network startup retries no longer fail on stale bind preflight
+- Fixed `iroha_test_network` restart behavior after partial bootstrap failures by
+  running socket bind preflight only on a peer's first start attempt. Retrying
+  the same `Network` after shutdown no longer trips the harness on transient
+  `AddrInUse` from reused API/P2P ports before `irohad` can rebind them.
+- Added a focused unit regression for the new preflight gating helper and
+  confirmed the original `integration_tests` failure now passes.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_test_network bind_preflight_runs_only_before_first_start_attempt -- --nocapture`
+  - `cargo test -p integration_tests --test address_canonicalisation -- --nocapture`
+
 ## 2026-04-01 Follow-up: `ivm` `koto_domain_demo` builds against the canonical `AccountId` API again
 - Fixed `crates/ivm/examples/koto_domain_demo.rs` after the universal-account
   migration by removing the duplicate `AccountId` import, switching the
@@ -53,6 +65,37 @@ Last updated: 2026-04-01
   - `cargo build -p ivm --example koto_domain_demo`
     passes; the build still emits pre-existing unrelated dead-code warnings in
     `iroha_crypto` and `ivm`
+
+## 2026-04-01 Follow-up: Nexus routing and cross-dataspace localnet regressions are green again
+- Closed the remaining Nexus regression cluster behind the reported failing
+  integration targets:
+  - `crates/iroha_core/src/queue/router.rs` now routes
+    account-permission grant/revoke instructions by destination account only
+    for account-local permissions, so asset-definition permissions such as
+    `CanTransferAssetWithDefinition` stay on the authority-routing path;
+  - `crates/iroha_core/src/smartcontracts/isi/settlement.rs` now resolves each
+    settlement leg against the real source balance bucket before applying the
+    leg, which keeps cross-dataspace DvP/PvP execution aligned with the
+    source asset scope; and
+  - `integration_tests/tests/nexus/cross_dataspace_localnet.rs` now waits for
+    authoritative lane-wide commit-QC convergence before and after the
+    forward/reverse swap barriers, eliminating the earlier localnet swap stall
+    and mixed-view assertions.
+- Rebuilt a fresh local test binary and revalidated the previously failing
+  localnet/RBC targets against that binary. The earlier RBC `payload=0`
+  reports did not reproduce once the tests ran against the rebuilt
+  `target/debug/iroha3d`; fresh runs now report non-zero persisted RBC payload
+  bytes across the participating peers.
+- Verification:
+  - `cargo build -p irohad --bin iroha3d`
+  - `TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" cargo test -p integration_tests --test mod cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture`
+  - `TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" cargo test -p integration_tests --test mod wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --nocapture`
+  - `TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" SUMERAGI_DA_ARTIFACT_DIR=/tmp/sumeragi-da-artifacts-bgq cargo test -p integration_tests --test mod sumeragi_rbc_background_queue_synchronous -- --nocapture`
+  - `TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" SUMERAGI_DA_ARTIFACT_DIR=/tmp/sumeragi-da-artifacts-commitcert cargo test -p integration_tests --test mod sumeragi_da_commit_certificate_history_four_peers -- --nocapture`
+  - `TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" SUMERAGI_DA_ARTIFACT_DIR=/tmp/sumeragi-da-artifacts-six cargo test -p integration_tests --test mod sumeragi_rbc_da_large_payload_six_peers -- --nocapture`
+  - `TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" SUMERAGI_DA_ARTIFACT_DIR=/tmp/sumeragi-da-artifacts-six-rs16 cargo test -p integration_tests --test mod sumeragi_rbc_da_large_payload_six_peers_rs16 -- --nocapture`
+  - `TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" SUMERAGI_DA_ARTIFACT_DIR=/tmp/sumeragi-da-artifacts cargo test -p integration_tests --test mod sumeragi_rbc_da_large_payload_four_peers -- --nocapture`
+  - `TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" SUMERAGI_DA_ARTIFACT_DIR=/tmp/sumeragi-da-artifacts cargo test -p integration_tests --test mod sumeragi_rbc_da_large_payload_four_peers_rs16 -- --nocapture`
 
 ## 2026-04-01 Follow-up: workspace clippy is green again after domainless-account cleanup
 - Cleared the remaining workspace-wide `clippy` backlog caused by stale

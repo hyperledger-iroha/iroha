@@ -834,6 +834,13 @@ mod tests {
     }
 
     fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
+        settlement_state_with_balances(Numeric::from(10u32), Numeric::from(1_000u32))
+    }
+
+    fn settlement_state_with_balances(
+        delivery_balance: Numeric,
+        payment_balance: Numeric,
+    ) -> (State, AssetDefinitionId, AssetDefinitionId) {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
@@ -854,11 +861,11 @@ mod tests {
 
         let alice_delivery = Asset::new(
             AssetId::new(delivery_asset_id.clone(), ALICE_ID.clone()),
-            Numeric::from(10u32),
+            delivery_balance,
         );
         let bob_payment = Asset::new(
             AssetId::new(payment_asset_id.clone(), BOB_ID.clone()),
-            Numeric::from(1_000u32),
+            payment_balance,
         );
 
         let world = World::with_assets(
@@ -1083,6 +1090,88 @@ mod tests {
         assert!(
             world.asset(&bob_cash).is_err(),
             "payer cash balance should stay debited after commit"
+        );
+    }
+
+    #[test]
+    fn dvp_persists_partial_debits_after_commit() {
+        let (state, delivery_def_id, payment_def_id) =
+            settlement_state_with_balances(Numeric::from(100u32), Numeric::from(200u32));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut stx = state_block.transaction();
+        stx.current_dataspace_id = Some(DataSpaceId::new(7));
+        stx.world.current_dataspace_id = Some(DataSpaceId::new(7));
+
+        DvpIsi {
+            settlement_id: "dvp_partial_commit".parse().unwrap(),
+            delivery_leg: SettlementLeg::new(
+                delivery_def_id.clone(),
+                Numeric::from(30u32),
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+            ),
+            payment_leg: SettlementLeg::new(
+                payment_def_id.clone(),
+                Numeric::from(45u32),
+                BOB_ID.clone(),
+                ALICE_ID.clone(),
+            ),
+            plan: SettlementPlan::new(
+                SettlementExecutionOrder::DeliveryThenPayment,
+                SettlementAtomicity::AllOrNothing,
+            ),
+            metadata: Metadata::default(),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect("DvP execution succeeds");
+
+        stx.apply();
+        state_block.commit().expect("commit state block");
+
+        let view = state.view();
+        let world = view.world();
+
+        let alice_bond = AssetId::new(delivery_def_id.clone(), ALICE_ID.clone());
+        let bob_bond = AssetId::new(delivery_def_id.clone(), BOB_ID.clone());
+        let alice_cash = AssetId::new(payment_def_id.clone(), ALICE_ID.clone());
+        let bob_cash = AssetId::new(payment_def_id.clone(), BOB_ID.clone());
+
+        assert_eq!(
+            world
+                .asset(&alice_bond)
+                .expect("seller delivery balance")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(70u32),
+        );
+        assert_eq!(
+            world
+                .asset(&bob_bond)
+                .expect("buyer delivery balance")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(30u32),
+        );
+        assert_eq!(
+            world
+                .asset(&alice_cash)
+                .expect("seller payment balance")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(45u32),
+        );
+        assert_eq!(
+            world
+                .asset(&bob_cash)
+                .expect("buyer payment balance")
+                .value()
+                .as_ref()
+                .clone(),
+            Numeric::from(155u32),
         );
     }
 
