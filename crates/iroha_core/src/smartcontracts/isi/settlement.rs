@@ -168,29 +168,23 @@ fn resolve_settlement_leg_source_asset_id(
     stx: &StateTransaction<'_, '_>,
     leg: &SettlementLeg,
 ) -> Result<AssetId, Error> {
-    if let Some(scoped_asset_id) = stx
-        .world
-        .assets
-        .iter()
-        .find_map(|(asset_id, balance)| {
-            (asset_id.definition() == leg.asset_definition_id()
-                && asset_id.account() == leg.from()
-                && balance
-                    .as_ref()
-                    .clone()
-                    .checked_sub(leg.quantity().clone())
-                    .is_some_and(|remaining| !remaining.mantissa().is_negative()))
-            .then(|| asset_id.clone())
-        })
-    {
+    if let Some(scoped_asset_id) = stx.world.assets.iter().find_map(|(asset_id, balance)| {
+        (asset_id.definition() == leg.asset_definition_id()
+            && asset_id.account() == leg.from()
+            && balance
+                .as_ref()
+                .clone()
+                .checked_sub(leg.quantity().clone())
+                .is_some_and(|remaining| !remaining.mantissa().is_negative()))
+        .then(|| asset_id.clone())
+    }) {
         return Ok(scoped_asset_id);
     }
 
-    stx.world
-        .resolve_asset_id_for_current_scope(&AssetId::new(
-            leg.asset_definition_id().clone(),
-            leg.from().clone(),
-        ))
+    stx.world.resolve_asset_id_for_current_scope(&AssetId::new(
+        leg.asset_definition_id().clone(),
+        leg.from().clone(),
+    ))
 }
 
 fn resolve_settlement_leg_asset_ids(
@@ -1105,10 +1099,8 @@ mod tests {
             domain_id.clone(),
             "bond".parse().expect("delivery asset name"),
         );
-        let payment_def_id = AssetDefinitionId::new(
-            domain_id,
-            "usd".parse().expect("payment asset name"),
-        );
+        let payment_def_id =
+            AssetDefinitionId::new(domain_id, "usd".parse().expect("payment asset name"));
 
         let delivery_def = {
             let __asset_definition_id = delivery_def_id.clone();

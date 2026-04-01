@@ -410,6 +410,14 @@ fn preflight_bind_addresses(
     Ok(())
 }
 
+fn should_run_bind_preflight_for_runs_started(runs_started: usize) -> bool {
+    // Only probe sockets before the first start attempt. Restarting a peer or a full
+    // network after a partial bootstrap can briefly leave API/P2P ports in a kernel
+    // cleanup state, and the actual `irohad`/Tokio listeners are a better source of truth
+    // than this best-effort preflight probe on those retries.
+    runs_started == 0
+}
+
 fn sync_timeout_env() -> Duration {
     // Default 60s; override with IROHA_TEST_SYNC_TIMEOUT_SECS or *_MS
     let secs = read_env_duration("IROHA_TEST_SYNC_TIMEOUT_SECS", Duration::from_secs(0));
@@ -2185,13 +2193,19 @@ impl Network {
     where
         I: IntoIterator<Item = usize>,
     {
-        let preflight = preflight_bind_addresses(
-            self.peers
-                .iter()
-                .flat_map(|peer| [peer.p2p_address(), peer.api_address()]),
-        );
-        if let Err(err) = preflight {
-            return Err(err).wrap_err("preflight bind failed for network peers");
+        if self
+            .peers
+            .iter()
+            .all(NetworkPeer::should_run_bind_preflight)
+        {
+            let preflight = preflight_bind_addresses(
+                self.peers
+                    .iter()
+                    .flat_map(|peer| [peer.p2p_address(), peer.api_address()]),
+            );
+            if let Err(err) = preflight {
+                return Err(err).wrap_err("preflight bind failed for network peers");
+            }
         }
 
         // Ensure we resolve `irohad` once before spawning peers; caches for subsequent calls.
@@ -5525,6 +5539,10 @@ pub struct NetworkPeer {
 }
 
 impl NetworkPeer {
+    fn should_run_bind_preflight(&self) -> bool {
+        should_run_bind_preflight_for_runs_started(self.runs_count.load(Ordering::Relaxed))
+    }
+
     fn record_probe_status(
         probe: &Arc<StdMutex<PeerStartupProbe>>,
         status: &Status,
@@ -5575,9 +5593,11 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
     ) -> Result<()> {
-        let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
-        if let Err(err) = preflight {
-            return Err(err).wrap_err("preflight bind failed for peer");
+        if self.should_run_bind_preflight() {
+            let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
+            if let Err(err) = preflight {
+                return Err(err).wrap_err("preflight bind failed for peer");
+            }
         }
 
         let mut run_guard = self.run.lock().await;
@@ -8561,6 +8581,13 @@ mod tests {
             Err(err) => panic!("unexpected preflight bind error: {err}"),
             Ok(()) => panic!("preflight should fail when port is already in use"),
         }
+    }
+
+    #[test]
+    fn bind_preflight_runs_only_before_first_start_attempt() {
+        assert!(should_run_bind_preflight_for_runs_started(0));
+        assert!(!should_run_bind_preflight_for_runs_started(1));
+        assert!(!should_run_bind_preflight_for_runs_started(2));
     }
 
     #[test]
