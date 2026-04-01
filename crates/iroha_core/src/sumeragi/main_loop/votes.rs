@@ -81,6 +81,11 @@ const VOTE_VERIFY_POP_CACHE_MAX: usize = 64;
 const VOTE_VERIFY_TOPOLOGY_CACHE_MAX: usize = 64;
 
 impl Actor {
+    fn should_fast_path_new_view_vote(&self, vote: &crate::sumeragi::consensus::Vote) -> bool {
+        vote.phase == Phase::NewView
+            && vote.height == self.committed_height_snapshot().saturating_add(1)
+    }
+
     fn vote_signer_peer_from_base_topology(
         &self,
         vote: &crate::sumeragi::consensus::Vote,
@@ -479,6 +484,10 @@ impl Actor {
             );
             return;
         }
+        if self.should_fast_path_new_view_vote(&vote) {
+            self.handle_vote(vote);
+            return;
+        }
         let pending_cap = self.config.worker.validation_pending_cap;
         if self.subsystems.vote_verify.pending_validation.len() >= pending_cap {
             debug!(
@@ -679,6 +688,25 @@ impl Actor {
             }
             return;
         }
+        if self.should_fast_path_new_view_vote(&vote) {
+            let chain_id = self.common_config.chain.clone();
+            let evidence_context = super::evidence::EvidenceValidationContext {
+                topology: &context.topology,
+                chain_id: &chain_id,
+                mode_tag,
+                prf_seed,
+            };
+            if !self.validate_and_record_vote(
+                &vote,
+                context.signature_topology.as_ref(),
+                &evidence_context,
+                mode_tag,
+            ) {
+                return;
+            }
+            self.apply_validated_vote(vote, context);
+            return;
+        }
         if self.try_dispatch_vote_verification(&vote, &context) {
             return;
         }
@@ -856,12 +884,23 @@ impl Actor {
                 }
                 crate::sumeragi::new_view_stats::note_receipt(vote.height, vote.view, &signer_peer);
                 if let Some(local_view) = context.stale_view {
+                    // Stale NEW_VIEW votes must not drive local proposal selection, but they still
+                    // need to participate in QC aggregation. Otherwise a node that timed out one
+                    // view ahead discards the very quorum evidence that can converge the cluster.
+                    self.try_form_qc_from_votes(
+                        vote.phase,
+                        vote.block_hash,
+                        vote.height,
+                        vote.view,
+                        vote.epoch,
+                        &context.topology,
+                    );
                     debug!(
                         height = vote.height,
                         view = vote.view,
                         local_view,
                         signer = vote.signer,
-                        "recorded stale NEW_VIEW vote"
+                        "recorded stale NEW_VIEW vote for QC aggregation only"
                     );
                     return;
                 }

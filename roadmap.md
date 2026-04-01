@@ -111,6 +111,31 @@ NPoS stable reruns are substantially worse than the previous baseline.
     `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`)
     until the full permissioned and NPoS soak envelopes are green again.
 
+Latest sync (2026-03-31 Sumeragi RBC layout metadata + RS16 reconstruction):
+RBC sessions now carry explicit encoding/layout metadata across config,
+handshake, wire, status, and persistence, and the session reload/hydration path
+can reconstruct missing RS16 shards before rebuilding the canonical payload.
+
+Open work for this slice now remains:
+- add shard-targeted repair control messages so missing-payload rescue no longer
+  falls back to full RBC payload rebroadcast when INIT or some shards are
+  missing
+- benchmark `plain` vs `rs16` RBC mode on the existing large-payload/localnet
+  harness and decide when `rs16` can move from opt-in to default
+- extend typed operator/status surfaces further if we want the RS16
+  reconstruction counters outside the dedicated `/v1/sumeragi/rbc/sessions`
+  endpoint
+
+Latest sync (2026-03-31 retired offline-allowance app route alignment):
+the address-canonicalisation suite no longer treats the legacy
+`/v1/offline/allowances*` app routes as live requirements. Those checks now
+skip on `404`, matching the existing offline cash router/OpenAPI contract, and
+Torii unit coverage now pins canonical I105 `controller_display` emission for
+offline allowance JSON serialization directly.
+
+Open work for this slice now remains:
+- none.
+
 Latest sync (2026-03-31 Kotodama GitHub Linguist upstream bundle):
 a self-contained `tools/kotodama_linguist/` bundle now exists with a TextMate
 grammar scaffold, a proposed `languages.yml` entry, a ready-to-fill Linguist

@@ -831,8 +831,10 @@ mod tests {
     use clap::Parser;
     use std::path::Path;
 
-    const HOST_ACCOUNT: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
-    const PARTICIPANT_ACCOUNT: &str = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+    const HOST_ACCOUNT: &str =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const PARTICIPANT_ACCOUNT: &str =
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
 
     #[derive(Parser, Debug)]
     struct TestCli {
@@ -1159,7 +1161,10 @@ mod tests {
             Some(321)
         );
         assert_eq!(artifacts.proof, Some(vec![0xaa, 0x55]));
-        assert_eq!(artifacts.roster_root, Some(parse_hash(&roster_root_hex).unwrap()));
+        assert_eq!(
+            artifacts.roster_root,
+            Some(parse_hash(&roster_root_hex).unwrap())
+        );
     }
 
     #[test]

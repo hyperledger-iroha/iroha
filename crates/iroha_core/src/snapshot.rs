@@ -13,9 +13,13 @@ use iroha_config::{
     snapshot::Mode,
 };
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature};
-use iroha_data_model::{ChainId, block::BlockHeader};
+use iroha_data_model::{
+    ChainId, account::AccountId, asset::AssetId, block::BlockHeader, nexus::LaneId,
+};
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use mv::storage::StorageReadOnly;
+use norito::codec::Encode as NoritoEncode;
 use norito::json::{self, JsonSerialize, JsonSerialize as JsonSerializeTrait};
 use sha2::{Digest, Sha256};
 
@@ -24,7 +28,10 @@ use crate::telemetry::StateTelemetry;
 use crate::{
     kura::{BlockCount, Kura},
     query::store::LiveQueryStoreHandle,
-    state::{State, deserialize::KuraSeed, storage_transactions::TransactionsBlockError},
+    state::{
+        SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim, State, deserialize::KuraSeed,
+        storage_transactions::TransactionsBlockError,
+    },
 };
 
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.
@@ -34,6 +41,46 @@ impl JsonSerializeTrait for State {
         let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
         let commit_topology = view.commit_topology.to_vec();
         let prev_commit_topology = view.prev_commit_topology.to_vec();
+        let public_lane_validators: Vec<_> = view
+            .world
+            .public_lane_validators
+            .iter()
+            .map(|(_key, value)| SnapshotNoritoBlob {
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
+            .collect();
+        let public_lane_stake_shares: Vec<_> = view
+            .world
+            .public_lane_stake_shares
+            .iter()
+            .map(|(_key, value)| SnapshotNoritoBlob {
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
+            .collect();
+        let public_lane_rewards: Vec<_> = view
+            .world
+            .public_lane_rewards
+            .iter()
+            .map(|(_key, value)| SnapshotNoritoBlob {
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
+            .collect();
+        let public_lane_reward_claims: Vec<_> = view
+            .world
+            .public_lane_reward_claims
+            .iter()
+            .map(
+                |(key, last_claimed_epoch): (&(LaneId, AccountId, AssetId), &u64)| {
+                    let (lane_id, account, asset) = key;
+                    SnapshotPublicLaneRewardClaim {
+                        lane_id: *lane_id,
+                        account: account.clone(),
+                        asset: asset.clone(),
+                        last_claimed_epoch: *last_claimed_epoch,
+                    }
+                },
+            )
+            .collect();
 
         out.push('{');
         json::write_json_string("chain_id", out);
@@ -53,6 +100,26 @@ impl JsonSerializeTrait for State {
         json::write_json_string("transactions", out);
         out.push(':');
         self.transactions.json_serialize(out);
+        out.push(',');
+
+        json::write_json_string("public_lane_validators", out);
+        out.push(':');
+        json::JsonSerialize::json_serialize(&public_lane_validators, out);
+        out.push(',');
+
+        json::write_json_string("public_lane_stake_shares", out);
+        out.push(':');
+        json::JsonSerialize::json_serialize(&public_lane_stake_shares, out);
+        out.push(',');
+
+        json::write_json_string("public_lane_rewards", out);
+        out.push(':');
+        json::JsonSerialize::json_serialize(&public_lane_rewards, out);
+        out.push(',');
+
+        json::write_json_string("public_lane_reward_claims", out);
+        out.push(':');
+        json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
         out.push(',');
 
         json::write_json_string("commit_topology", out);

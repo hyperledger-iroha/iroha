@@ -2810,6 +2810,11 @@ fn enforce_manifest_quorum(
     rules: &GovernanceRules,
     tx: &SignedTransaction,
 ) -> Result<(), TransactionRejectionReason> {
+    if let Executable::Instructions(instructions) = tx.instructions()
+        && instructions_allow_multisig_envelope_authority(instructions)
+    {
+        return Ok(());
+    }
     let Some(quorum) = rules.quorum else {
         return Ok(());
     };
@@ -3378,13 +3383,11 @@ fn enforce_lane_policies(
                 ));
             }
 
-            let quorum_required =
-                rules.quorum.unwrap_or(0).saturating_sub(1) > 0 && !rules.validators.is_empty();
-            let quorum_result = enforce_manifest_quorum(&lane_alias, rules, tx);
+            let quorum_required = !allows_multisig_envelope_authority
+                && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                && !rules.validators.is_empty();
             if quorum_required {
-                quorum_result?;
-            } else if let Err(err) = quorum_result {
-                return Err(err);
+                enforce_manifest_quorum(&lane_alias, rules, tx)?;
             }
 
             enforce_manifest_protected_namespaces(

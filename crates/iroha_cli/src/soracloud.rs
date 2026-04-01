@@ -40,14 +40,13 @@ use iroha::{
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
             AgentApartmentManifestV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
-            SECRET_ENVELOPE_VERSION_V1,
+            CanonicalRequestWitnessV1, PrivateModelSourceV1, SECRET_ENVELOPE_VERSION_V1,
             SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
             SORA_STATE_BINDING_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
             SORA_UPLOADED_MODEL_CHUNK_VERSION_V1, SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
-            CanonicalRequestWitnessV1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
-            SoraArtifactKindV1, SoraArtifactRefV1, SoraCertifiedResponsePolicyV1,
-            SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
-            SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+            SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
+            SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+            SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
             SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1,
             SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1,
             SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceHandlerClassV1,
@@ -89,7 +88,6 @@ use iroha::{
             encode_uploaded_model_bundle_register_provenance_payload,
             encode_uploaded_model_chunk_append_provenance_payload,
             encode_uploaded_model_finalize_provenance_payload,
-            PrivateModelSourceV1,
         },
         sorafs::pin_registry::StorageClass,
     },
@@ -108,11 +106,11 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize},
     to_bytes,
 };
+use rand::RngCore as _;
 use reqwest::{
     blocking::Client as BlockingHttpClient,
     header::{self, HeaderValue},
 };
-use rand::RngCore as _;
 use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
@@ -5026,7 +5024,7 @@ fn sign_generated_hf_service_provenance(
 ) -> Result<ManifestProvenance> {
     let payload =
         encode_bundle_with_materials_provenance_payload(bundle, &BTreeMap::new(), &BTreeMap::new())
-        .wrap_err("failed to encode generated HF service bundle for signing")?;
+            .wrap_err("failed to encode generated HF service bundle for signing")?;
     Ok(ManifestProvenance {
         signer: key_pair.public_key().clone(),
         signature: Signature::new(key_pair.private_key(), &payload),
@@ -6652,8 +6650,12 @@ fn canonical_request_signature_message(
 fn load_soracloud_http_witness(path: &Path) -> Result<CanonicalRequestWitnessV1> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read Soracloud witness file `{}`", path.display()))?;
-    let witness: CanonicalRequestWitnessV1 = json::from_slice(&bytes)
-        .wrap_err_with(|| format!("failed to decode Soracloud witness file `{}`", path.display()))?;
+    let witness: CanonicalRequestWitnessV1 = json::from_slice(&bytes).wrap_err_with(|| {
+        format!(
+            "failed to decode Soracloud witness file `{}`",
+            path.display()
+        )
+    })?;
     if witness.schema_version != CANONICAL_REQUEST_WITNESS_VERSION_V1 {
         return Err(eyre!(
             "unsupported Soracloud witness schema_version `{}` in `{}`",
@@ -6704,8 +6706,7 @@ fn build_soracloud_mutation_auth_headers(
     let mut nonce_bytes = [0_u8; 16];
     rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = hex::encode(nonce_bytes);
-    let message =
-        canonical_request_signature_message("POST", endpoint, body, timestamp_ms, &nonce);
+    let message = canonical_request_signature_message("POST", endpoint, body, timestamp_ms, &nonce);
     let signature = Signature::new(submission_config.key_pair.private_key(), &message);
 
     Ok(vec![
@@ -6860,7 +6861,9 @@ fn merge_submission_metadata(
     mutation_payload: &json::Value,
 ) -> Result<()> {
     let Some(root) = target.as_object_mut() else {
-        return Err(eyre!("expected JSON object when merging Soracloud submission metadata"));
+        return Err(eyre!(
+            "expected JSON object when merging Soracloud submission metadata"
+        ));
     };
     if let Some(value) = extract_json_field(mutation_payload, "submitted_tx_hash")? {
         root.insert("submitted_tx_hash".to_owned(), value);
@@ -7836,8 +7839,12 @@ fn download_private_model_hf_snapshot(
                 config.max_total_bytes
             ));
         }
-        fs::write(destination_root.join(&relative_path), file_bytes)
-            .wrap_err_with(|| format!("write `{}`", destination_root.join(&relative_path).display()))?;
+        fs::write(destination_root.join(&relative_path), file_bytes).wrap_err_with(|| {
+            format!(
+                "write `{}`",
+                destination_root.join(&relative_path).display()
+            )
+        })?;
     }
 
     Ok(())
@@ -12313,7 +12320,9 @@ mod tests {
         }
     }
 
-    fn sample_private_model_publish_draft(source: PrivateModelSourceV1) -> PrivateModelPublishDraft {
+    fn sample_private_model_publish_draft(
+        source: PrivateModelSourceV1,
+    ) -> PrivateModelPublishDraft {
         PrivateModelPublishDraft {
             source,
             service_name: "private_models".to_owned(),
@@ -12402,7 +12411,10 @@ mod tests {
             listener
                 .set_nonblocking(true)
                 .expect("set mock listener nonblocking");
-            let address = listener.local_addr().expect("mock listener address").to_string();
+            let address = listener
+                .local_addr()
+                .expect("mock listener address")
+                .to_string();
             let base_url = format!("http://{address}");
             let stop = Arc::new(AtomicBool::new(false));
             let stop_flag = Arc::clone(&stop);
@@ -14164,7 +14176,9 @@ mod tests {
                 },
             ),
             (
-                format!("/openai-community/gpt2/resolve/{revision}/model-00001-of-00001.safetensors"),
+                format!(
+                    "/openai-community/gpt2/resolve/{revision}/model-00001-of-00001.safetensors"
+                ),
                 MockHttpResponse {
                     content_type: "application/octet-stream",
                     body: b"deterministic-safetensors-payload".to_vec(),
@@ -14249,8 +14263,8 @@ mod tests {
     #[test]
     fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
         let config = crate::fallback_config();
-        let endpoint = reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy")
-            .expect("endpoint");
+        let endpoint =
+            reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
         let headers =
             build_soracloud_mutation_auth_headers(&config, &endpoint, br#"{"noop":true}"#)
                 .expect("single-sig headers");
@@ -14269,8 +14283,8 @@ mod tests {
     #[test]
     fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
         let mut config = crate::fallback_config();
-        let endpoint = reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy")
-            .expect("endpoint");
+        let endpoint =
+            reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
         let body = br#"{"noop":true}"#;
         let witness = CanonicalRequestWitnessV1 {
             schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
@@ -14282,8 +14296,11 @@ mod tests {
         };
         let dir = temp_dir("witness_headers");
         let witness_path = dir.join("witness.json");
-        fs::write(&witness_path, json::to_vec(&witness).expect("encode witness json"))
-            .expect("write witness file");
+        fs::write(
+            &witness_path,
+            json::to_vec(&witness).expect("encode witness json"),
+        )
+        .expect("write witness file");
         config.soracloud_http_witness_file = Some(witness_path);
 
         let headers =
@@ -14303,8 +14320,8 @@ mod tests {
     #[test]
     fn build_soracloud_mutation_auth_headers_rejects_witness_account_mismatch() {
         let mut config = crate::fallback_config();
-        let endpoint = reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy")
-            .expect("endpoint");
+        let endpoint =
+            reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
         let body = br#"{"noop":true}"#;
         let other_account = AccountId::new(KeyPair::random().public_key().clone());
         let witness = CanonicalRequestWitnessV1 {
@@ -14317,8 +14334,11 @@ mod tests {
         };
         let dir = temp_dir("witness_account_mismatch");
         let witness_path = dir.join("witness.json");
-        fs::write(&witness_path, json::to_vec(&witness).expect("encode witness json"))
-            .expect("write witness file");
+        fs::write(
+            &witness_path,
+            json::to_vec(&witness).expect("encode witness json"),
+        )
+        .expect("write witness file");
         config.soracloud_http_witness_file = Some(witness_path);
 
         let err = build_soracloud_mutation_auth_headers(&config, &endpoint, body)
@@ -14329,8 +14349,8 @@ mod tests {
     #[test]
     fn build_soracloud_mutation_auth_headers_rejects_witness_hash_mismatch() {
         let mut config = crate::fallback_config();
-        let endpoint = reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy")
-            .expect("endpoint");
+        let endpoint =
+            reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy").expect("endpoint");
         let body = br#"{"noop":true}"#;
         let witness = CanonicalRequestWitnessV1 {
             schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
@@ -14342,8 +14362,11 @@ mod tests {
         };
         let dir = temp_dir("witness_hash_mismatch");
         let witness_path = dir.join("witness.json");
-        fs::write(&witness_path, json::to_vec(&witness).expect("encode witness json"))
-            .expect("write witness file");
+        fs::write(
+            &witness_path,
+            json::to_vec(&witness).expect("encode witness json"),
+        )
+        .expect("write witness file");
         config.soracloud_http_witness_file = Some(witness_path);
 
         let err = build_soracloud_mutation_auth_headers(&config, &endpoint, body)

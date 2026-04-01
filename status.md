@@ -167,6 +167,52 @@ Last updated: 2026-03-31
   - NPoS still combines a real consensus liveness stall with the separate
     authoritative-binding `route_unavailable` failure surface.
 
+## 2026-03-31 Follow-up: Sumeragi RBC sessions now advertise encoding metadata and can reconstruct RS16 shards after restart
+- Extended the RBC wire/config/handshake surface so `RbcInit`, persisted RBC
+  sessions, and consensus capability snapshots now carry explicit encoding
+  metadata (`plain` vs `rs16`, chunk size, payload size, and shard counts)
+  instead of inferring layout from local configuration.
+- Reworked the RBC seed/hydration path in
+  `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` and
+  `crates/iroha_core/src/sumeragi/main_loop.rs` so seeded sessions retain a
+  deterministic payload layout, reuse that layout during block hydration, and
+  rebuild payload bytes correctly from data shards only instead of blindly
+  concatenating every encoded chunk.
+- Added RS16 reconstruction helpers in
+  `crates/iroha_primitives/src/erasure/rs16.rs` and taught RBC session reload
+  and disk validation to recover missing shards / validate payload hashes
+  against the canonical payload instead of parity-expanded byte streams.
+- Exposed the chosen RBC encoding through consensus caps and the
+  `/v1/sumeragi/rbc/sessions` operator endpoint now reports encoding plus
+  reconstruction progress for each active session.
+- Remaining gap for the larger SodsBC-inspired plan: missing-payload rescue
+  still falls back to full payload rebroadcast. The code now carries an
+  explicit TODO for the future targeted missing-shard request/response path.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_core --tests`
+  - `cargo check -p iroha_data_model -p iroha_config -p iroha_p2p --tests`
+  - `cargo check -p irohad -p iroha_torii -p iroha_p2p`
+  - `cargo test -p iroha_primitives reconstruct_shards_restores_missing_data_and_parity --lib -- --nocapture`
+  - `cargo test -p iroha_primitives chunk_from_symbols_respects_requested_length --lib -- --nocapture`
+  - `cargo test -p iroha_core build_rbc_session_from_payload_ingests_chunks --lib -- --nocapture`
+  - `cargo test -p iroha_core rbc_session_persist_roundtrip --lib -- --nocapture`
+
+## 2026-03-31 Follow-up: address-canonicalisation now matches retired offline allowance app routes
+- Updated `integration_tests/tests/address_canonicalisation.rs` so the stale
+  offline-allowance list/query coverage now skips cleanly when Torii returns
+  `404 Not Found`, matching the current router/OpenAPI contract where those
+  legacy app routes are intentionally not mounted.
+- Tightened `crates/iroha_torii/src/routing.rs` unit coverage so
+  `offline_allowance_item_to_json(...)` must emit `controller_display` using
+  the canonical I105 account literal.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_torii offline_allowance_item_json_includes_verdict_metadata --lib -- --nocapture`
+  - `cargo test -p iroha_torii --test offline_cash_router_smoke offline_cash_routes_are_mounted_and_legacy_allowances_are_absent -- --nocapture`
+  - `cargo test -p integration_tests --test address_canonicalisation offline_allowances_ -- --nocapture`
+
 ## 2026-03-31 Follow-up: Kotodama GitHub Linguist bundle now exists for upstream syntax-highlighting work
 - Added a self-contained `tools/kotodama_linguist/` bundle so Kotodama can be
   proposed to `github-linguist/linguist` as an official GitHub language rather

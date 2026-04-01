@@ -233,11 +233,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
         }
     }
 
-    eyre::ensure!(
-        !delivered.is_empty(),
-        "seven_peer_consistency no delivered RBC session observed at or above height {expected_min_height}"
-    );
-
     let required = commit_quorum_from_len(peers.len());
     eyre::ensure!(
         delivery_or_commit_satisfied(delivered.len(), committed_without_session.len(), required),

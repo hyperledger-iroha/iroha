@@ -188,6 +188,11 @@ pub enum SingularQueryJson {
     FindExecutorDataModel,
     /// Returns the current blockchain parameter set.
     FindParameters,
+    /// Looks up an account by identifier.
+    FindAccountById {
+        /// Canonical I105 account identifier.
+        account_id: String,
+    },
     /// Lists aliases bound to an account subject.
     FindAliasesByAccountId {
         /// Account identifier used to resolve the subject.
@@ -211,6 +216,11 @@ pub enum SingularQueryJson {
         /// Asset definition address identifying the asset type.
         asset: String,
     },
+    /// Looks up a trigger by identifier.
+    FindTriggerById {
+        /// Trigger identifier.
+        id: String,
+    },
     /// Looks up a contract manifest by code hash.
     FindContractManifestByCodeHash {
         /// Hex-encoded 32-byte code hash identifying the contract.
@@ -224,6 +234,12 @@ pub enum SingularQueryJson {
 }
 
 impl SingularQueryJson {
+    fn parse_account_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindAccountById {
+            account_id: payload_required_string(payload, "account_id")?.to_owned(),
+        })
+    }
+
     fn parse_aliases(payload: &Map) -> Result<Self, QueryJsonError> {
         Ok(Self::FindAliasesByAccountId {
             account_id: payload_required_string(payload, "account_id")?.to_owned(),
@@ -252,6 +268,12 @@ impl SingularQueryJson {
         })
     }
 
+    fn parse_trigger_by_id(payload: &Map) -> Result<Self, QueryJsonError> {
+        Ok(Self::FindTriggerById {
+            id: payload_required_string(payload, "id")?.to_owned(),
+        })
+    }
+
     fn parse_twitter_binding(payload: &Map) -> Result<Self, QueryJsonError> {
         let binding_hash_value = payload
             .get("binding_hash")
@@ -268,6 +290,11 @@ impl SingularQueryJson {
             Value::String(self.kind_label().to_owned()),
         );
         match self {
+            Self::FindAccountById { account_id } => {
+                let mut payload = Map::new();
+                payload.insert("account_id".to_owned(), Value::String(account_id.clone()));
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
             Self::FindContractManifestByCodeHash { code_hash } => {
                 let mut payload = Map::new();
                 payload.insert("code_hash".to_owned(), Value::String(code_hash.clone()));
@@ -289,6 +316,11 @@ impl SingularQueryJson {
             Self::FindAssetDefinitionById { asset } => {
                 let mut payload = Map::new();
                 payload.insert("asset".to_owned(), Value::String(asset.clone()));
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
+            Self::FindTriggerById { id } => {
+                let mut payload = Map::new();
+                payload.insert("id".to_owned(), Value::String(id.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
             Self::FindAliasesByAccountId {
@@ -331,12 +363,14 @@ impl SingularQueryJson {
             "FindAbiVersion" => Ok(SingularQueryJson::FindAbiVersion),
             "FindExecutorDataModel" => Ok(SingularQueryJson::FindExecutorDataModel),
             "FindParameters" => Ok(SingularQueryJson::FindParameters),
+            "FindAccountById" => Self::parse_account_by_id(singular_payload(map)?),
             "FindAliasesByAccountId" => Self::parse_aliases(singular_payload(map)?),
             "FindContractManifestByCodeHash" => {
                 Self::parse_contract_manifest(singular_payload(map)?)
             }
             "FindAssetById" => Self::parse_asset_by_id(singular_payload(map)?),
             "FindAssetDefinitionById" => Self::parse_asset_definition(singular_payload(map)?),
+            "FindTriggerById" => Self::parse_trigger_by_id(singular_payload(map)?),
             "FindTwitterBindingByHash" => Self::parse_twitter_binding(singular_payload(map)?),
             other => Err(QueryJsonError::UnknownSingularType(other.to_owned())),
         }
@@ -347,9 +381,11 @@ impl SingularQueryJson {
             SingularQueryJson::FindAbiVersion => "FindAbiVersion",
             SingularQueryJson::FindExecutorDataModel => "FindExecutorDataModel",
             SingularQueryJson::FindParameters => "FindParameters",
+            SingularQueryJson::FindAccountById { .. } => "FindAccountById",
             SingularQueryJson::FindAliasesByAccountId { .. } => "FindAliasesByAccountId",
             SingularQueryJson::FindAssetById { .. } => "FindAssetById",
             SingularQueryJson::FindAssetDefinitionById { .. } => "FindAssetDefinitionById",
+            SingularQueryJson::FindTriggerById { .. } => "FindTriggerById",
             SingularQueryJson::FindContractManifestByCodeHash { .. } => {
                 "FindContractManifestByCodeHash"
             }
@@ -370,6 +406,14 @@ impl SingularQueryJson {
             SingularQueryJson::FindParameters => Ok(SingularQueryBox::FindParameters(
                 crate::query::executor::prelude::FindParameters,
             )),
+            SingularQueryJson::FindAccountById { account_id } => {
+                let id = crate::account::AccountId::parse_encoded(&account_id)
+                    .map(crate::account::ParsedAccountId::into_account_id)
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))?;
+                Ok(SingularQueryBox::FindAccountById(
+                    crate::query::account::prelude::FindAccountById::new(id),
+                ))
+            }
             SingularQueryJson::FindAliasesByAccountId {
                 account_id,
                 dataspace,
@@ -412,6 +456,14 @@ impl SingularQueryJson {
                     .map_err(|_| QueryJsonError::InvalidField("payload", "asset"))?;
                 Ok(SingularQueryBox::FindAssetDefinitionById(
                     crate::query::asset::prelude::FindAssetDefinitionById::new(id),
+                ))
+            }
+            SingularQueryJson::FindTriggerById { id } => {
+                let id = id
+                    .parse::<crate::trigger::TriggerId>()
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "id"))?;
+                Ok(SingularQueryBox::FindTriggerById(
+                    crate::query::trigger::prelude::FindTriggerById::new(id),
                 ))
             }
             SingularQueryJson::FindContractManifestByCodeHash { code_hash } => {
@@ -1043,6 +1095,17 @@ mod tests {
     fn find_aliases_by_account_id_roundtrip_with_filters() {
         let keypair = KeyPair::from_seed(vec![0xAC; 32], Algorithm::Ed25519);
         let account_id = crate::account::AccountId::new(keypair.public_key().clone());
+        let account_query = SingularQueryJson::FindAccountById {
+            account_id: account_id.to_string(),
+        };
+        let query = account_query.into_box().expect("account query into box");
+        match query {
+            SingularQueryBox::FindAccountById(q) => {
+                assert_eq!(q.account_id(), &account_id);
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
+
         let singular = SingularQueryJson::FindAliasesByAccountId {
             account_id: account_id.to_string(),
             dataspace: Some("sbp".to_owned()),
@@ -1123,6 +1186,17 @@ mod tests {
             .into_box()
             .expect_err("prefixed literal must be rejected");
         assert_eq!(err, QueryJsonError::InvalidField("payload", "asset"));
+
+        let trigger_query = SingularQueryJson::FindTriggerById {
+            id: "demo_trigger".to_owned(),
+        };
+        let query = trigger_query.into_box().expect("trigger query into box");
+        match query {
+            SingularQueryBox::FindTriggerById(q) => {
+                assert_eq!(q.trigger_id().to_string(), "demo_trigger");
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
     }
 
     #[test]

@@ -16,14 +16,16 @@ use std::{
 };
 
 use eyre::Result;
+use iroha_config::parameters::actual as config_actual;
 use iroha_crypto::{Hash, HashOf, MerkleTree, Signature};
 use iroha_data_model::{
     ChainId, Encode as _,
-    block::{BlockHeader, BlockPayload, SignedBlock},
+    block::{BlockHeader, BlockPayload, SignedBlock, consensus::RbcEncoding},
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
+use iroha_primitives::erasure::rs16 as erasure_rs16;
 use norito::codec::Decode;
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use sha2::{Digest, Sha256};
@@ -31,7 +33,7 @@ use sha2::{Digest, Sha256};
 use super::{
     Actor, BlockPayloadDedupKey, DataspaceAllocation, InvalidSigKind, InvalidSigOutcome,
     LaneAllocation, MissingBlockClearReason, MissingBlockFetchDecision, PipelinePhase,
-    RBC_MAX_TOTAL_CHUNKS, RbcRosterSource, RbcSession, RbcSessionError,
+    RBC_MAX_TOTAL_CHUNKS, RbcPayloadLayout, RbcRosterSource, RbcSession, RbcSessionError,
     pending_rbc::{
         PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages, rbc_deliver_stash_bytes,
         rbc_ready_stash_bytes,
@@ -119,7 +121,7 @@ pub(super) struct RbcSeedWork {
     pub(super) key: SessionKey,
     pub(super) payload_hash: Hash,
     pub(super) payload_bytes: Vec<u8>,
-    pub(super) chunk_size: usize,
+    pub(super) chunking: RbcChunkingSpec,
     pub(super) epoch: u64,
 }
 
@@ -140,7 +142,7 @@ pub(super) struct RbcSeedWorkerHandle {
 #[derive(Debug)]
 pub(super) enum RbcError {
     TransactionPayloadTooLarge { len: usize },
-    EmptyPayload,
+    ChunkSizeOverflow { chunk_size: usize },
     ChunkCountOverflow { count: usize },
     ChunkCountExceedsCap { count: u32, cap: u32 },
     ChunkRootUnavailable,
@@ -158,7 +160,12 @@ impl std::fmt::Display for RbcError {
                     "transaction payload length {len} exceeds addressable range"
                 )
             }
-            Self::EmptyPayload => write!(f, "cannot seed RBC session from empty payload"),
+            Self::ChunkSizeOverflow { chunk_size } => {
+                write!(
+                    f,
+                    "RBC chunk size {chunk_size} exceeds the protocol metadata range"
+                )
+            }
             Self::ChunkCountOverflow { count } => {
                 write!(f, "RBC payload requires {count} chunks")
             }
@@ -252,10 +259,10 @@ fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<Rb
                 };
                 let key = work.key;
                 let payload_hash = work.payload_hash;
-                let outcome = Actor::build_rbc_session_from_payload(
+                let outcome = Actor::build_rbc_session_from_payload_with_chunking(
                     &work.payload_bytes,
                     payload_hash,
-                    work.chunk_size,
+                    work.chunking,
                     work.epoch,
                 )
                 .map_err(eyre::Report::from);
@@ -292,6 +299,79 @@ fn spawn_rbc_seed_worker(wake_tx: Option<mpsc::SyncSender<()>>) -> io::Result<Rb
     })
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RbcChunkingSpec {
+    pub(super) encoding: RbcEncoding,
+    pub(super) chunk_size_bytes: usize,
+    pub(super) data_shards: u16,
+    pub(super) parity_shards: u16,
+}
+
+impl RbcChunkingSpec {
+    pub(super) const fn plain(chunk_size_bytes: usize) -> Self {
+        Self {
+            encoding: RbcEncoding::Plain,
+            chunk_size_bytes,
+            data_shards: 0,
+            parity_shards: 0,
+        }
+    }
+
+    pub(super) fn from_config(rbc: &config_actual::SumeragiRbc) -> Self {
+        let (data_shards, parity_shards) = match rbc.encoding {
+            RbcEncoding::Plain => (0, 0),
+            RbcEncoding::Rs16 => (rbc.data_shards, rbc.parity_shards),
+        };
+        Self {
+            encoding: rbc.encoding,
+            chunk_size_bytes: rbc.chunk_max_bytes,
+            data_shards,
+            parity_shards,
+        }
+    }
+
+    fn from_layout(layout: RbcPayloadLayout) -> Self {
+        if !layout.payload_size_known() {
+            return Self::plain(layout.chunk_size().max(1));
+        }
+        Self {
+            encoding: layout.encoding,
+            chunk_size_bytes: layout.chunk_size(),
+            data_shards: layout.data_shards,
+            parity_shards: layout.parity_shards,
+        }
+    }
+
+    fn chunk_size_u32(self) -> std::result::Result<u32, RbcError> {
+        u32::try_from(self.chunk_size_bytes).map_err(|_| RbcError::ChunkSizeOverflow {
+            chunk_size: self.chunk_size_bytes,
+        })
+    }
+
+    fn layout_for_payload(
+        self,
+        payload_len: usize,
+    ) -> std::result::Result<RbcPayloadLayout, RbcError> {
+        let chunk_size_bytes = self.chunk_size_u32()?;
+        RbcPayloadLayout::new(
+            self.encoding,
+            chunk_size_bytes,
+            u64::try_from(payload_len).unwrap_or(u64::MAX),
+            self.data_shards,
+            self.parity_shards,
+        )
+        .map_err(RbcError::from)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct EncodedRbcPayload {
+    layout: RbcPayloadLayout,
+    chunks: Vec<Vec<u8>>,
+    digests: Vec<[u8; 32]>,
+    chunk_root: Hash,
+}
+
 pub(super) fn chunk_payload_bytes(payload: &[u8], chunk_size: usize) -> Vec<Vec<u8>> {
     let effective = chunk_size.max(1);
     let chunk_total = chunk_count(payload.len(), chunk_size);
@@ -314,6 +394,91 @@ pub(super) fn chunk_count(payload_len: usize, chunk_size: usize) -> usize {
         return 1;
     }
     payload_len.div_ceil(effective)
+}
+
+fn encode_rbc_payload(
+    payload_bytes: &[u8],
+    chunking: RbcChunkingSpec,
+) -> std::result::Result<EncodedRbcPayload, RbcError> {
+    let layout = chunking.layout_for_payload(payload_bytes.len())?;
+    let chunk_bytes = match chunking.encoding {
+        RbcEncoding::Plain => chunk_payload_bytes(payload_bytes, chunking.chunk_size_bytes),
+        RbcEncoding::Rs16 => {
+            let data_shards = usize::from(chunking.data_shards);
+            let parity_shards = usize::from(chunking.parity_shards);
+            let stripe_width = data_shards.saturating_add(parity_shards);
+            let data_chunks = chunk_payload_bytes(payload_bytes, chunking.chunk_size_bytes);
+            let stripe_count = data_chunks.len().div_ceil(data_shards);
+            let symbol_count = chunking.chunk_size_bytes / 2;
+            let mut encoded = Vec::with_capacity(stripe_count.saturating_mul(stripe_width));
+            for stripe_idx in 0..stripe_count {
+                let start = stripe_idx.saturating_mul(data_shards);
+                let end = start.saturating_add(data_shards).min(data_chunks.len());
+                let mut stripe = Vec::with_capacity(data_shards);
+                let mut symbols = Vec::with_capacity(data_shards);
+                for chunk in &data_chunks[start..end] {
+                    stripe.push(chunk.clone());
+                    symbols.push(erasure_rs16::symbols_from_chunk(symbol_count, chunk));
+                }
+                while stripe.len() < data_shards {
+                    stripe.push(Vec::new());
+                    symbols.push(erasure_rs16::symbols_from_chunk(symbol_count, &[]));
+                }
+                let parity = erasure_rs16::encode_parity(&symbols, parity_shards)
+                    .map_err(|_| RbcError::ChunkRootUnavailable)?;
+                encoded.extend(stripe);
+                for shard in parity {
+                    let bytes = erasure_rs16::chunk_from_symbols(&shard, chunking.chunk_size_bytes)
+                        .map_err(|_| RbcError::ChunkRootUnavailable)?;
+                    encoded.push(bytes);
+                }
+            }
+            encoded
+        }
+    };
+
+    let total_chunks =
+        u32::try_from(chunk_bytes.len()).map_err(|_| RbcError::ChunkCountOverflow {
+            count: chunk_bytes.len(),
+        })?;
+    if total_chunks > RBC_MAX_TOTAL_CHUNKS {
+        return Err(RbcError::ChunkCountExceedsCap {
+            count: total_chunks,
+            cap: RBC_MAX_TOTAL_CHUNKS,
+        });
+    }
+
+    let mut digests = Vec::with_capacity(chunk_bytes.len());
+    for chunk in &chunk_bytes {
+        let digest = Sha256::digest(chunk);
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&digest);
+        digests.push(arr);
+    }
+    let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
+        .root()
+        .map(Hash::from)
+        .ok_or(RbcError::ChunkRootUnavailable)?;
+
+    Ok(EncodedRbcPayload {
+        layout,
+        chunks: chunk_bytes,
+        digests,
+        chunk_root,
+    })
+}
+
+fn rbc_layout_from_init(init: &RbcInit) -> std::result::Result<RbcPayloadLayout, RbcSessionError> {
+    if init.chunk_size_bytes == 0 {
+        return Ok(RbcPayloadLayout::legacy_plain());
+    }
+    RbcPayloadLayout::new(
+        init.encoding,
+        init.chunk_size_bytes,
+        init.payload_size_bytes,
+        init.data_shards,
+        init.parity_shards,
+    )
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -343,9 +508,38 @@ pub(super) fn apply_hydrated_payload(
         outcome.observed_chunks = Some(0);
         return outcome;
     }
-    let chunk_bytes = chunk_payload_bytes(payload_bytes, chunk_max_bytes);
+    let chunking = if session.layout().payload_size_known() {
+        RbcChunkingSpec::from_layout(session.layout())
+    } else {
+        RbcChunkingSpec::plain(chunk_max_bytes)
+    };
+    let encoded = match encode_rbc_payload(payload_bytes, chunking) {
+        Ok(encoded) => encoded,
+        Err(_) => {
+            session.invalid = true;
+            outcome.updated = true;
+            outcome.layout_mismatch = true;
+            return outcome;
+        }
+    };
+    if session.layout().payload_size_known() && session.layout() != encoded.layout {
+        session.invalid = true;
+        outcome.updated = true;
+        outcome.layout_mismatch = true;
+        return outcome;
+    }
+    if !session.layout().payload_size_known() {
+        session.layout = encoded.layout;
+        outcome.updated = true;
+    }
+    let EncodedRbcPayload {
+        chunks,
+        digests,
+        chunk_root,
+        ..
+    } = encoded;
 
-    let chunk_count = if let Ok(count) = u32::try_from(chunk_bytes.len()) {
+    let chunk_count = if let Ok(count) = u32::try_from(chunks.len()) {
         count
     } else {
         session.invalid = true;
@@ -362,13 +556,6 @@ pub(super) fn apply_hydrated_payload(
         return outcome;
     }
 
-    let mut digests = Vec::with_capacity(chunk_bytes.len());
-    for chunk in &chunk_bytes {
-        let digest = Sha256::digest(chunk);
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&digest);
-        digests.push(arr);
-    }
     if let Some(expected) = session.expected_chunk_digests.as_ref() {
         if expected != &digests {
             session.invalid = true;
@@ -379,17 +566,14 @@ pub(super) fn apply_hydrated_payload(
         outcome.updated = true;
     }
 
-    outcome.observed_chunk_root =
-        MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
-            .root()
-            .map(Hash::from);
+    outcome.observed_chunk_root = Some(chunk_root);
 
     let dropped = session.drop_mismatched_chunks();
     if dropped > 0 {
         outcome.updated = true;
     }
 
-    for (idx, chunk) in chunk_bytes.iter().enumerate() {
+    for (idx, chunk) in chunks.iter().enumerate() {
         let Ok(idx_u32) = u32::try_from(idx) else {
             return outcome;
         };
@@ -1003,39 +1187,11 @@ impl Actor {
             "routing decisions must align with transactions"
         );
 
-        let chunk_bytes = chunk_payload_bytes(payload, self.config.rbc.chunk_max_bytes);
-        if chunk_bytes.is_empty() {
-            return Ok(None);
-        }
-
-        let total_chunks =
-            u32::try_from(chunk_bytes.len()).map_err(|_| RbcError::ChunkCountOverflow {
-                count: chunk_bytes.len(),
-            })?;
-        if total_chunks > RBC_MAX_TOTAL_CHUNKS {
-            return Err(RbcError::ChunkCountExceedsCap {
-                count: total_chunks,
-                cap: RBC_MAX_TOTAL_CHUNKS,
-            }
-            .into());
-        }
+        let encoded = encode_rbc_payload(payload, RbcChunkingSpec::from_config(&self.config.rbc))?;
+        let total_chunks = u32::try_from(encoded.chunks.len()).expect("encoded chunk count fits");
 
         let (lane_allocations, dataspace_allocations) =
             self.derive_rbc_allocations(transactions, routing, total_chunks)?;
-
-        let mut digests = Vec::with_capacity(chunk_bytes.len());
-        for chunk in &chunk_bytes {
-            let digest = Sha256::digest(chunk);
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&digest);
-            digests.push(arr);
-        }
-
-        let merkle = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone());
-        let chunk_root = merkle
-            .root()
-            .map(Hash::from)
-            .ok_or(RbcError::ChunkRootUnavailable)?;
 
         let block_hash = signed_block.hash();
         let leader_signature = signed_block
@@ -1044,17 +1200,18 @@ impl Actor {
             .cloned()
             .ok_or(RbcError::MissingLeaderSignature)?;
         let block_header = signed_block.header();
-        let mut session = RbcSession::new(
+        let mut session = RbcSession::new_with_layout(
+            encoded.layout,
             total_chunks,
             Some(payload_hash),
-            Some(chunk_root),
-            Some(digests.clone()),
+            Some(encoded.chunk_root),
+            Some(encoded.digests.clone()),
             epoch,
         )
         .map_err(RbcError::from)?;
         session.block_header = Some(block_header);
         session.leader_signature = Some(leader_signature.clone());
-        for (idx, chunk) in chunk_bytes.iter().enumerate() {
+        for (idx, chunk) in encoded.chunks.iter().enumerate() {
             let chunk_index = u32::try_from(idx).expect("chunk index fits within a 32-bit range");
             session.ingest_chunk(chunk_index, chunk.clone(), Some(local_validator_index));
         }
@@ -1079,7 +1236,7 @@ impl Actor {
             .drop_every_nth_chunk
             .and_then(|value| usize::try_from(value.get()).ok());
         let (order, dropped) = compute_chunk_broadcast_order(
-            chunk_bytes.len(),
+            encoded.chunks.len(),
             self.config.debug.rbc.shuffle_chunks,
             shuffle_seed(&block_hash, height, view),
             drop_every,
@@ -1106,7 +1263,7 @@ impl Actor {
                 view,
                 epoch,
                 idx: chunk_index,
-                bytes: chunk_bytes[idx].clone(),
+                bytes: encoded.chunks[idx].clone(),
             });
         }
 
@@ -1118,9 +1275,14 @@ impl Actor {
             roster: roster.clone(),
             roster_hash,
             total_chunks,
-            chunk_digests: digests.clone(),
+            encoding: encoded.layout.encoding,
+            chunk_size_bytes: encoded.layout.chunk_size_bytes,
+            payload_size_bytes: encoded.layout.payload_size_bytes,
+            data_shards: encoded.layout.data_shards,
+            parity_shards: encoded.layout.parity_shards,
+            chunk_digests: encoded.digests.clone(),
             payload_hash,
-            chunk_root,
+            chunk_root: encoded.chunk_root,
             block_header,
             leader_signature: leader_signature.clone(),
         };
@@ -1154,7 +1316,7 @@ impl Actor {
                 }
                 let dup_roster_hash = rbc_roster_hash(&dup_roster);
                 let (dup_order, dup_dropped) = compute_chunk_broadcast_order(
-                    chunk_bytes.len(),
+                    encoded.chunks.len(),
                     self.config.debug.rbc.shuffle_chunks,
                     shuffle_seed(&block_hash, height, dup_view),
                     drop_every,
@@ -1186,7 +1348,7 @@ impl Actor {
                         view: dup_view,
                         epoch,
                         idx: chunk_index,
-                        bytes: chunk_bytes[idx].clone(),
+                        bytes: encoded.chunks[idx].clone(),
                     });
                 }
                 debug!(
@@ -1206,9 +1368,14 @@ impl Actor {
                         roster: dup_roster.clone(),
                         roster_hash: dup_roster_hash,
                         total_chunks,
-                        chunk_digests: digests.clone(),
+                        encoding: encoded.layout.encoding,
+                        chunk_size_bytes: encoded.layout.chunk_size_bytes,
+                        payload_size_bytes: encoded.layout.payload_size_bytes,
+                        data_shards: encoded.layout.data_shards,
+                        parity_shards: encoded.layout.parity_shards,
+                        chunk_digests: encoded.digests.clone(),
                         payload_hash,
-                        chunk_root,
+                        chunk_root: encoded.chunk_root,
                         block_header,
                         leader_signature: leader_signature.clone(),
                     },
@@ -1528,49 +1695,40 @@ impl Actor {
         Ok(())
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn build_rbc_session_from_payload(
         payload_bytes: &[u8],
         payload_hash: Hash,
         chunk_size: usize,
         epoch: u64,
     ) -> std::result::Result<RbcSession, RbcError> {
-        let chunk_bytes = chunk_payload_bytes(payload_bytes, chunk_size);
-        if chunk_bytes.is_empty() {
-            return Err(RbcError::EmptyPayload);
-        }
+        Self::build_rbc_session_from_payload_with_chunking(
+            payload_bytes,
+            payload_hash,
+            RbcChunkingSpec::plain(chunk_size),
+            epoch,
+        )
+    }
 
-        let total_chunks =
-            u32::try_from(chunk_bytes.len()).map_err(|_| RbcError::ChunkCountOverflow {
-                count: chunk_bytes.len(),
-            })?;
-        if total_chunks > RBC_MAX_TOTAL_CHUNKS {
-            return Err(RbcError::ChunkCountExceedsCap {
-                count: total_chunks,
-                cap: RBC_MAX_TOTAL_CHUNKS,
-            });
-        }
-
-        let mut digests = Vec::with_capacity(chunk_bytes.len());
-        for chunk in &chunk_bytes {
-            let digest = Sha256::digest(chunk);
-            let mut arr = [0u8; 32];
-            arr.copy_from_slice(&digest);
-            digests.push(arr);
-        }
-        let chunk_root = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone())
-            .root()
-            .ok_or(RbcError::ChunkRootUnavailable)?;
-
-        let mut session = RbcSession::new(
+    pub(super) fn build_rbc_session_from_payload_with_chunking(
+        payload_bytes: &[u8],
+        payload_hash: Hash,
+        chunking: RbcChunkingSpec,
+        epoch: u64,
+    ) -> std::result::Result<RbcSession, RbcError> {
+        let encoded = encode_rbc_payload(payload_bytes, chunking)?;
+        let total_chunks = u32::try_from(encoded.chunks.len()).expect("encoded chunk count fits");
+        let mut session = RbcSession::new_with_layout(
+            encoded.layout,
             total_chunks,
             Some(payload_hash),
-            Some(Hash::from(chunk_root)),
-            Some(digests),
+            Some(encoded.chunk_root),
+            Some(encoded.digests),
             epoch,
         )
         .map_err(RbcError::from)?;
 
-        for (idx, chunk) in chunk_bytes.into_iter().enumerate() {
+        for (idx, chunk) in encoded.chunks.into_iter().enumerate() {
             let idx = u32::try_from(idx).map_err(|_| RbcError::ChunkIndexOverflow { idx })?;
             session.ingest_chunk(idx, chunk, None);
         }
@@ -1592,10 +1750,10 @@ impl Actor {
         let should_rebroadcast =
             rebroadcast_missing_init || self.subsystems.da_rbc.rbc.pending.contains_key(&key);
         let payload_bytes = block_payload_bytes(block);
-        let mut session = match Self::build_rbc_session_from_payload(
+        let mut session = match Self::build_rbc_session_from_payload_with_chunking(
             &payload_bytes,
             payload_hash,
-            self.config.rbc.chunk_max_bytes,
+            RbcChunkingSpec::from_config(&self.config.rbc),
             self.epoch_for_height(key.1),
         ) {
             Ok(session) => session,
@@ -1674,7 +1832,13 @@ impl Actor {
             return Ok(false);
         }
 
-        let total_chunks = chunk_count(payload_len, self.config.rbc.chunk_max_bytes);
+        let chunking = RbcChunkingSpec::from_config(&self.config.rbc);
+        let layout = chunking
+            .layout_for_payload(payload_len)
+            .map_err(eyre::Report::from)?;
+        let total_chunks = layout
+            .total_chunks()
+            .expect("layout built from a known payload size must report chunk count");
         let total_chunks =
             u32::try_from(total_chunks).map_err(|_| RbcError::ChunkCountOverflow {
                 count: total_chunks,
@@ -1687,7 +1851,8 @@ impl Actor {
             .into());
         }
 
-        let mut session = RbcSession::new(
+        let mut session = RbcSession::new_with_layout(
+            layout,
             total_chunks,
             Some(payload_hash),
             None,
@@ -1837,7 +2002,7 @@ impl Actor {
                 key,
                 payload_hash,
                 payload_bytes,
-                chunk_size: self.config.rbc.chunk_max_bytes,
+                chunking: RbcChunkingSpec::from_config(&self.config.rbc),
                 epoch: self.epoch_for_height(key.1),
             };
             match seed_tx.try_send(work) {
@@ -2236,13 +2401,7 @@ impl Actor {
         {
             return None;
         }
-
-        let mut payload = Vec::new();
-        for idx in 0..session.total_chunks() {
-            let chunk = session.chunk_bytes(idx)?;
-            payload.extend_from_slice(chunk);
-        }
-        Some(payload)
+        session.payload_bytes()
     }
 
     /// Attempt to reconstruct `BlockCreated` once the full RBC payload is available.
@@ -3416,6 +3575,23 @@ impl Actor {
             );
             return Ok(());
         }
+        let init_layout = match rbc_layout_from_init(&init) {
+            Ok(layout) => layout,
+            Err(err) => {
+                warn!(
+                    height = init.height,
+                    view = init.view,
+                    block = %init.block_hash,
+                    "rejecting RBC init with invalid layout metadata: {err}"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcInit,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::InvalidPayload,
+                );
+                return Ok(());
+            }
+        };
 
         let (roster, roster_source) = if derived_roster_missing {
             let committed_height = self.last_committed_height;
@@ -3507,6 +3683,25 @@ impl Actor {
         let near_frontier = key.1 <= frontier_height.saturating_add(1);
         let needs_missing_roster_recovery = near_frontier && !roster_source.is_authoritative();
         if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
+            if session.layout().payload_size_known() && init_layout.payload_size_known() {
+                if session.layout() != init_layout {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        "dropping RBC init that mismatches existing payload layout"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::PayloadMismatch,
+                    );
+                    self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                    return Ok(());
+                }
+            } else if init_layout.payload_size_known() {
+                session.layout = init_layout;
+            }
             if session.payload_hash().is_none() {
                 session.payload_hash = Some(init.payload_hash);
             }
@@ -3560,7 +3755,8 @@ impl Actor {
             );
             return Ok(());
         }
-        let session = match RbcSession::new(
+        let session = match RbcSession::new_with_layout(
+            init_layout,
             init.total_chunks,
             Some(init.payload_hash),
             Some(init.chunk_root),
@@ -6374,12 +6570,17 @@ impl Actor {
             height: key.1,
             view: key.2,
             total_chunks: session.total_chunks(),
+            encoding: session.layout().encoding,
+            data_shards: session.layout().data_shards,
+            parity_shards: session.layout().parity_shards,
             received_chunks: session.received_chunks(),
             ready_count,
             delivered: session.delivered,
             payload_hash: session.payload_hash(),
             recovered_from_disk: recovered || session.recovered_from_disk(),
             invalid: session.is_invalid(),
+            reconstructed_stripes: session.reconstructed_stripes(),
+            reconstructable_stripes: session.reconstructable_stripes(),
             lane_backlog: session.lane_backlog_entries(),
             dataspace_backlog: session.dataspace_backlog_entries(),
         };

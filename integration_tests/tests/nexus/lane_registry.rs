@@ -78,7 +78,12 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
     assert_eq!(
         governance_rules.validators.len(),
         2,
-        "fixture duplicate validators should be deduplicated by the registry"
+        "fixture governance manifest should expose the configured validator roster"
+    );
+    assert_eq!(
+        governance_rules.validator_bindings.len(),
+        2,
+        "fixture governance manifest should expose explicit validator-to-peer bindings"
     );
     assert_eq!(governance_rules.quorum, Some(2));
     assert!(
@@ -117,7 +122,12 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
     assert_eq!(
         zk_rules.validators.len(),
         2,
-        "fixture duplicate validators should be deduplicated by the registry"
+        "fixture zk manifest should expose the configured validator roster"
+    );
+    assert_eq!(
+        zk_rules.validator_bindings.len(),
+        2,
+        "fixture zk manifest should expose explicit validator-to-peer bindings"
     );
     assert_eq!(zk_rules.quorum, Some(2));
     assert!(

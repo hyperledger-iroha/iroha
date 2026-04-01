@@ -870,6 +870,9 @@ mod tests {
             },
             rbc: SumeragiRbc {
                 chunk_max_bytes: 0,
+                encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                data_shards: 0,
+                parity_shards: 0,
                 chunk_fanout: None,
                 pending_max_chunks: 0,
                 pending_max_bytes: 0,

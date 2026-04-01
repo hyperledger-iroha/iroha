@@ -30,7 +30,7 @@ use iroha_data_model::{
     account::AccountId,
     block::{
         BlockHeader, BlockSignature, SignedBlock,
-        consensus::{RbcReadySignature, SumeragiMembershipStatus},
+        consensus::{RbcEncoding, RbcReadySignature, SumeragiMembershipStatus},
     },
     consensus::{
         VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome, ValidatorSetCheckpoint,
@@ -52,8 +52,8 @@ use iroha_data_model::{
 use iroha_logger::prelude::*;
 use iroha_p2p::network::data_frame_wire_len;
 use iroha_p2p::{Broadcast, Post, Priority, UpdateTopology, frame_plaintext_cap};
-use iroha_primitives::numeric::Numeric;
 use iroha_primitives::time::TimeSource;
+use iroha_primitives::{erasure::rs16 as erasure_rs16, numeric::Numeric};
 #[cfg(all(test, feature = "telemetry"))]
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use sha2::{Digest as ShaDigest, Sha256};
@@ -6272,7 +6272,11 @@ impl Actor {
         })
     }
 
-    fn frontier_slot_has_live_local_owner_work_in_slot(&self, slot: &FrontierSlot) -> bool {
+    fn frontier_slot_has_live_local_owner_work_for_view(
+        &self,
+        slot: &FrontierSlot,
+        requested_view: u64,
+    ) -> bool {
         if matches!(
             slot.mode,
             FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
@@ -6317,11 +6321,16 @@ impl Actor {
                             tip_hash,
                         )
                 });
-        let locally_voted = matches!(slot.lock_state, FrontierOwnerLockState::LocallyVoted);
+        let exact_owner_view = slot.view == requested_view;
+        let locally_voted =
+            exact_owner_view && matches!(slot.lock_state, FrontierOwnerLockState::LocallyVoted);
         pending_live
             || commit_inflight_live
+            // Preserve same-height owner protection after the pending wrapper is cleaned up but a
+            // frontier commit QC has already anchored the contiguous slot.
+            || slot.quorum_progress.commit_qc_observed
             || locally_voted
-            || self.frontier_slot_has_local_vote_history_in_slot(slot)
+            || (exact_owner_view && self.frontier_slot_has_local_vote_history_in_slot(slot))
     }
 
     fn frontier_slot_live_local_owner_for_round(
@@ -6332,20 +6341,46 @@ impl Actor {
         self.frontier_slot.as_ref().and_then(|slot| {
             (slot.height == height
                 && slot.active_view >= view
-                && self.frontier_slot_has_live_local_owner_work_in_slot(slot))
+                && self.frontier_slot_has_live_local_owner_work_for_view(slot, view))
             .then_some((slot.block_hash, slot.view))
         })
+    }
+
+    fn keep_frontier_pending_active_across_view_change(
+        &self,
+        height: u64,
+        min_view: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        if !self
+            .frontier_slot_live_local_owner_for_round(height, min_view)
+            .is_some_and(|(owner_hash, _)| owner_hash == block_hash)
+        {
+            return false;
+        }
+
+        self.subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash)
+            || self
+                .subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| inflight.block_hash == block_hash)
     }
 
     fn frontier_slot_conflicts_with_live_local_owner(
         &self,
         height: u64,
+        view: u64,
         block_hash: HashOf<BlockHeader>,
     ) -> Option<(HashOf<BlockHeader>, u64)> {
         self.frontier_slot.as_ref().and_then(|slot| {
             (slot.height == height
                 && slot.block_hash != block_hash
-                && self.frontier_slot_has_live_local_owner_work_in_slot(slot))
+                && self.frontier_slot_has_live_local_owner_work_for_view(slot, view))
             .then_some((slot.block_hash, slot.view))
         })
     }
@@ -7444,6 +7479,34 @@ impl Actor {
                 inflight.pending.touch_progress(now);
             }
         }
+    }
+
+    fn refresh_tip_activated_pending_progress(
+        &mut self,
+        committed_height: u64,
+        committed_hash: HashOf<BlockHeader>,
+        now: Instant,
+    ) -> usize {
+        let state_height = usize::try_from(committed_height).unwrap_or(usize::MAX);
+        let activated: Vec<_> = self
+            .pending
+            .pending_blocks
+            .iter()
+            .filter_map(|(hash, pending)| {
+                (!pending.aborted
+                    && pending_extends_tip(
+                        pending.height,
+                        pending.block.header().prev_block_hash(),
+                        state_height,
+                        Some(committed_hash),
+                    ))
+                .then_some((*hash, pending.view))
+            })
+            .collect();
+        for (hash, view) in &activated {
+            self.touch_pending_progress(*hash, committed_height.saturating_add(1), *view, now);
+        }
+        activated.len()
     }
 
     fn has_recent_pending_progress_for_rbc(&self, now: Instant, window: Duration) -> bool {
@@ -13431,7 +13494,22 @@ impl Actor {
                 .pending_processing
                 .get()
                 .is_some_and(|pending| pending == hash)
+            || self
+                .deferred_block_sync_updates
+                .keys()
+                .any(|(_, _, deferred_hash)| *deferred_hash == hash)
             || self.kura.block_payload_available_by_hash(hash)
+    }
+
+    fn deferred_block_sync_payload_for_hash(
+        &self,
+        hash: HashOf<BlockHeader>,
+    ) -> Option<Arc<SignedBlock>> {
+        self.deferred_block_sync_updates
+            .iter()
+            .find_map(|((_, _, deferred_hash), entry)| {
+                (*deferred_hash == hash).then(|| Arc::new(entry.update.block.clone()))
+            })
     }
 
     fn local_signed_block_for_hash(&self, hash: HashOf<BlockHeader>) -> Option<Arc<SignedBlock>> {
@@ -13451,6 +13529,9 @@ impl Actor {
             )
         {
             return Some(Arc::new(inflight.pending.block.clone()));
+        }
+        if let Some(block) = self.deferred_block_sync_payload_for_hash(hash) {
+            return Some(block);
         }
         let height = self.kura.get_block_height_by_hash(hash)?;
         self.kura.get_block(height)
@@ -13488,6 +13569,16 @@ impl Actor {
                 inflight.pending.view,
                 &payload_bytes,
                 inflight.pending.payload_hash,
+            ));
+        }
+        if let Some(block) = self.deferred_block_sync_payload_for_hash(hash) {
+            let payload_bytes = self::proposals::block_payload_bytes(block.as_ref());
+            let payload_hash = Hash::new(&payload_bytes);
+            return Some(use_payload(
+                block.header().height().get(),
+                block.header().view_change_index(),
+                &payload_bytes,
+                payload_hash,
             ));
         }
         let block_height = self.kura.get_block_height_by_hash(hash)?;
@@ -13709,8 +13800,12 @@ impl Actor {
                     );
                     return FrontierSlotActions::default();
                 }
-                if let Some((owner_hash, owner_view)) =
-                    self.frontier_slot_conflicts_with_live_local_owner(frontier_height, block_hash)
+                if let Some((owner_hash, owner_view)) = self
+                    .frontier_slot_conflicts_with_live_local_owner(
+                        frontier_height,
+                        view,
+                        block_hash,
+                    )
                 {
                     debug!(
                         height = frontier_height,
@@ -13796,8 +13891,12 @@ impl Actor {
                     );
                     return FrontierSlotActions::default();
                 }
-                if let Some((owner_hash, owner_view)) =
-                    self.frontier_slot_conflicts_with_live_local_owner(frontier_height, block_hash)
+                if let Some((owner_hash, owner_view)) = self
+                    .frontier_slot_conflicts_with_live_local_owner(
+                        frontier_height,
+                        view,
+                        block_hash,
+                    )
                 {
                     debug!(
                         height = frontier_height,
@@ -13936,8 +14035,12 @@ impl Actor {
                     );
                     return FrontierSlotActions::default();
                 }
-                if let Some((owner_hash, owner_view)) =
-                    self.frontier_slot_conflicts_with_live_local_owner(frontier_height, block_hash)
+                if let Some((owner_hash, owner_view)) = self
+                    .frontier_slot_conflicts_with_live_local_owner(
+                        frontier_height,
+                        view,
+                        block_hash,
+                    )
                 {
                     debug!(
                         height = frontier_height,
@@ -14039,9 +14142,15 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         reason: &'static str,
     ) -> bool {
+        let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() else {
+            return false;
+        };
         if !self.exact_frontier_block_created_owner_active(key)
             && !self.near_tip_rbc_runtime_unneeded(key)
         {
+            return false;
+        }
+        if !session.delivered && !session.is_invalid() {
             return false;
         }
         debug!(
@@ -14052,7 +14161,9 @@ impl Actor {
             reason,
             "retiring near-tip RBC runtime after local BlockCreated ownership or local materialization"
         );
-        self.purge_rbc_state(key, key.0, key.1, key.2);
+        self.update_rbc_status_entry(key, &session, false);
+        self.clear_rbc_runtime_state(key, false);
+        self.publish_rbc_backlog_snapshot();
         true
     }
 
@@ -14271,6 +14382,12 @@ impl Actor {
             None,
             now,
         ) {
+            return false;
+        }
+        let slot_routed = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height && slot.view == view && slot.block_hash == block_hash
+        });
+        if !slot_routed {
             return false;
         }
         self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
@@ -15285,12 +15402,17 @@ impl Actor {
                                     height: key.1,
                                     view: key.2,
                                     total_chunks: session.total_chunks(),
+                                    encoding: session.layout().encoding,
+                                    data_shards: session.layout().data_shards,
+                                    parity_shards: session.layout().parity_shards,
                                     received_chunks: session.received_chunks(),
                                     ready_count,
                                     delivered: session.delivered,
                                     payload_hash: session.payload_hash(),
                                     recovered_from_disk: session.recovered_from_disk(),
                                     invalid: session.is_invalid(),
+                                    reconstructed_stripes: session.reconstructed_stripes(),
+                                    reconstructable_stripes: session.reconstructable_stripes(),
                                     lane_backlog: session.lane_backlog_entries(),
                                     dataspace_backlog: session.dataspace_backlog_entries(),
                                 };
@@ -15925,6 +16047,9 @@ impl Actor {
             redundant_send_r,
             da_enabled,
             rbc_chunk_max_bytes: u64::try_from(sumeragi.rbc.chunk_max_bytes).unwrap_or(u64::MAX),
+            rbc_encoding: sumeragi.rbc.encoding,
+            rbc_rs16_data_shards: sumeragi.rbc.data_shards,
+            rbc_rs16_parity_shards: sumeragi.rbc.parity_shards,
             rbc_session_ttl_ms: u64::try_from(sumeragi.rbc.session_ttl.as_millis())
                 .unwrap_or(u64::MAX),
             rbc_store_max_sessions: u32::try_from(sumeragi.rbc.store_max_sessions)
@@ -17057,6 +17182,14 @@ impl Actor {
     }
 
     fn record_phase_sample(&mut self, phase: PipelinePhase, height: u64, view: u64) {
+        if self.phase_tracker.round_height.is_some() {
+            let active_height = self.active_consensus_round_height();
+            if height > active_height {
+                // Keep future-height telemetry/QC samples from clobbering the active frontier
+                // round tracker while lower unresolved work still owns timeout/view rotation.
+                return;
+            }
+        }
         if let Some(current_height) = self.phase_tracker.round_height {
             if height < current_height {
                 return;
@@ -17996,6 +18129,7 @@ impl Actor {
                 msg.as_ref(),
                 BlockMessage::Proposal(_)
                     | BlockMessage::BlockCreated(_)
+                    | BlockMessage::FetchBlockBody(_)
                     | BlockMessage::BlockBodyResponse(_)
                     | BlockMessage::Qc(_)
                     | BlockMessage::QcVote(_)
@@ -18622,6 +18756,11 @@ impl Actor {
             roster,
             roster_hash,
             total_chunks: session.total_chunks(),
+            encoding: session.layout().encoding,
+            chunk_size_bytes: session.layout().chunk_size_bytes,
+            payload_size_bytes: session.layout().payload_size_bytes,
+            data_shards: session.layout().data_shards,
+            parity_shards: session.layout().parity_shards,
             chunk_digests,
             payload_hash,
             chunk_root,
@@ -18642,10 +18781,10 @@ impl Actor {
         let payload_bytes = self::proposals::block_payload_bytes(block);
         let payload_hash = Hash::new(&payload_bytes);
         let epoch = self.epoch_for_height(key.1);
-        let session = match Self::build_rbc_session_from_payload(
+        let session = match Self::build_rbc_session_from_payload_with_chunking(
             &payload_bytes,
             payload_hash,
-            self.config.rbc.chunk_max_bytes,
+            self::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
             epoch,
         ) {
             Ok(session) => session,
@@ -18689,6 +18828,11 @@ impl Actor {
             roster,
             roster_hash,
             total_chunks: session.total_chunks(),
+            encoding: session.layout().encoding,
+            chunk_size_bytes: session.layout().chunk_size_bytes,
+            payload_size_bytes: session.layout().payload_size_bytes,
+            data_shards: session.layout().data_shards,
+            parity_shards: session.layout().parity_shards,
             chunk_digests,
             payload_hash,
             chunk_root,
@@ -19228,6 +19372,11 @@ impl Actor {
             roster: roster.to_vec(),
             roster_hash,
             total_chunks: session.total_chunks(),
+            encoding: session.layout().encoding,
+            chunk_size_bytes: session.layout().chunk_size_bytes,
+            payload_size_bytes: session.layout().payload_size_bytes,
+            data_shards: session.layout().data_shards,
+            parity_shards: session.layout().parity_shards,
             chunk_digests,
             payload_hash,
             chunk_root,
@@ -19501,7 +19650,9 @@ impl Actor {
         if self.is_observer() || !self.runtime_da_enabled() {
             return false;
         }
-        if self.suppress_rbc_hot_repair(key) {
+        // Keep contiguous frontier sessions passive until local DELIVER lands; before then the
+        // frontier owner / missing-block fetch path is responsible for repair.
+        if self.suppress_rbc_hot_repair(key) && !session.delivered {
             return false;
         }
         if session.is_invalid() {
@@ -19530,9 +19681,9 @@ impl Actor {
         let roster = self.ensure_rbc_session_roster(key);
         let mut payload_session = session.clone();
 
-        // Once DELIVER is already in flight locally, keep repairing READY evidence but
-        // avoid resending the full payload on every delivered-session rescue turn.
-        if !session.delivered && payload_due && !roster.is_empty() {
+        // Peers can still be missing INIT/chunks after the local session reaches DELIVER, so
+        // keep targeted payload rescue enabled under the existing cooldown until READY catches up.
+        if payload_due && !roster.is_empty() {
             if payload_session.total_chunks() != 0
                 && payload_session.received_chunks() < payload_session.total_chunks()
                 && let Some((height, view, payload_bytes, payload_hash)) = self
@@ -19708,6 +19859,8 @@ impl Actor {
             block = %key.0,
             "rebroadcasting RBC INIT after reconstructing missing INIT"
         );
+        // TODO: Replace this full payload rebroadcast with shard-targeted repair once
+        // Sumeragi has an explicit missing-shard request/response control message.
         self.rebroadcast_rbc_payload_bundle(key, init, chunks, session.ready_signatures.len());
     }
 
@@ -29722,10 +29875,10 @@ impl Actor {
         let mut pending_removed = 0usize;
         let mut pending_retained = 0usize;
         for hash in stale_pending {
-            if self
-                .frontier_slot_live_local_owner_for_round(height, min_view)
-                .is_some_and(|(owner_hash, _)| owner_hash == hash)
-            {
+            // Once the round view advances, stale same-height payloads should normally be
+            // retained only as passive DA data. Keep the payload active across the view change
+            // only while local execution work is still in flight for that exact owner.
+            if self.keep_frontier_pending_active_across_view_change(height, min_view, hash) {
                 continue;
             }
             if let Some(mut pending) = self.pending.pending_blocks.remove(&hash) {
@@ -30406,12 +30559,17 @@ fn drain_rbc_state_for_block(
                     height: key.1,
                     view: key.2,
                     total_chunks: session.total_chunks(),
+                    encoding: session.layout().encoding,
+                    data_shards: session.layout().data_shards,
+                    parity_shards: session.layout().parity_shards,
                     received_chunks: session.received_chunks(),
                     ready_count,
                     delivered: session.delivered,
                     payload_hash: session.payload_hash(),
                     recovered_from_disk: session.recovered_from_disk(),
                     invalid: session.is_invalid(),
+                    reconstructed_stripes: session.reconstructed_stripes(),
+                    reconstructable_stripes: session.reconstructable_stripes(),
                     lane_backlog: session.lane_backlog_entries(),
                     dataspace_backlog: session.dataspace_backlog_entries(),
                 },
@@ -32065,6 +32223,177 @@ struct RbcChunkEntry {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RbcPayloadLayout {
+    pub(crate) encoding: RbcEncoding,
+    pub(crate) chunk_size_bytes: u32,
+    pub(crate) payload_size_bytes: u64,
+    pub(crate) data_shards: u16,
+    pub(crate) parity_shards: u16,
+}
+
+impl RbcPayloadLayout {
+    pub(crate) fn new(
+        encoding: RbcEncoding,
+        chunk_size_bytes: u32,
+        payload_size_bytes: u64,
+        data_shards: u16,
+        parity_shards: u16,
+    ) -> Result<Self, RbcSessionError> {
+        if chunk_size_bytes == 0 {
+            return Err(RbcSessionError::InvalidChunkSize {
+                chunk_size_bytes,
+                encoding,
+            });
+        }
+        match encoding {
+            RbcEncoding::Plain => {
+                if data_shards != 0 || parity_shards != 0 {
+                    return Err(RbcSessionError::InvalidErasureProfile {
+                        encoding,
+                        data_shards,
+                        parity_shards,
+                    });
+                }
+            }
+            RbcEncoding::Rs16 => {
+                if chunk_size_bytes % 2 != 0 {
+                    return Err(RbcSessionError::InvalidChunkSize {
+                        chunk_size_bytes,
+                        encoding,
+                    });
+                }
+                if data_shards == 0 || parity_shards == 0 {
+                    return Err(RbcSessionError::InvalidErasureProfile {
+                        encoding,
+                        data_shards,
+                        parity_shards,
+                    });
+                }
+            }
+        }
+        Ok(Self {
+            encoding,
+            chunk_size_bytes,
+            payload_size_bytes,
+            data_shards,
+            parity_shards,
+        })
+    }
+
+    pub(crate) const fn legacy_plain() -> Self {
+        Self {
+            encoding: RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
+        }
+    }
+
+    pub(crate) const fn payload_size_known(self) -> bool {
+        self.chunk_size_bytes != 0
+    }
+
+    pub(crate) fn chunk_size(self) -> usize {
+        usize::try_from(self.chunk_size_bytes).unwrap_or(usize::MAX)
+    }
+
+    pub(crate) fn payload_size(self) -> Option<usize> {
+        if !self.payload_size_known() {
+            return None;
+        }
+        usize::try_from(self.payload_size_bytes).ok()
+    }
+
+    pub(crate) const fn is_rs16(self) -> bool {
+        matches!(self.encoding, RbcEncoding::Rs16)
+    }
+
+    pub(crate) fn stripe_width(self) -> usize {
+        if self.is_rs16() {
+            usize::from(self.data_shards) + usize::from(self.parity_shards)
+        } else {
+            1
+        }
+    }
+
+    pub(crate) fn payload_chunk_count(self) -> Option<usize> {
+        let payload_size = self.payload_size()?;
+        Some(self::rbc::chunk_count(payload_size, self.chunk_size()))
+    }
+
+    pub(crate) fn stripe_count(self) -> Option<usize> {
+        let payload_chunks = self.payload_chunk_count()?;
+        Some(if self.is_rs16() {
+            payload_chunks.div_ceil(usize::from(self.data_shards))
+        } else {
+            payload_chunks
+        })
+    }
+
+    pub(crate) fn total_chunks(self) -> Option<usize> {
+        let stripes = self.stripe_count()?;
+        Some(if self.is_rs16() {
+            stripes.saturating_mul(self.stripe_width())
+        } else {
+            stripes
+        })
+    }
+
+    pub(crate) fn payload_chunk_index_for_encoded(self, idx: usize) -> Option<usize> {
+        if !self.payload_size_known() {
+            return None;
+        }
+        if !self.is_rs16() {
+            return (idx < self.payload_chunk_count()?).then_some(idx);
+        }
+        let within = idx % self.stripe_width();
+        if within >= usize::from(self.data_shards) {
+            return None;
+        }
+        let payload_idx = (idx / self.stripe_width()) * usize::from(self.data_shards) + within;
+        (payload_idx < self.payload_chunk_count()?).then_some(payload_idx)
+    }
+
+    pub(crate) fn encoded_index_for_payload_chunk(self, payload_idx: usize) -> Option<usize> {
+        if !self.payload_size_known() {
+            return None;
+        }
+        if payload_idx >= self.payload_chunk_count()? {
+            return None;
+        }
+        Some(if self.is_rs16() {
+            let data_shards = usize::from(self.data_shards);
+            let stripe = payload_idx / data_shards;
+            let within = payload_idx % data_shards;
+            stripe * self.stripe_width() + within
+        } else {
+            payload_idx
+        })
+    }
+
+    pub(crate) fn expected_chunk_len_for_encoded(self, idx: usize) -> Option<usize> {
+        if !self.payload_size_known() {
+            return None;
+        }
+        if let Some(payload_idx) = self.payload_chunk_index_for_encoded(idx) {
+            let chunk_size = self.chunk_size();
+            let payload_size = self.payload_size()?;
+            let offset = payload_idx.saturating_mul(chunk_size);
+            return Some(payload_size.saturating_sub(offset).min(chunk_size));
+        }
+        if self.is_rs16() {
+            let within = idx % self.stripe_width();
+            if within < usize::from(self.data_shards) {
+                return Some(0);
+            }
+            return Some(self.chunk_size());
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ChunkIngestOutcome {
     Accepted,
     Duplicate,
@@ -32097,11 +32426,40 @@ pub(crate) enum RbcSessionError {
         /// Observed digest count.
         observed: usize,
     },
+    /// RBC chunk size was invalid for the configured encoding.
+    #[error("invalid RBC chunk size {chunk_size_bytes} for {encoding:?}")]
+    InvalidChunkSize {
+        /// Invalid chunk size in bytes.
+        chunk_size_bytes: u32,
+        /// Encoding that rejected the chunk size.
+        encoding: RbcEncoding,
+    },
+    /// RBC erasure profile was invalid for the configured encoding.
+    #[error(
+        "invalid RBC erasure profile for {encoding:?}: data_shards={data_shards}, parity_shards={parity_shards}"
+    )]
+    InvalidErasureProfile {
+        /// Encoding that rejected the profile.
+        encoding: RbcEncoding,
+        /// Configured data shards.
+        data_shards: u16,
+        /// Configured parity shards.
+        parity_shards: u16,
+    },
+    /// RBC layout metadata did not match the advertised chunk count.
+    #[error("RBC layout expected {expected_total_chunks} chunks, observed {total_chunks}")]
+    LayoutChunkCountMismatch {
+        /// Reported chunk count in the RBC session.
+        total_chunks: u32,
+        /// Chunk count derived from the layout metadata.
+        expected_total_chunks: u32,
+    },
 }
 
 #[derive(Clone, Debug)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct RbcSession {
+    layout: RbcPayloadLayout,
     total_chunks: u32,
     payload_hash: Option<Hash>,
     expected_chunk_root: Option<Hash>,
@@ -32121,6 +32479,7 @@ pub(crate) struct RbcSession {
     invalid: bool,
     recovered_from_disk: bool,
     delivered_payload_bytes_recorded: bool,
+    reconstructed_stripes: u32,
     lane_allocations: Vec<LaneAllocation>,
     dataspace_allocations: Vec<DataspaceAllocation>,
 }
@@ -32135,7 +32494,26 @@ pub(crate) enum RbcProgressStage {
 }
 
 impl RbcSession {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new(
+        total_chunks: u32,
+        payload_hash: Option<Hash>,
+        expected_chunk_root: Option<Hash>,
+        expected_chunk_digests: Option<Vec<[u8; 32]>>,
+        epoch: u64,
+    ) -> Result<Self, RbcSessionError> {
+        Self::new_with_layout(
+            RbcPayloadLayout::legacy_plain(),
+            total_chunks,
+            payload_hash,
+            expected_chunk_root,
+            expected_chunk_digests,
+            epoch,
+        )
+    }
+
+    pub(crate) fn new_with_layout(
+        layout: RbcPayloadLayout,
         total_chunks: u32,
         payload_hash: Option<Hash>,
         expected_chunk_root: Option<Hash>,
@@ -32148,6 +32526,16 @@ impl RbcSession {
                 max_chunks: RBC_MAX_TOTAL_CHUNKS,
             });
         }
+        if let Some(expected_total_chunks) = layout
+            .total_chunks()
+            .and_then(|count| u32::try_from(count).ok())
+            && expected_total_chunks != total_chunks
+        {
+            return Err(RbcSessionError::LayoutChunkCountMismatch {
+                total_chunks,
+                expected_total_chunks,
+            });
+        }
         if let Some(ref digests) = expected_chunk_digests {
             if digests.len() != usize::try_from(total_chunks).unwrap_or(usize::MAX) {
                 return Err(RbcSessionError::DigestCountMismatch {
@@ -32158,6 +32546,7 @@ impl RbcSession {
         }
         let capacity = usize::try_from(total_chunks).unwrap_or(RBC_MAX_TOTAL_CHUNKS as usize);
         Ok(Self {
+            layout,
             total_chunks,
             payload_hash,
             expected_chunk_root,
@@ -32177,6 +32566,7 @@ impl RbcSession {
             invalid: false,
             recovered_from_disk: false,
             delivered_payload_bytes_recorded: false,
+            reconstructed_stripes: 0,
             lane_allocations: Vec::new(),
             dataspace_allocations: Vec::new(),
         })
@@ -32189,8 +32579,15 @@ impl RbcSession {
         expected_chunk_root: Option<Hash>,
         epoch: u64,
     ) -> Self {
-        Self::new(total_chunks, payload_hash, expected_chunk_root, None, epoch)
-            .expect("test configuration should respect RBC chunk cap")
+        Self::new_with_layout(
+            RbcPayloadLayout::legacy_plain(),
+            total_chunks,
+            payload_hash,
+            expected_chunk_root,
+            None,
+            epoch,
+        )
+        .expect("test configuration should respect RBC chunk cap")
     }
 
     /// Seed the block header and leader signature for test-only RBC sessions.
@@ -32209,6 +32606,10 @@ impl RbcSession {
         self.total_chunks
     }
 
+    pub(crate) fn layout(&self) -> RbcPayloadLayout {
+        self.layout
+    }
+
     pub(crate) fn received_chunks(&self) -> u32 {
         self.received_chunks
     }
@@ -32219,6 +32620,34 @@ impl RbcSession {
 
     pub(crate) fn progress_stage(&self) -> RbcProgressStage {
         self.progress_stage
+    }
+
+    pub(crate) fn reconstructed_stripes(&self) -> u32 {
+        self.reconstructed_stripes
+    }
+
+    pub(crate) fn reconstructable_stripes(&self) -> u32 {
+        if !self.layout.is_rs16() {
+            return 0;
+        }
+        let stripe_width = self.layout.stripe_width();
+        let Some(stripe_count) = self.layout.stripe_count() else {
+            return 0;
+        };
+        let data_shards = usize::from(self.layout.data_shards);
+        let mut reconstructable = 0u32;
+        for stripe in 0..stripe_count {
+            let start = stripe.saturating_mul(stripe_width);
+            let end = start.saturating_add(stripe_width).min(self.chunks.len());
+            let present = self.chunks[start..end]
+                .iter()
+                .filter(|entry| entry.is_some())
+                .count();
+            if present >= data_shards && present < stripe_width {
+                reconstructable = reconstructable.saturating_add(1);
+            }
+        }
+        reconstructable
     }
 
     fn advance_progress_stage(&mut self, stage: RbcProgressStage) -> bool {
@@ -32233,6 +32662,7 @@ impl RbcSession {
         if self.is_invalid() {
             return false;
         }
+        let _ = self.try_reconstruct_full_chunks();
         if self.total_chunks == 0 || self.received_chunks != self.total_chunks {
             return false;
         }
@@ -32424,6 +32854,118 @@ impl RbcSession {
         tree.root().map(Hash::from)
     }
 
+    pub(crate) fn payload_bytes(&self) -> Option<Vec<u8>> {
+        if self.total_chunks == 0 || self.received_chunks != self.total_chunks {
+            return None;
+        }
+        if !self.layout.payload_size_known() {
+            let total_len: usize = self
+                .chunks
+                .iter()
+                .flatten()
+                .map(|entry| entry.bytes.len())
+                .sum();
+            let mut payload = Vec::with_capacity(total_len);
+            for idx in 0..self.total_chunks {
+                let chunk = self.chunk_bytes(idx)?;
+                payload.extend_from_slice(chunk);
+            }
+            return Some(payload);
+        }
+
+        let payload_chunk_count = self.layout.payload_chunk_count()?;
+        let payload_size = self.layout.payload_size()?;
+        let mut payload = Vec::with_capacity(payload_size);
+        for payload_idx in 0..payload_chunk_count {
+            let encoded_idx = self.layout.encoded_index_for_payload_chunk(payload_idx)?;
+            let chunk = self.chunk_bytes(u32::try_from(encoded_idx).ok()?)?;
+            payload.extend_from_slice(chunk);
+        }
+        payload.truncate(payload_size);
+        Some(payload)
+    }
+
+    fn try_reconstruct_full_chunks(&mut self) -> bool {
+        if self.invalid || !self.layout.is_rs16() || self.received_chunks == self.total_chunks {
+            return false;
+        }
+        let stripe_width = self.layout.stripe_width();
+        let Some(stripe_count) = self.layout.stripe_count() else {
+            return false;
+        };
+        let data_shards = usize::from(self.layout.data_shards);
+        let parity_shards = usize::from(self.layout.parity_shards);
+        let symbol_count = self.layout.chunk_size() / 2;
+        let mut changed = false;
+
+        for stripe in 0..stripe_count {
+            let start = stripe.saturating_mul(stripe_width);
+            let end = start.saturating_add(stripe_width).min(self.chunks.len());
+            let present = self.chunks[start..end]
+                .iter()
+                .filter(|entry| entry.is_some())
+                .count();
+            if present < data_shards || present == stripe_width {
+                continue;
+            }
+
+            let mut stripe_symbols = Vec::with_capacity(stripe_width);
+            for idx in start..end {
+                stripe_symbols.push(
+                    self.chunks[idx]
+                        .as_ref()
+                        .map(|entry| erasure_rs16::symbols_from_chunk(symbol_count, &entry.bytes)),
+                );
+            }
+            if erasure_rs16::reconstruct_shards(&mut stripe_symbols, data_shards, parity_shards)
+                .is_err()
+            {
+                continue;
+            }
+
+            let mut stripe_changed = false;
+            for (offset, slot) in self.chunks[start..end].iter_mut().enumerate() {
+                if slot.is_some() {
+                    continue;
+                }
+                let idx = start + offset;
+                let Some(symbols) = stripe_symbols[offset].as_ref() else {
+                    self.invalid = true;
+                    return changed;
+                };
+                let Some(expected_len) = self.layout.expected_chunk_len_for_encoded(idx) else {
+                    self.invalid = true;
+                    return changed;
+                };
+                let Ok(bytes) = erasure_rs16::chunk_from_symbols(symbols, expected_len) else {
+                    self.invalid = true;
+                    return changed;
+                };
+                let mut hasher = Sha256::new();
+                sha2::digest::Update::update(&mut hasher, &bytes);
+                let mut digest = [0u8; 32];
+                digest.copy_from_slice(&hasher.finalize());
+                if let Some(expected_digests) = self.expected_chunk_digests.as_ref()
+                    && expected_digests
+                        .get(idx)
+                        .is_some_and(|expected| expected != &digest)
+                {
+                    self.invalid = true;
+                    return changed;
+                }
+                *slot = Some(RbcChunkEntry { bytes, digest });
+                self.received_chunks = self.received_chunks.saturating_add(1);
+                stripe_changed = true;
+                changed = true;
+            }
+            if stripe_changed {
+                self.reconstructed_stripes = self.reconstructed_stripes.saturating_add(1);
+            }
+        }
+
+        changed
+    }
+
     pub(super) fn to_persisted(
         &self,
         key: super::rbc_store::SessionKey,
@@ -32477,6 +33019,11 @@ impl RbcSession {
             block_header: self.block_header,
             leader_signature: self.leader_signature.clone(),
             total_chunks: self.total_chunks,
+            encoding: self.layout.encoding,
+            chunk_size_bytes: self.layout.chunk_size_bytes,
+            payload_size_bytes: self.layout.payload_size_bytes,
+            data_shards: self.layout.data_shards,
+            parity_shards: self.layout.parity_shards,
             chunk_digests,
             payload_hash: self.payload_hash,
             expected_chunk_root: self.expected_chunk_root,
@@ -32487,6 +33034,7 @@ impl RbcSession {
             delivered: self.delivered,
             deliver_sender: self.deliver_sender,
             deliver_signature: self.deliver_signature.clone(),
+            reconstructed_stripes: self.reconstructed_stripes,
             chunks,
             last_updated_ms: now_ms,
             session_roster: session_roster.to_vec(),
@@ -32509,6 +33057,11 @@ impl RbcSession {
 
         let PersistedSession {
             total_chunks,
+            encoding,
+            chunk_size_bytes,
+            payload_size_bytes,
+            data_shards,
+            parity_shards,
             chunk_digests,
             payload_hash,
             expected_chunk_root,
@@ -32519,6 +33072,7 @@ impl RbcSession {
             deliver_sender,
             deliver_signature,
             sent_ready,
+            reconstructed_stripes,
             chunks,
             epoch,
             block_header,
@@ -32559,17 +33113,27 @@ impl RbcSession {
 
         let received_chunks =
             u32::try_from(data.iter().filter(|entry| entry.is_some()).count()).unwrap_or(u32::MAX);
-        if let Some(hash) = payload_hash {
-            if received_chunks == total_chunks {
-                let mut aggregate = Vec::new();
-                for entry in data.iter().flatten() {
-                    aggregate.extend_from_slice(&entry.bytes);
-                }
-                if Hash::new(&aggregate) != hash {
-                    return Err(PersistedLoadError::PayloadHashMismatch);
-                }
-            }
-        }
+        let layout = match chunk_size_bytes {
+            0 => RbcPayloadLayout::legacy_plain(),
+            _ => RbcPayloadLayout::new(
+                encoding,
+                chunk_size_bytes,
+                payload_size_bytes,
+                data_shards,
+                parity_shards,
+            )
+            .map_err(|err| {
+                PersistedLoadError::InvalidLayout(match err {
+                    RbcSessionError::InvalidChunkSize { .. } => "invalid chunk size",
+                    RbcSessionError::InvalidErasureProfile { .. } => "invalid erasure profile",
+                    RbcSessionError::LayoutChunkCountMismatch { .. } => {
+                        "layout chunk count mismatch"
+                    }
+                    RbcSessionError::TooManyChunks { .. } => "too many chunks",
+                    RbcSessionError::DigestCountMismatch { .. } => "chunk digest count mismatch",
+                })
+            })?,
+        };
 
         let expected_chunk_digests = if !chunk_digests.is_empty() {
             if chunk_digests.len() != usize::try_from(total_chunks).unwrap_or(usize::MAX) {
@@ -32600,7 +33164,8 @@ impl RbcSession {
             })
             .collect();
 
-        let mut session = Self::new(
+        let mut session = Self::new_with_layout(
+            layout,
             total_chunks,
             payload_hash,
             expected_chunk_root,
@@ -32622,6 +33187,15 @@ impl RbcSession {
                 total_chunks,
                 observed,
             },
+            RbcSessionError::InvalidChunkSize { .. } => {
+                PersistedLoadError::InvalidLayout("invalid chunk size")
+            }
+            RbcSessionError::InvalidErasureProfile { .. } => {
+                PersistedLoadError::InvalidLayout("invalid erasure profile")
+            }
+            RbcSessionError::LayoutChunkCountMismatch { .. } => {
+                PersistedLoadError::InvalidLayout("layout chunk count mismatch")
+            }
         })?;
         session.chunks = data;
         session.received_chunks = received_chunks;
@@ -32635,7 +33209,17 @@ impl RbcSession {
         session.invalid = invalid;
         session.block_header = block_header;
         session.leader_signature = leader_signature;
+        session.reconstructed_stripes = reconstructed_stripes;
         session.drop_mismatched_chunks();
+        let _ = session.try_reconstruct_full_chunks();
+        if let Some(hash) = payload_hash
+            && session.received_chunks == total_chunks
+            && session
+                .payload_bytes()
+                .is_some_and(|payload| Hash::new(&payload) != hash)
+        {
+            return Err(PersistedLoadError::PayloadHashMismatch);
+        }
         session.recovered_from_disk = true;
         session.delivered_payload_bytes_recorded = session.delivered_payload_bytes().is_some();
         let _ = session.sync_progress_observations(false, None);
@@ -32803,12 +33387,8 @@ impl RbcSession {
         if !self.delivered || self.received_chunks != self.total_chunks {
             return None;
         }
-        let mut total: u64 = 0;
-        for entry in &self.chunks {
-            let entry = entry.as_ref()?;
-            total = total.saturating_add(entry.bytes.len() as u64);
-        }
-        Some(total)
+        let payload = self.payload_bytes()?;
+        Some(u64::try_from(payload.len()).unwrap_or(u64::MAX))
     }
 
     pub(crate) fn take_delivered_payload_bytes_for_telemetry(&mut self) -> Option<u64> {
@@ -32838,6 +33418,9 @@ pub enum PersistedLoadError {
     /// The accumulated payload hash did not match the stored digest.
     #[error("payload hash mismatch")]
     PayloadHashMismatch,
+    /// Persisted layout metadata was invalid.
+    #[error("invalid persisted RBC layout: {0}")]
+    InvalidLayout(&'static str),
     /// Persisted snapshot advertises more chunks than supported.
     #[error("persisted RBC session exceeds chunk cap: {total_chunks} (cap {max_chunks})")]
     TooManyChunks {

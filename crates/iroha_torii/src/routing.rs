@@ -9428,8 +9428,13 @@ fn build_contract_call_metadata(
     let ns_key =
         Name::from_str("contract_namespace").expect("static metadata key `contract_namespace`");
     metadata.insert(ns_key, IrohaJson::new(namespace.to_owned()));
+    let gov_ns_key = Name::from_str("gov_namespace").expect("static metadata key `gov_namespace`");
+    metadata.insert(gov_ns_key, IrohaJson::new(namespace.to_owned()));
     let cid_key = Name::from_str("contract_id").expect("static metadata key `contract_id`");
     metadata.insert(cid_key, IrohaJson::new(contract_id.to_owned()));
+    let gov_cid_key =
+        Name::from_str("gov_contract_id").expect("static metadata key `gov_contract_id`");
+    metadata.insert(gov_cid_key, IrohaJson::new(contract_id.to_owned()));
     if let Some(contract_address) = contract_address {
         let address_key =
             Name::from_str("contract_address").expect("static metadata key `contract_address`");
@@ -10695,6 +10700,51 @@ mod multisig_contract_call_tests {
 
         assert_eq!(instructions.len(), 3);
         assert_eq!(instructions_hash, HashOf::new(&instructions));
+    }
+
+    #[test]
+    fn contract_call_metadata_includes_lane_governance_keys() {
+        let manifest = manifest::ContractManifest {
+            code_hash: None,
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            kotoba: None,
+            provenance: None,
+        };
+
+        let metadata = build_contract_call_metadata(
+            &manifest,
+            "apps",
+            "mint_request",
+            None,
+            Some("create_mint_request"),
+            None,
+            None,
+            None,
+            300_000,
+        );
+
+        let gov_namespace = metadata
+            .get(&Name::from_str("gov_namespace").expect("static name"))
+            .expect("gov_namespace metadata");
+        let gov_contract_id = metadata
+            .get(&Name::from_str("gov_contract_id").expect("static name"))
+            .expect("gov_contract_id metadata");
+        assert_eq!(
+            gov_namespace
+                .try_into_any_norito::<String>()
+                .expect("gov namespace string"),
+            "apps"
+        );
+        assert_eq!(
+            gov_contract_id
+                .try_into_any_norito::<String>()
+                .expect("gov contract id string"),
+            "mint_request"
+        );
     }
 }
 
@@ -12962,6 +13012,17 @@ pub async fn handle_post_contract_call_multisig_propose(
         ..
     } = prepared;
     ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
+    let tx_metadata = build_contract_call_metadata(
+        &manifest,
+        &namespace,
+        &contract_id,
+        None,
+        Some(&entrypoint),
+        payload.as_ref(),
+        gas_asset_id.as_deref(),
+        fee_sponsor.as_ref(),
+        gas_limit,
+    );
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
         &multisig_account_id,
         &namespace,
@@ -12989,7 +13050,9 @@ pub async fn handle_post_contract_call_multisig_propose(
     let mut builder =
         dm::TransactionBuilder::new((*chain_id).clone(), signer_account_id.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
-    let builder = builder.with_instructions([dm::InstructionBox::from(propose_instruction)]);
+    let builder = builder
+        .with_metadata(tx_metadata)
+        .with_instructions([dm::InstructionBox::from(propose_instruction)]);
 
     let response =
         if private_key.is_some() {
@@ -34376,6 +34439,9 @@ mod status_tests {
                 redundant_send_r: 2,
                 da_enabled: true,
                 rbc_chunk_max_bytes: 8_192,
+                rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                rbc_rs16_data_shards: 0,
+                rbc_rs16_parity_shards: 0,
                 rbc_session_ttl_ms: 10_000,
                 rbc_store_max_sessions: 64,
                 rbc_store_soft_sessions: 48,
@@ -35377,6 +35443,9 @@ pub async fn handle_v1_sumeragi_status(
                     redundant_send_r: caps.redundant_send_r,
                     da_enabled: caps.da_enabled,
                     rbc_chunk_max_bytes: caps.rbc_chunk_max_bytes,
+                    rbc_encoding: caps.rbc_encoding,
+                    rbc_rs16_data_shards: caps.rbc_rs16_data_shards,
+                    rbc_rs16_parity_shards: caps.rbc_rs16_parity_shards,
                     rbc_session_ttl_ms: caps.rbc_session_ttl_ms,
                     rbc_store_max_sessions: caps.rbc_store_max_sessions,
                     rbc_store_soft_sessions: caps.rbc_store_soft_sessions,
@@ -36494,6 +36563,9 @@ pub async fn handle_v1_sumeragi_rbc_sessions() -> Result<impl IntoResponse> {
                 json_entry("height", s.height),
                 json_entry("view", s.view),
                 json_entry("total_chunks", s.total_chunks),
+                json_entry("encoding", s.encoding.as_str()),
+                json_entry("data_shards", s.data_shards),
+                json_entry("parity_shards", s.parity_shards),
                 json_entry("received_chunks", s.received_chunks),
                 json_entry("ready_count", s.ready_count),
                 json_entry("delivered", s.delivered),
@@ -36503,6 +36575,8 @@ pub async fn handle_v1_sumeragi_rbc_sessions() -> Result<impl IntoResponse> {
                 ),
                 json_entry("recovered", s.recovered_from_disk),
                 json_entry("invalid", s.invalid),
+                json_entry("reconstructed_stripes", s.reconstructed_stripes),
+                json_entry("reconstructable_stripes", s.reconstructable_stripes),
                 json_entry(
                     "lane_backlog",
                     norito::json::Value::Array(
@@ -56493,6 +56567,13 @@ mod adapter_filter_tests {
                 .get("asset_definition_alias")
                 .is_some_and(Value::is_null),
             "asset_definition_alias should be present and null"
+        );
+        assert_eq!(
+            object
+                .get("controller_display")
+                .and_then(Value::as_str)
+                .expect("controller display"),
+            crate::account_literal::display_literal(&item.controller)
         );
         assert_eq!(
             object

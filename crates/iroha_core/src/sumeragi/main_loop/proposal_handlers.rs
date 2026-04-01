@@ -582,6 +582,44 @@ impl Actor {
         true
     }
 
+    fn preserve_block_created_for_highest_qc_repair(
+        &mut self,
+        block: &SignedBlock,
+        frontier: Option<super::message::BlockCreatedFrontierInfo>,
+        inline_hint: Option<super::message::ProposalHint>,
+        inline_proposal: Option<crate::sumeragi::consensus::Proposal>,
+        sender: Option<PeerId>,
+    ) {
+        let block_hash = block.hash();
+        let header = block.header();
+        let height = header.height().get();
+        let view = header.view_change_index();
+        if let Some(frontier) = frontier {
+            self.note_authoritative_slot_frontier_info(height, view, block_hash, frontier);
+        }
+        if let Some(hint) = inline_hint {
+            self.subsystems.propose.proposal_cache.insert_hint(hint);
+        }
+        if let Some(proposal) = inline_proposal {
+            self.subsystems
+                .propose
+                .proposal_cache
+                .insert_proposal(proposal);
+        }
+        self.cache_deferred_block_sync_update(
+            super::message::BlockSyncUpdate::from(block),
+            sender,
+            block_hash,
+            height,
+            view,
+            "missing_highest_qc_block_created",
+        );
+        self.flush_frontier_body_requesters(block);
+        self.flush_pending_fetch_requests(block);
+        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
+        self.clear_missing_block_view_change(&block_hash);
+    }
+
     pub(super) fn ensure_highest_qc_extends_locked(
         &mut self,
         height: u64,
@@ -1069,7 +1107,7 @@ impl Actor {
         let _ = self.maybe_release_committed_edge_conflict_owner("frontier_block_created");
     }
 
-    fn drop_superseded_contiguous_frontier_owner_state(
+    pub(super) fn drop_superseded_contiguous_frontier_owner_state(
         &mut self,
         incoming_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1702,7 +1740,7 @@ impl Actor {
                 .is_some();
         let passive_conflicting_same_height_owner = !authoritative_frontier_owner_supersede
             && self
-                .frontier_slot_conflicts_with_live_local_owner(height, block_hash)
+                .frontier_slot_conflicts_with_live_local_owner(height, view, block_hash)
                 .is_some();
         let passive_conflicting_same_height =
             passive_conflicting_same_height_vote || passive_conflicting_same_height_owner;
@@ -1966,7 +2004,9 @@ impl Actor {
                                 key: session_key,
                                 payload_hash,
                                 payload_bytes,
-                                chunk_size: self.config.rbc.chunk_max_bytes,
+                                chunking: super::rbc::RbcChunkingSpec::from_config(
+                                    &self.config.rbc,
+                                ),
                                 epoch: self.epoch_for_height(height),
                             };
                             match seed_tx.try_send(work) {
@@ -2089,7 +2129,9 @@ impl Actor {
                                 key: session_key,
                                 payload_hash,
                                 payload_bytes,
-                                chunk_size: self.config.rbc.chunk_max_bytes,
+                                chunking: super::rbc::RbcChunkingSpec::from_config(
+                                    &self.config.rbc,
+                                ),
                                 epoch: self.epoch_for_height(height),
                             };
                             match seed_tx.try_send(work) {
@@ -2239,7 +2281,7 @@ impl Actor {
                 .get_hint(height, view)
                 .copied()
         });
-        let cached_proposal = inline_proposal.or_else(|| {
+        let cached_proposal = inline_proposal.clone().or_else(|| {
             self.subsystems
                 .propose
                 .proposal_cache
@@ -2350,6 +2392,13 @@ impl Actor {
                     view,
                     hint_highest,
                     "block_created_hint",
+                );
+                self.preserve_block_created_for_highest_qc_repair(
+                    &block,
+                    frontier.clone(),
+                    inline_hint,
+                    inline_proposal,
+                    sender.clone(),
                 );
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::BlockCreated,
@@ -2965,7 +3014,7 @@ impl Actor {
                             key: session_key,
                             payload_hash,
                             payload_bytes: payload_bytes.clone(),
-                            chunk_size: self.config.rbc.chunk_max_bytes,
+                            chunking: super::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
                             epoch: self.epoch_for_height(height),
                         };
                         match seed_tx.try_send(work) {
@@ -3083,7 +3132,7 @@ impl Actor {
                             key: session_key,
                             payload_hash,
                             payload_bytes: payload_bytes.clone(),
-                            chunk_size: self.config.rbc.chunk_max_bytes,
+                            chunking: super::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
                             epoch: self.epoch_for_height(height),
                         };
                         match seed_tx.try_send(work) {
@@ -3356,12 +3405,17 @@ impl Actor {
                     height: session_key.1,
                     view: session_key.2,
                     total_chunks,
+                    encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                    data_shards: 0,
+                    parity_shards: 0,
                     received_chunks,
                     ready_count,
                     delivered: delivered_flag,
                     payload_hash: payload_hash_opt,
                     recovered_from_disk: recovered_flag,
                     invalid: invalid_flag,
+                    reconstructed_stripes: 0,
+                    reconstructable_stripes: 0,
                     lane_backlog,
                     dataspace_backlog,
                 };

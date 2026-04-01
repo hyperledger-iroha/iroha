@@ -101,7 +101,7 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
-    fn qc_conflicts_with_vote_history(
+    pub(super) fn qc_conflicts_with_vote_history(
         &self,
         phase: crate::sumeragi::consensus::Phase,
         block_hash: HashOf<BlockHeader>,
@@ -175,11 +175,70 @@ impl Actor {
         if self.rehydrate_pending_from_kura_for_qc(qc) {
             return true;
         }
+        if self.rehydrate_pending_from_local_payload_for_qc(qc) {
+            return true;
+        }
         self.try_recover_missing_block_from_local_rbc_session(
             qc.subject_block_hash,
             qc.height,
             qc.view,
         )
+    }
+
+    fn rehydrate_pending_from_block_for_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+        block: Arc<SignedBlock>,
+        mark_kura_persisted: bool,
+        source: &'static str,
+    ) -> bool {
+        let block_height = block.header().height().get();
+        if block_height != qc.height {
+            warn!(
+                qc_height = qc.height,
+                block_height,
+                block = %qc.subject_block_hash,
+                source,
+                "skipping pending rehydration: local payload height mismatch"
+            );
+            return false;
+        }
+        let block_view = block.header().view_change_index();
+        if block_view != qc.view {
+            warn!(
+                qc_height = qc.height,
+                qc_view = qc.view,
+                block_view,
+                block = %qc.subject_block_hash,
+                source,
+                "skipping pending rehydration: local payload view mismatch"
+            );
+            return false;
+        }
+
+        let payload_bytes = super::proposals::block_payload_bytes(block.as_ref());
+        let payload_hash = iroha_crypto::Hash::new(&payload_bytes);
+        let mut pending =
+            PendingBlock::new(block.as_ref().clone(), payload_hash, qc.height, qc.view);
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            pending.note_commit_qc_observed(qc.epoch);
+        }
+        if mark_kura_persisted {
+            pending.mark_kura_persisted();
+        }
+        self.pending
+            .pending_blocks
+            .insert(qc.subject_block_hash, pending);
+        self.deferred_block_sync_updates
+            .remove(&(qc.height, qc.view, qc.subject_block_hash));
+        self.flush_frontier_body_requesters(block.as_ref());
+        self.flush_pending_fetch_requests(block.as_ref());
+        self.clear_missing_block_request(
+            &qc.subject_block_hash,
+            MissingBlockClearReason::PayloadAvailable,
+        );
+        self.clear_missing_block_view_change(&qc.subject_block_hash);
+        true
     }
 
     pub(super) fn missing_block_retry_window_with_rbc_progress(
@@ -331,6 +390,183 @@ impl Actor {
                 false
             }
         }
+    }
+
+    fn clear_superseded_frontier_owner_proposal_state(
+        &mut self,
+        height: u64,
+        incoming_hash: HashOf<BlockHeader>,
+    ) {
+        let mut stale_views = BTreeSet::new();
+        if let Some(slot) = self.frontier_slot.as_ref()
+            && slot.height == height
+            && slot.block_hash != incoming_hash
+        {
+            stale_views.insert(slot.view);
+        }
+        stale_views.extend(
+            self.slot_tracker
+                .authoritative_block_slots
+                .iter()
+                .filter_map(|(&(entry_height, entry_view), &block_hash)| {
+                    (entry_height == height && block_hash != incoming_hash).then_some(entry_view)
+                }),
+        );
+        for view in stale_views {
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_proposal(height, view);
+            self.subsystems
+                .propose
+                .proposal_cache
+                .pop_hint(height, view);
+        }
+    }
+
+    pub(super) fn conflicting_frontier_commit_qc_has_live_owner_context(
+        &self,
+        height: u64,
+        incoming_hash: HashOf<BlockHeader>,
+    ) -> bool {
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let frontier_owner_live = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height
+                && slot.block_hash != incoming_hash
+                && (self
+                    .pending
+                    .pending_blocks
+                    .get(&slot.block_hash)
+                    .is_some_and(|pending| {
+                        !pending.aborted
+                            && !pending.is_retired_same_height()
+                            && pending.validation_status != ValidationStatus::Invalid
+                            && pending.height == slot.height
+                            && pending.view == slot.view
+                            && pending_extends_tip(
+                                pending.height,
+                                pending.block.header().prev_block_hash(),
+                                tip_height,
+                                tip_hash,
+                            )
+                    })
+                    || self
+                        .subsystems
+                        .commit
+                        .inflight
+                        .as_ref()
+                        .is_some_and(|inflight| {
+                            inflight.block_hash == slot.block_hash
+                                && !inflight.pending.aborted
+                                && !inflight.pending.is_retired_same_height()
+                                && inflight.pending.validation_status != ValidationStatus::Invalid
+                                && inflight.pending.height == slot.height
+                                && inflight.pending.view == slot.view
+                                && pending_extends_tip(
+                                    inflight.pending.height,
+                                    inflight.pending.block.header().prev_block_hash(),
+                                    tip_height,
+                                    tip_hash,
+                                )
+                        }))
+        });
+        if frontier_owner_live {
+            return true;
+        }
+
+        self.slot_tracker.authoritative_block_slots.iter().any(
+            |(&(entry_height, entry_view), &owner_hash)| {
+                entry_height == height
+                    && owner_hash != incoming_hash
+                    && self
+                        .pending
+                        .pending_blocks
+                        .get(&owner_hash)
+                        .is_some_and(|pending| {
+                            !pending.aborted
+                                && !pending.is_retired_same_height()
+                                && pending.validation_status != ValidationStatus::Invalid
+                                && pending.height == entry_height
+                                && pending.view == entry_view
+                                && pending_extends_tip(
+                                    pending.height,
+                                    pending.block.header().prev_block_hash(),
+                                    tip_height,
+                                    tip_hash,
+                                )
+                        })
+            },
+        )
+    }
+
+    fn note_frontier_commit_qc_observed(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) {
+        let frontier_height = self.committed_height_snapshot().saturating_add(1);
+        if height != frontier_height {
+            return;
+        }
+        let resolved_view = self
+            .local_block_height_view(block_hash)
+            .filter(|(local_height, _)| *local_height == height)
+            .map_or(view, |(_, local_view)| local_view);
+        let conflicting_owner = self
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height == height && slot.block_hash != block_hash);
+        let conflicting_authoritative_owner = self
+            .authoritative_slot_owner_hash(height, resolved_view)
+            .is_some_and(|owner_hash| owner_hash != block_hash);
+        if self
+            .local_block_height_view(block_hash)
+            .is_some_and(|(local_height, _)| local_height == height)
+            && (conflicting_owner || conflicting_authoritative_owner)
+        {
+            debug!(
+                height,
+                qc_view = view,
+                owner_view = resolved_view,
+                block = %block_hash,
+                conflicting_owner,
+                conflicting_authoritative_owner,
+                "routing same-height frontier commit QC through authoritative supersede"
+            );
+            self.clear_superseded_frontier_owner_proposal_state(height, block_hash);
+            self.drop_superseded_contiguous_frontier_owner_state(block_hash, height, resolved_view);
+            self.note_authoritative_slot_owner(height, resolved_view, block_hash);
+            let frontier_info =
+                self.authoritative_slot_frontier_info(height, resolved_view, block_hash);
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnAuthoritativeSupersede {
+                    block_hash,
+                    view: resolved_view,
+                    frontier_info,
+                    leader: None,
+                    voters: BTreeSet::new(),
+                    body_present: true,
+                    requester: None,
+                },
+            );
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+            self.clear_missing_block_view_change(&block_hash);
+            return;
+        }
+        let _ = self.handle_frontier_slot_event(
+            now,
+            super::FrontierSlotEvent::OnCommitQcObserved {
+                block_hash,
+                view: resolved_view,
+            },
+        );
     }
 
     fn defer_qc_for_roster(&mut self, qc: crate::sumeragi::consensus::Qc, reason: &'static str) {
@@ -1128,28 +1364,9 @@ impl Actor {
         priority: super::MissingBlockPriority,
         targets: &[PeerId],
     ) {
-        if self.frontier_slot_is_exact_height(height)
-            && !self.frontier_slot_allows_deep_catchup(height, "frontier_gap_realign")
+        if self
+            .try_route_missing_block_through_exact_frontier_slot(block_hash, height, view, targets)
         {
-            let now = Instant::now();
-            let mut targets = super::missing_block_request_targets_without_local(
-                &self.common_config.peer.id,
-                targets,
-            )
-            .into_iter();
-            let leader = targets.next();
-            let voters = targets.collect();
-            let _ = self.handle_frontier_slot_event(
-                now,
-                super::FrontierSlotEvent::OnFutureGapObserved {
-                    block_hash,
-                    view,
-                    leader,
-                    voters,
-                    exact_fetch_armed: true,
-                    requester: None,
-                },
-            );
             return;
         }
         if self.should_suppress_lock_rejected_block_fetch(
@@ -1173,6 +1390,65 @@ impl Actor {
             requester_roster_proof_known,
             targets,
         );
+    }
+
+    pub(super) fn try_route_missing_block_through_exact_frontier_slot(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        targets: &[PeerId],
+    ) -> bool {
+        if !self.frontier_slot_is_exact_height(height)
+            || self.frontier_slot_allows_deep_catchup(height, "frontier_gap_realign")
+        {
+            return false;
+        }
+        if let Some(conflict) = self.local_conflicting_frontier_vote(height, block_hash) {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                conflicting_block = %conflict.block_hash,
+                conflicting_view = conflict.view,
+                "falling back to generic missing-block fetch because exact frontier handoff conflicts with local vote history"
+            );
+            return false;
+        }
+        if let Some((owner_hash, owner_view)) =
+            self.frontier_slot_conflicts_with_live_local_owner(height, view, block_hash)
+        {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                owner = %owner_hash,
+                owner_view,
+                "falling back to generic missing-block fetch because a different same-height frontier owner is still locally live"
+            );
+            return false;
+        }
+
+        let now = Instant::now();
+        let mut targets = super::missing_block_request_targets_without_local(
+            &self.common_config.peer.id,
+            targets,
+        )
+        .into_iter();
+        let leader = targets.next();
+        let voters = targets.collect();
+        let _ = self.handle_frontier_slot_event(
+            now,
+            super::FrontierSlotEvent::OnFutureGapObserved {
+                block_hash,
+                view,
+                leader,
+                voters,
+                exact_fetch_armed: true,
+                requester: None,
+            },
+        );
+        true
     }
 
     fn requester_has_local_roster_proof(
@@ -3336,11 +3612,8 @@ impl Actor {
             let contiguous_frontier = height == self.committed_height_snapshot().saturating_add(1)
                 && height == self.active_consensus_round_height();
             if contiguous_frontier {
-                let _ = if matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
-                    self.handle_frontier_slot_event(
-                        now,
-                        super::FrontierSlotEvent::OnCommitQcObserved { block_hash, view },
-                    )
+                if matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
+                    self.note_frontier_commit_qc_observed(block_hash, height, view, now);
                 } else {
                     self.handle_frontier_slot_event(
                         now,
@@ -3349,8 +3622,8 @@ impl Actor {
                             view,
                             voter: None,
                         },
-                    )
-                };
+                    );
+                }
                 let exact_owner_routed = self.handle_frontier_body_gap_with_topology(
                     block_hash,
                     height,
@@ -4081,6 +4354,9 @@ impl Actor {
         qc: &crate::sumeragi::consensus::Qc,
         block_known: bool,
     ) -> bool {
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::NewView) {
+            return false;
+        }
         if !block_known {
             return false;
         }
@@ -4362,43 +4638,17 @@ impl Actor {
         let Some(block) = self.kura.get_block(height_nz) else {
             return false;
         };
-        let block_height = u64::try_from(height_nz.get()).unwrap_or(u64::MAX);
-        if block_height != qc.height {
-            warn!(
-                qc_height = qc.height,
-                block_height,
-                block = %qc.subject_block_hash,
-                "skipping pending rehydration: kura height mismatch"
-            );
+        self.rehydrate_pending_from_block_for_qc(qc, block, true, "kura")
+    }
+
+    fn rehydrate_pending_from_local_payload_for_qc(
+        &mut self,
+        qc: &crate::sumeragi::consensus::Qc,
+    ) -> bool {
+        let Some(block) = self.local_signed_block_for_hash(qc.subject_block_hash) else {
             return false;
-        }
-        let block_view = block.header().view_change_index();
-        if block_view != qc.view {
-            warn!(
-                qc_height = qc.height,
-                qc_view = qc.view,
-                block_view,
-                block = %qc.subject_block_hash,
-                "skipping pending rehydration: kura view mismatch"
-            );
-            return false;
-        }
-        let payload_bytes = super::proposals::block_payload_bytes(&block);
-        let payload_hash = iroha_crypto::Hash::new(&payload_bytes);
-        let mut pending =
-            PendingBlock::new(block.as_ref().clone(), payload_hash, qc.height, qc.view);
-        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-            pending.note_commit_qc_observed(qc.epoch);
-        }
-        pending.mark_kura_persisted();
-        self.pending
-            .pending_blocks
-            .insert(qc.subject_block_hash, pending);
-        self.clear_missing_block_request(
-            &qc.subject_block_hash,
-            MissingBlockClearReason::PayloadAvailable,
-        );
-        true
+        };
+        self.rehydrate_pending_from_block_for_qc(qc, block, false, "deferred_payload")
     }
 
     pub(super) fn prune_precommit_votes_conflicting_with_lock(
@@ -4803,23 +5053,44 @@ impl Actor {
             &signer_set,
             &topology,
         ) {
-            warn!(
-                phase = ?qc.phase,
-                height = qc.height,
-                view = qc.view,
-                epoch = qc.epoch,
-                block = %qc.subject_block_hash,
-                conflicting_view = conflicting_vote.view,
-                conflicting_block = %conflicting_vote.block_hash,
-                signer_peer = ?signer_peer,
-                "dropping QC that conflicts with recorded same-height vote history"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::Qc,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::ConflictingVote,
-            );
-            return Ok(());
+            let allow_conflicting_frontier_commit_qc =
+                matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+                    && qc.height == self.committed_height_snapshot().saturating_add(1)
+                    && self.conflicting_frontier_commit_qc_has_live_owner_context(
+                        qc.height,
+                        qc.subject_block_hash,
+                    );
+            if allow_conflicting_frontier_commit_qc {
+                info!(
+                    phase = ?qc.phase,
+                    height = qc.height,
+                    view = qc.view,
+                    epoch = qc.epoch,
+                    block = %qc.subject_block_hash,
+                    conflicting_view = conflicting_vote.view,
+                    conflicting_block = %conflicting_vote.block_hash,
+                    signer_peer = ?signer_peer,
+                    "allowing conflicting same-height frontier commit QC to drive sync or authoritative supersede"
+                );
+            } else {
+                warn!(
+                    phase = ?qc.phase,
+                    height = qc.height,
+                    view = qc.view,
+                    epoch = qc.epoch,
+                    block = %qc.subject_block_hash,
+                    conflicting_view = conflicting_vote.view,
+                    conflicting_block = %conflicting_vote.block_hash,
+                    signer_peer = ?signer_peer,
+                    "dropping QC that conflicts with recorded same-height vote history"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Qc,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::ConflictingVote,
+                );
+                return Ok(());
+            }
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             crate::sumeragi::status::record_precommit_signers(
@@ -5012,14 +5283,13 @@ impl Actor {
                 "received QC for unknown block; caching without updating locks/highest"
             );
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
-            let _ = if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-                self.handle_frontier_slot_event(
+            if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                self.note_frontier_commit_qc_observed(
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
                     now,
-                    super::FrontierSlotEvent::OnCommitQcObserved {
-                        block_hash: qc.subject_block_hash,
-                        view: qc.view,
-                    },
-                )
+                );
             } else {
                 self.handle_frontier_slot_event(
                     now,
@@ -5028,8 +5298,8 @@ impl Actor {
                         view: qc.view,
                         voter: None,
                     },
-                )
-            };
+                );
+            }
             if self.handle_frontier_body_gap_with_topology(
                 qc.subject_block_hash,
                 qc.height,
@@ -5045,6 +5315,19 @@ impl Actor {
                     phase = ?qc.phase,
                     hash = %qc.subject_block_hash,
                     "routed frontier QC payload miss through exact body repair"
+                );
+                if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                    super::status::record_commit_qc(qc.clone());
+                }
+                self.qc_cache.insert(
+                    (
+                        qc.phase,
+                        qc.subject_block_hash,
+                        qc.height,
+                        qc.view,
+                        qc.epoch,
+                    ),
+                    qc.clone(),
                 );
                 return Ok(());
             }
@@ -5199,14 +5482,13 @@ impl Actor {
                     | crate::sumeragi::consensus::Phase::Commit
             )
         {
-            let _ = if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-                self.handle_frontier_slot_event(
+            if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                self.note_frontier_commit_qc_observed(
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
                     Instant::now(),
-                    super::FrontierSlotEvent::OnCommitQcObserved {
-                        block_hash: qc.subject_block_hash,
-                        view: qc.view,
-                    },
-                )
+                );
             } else {
                 self.handle_frontier_slot_event(
                     Instant::now(),
@@ -5215,8 +5497,8 @@ impl Actor {
                         view: qc.view,
                         voter: None,
                     },
-                )
-            };
+                );
+            }
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             super::status::record_commit_qc(qc.clone());

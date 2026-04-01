@@ -1856,6 +1856,19 @@ impl Actor {
                 queue_latency_ms: None,
                 no_progress_wake: false,
             });
+            let refreshed = self.refresh_tip_activated_pending_progress(
+                pending_height,
+                block_hash,
+                Instant::now(),
+            );
+            if refreshed > 0 {
+                debug!(
+                    height = pending_height,
+                    block = %block_hash,
+                    refreshed,
+                    "refreshed pending progress for proposals activated by the committed tip"
+                );
+            }
             let backpressure = self.proposal_backpressure_at(Instant::now());
             let _ =
                 kickstart_pacemaker_after_commit(self.queue.queued_len(), backpressure, |now| {
@@ -5741,6 +5754,16 @@ impl Actor {
             .and_then(|nz| self.kura.get_block(nz));
         if let Some(block) = committed_block.as_ref() {
             self.prune_descendants_not_on_tip(height, block.hash());
+            let refreshed =
+                self.refresh_tip_activated_pending_progress(height, block.hash(), Instant::now());
+            if refreshed > 0 {
+                debug!(
+                    height,
+                    block = %block.hash(),
+                    refreshed,
+                    "refreshed pending progress for proposals activated by the new committed tip"
+                );
+            }
             self.note_view_change_from_block(height, block.header().view_change_index());
         }
         if let Some(committed_qc) = self.latest_committed_qc() {
@@ -7368,12 +7391,17 @@ mod tests {
             height: pending.height,
             view: pending.view,
             total_chunks: 0,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 0,
             ready_count: 0,
             delivered: true,
             payload_hash: Some(pending.payload_hash),
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };

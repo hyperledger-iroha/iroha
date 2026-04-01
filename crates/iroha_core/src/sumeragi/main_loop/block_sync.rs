@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use iroha_logger::prelude::*;
+use norito::codec::Encode as _;
 
 use crate::sumeragi::message::BlockMessageWire;
 
@@ -1086,7 +1087,7 @@ impl Actor {
         }
     }
 
-    pub(super) fn defer_block_sync_update(
+    pub(super) fn cache_deferred_block_sync_update(
         &mut self,
         mut update: super::message::BlockSyncUpdate,
         sender: Option<PeerId>,
@@ -1104,6 +1105,33 @@ impl Actor {
             self.deferred_block_sync_updates.insert(key, entry);
         }
         self.enforce_deferred_block_sync_cap();
+        debug!(
+            height = block_height,
+            view = block_view,
+            block = %block_hash,
+            deferred = self.deferred_block_sync_updates.len(),
+            reason,
+            "cached deferred block sync payload for later replay"
+        );
+    }
+
+    pub(super) fn defer_block_sync_update(
+        &mut self,
+        update: super::message::BlockSyncUpdate,
+        sender: Option<PeerId>,
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        reason: &'static str,
+    ) {
+        self.cache_deferred_block_sync_update(
+            update,
+            sender,
+            block_hash,
+            block_height,
+            block_view,
+            reason,
+        );
         self.record_consensus_message_handling(
             super::status::ConsensusMessageKind::BlockSyncUpdate,
             super::status::ConsensusMessageOutcome::Deferred,
@@ -1320,6 +1348,7 @@ impl Actor {
                 has_checkpoint = validator_checkpoint.is_some(),
                 "routing frontier-lane BlockSyncUpdate through BlockCreated owner"
             );
+            let recovery_block = block.clone();
             let result = self.handle_block_created_from_block_sync(
                 super::message::BlockCreated {
                     block,
@@ -1330,7 +1359,21 @@ impl Actor {
                 incoming_qc.is_some() || validator_checkpoint.is_some(),
             );
             if result.is_ok()
-                && self.block_known_locally(block_hash)
+                && self.materialize_frontier_block_sync_payload_for_qc_recovery(
+                    &recovery_block,
+                    incoming_qc.as_ref().map(|qc| qc.epoch),
+                )
+            {
+                let _ = self.try_replay_deferred_qcs();
+                let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
+                self.request_commit_pipeline_for_pending(
+                    block_hash,
+                    super::status::RoundEventCauseTrace::BlockSyncUpdated,
+                    None,
+                );
+            }
+            if result.is_ok()
+                && let Some(local_block) = self.local_signed_block_for_hash(block_hash)
                 && let Some(qc) = incoming_qc.take()
             {
                 let world_view = self.state.world_view();
@@ -1368,8 +1411,7 @@ impl Actor {
                 let topology = super::network_topology::Topology::new(qc.validator_set.clone());
                 if let Some(work) = self.prepare_known_block_qc_work(
                     qc,
-                    self.local_signed_block_for_hash(block_hash)
-                        .expect("accepted frontier block must be available locally"),
+                    local_block,
                     topology,
                     stake_snapshot.clone(),
                     consensus_mode,
@@ -2899,6 +2941,7 @@ impl Actor {
                             allow_nonextending_qc,
                         )
                     {
+                        crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
                         self.log_block_sync_locked_qc_conflict(
                             &qc,
                             lock,
@@ -3265,6 +3308,7 @@ impl Actor {
             if same_height_conflict
                 && !Self::block_sync_qc_same_height_recoverable(lock, &qc, allow_nonextending_qc)
             {
+                crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
                 self.log_block_sync_locked_qc_conflict(
                     &qc,
                     lock,
@@ -3378,6 +3422,9 @@ impl Actor {
                             "dropping stale block sync QC below locked height"
                         );
                     } else if let Some(lock) = self.locked_qc {
+                        if Self::block_sync_qc_same_height_conflict(lock, &qc) {
+                            crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
+                        }
                         self.log_block_sync_locked_qc_conflict(
                             &qc,
                             lock,
@@ -3552,6 +3599,33 @@ impl Actor {
             return Ok(());
         }
 
+        let deferred_response =
+            self.deferred_block_sync_updates
+                .iter()
+                .find_map(|((height, view, hash), entry)| {
+                    (*hash == block_hash)
+                        .then(|| (*height, *view, Arc::new(entry.update.block.clone())))
+                });
+        if let Some((_, _, block)) = deferred_response {
+            let mut requesters = self.take_pending_fetch_requesters(&block_hash);
+            requesters
+                .entry(peer.clone())
+                .and_modify(|stored| {
+                    stored.priority = stored.priority.max(request_meta.priority);
+                    stored.requester_roster_proof_known |=
+                        request_meta.requester_roster_proof_known;
+                })
+                .or_insert(request_meta);
+            self.send_fetch_pending_block_responses(
+                requesters,
+                block.as_ref(),
+                force_bypass_queue,
+                /*allow_highest_qc_bypass*/ true,
+                /*allow_hintless_block_sync_bypass*/ false,
+            );
+            return Ok(());
+        }
+
         if let Some(height) = self.kura.get_block_height_by_hash(block_hash) {
             if let Some(block) = self.kura.get_block(height) {
                 let block = block.as_ref();
@@ -3597,6 +3671,12 @@ impl Actor {
         &mut self,
         request: super::message::FetchBlockBody,
     ) -> Result<()> {
+        let dedup_key = super::BlockPayloadDedupKey::FetchBlockBody {
+            height: request.height,
+            view: request.view,
+            block_hash: request.block_hash,
+            requester_hash: CryptoHash::new(request.requester.encode()),
+        };
         let block_hash = request.block_hash;
         let peer = request.requester;
         if let Some(block) = self.local_signed_block_for_hash(block_hash) {
@@ -3604,6 +3684,7 @@ impl Actor {
             if header.height().get() == request.height && header.view_change_index() == request.view
             {
                 self.send_block_body_response(peer, block.as_ref());
+                self.release_block_payload_dedup(&dedup_key);
                 return Ok(());
             }
         }
@@ -3615,12 +3696,49 @@ impl Actor {
             slot.repair_state.pending_requesters.insert(peer);
             slot.sync_compat_fields();
         }
+        self.release_block_payload_dedup(&dedup_key);
         self.record_consensus_message_handling(
             super::status::ConsensusMessageKind::FetchBlockBody,
             super::status::ConsensusMessageOutcome::Deferred,
             super::status::ConsensusMessageReason::NotFound,
         );
         Ok(())
+    }
+
+    fn allow_same_height_block_body_repair(
+        &self,
+        response: &super::message::BlockBodyResponse,
+    ) -> bool {
+        if !self.frontier_slot_is_exact_height(response.height) {
+            return false;
+        }
+        let committed_height = self.committed_height_snapshot();
+        let now = Instant::now();
+        self.pending
+            .missing_block_requests
+            .get(&response.block_hash)
+            .is_some_and(|request| {
+                request.phase == crate::sumeragi::consensus::Phase::Commit
+                    && request.height == response.height
+                    && request.view == response.view
+                    && self.missing_block_request_has_actionable_dependency(
+                        response.block_hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.phase == crate::sumeragi::consensus::Phase::Commit
+                    && entry.qc.subject_block_hash == response.block_hash
+                    && entry.qc.height == response.height
+                    && entry.qc.view == response.view
+                    && self.deferred_missing_payload_qc_has_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            })
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -3638,14 +3756,14 @@ impl Actor {
             self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
-        let Some(slot) = self.frontier_slot.as_ref() else {
-            self.release_block_payload_dedup(&dedup_key);
-            return Ok(());
-        };
-        if slot.block_hash != response.block_hash
-            || slot.height != response.height
-            || slot.view != response.view
-        {
+        let slot_matches = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.block_hash == response.block_hash
+                && slot.height == response.height
+                && slot.view == response.view
+        });
+        let allow_same_height_repair =
+            !slot_matches && self.allow_same_height_block_body_repair(&response);
+        if !slot_matches && !allow_same_height_repair {
             self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
@@ -3666,9 +3784,26 @@ impl Actor {
         let sender_for_slot = sender
             .clone()
             .filter(|peer| peer != self.common_config.peer.id());
+        if allow_same_height_repair {
+            info!(
+                height = response.height,
+                view = response.view,
+                block = %response.block_hash,
+                active_frontier = ?self
+                    .frontier_slot
+                    .as_ref()
+                    .map(|slot| (slot.height, slot.view, slot.block_hash)),
+                "accepting BlockBodyResponse for exact-height same-slot repair after frontier ownership moved"
+            );
+        }
         let result = self.handle_block_created(block_created, sender);
         let body_materialized = self.frontier_block_materialized_locally(response.block_hash);
-        if body_materialized {
+        let slot_matches_after = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.block_hash == response.block_hash
+                && slot.height == response.height
+                && slot.view == response.view
+        });
+        if body_materialized && slot_matches_after {
             let _ = self.handle_frontier_slot_event(
                 Instant::now(),
                 super::FrontierSlotEvent::OnBodyAvailable {
@@ -3681,6 +3816,60 @@ impl Actor {
             self.release_block_payload_dedup(&dedup_key);
         }
         result
+    }
+
+    fn materialize_frontier_block_sync_payload_for_qc_recovery(
+        &mut self,
+        block: &SignedBlock,
+        observed_commit_qc_epoch: Option<u64>,
+    ) -> bool {
+        let block_hash = block.hash();
+        let block_height = block.header().height().get();
+        let block_view = block.header().view_change_index();
+        if self.block_known_locally(block_hash) || !self.frontier_slot_is_exact_height(block_height)
+        {
+            return false;
+        }
+
+        let authoritative_owner = self.authoritative_slot_owner_hash(block_height, block_view);
+        let deferred_commit_qc_epoch =
+            self.deferred_missing_payload_qcs
+                .values()
+                .find_map(|entry| {
+                    (entry.qc.subject_block_hash == block_hash
+                        && entry.qc.height == block_height
+                        && entry.qc.view == block_view
+                        && matches!(entry.qc.phase, crate::sumeragi::consensus::Phase::Commit))
+                    .then_some(entry.qc.epoch)
+                });
+        if authoritative_owner != Some(block_hash) && deferred_commit_qc_epoch.is_none() {
+            return false;
+        }
+
+        let payload_bytes = super::proposals::block_payload_bytes(block);
+        let payload_hash = Hash::new(&payload_bytes);
+        let mut pending = PendingBlock::new(block.clone(), payload_hash, block_height, block_view);
+        if let Some(epoch) = observed_commit_qc_epoch.or(deferred_commit_qc_epoch) {
+            pending.note_commit_qc_observed(epoch);
+        }
+
+        self.pending.pending_blocks.insert(block_hash, pending);
+        self.deferred_block_sync_updates
+            .remove(&(block_height, block_view, block_hash));
+        self.flush_frontier_body_requesters(block);
+        self.flush_pending_fetch_requests(block);
+        self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
+        self.clear_missing_block_view_change(&block_hash);
+        info!(
+            height = block_height,
+            view = block_view,
+            block = %block_hash,
+            commit_qc_observed = observed_commit_qc_epoch
+                .or(deferred_commit_qc_epoch)
+                .is_some(),
+            "materialized frontier block-sync payload for deferred QC recovery"
+        );
+        true
     }
 
     fn prepare_known_block_qc_work(
@@ -3754,6 +3943,7 @@ impl Actor {
             let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, &qc);
             if same_height_conflict && !Self::block_sync_qc_same_height_recoverable(lock, &qc, true)
             {
+                crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
                 self.log_block_sync_locked_qc_conflict(&qc, lock, "known_block_qc.height_conflict");
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::Qc,
@@ -4153,6 +4343,9 @@ impl Actor {
                     "dropping stale block sync QC below locked height"
                 );
             } else if let Some(lock) = self.locked_qc {
+                if Self::block_sync_qc_same_height_conflict(lock, &qc) {
+                    crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
+                }
                 self.log_block_sync_locked_qc_conflict(
                     &qc,
                     lock,

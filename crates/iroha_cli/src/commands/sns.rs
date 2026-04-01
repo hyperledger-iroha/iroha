@@ -383,7 +383,9 @@ impl Run for RenewArgs {
             crate::resolve_account_id(context, literal)
         })?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
-        let record = client.sns().renew(SnsNamespacePath::Domain, literal, &request)?;
+        let record = client
+            .sns()
+            .renew(SnsNamespacePath::Domain, literal, &request)?;
         context.print_data(&record)
     }
 }
@@ -416,10 +418,11 @@ impl Run for TransferArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.build_request(&|literal| crate::resolve_account_id(context, literal))?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
-        let record = context
-            .client_from_config()
-            .sns()
-            .transfer(SnsNamespacePath::Domain, literal, &request)?;
+        let record = context.client_from_config().sns().transfer(
+            SnsNamespacePath::Domain,
+            literal,
+            &request,
+        )?;
         context.print_data(&record)
     }
 }
@@ -456,10 +459,11 @@ impl Run for UpdateControllersArgs {
             crate::resolve_account_id(context, literal)
         })?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
-        let record = context
-            .client_from_config()
-            .sns()
-            .update_controllers(SnsNamespacePath::Domain, literal, &request)?;
+        let record = context.client_from_config().sns().update_controllers(
+            SnsNamespacePath::Domain,
+            literal,
+            &request,
+        )?;
         context.print_data(&record)
     }
 }
@@ -483,10 +487,11 @@ impl Run for FreezeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.build_request()?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
-        let record = context
-            .client_from_config()
-            .sns()
-            .freeze(SnsNamespacePath::Domain, literal, &request)?;
+        let record = context.client_from_config().sns().freeze(
+            SnsNamespacePath::Domain,
+            literal,
+            &request,
+        )?;
         context.print_data(&record)
     }
 }
@@ -510,10 +515,11 @@ impl Run for UnfreezeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let hook = self.governance()?;
         let literal = domain_literal_from_selector(self.selector_literal())?;
-        let record = context
-            .client_from_config()
-            .sns()
-            .unfreeze(SnsNamespacePath::Domain, literal, &hook)?;
+        let record = context.client_from_config().sns().unfreeze(
+            SnsNamespacePath::Domain,
+            literal,
+            &hook,
+        )?;
         context.print_data(&record)
     }
 }

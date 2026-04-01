@@ -497,6 +497,46 @@ pub trait SetReadOnly {
             )
     }
 
+    /// Resolve one trigger by identifier.
+    fn trigger_by_id(&self, id: &TriggerId) -> Option<Trigger> {
+        let event_type = self.ids().get(id).copied()?;
+
+        let trigger = match event_type {
+            TriggeringEventType::Data => self
+                .data_triggers()
+                .get(id)
+                .cloned()
+                .and_then(|action| self.get_original_action(action))
+                .map(|action| Trigger::new(id.clone(), action.into())),
+            TriggeringEventType::Pipeline => self
+                .pipeline_triggers()
+                .get(id)
+                .cloned()
+                .and_then(|action| self.get_original_action(action))
+                .map(|action| Trigger::new(id.clone(), action.into())),
+            TriggeringEventType::Time => self
+                .time_triggers()
+                .get(id)
+                .cloned()
+                .and_then(|action| self.get_original_action(action))
+                .map(|action| Trigger::new(id.clone(), action.into())),
+            TriggeringEventType::ExecuteTrigger => self
+                .by_call_triggers()
+                .get(id)
+                .cloned()
+                .and_then(|action| self.get_original_action(action))
+                .map(|action| Trigger::new(id.clone(), action.into())),
+        };
+        if trigger.is_none() {
+            warn!(
+                trigger_id = %id,
+                ?event_type,
+                "trigger id missing from typed map while resolving trigger"
+            );
+        }
+        trigger
+    }
+
     /// Returns an iterator over `(TriggerId, LoadedAction)` pairs for a given time event.
     fn match_time_event(
         &self,
