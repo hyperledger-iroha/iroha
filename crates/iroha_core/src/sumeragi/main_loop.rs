@@ -20994,7 +20994,7 @@ impl Actor {
         if first_deliver {
             status::record_round_gap_deliver(key.1, key.2, key.0);
         }
-        let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
+        let _delivered_bytes = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
             delivered_payload_bytes_fallback,
         );
         let ready_count = session.ready_signatures.len();
@@ -21026,9 +21026,6 @@ impl Actor {
         if first_deliver {
             if let Some(telemetry) = telemetry_ref {
                 telemetry.inc_rbc_deliver_broadcasts();
-            }
-            if let Some(bytes) = delivered_bytes {
-                self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
             }
         }
 

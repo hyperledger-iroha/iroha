@@ -5895,7 +5895,7 @@ impl Actor {
         let (
             ignored,
             first_deliver,
-            delivered_bytes,
+            _delivered_bytes,
             invalidate,
             chunk_root_mismatch,
             defer_reason,
@@ -6233,9 +6233,6 @@ impl Actor {
         if first_deliver {
             if let Some(telemetry) = self.telemetry_handle() {
                 telemetry.inc_rbc_deliver_broadcasts();
-            }
-            if let Some(bytes) = delivered_bytes {
-                self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
             }
         }
         if self.subsystems.da_rbc.rbc.sessions.contains_key(&key) {
