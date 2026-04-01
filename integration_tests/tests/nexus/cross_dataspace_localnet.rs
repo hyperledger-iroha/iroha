@@ -574,6 +574,16 @@ fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Opt
         .map(ToOwned::to_owned)
 }
 
+fn add_client_headers(
+    client: &Client,
+    mut request: reqwest::RequestBuilder,
+) -> reqwest::RequestBuilder {
+    for (name, value) in &client.headers {
+        request = request.header(name, value);
+    }
+    request
+}
+
 async fn torii_json_get(
     client: &Client,
     path_segments: &[String],
@@ -597,11 +607,10 @@ async fn torii_json_get(
         }
     }
 
-    let response = reqwest::Client::new()
+    let request = reqwest::Client::new()
         .get(url)
-        .header(reqwest::header::ACCEPT, "application/json")
-        .send()
-        .await?;
+        .header(reqwest::header::ACCEPT, "application/json");
+    let response = add_client_headers(client, request).send().await?;
     let status = response.status();
     let headers = response.headers().clone();
     let body = response.bytes().await?;
@@ -619,6 +628,28 @@ async fn torii_json_get(
         route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
         route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
+}
+
+fn expect_local_or_proxy_fanout_headers(
+    response: &RoutedJsonGetResponse,
+    context: &str,
+) -> Result<()> {
+    ensure!(
+        matches!(response.routed_by.as_deref(), Some("local" | "proxy")),
+        "{context}: expected local or proxy fanout read, observed {:?}",
+        response.routed_by
+    );
+    ensure!(
+        response.route_lane_id.is_none(),
+        "{context}: fanout response should not expose a singular route lane {:?}",
+        response.route_lane_id
+    );
+    ensure!(
+        response.route_dataspace_id.is_none(),
+        "{context}: fanout response should not expose a singular route dataspace {:?}",
+        response.route_dataspace_id
+    );
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1639,11 +1670,10 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
 
             let account_assets =
                 torii_json_get(&nexus_alice_submitter, &account_assets_path, &[]).await?;
-            ensure!(
-                account_assets.routed_by.as_deref() == Some("proxy"),
-                "account assets query through Nexus ingress should be proxied, observed {:?}",
-                account_assets.routed_by
-            );
+            expect_local_or_proxy_fanout_headers(
+                &account_assets,
+                "account assets query through Nexus ingress",
+            )?;
             let account_asset_items = account_assets
                 .body
                 .get("items")
@@ -1660,11 +1690,10 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
 
             let asset_definition =
                 torii_json_get(&nexus_alice_submitter, &asset_definition_path, &[]).await?;
-            ensure!(
-                asset_definition.routed_by.as_deref() == Some("proxy"),
-                "asset definition query through Nexus ingress should be proxied, observed {:?}",
-                asset_definition.routed_by
-            );
+            expect_local_or_proxy_fanout_headers(
+                &asset_definition,
+                "asset definition query through Nexus ingress",
+            )?;
             ensure!(
                 asset_definition.body["id"].as_str() == Some(ds1_asset_literal.as_str()),
                 "asset definition query through Nexus ingress returned unexpected id {:?}",
@@ -1673,11 +1702,10 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
 
             let account_summary =
                 torii_json_get(&nexus_alice_submitter, &account_summary_path, &[]).await?;
-            ensure!(
-                account_summary.routed_by.as_deref() == Some("proxy"),
-                "dataspace summary query through Nexus ingress should be proxied, observed {:?}",
-                account_summary.routed_by
-            );
+            expect_local_or_proxy_fanout_headers(
+                &account_summary,
+                "dataspace summary query through Nexus ingress",
+            )?;
             ensure!(
                 account_summary.body["account_id"].as_str() == Some(alice_account_literal.as_str()),
                 "dataspace summary query through Nexus ingress returned unexpected account_id {:?}",
@@ -1829,7 +1857,18 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             let _phase = phase_timings.phase("execute successful swap: barrier wait");
             submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
             match submitter.submit_transaction_blocking(&successful_swap_tx) {
-                Ok(_) => {}
+                Ok(_) => {
+                    let _ = wait_for_committed_success_or_height_fallback(
+                        &alice,
+                        &alice,
+                        successful_swap_entry_hash.clone(),
+                        "successful swap confirmation on alice",
+                        "successful swap barrier on alice (height fallback)",
+                        successful_swap_pre_barrier_height,
+                        SWAP_COMMITTED_OUTCOME_TIMEOUT,
+                        SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
+                    )?;
+                }
                 Err(err) => {
                     let error_text = err.to_string();
                     if !is_inconclusive_blocking_submit_error(&error_text) {
@@ -1930,7 +1969,18 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             let _phase = phase_timings.phase("execute reverse swap: barrier wait");
             submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
             match submitter.submit_transaction_blocking(&reverse_swap_tx) {
-                Ok(_) => {}
+                Ok(_) => {
+                    let _ = wait_for_committed_success_or_height_fallback(
+                        &alice,
+                        &alice,
+                        reverse_swap_entry_hash.clone(),
+                        "reverse swap confirmation on alice",
+                        "reverse swap barrier on alice (height fallback)",
+                        reverse_swap_pre_barrier_height,
+                        SWAP_COMMITTED_OUTCOME_TIMEOUT,
+                        SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
+                    )?;
+                }
                 Err(err) => {
                     let error_text = err.to_string();
                     if !is_inconclusive_blocking_submit_error(&error_text) {

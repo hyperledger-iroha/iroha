@@ -5527,6 +5527,7 @@ impl Actor {
                     .status_handle
                     .update(summary, SystemTime::now());
             }
+            self.maybe_record_rbc_payload_bytes_metric_for_retained_summary(key);
             self.clear_rbc_runtime_state(key, false);
         }
 
@@ -5550,6 +5551,41 @@ impl Actor {
         }
 
         self.publish_rbc_backlog_snapshot();
+    }
+
+    fn maybe_record_rbc_payload_bytes_metric_for_retained_summary(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+    ) {
+        let Some(summary) = self.subsystems.da_rbc.rbc.status_handle.get(&key) else {
+            return;
+        };
+        if summary.invalid || !summary.delivered {
+            return;
+        }
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .contains(&key)
+        {
+            return;
+        }
+        let expected_payload_hash = summary.payload_hash;
+        let bytes = self
+            .with_local_payload_for_progress(
+                key.0,
+                |_height, _view, payload_bytes, local_payload_hash| {
+                    expected_payload_hash
+                        .is_none_or(|expected| local_payload_hash == expected)
+                        .then(|| u64::try_from(payload_bytes.len()).unwrap_or(u64::MAX))
+                },
+            )
+            .flatten();
+        if let Some(bytes) = bytes {
+            self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
+        }
     }
 
     pub(super) fn clean_rbc_sessions_for_block(

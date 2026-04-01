@@ -3,7 +3,7 @@
 
 use std::{
     collections::BTreeSet,
-    num::{NonZeroU32, NonZeroU64},
+    num::NonZeroU32,
     thread,
     time::{Duration, Instant},
 };
@@ -12,7 +12,6 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    crypto::{Hash, HashOf},
     data_model::{
         Level, ValidationFail,
         account::{Account, AccountId},
@@ -22,19 +21,14 @@ use iroha::{
         domain::{Domain, DomainId},
         isi::{
             Grant, InstructionBox, Log, Mint, Register, Revoke,
-            space_directory::{PublishSpaceDirectoryManifest, RevokeSpaceDirectoryManifest},
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
         metadata::Metadata,
-        nexus::{
-            Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceId,
-            LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility, ManifestEffect,
-            ManifestEntry, ManifestVersion, UniversalAccountId,
-        },
+        nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
         peer::PeerId,
         permission::Permission,
         prelude::{FindAssetById, FindPermissionsByAccountId, Numeric},
-        transaction::{SignedTransaction, TransactionEntrypoint, TransactionSubmissionReceipt},
+        transaction::{SignedTransaction, TransactionSubmissionReceipt},
     },
     query::QueryError,
 };
@@ -43,17 +37,9 @@ use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     prelude::QueryBuilderExt,
-    query::{
-        CommittedTxFilters,
-        dsl::CompoundPredicate,
-        error::{FindError, QueryExecutionFail},
-        parameters::{FetchSize, Pagination},
-        transaction::prelude::FindTransactions,
-    },
+    query::error::{FindError, QueryExecutionFail},
 };
-use iroha_executor_data_model::permission::{
-    account::CanModifyAccountMetadata, nexus::CanPublishSpaceDirectoryManifest,
-};
+use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use norito::{decode_from_bytes, json::Value as JsonValue};
@@ -578,78 +564,6 @@ fn query_account_permissions(client: &Client, account_id: &AccountId) -> Result<
         .map_err(|err| eyre!(err))
 }
 
-fn wait_for_account_permissions(
-    client: &Client,
-    account_id: &AccountId,
-    required_permissions: &[Permission],
-    context: &str,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_observed = Vec::new();
-    let mut last_error: Option<String> = None;
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match query_account_permissions(client, account_id) {
-            Ok(permissions) => {
-                last_observed = permissions.clone();
-                if required_permissions
-                    .iter()
-                    .all(|required| permissions.iter().any(|permission| permission == required))
-                {
-                    return Ok(());
-                }
-                last_error = None;
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-
-    let suffix = last_error
-        .map(|err| format!("; last permission query error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
-    ))
-}
-
-fn wait_for_account_permissions_absence(
-    client: &Client,
-    account_id: &AccountId,
-    forbidden_permissions: &[Permission],
-    context: &str,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_observed = Vec::new();
-    let mut last_error: Option<String> = None;
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match query_account_permissions(client, account_id) {
-            Ok(permissions) => {
-                last_observed = permissions.clone();
-                if forbidden_permissions
-                    .iter()
-                    .all(|forbidden| permissions.iter().all(|permission| permission != forbidden))
-                {
-                    return Ok(());
-                }
-                last_error = None;
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-
-    let suffix = last_error
-        .map(|err| format!("; last permission query error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for permissions on {account_id} to exclude {forbidden_permissions:?}; last observed {last_observed:?}{suffix}"
-    ))
-}
-
 fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
     headers
         .get(name)
@@ -722,6 +636,57 @@ async fn torii_json_get(
     })
 }
 
+async fn torii_json_get_as_account(
+    client: &Client,
+    account: &AccountId,
+    path_segments: &[String],
+    query_pairs: &[(String, String)],
+) -> Result<RoutedJsonResponse> {
+    let mut url = client.torii_url.clone();
+    let torii_url_literal = url.to_string();
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
+        segments.pop_if_empty();
+        for segment in path_segments {
+            segments.push(segment);
+        }
+    }
+    if !query_pairs.is_empty() {
+        let mut query = url.query_pairs_mut();
+        for (key, value) in query_pairs {
+            query.append_pair(key, value);
+        }
+    }
+
+    let request = reqwest::Client::new()
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(
+            "X-Iroha-Account",
+            account
+                .canonical_i105()
+                .expect("account header should encode as canonical I105"),
+        );
+    let response = add_client_headers(client, request, true).send().await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.bytes().await?;
+    let body_text = String::from_utf8_lossy(&body).into_owned();
+    let json_body = norito::json::from_slice(&body)
+        .wrap_err_with(|| format!("decode JSON body: {body_text}"))?;
+
+    Ok(RoutedJsonResponse {
+        status,
+        body: json_body,
+        body_text,
+        routed_by: routed_header_string(&headers, "x-iroha-routed-by"),
+        route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
+        route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
+    })
+}
+
 async fn submit_transaction_raw(
     client: &Client,
     transaction: &SignedTransaction,
@@ -754,84 +719,6 @@ async fn submit_transaction_raw(
         route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
         route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
     })
-}
-
-fn render_rejection_reason(
-    reason: &iroha::data_model::transaction::error::TransactionRejectionReason,
-) -> String {
-    let display = reason.to_string();
-    let debug = format!("{reason:?}");
-    if display == debug {
-        display
-    } else {
-        format!("{display}; details: {debug}")
-    }
-}
-
-enum CommittedTxOutcome {
-    Applied,
-    Rejected(String),
-}
-
-fn wait_for_committed_tx_outcome(
-    client: &Client,
-    entry_hash: HashOf<TransactionEntrypoint>,
-    context: &str,
-) -> Result<CommittedTxOutcome> {
-    let started = Instant::now();
-    let mut last_error: Option<String> = None;
-    let one = NonZeroU64::new(1).expect("nonzero");
-
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let filters = CommittedTxFilters {
-            entry_eq: Some(entry_hash.clone()),
-            ..Default::default()
-        };
-        match client
-            .query(FindTransactions::new())
-            .filter(CompoundPredicate::from_filters(filters))
-            .with_pagination(Pagination::new(Some(one), 0))
-            .with_fetch_size(FetchSize::new(Some(one)))
-            .execute_all()
-        {
-            Ok(snapshot) => {
-                if let Some(tx) = snapshot.first() {
-                    return match &tx.result().0 {
-                        Ok(_) => Ok(CommittedTxOutcome::Applied),
-                        Err(reason) => Ok(CommittedTxOutcome::Rejected(render_rejection_reason(
-                            reason,
-                        ))),
-                    };
-                }
-                last_error = None;
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-
-    let suffix = last_error
-        .map(|err| format!("; last tx history query error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for committed transaction outcome for transaction {entry_hash}{suffix}"
-    ))
-}
-
-fn wait_for_committed_rejection_reason(
-    client: &Client,
-    entry_hash: HashOf<TransactionEntrypoint>,
-    context: &str,
-) -> Result<String> {
-    match wait_for_committed_tx_outcome(client, entry_hash.clone(), context)? {
-        CommittedTxOutcome::Applied => Err(eyre!(
-            "{context}: transaction {entry_hash} committed successfully, expected rejection"
-        )),
-        CommittedTxOutcome::Rejected(reason) => Ok(reason),
-    }
 }
 
 async fn submit_transaction_and_expect_route(
@@ -921,187 +808,6 @@ fn expect_proxy_fanout_headers(response: &RoutedJsonResponse, context: &str) -> 
     Ok(())
 }
 
-fn pipeline_status_kind<'a>(body: &'a JsonValue, context: &'a str) -> Result<&'a str> {
-    let status = body
-        .get("content")
-        .and_then(|content| content.get("status"))
-        .or_else(|| body.get("status"))
-        .ok_or_else(|| eyre!("{context}: pipeline status response missing status payload"))?;
-    match status {
-        JsonValue::String(kind) => Ok(kind.as_str()),
-        JsonValue::Object(map) => map
-            .get("kind")
-            .and_then(JsonValue::as_str)
-            .ok_or_else(|| eyre!("{context}: pipeline status response missing status.kind")),
-        _ => Err(eyre!(
-            "{context}: pipeline status payload had unexpected shape: {status:?}"
-        )),
-    }
-}
-
-fn pipeline_status_rejection_reason(body: &JsonValue, context: &str) -> Result<String> {
-    use base64::Engine as _;
-
-    let status = body
-        .get("content")
-        .and_then(|content| content.get("status"))
-        .or_else(|| body.get("status"))
-        .ok_or_else(|| eyre!("{context}: pipeline status response missing status payload"))?;
-    if let Some(reason_value) = status
-        .get("rejection_reason")
-        .or_else(|| status.get("reason"))
-        .cloned()
-    {
-        let reason = norito::json::from_value::<
-            iroha::data_model::transaction::error::TransactionRejectionReason,
-        >(reason_value)
-        .map_err(|err| eyre!("{context}: failed to decode rejection reason JSON: {err}"))?;
-        return Ok(render_rejection_reason(&reason));
-    }
-
-    let encoded = status
-        .get("content")
-        .and_then(JsonValue::as_str)
-        .ok_or_else(|| eyre!("{context}: pipeline status response missing rejection content"))?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .map_err(|err| eyre!("{context}: failed to decode rejection content: {err}"))?;
-    let reason = decode_from_bytes::<
-        iroha::data_model::transaction::error::TransactionRejectionReason,
-    >(&bytes)
-    .map_err(|err| eyre!("{context}: failed to decode rejection reason: {err}"))?;
-    Ok(render_rejection_reason(&reason))
-}
-
-async fn wait_for_pipeline_status_via_ingress(
-    client: &Client,
-    transaction: &SignedTransaction,
-    expected_kind: &str,
-    context: &str,
-) -> Result<RoutedJsonResponse> {
-    let expected_kinds: &[&str] = if expected_kind == "Approved" {
-        &["Approved", "Applied", "Committed"]
-    } else {
-        std::slice::from_ref(&expected_kind)
-    };
-    let started = Instant::now();
-    let mut last_error: Option<String> = None;
-
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match torii_json_get(
-            client,
-            &[
-                "v1".to_owned(),
-                "pipeline".to_owned(),
-                "transactions".to_owned(),
-                "status".to_owned(),
-            ],
-            &[
-                ("hash".to_owned(), transaction.hash().to_string()),
-                ("scope".to_owned(), "auto".to_owned()),
-            ],
-        )
-        .await
-        {
-            Ok(response) => {
-                if response.status == HttpStatusCode::OK {
-                    let kind = pipeline_status_kind(&response.body, context)?;
-                    if expected_kinds.contains(&kind) {
-                        return Ok(response);
-                    }
-                    last_error = Some(format!(
-                        "observed pipeline status `{kind}` body `{}`",
-                        response.body_text
-                    ));
-                } else {
-                    last_error = Some(format!(
-                        "unexpected pipeline status HTTP {} body `{}`",
-                        response.status, response.body_text
-                    ));
-                }
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-
-        tokio::time::sleep(STATUS_POLL_INTERVAL).await;
-    }
-
-    let suffix = last_error
-        .map(|err| format!("; last pipeline status error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for pipeline status in {expected_kinds:?}{suffix}"
-    ))
-}
-
-async fn submit_transaction_and_expect_rejection_route(
-    submitter: &Client,
-    confirmation_client: &Client,
-    transaction: &SignedTransaction,
-    expected_lane_id: LaneId,
-    expected_dataspace_id: DataSpaceId,
-    rejection_contains: &str,
-    context: &str,
-) -> Result<TransactionSubmissionReceipt> {
-    let response = submit_transaction_raw(submitter, transaction).await?;
-    ensure!(
-        response.status == HttpStatusCode::ACCEPTED,
-        "{context}: expected 202 Accepted, observed {} body `{}`",
-        response.status,
-        response.body_text
-    );
-    ensure!(
-        response.routed_by.as_deref() == Some("proxy"),
-        "{context}: expected proxy routing, observed {:?}",
-        response.routed_by
-    );
-    ensure!(
-        response.route_lane_id.as_deref() == Some(expected_lane_id.as_u32().to_string().as_str()),
-        "{context}: expected routed lane {}, observed {:?}",
-        expected_lane_id.as_u32(),
-        response.route_lane_id
-    );
-    ensure!(
-        response.route_dataspace_id.as_deref()
-            == Some(expected_dataspace_id.as_u64().to_string().as_str()),
-        "{context}: expected routed dataspace {}, observed {:?}",
-        expected_dataspace_id.as_u64(),
-        response.route_dataspace_id
-    );
-
-    let receipt = response
-        .receipt
-        .ok_or_else(|| eyre!("{context}: missing transaction submission receipt"))?;
-    let reason = match wait_for_pipeline_status_via_ingress(
-        confirmation_client,
-        transaction,
-        "Rejected",
-        context,
-    )
-    .await
-    {
-        Ok(status) => pipeline_status_rejection_reason(&status.body, context)?,
-        Err(pipeline_error) => wait_for_committed_rejection_reason(
-            confirmation_client,
-            transaction.hash_as_entrypoint(),
-            context,
-        )
-        .map_err(|committed_error| {
-            eyre!(
-                "{context}: pipeline rejection lookup failed ({pipeline_error}); committed fallback failed ({committed_error})"
-            )
-        })?,
-    };
-    ensure!(
-        reason.contains(rejection_contains),
-        "{context}: expected rejection containing `{rejection_contains}`, observed `{reason}`"
-    );
-
-    Ok(receipt)
-}
-
 fn permission_response_contains(
     body: &JsonValue,
     permission_name: &str,
@@ -1135,8 +841,9 @@ where
     let mut last_error: Option<String> = None;
 
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match torii_json_get(
+        match torii_json_get_as_account(
             client,
+            &client.account,
             &[
                 "v1".to_owned(),
                 "accounts".to_owned(),
@@ -1152,6 +859,8 @@ where
                 if response.status == HttpStatusCode::OK {
                     if let Some((lane_id, dataspace_id)) = expected_route {
                         expect_proxy_route_headers(&response, lane_id, dataspace_id, context)?;
+                    } else {
+                        expect_proxy_fanout_headers(&response, context)?;
                     }
                     let observed = permission_response_contains(
                         &response.body,
@@ -1183,84 +892,6 @@ where
         .unwrap_or_default();
     Err(eyre!(
         "{context}: timed out waiting for app API permission state on {account_id}; expected_present={expected_present}; last body `{last_body}`{suffix}"
-    ))
-}
-
-fn manifest_response_contains_status(
-    body: &JsonValue,
-    dataspace_id: DataSpaceId,
-    expected_status: &str,
-    context: &str,
-) -> Result<bool> {
-    let manifests = body
-        .get("manifests")
-        .and_then(JsonValue::as_array)
-        .ok_or_else(|| eyre!("{context}: manifest response missing manifests array"))?;
-    Ok(manifests.iter().any(|record| {
-        record.get("dataspace_id").and_then(JsonValue::as_u64) == Some(dataspace_id.as_u64())
-            && record.get("status").and_then(JsonValue::as_str) == Some(expected_status)
-    }))
-}
-
-async fn wait_for_manifest_api_status(
-    client: &Client,
-    uaid_literal: &str,
-    dataspace_id: DataSpaceId,
-    expected_status: &str,
-    expected_lane_id: LaneId,
-    context: &str,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_body = String::new();
-    let mut last_error: Option<String> = None;
-
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        match torii_json_get(
-            client,
-            &[
-                "v1".to_owned(),
-                "space-directory".to_owned(),
-                "uaids".to_owned(),
-                uaid_literal.to_owned(),
-                "manifests".to_owned(),
-            ],
-            &[("dataspace".to_owned(), dataspace_id.as_u64().to_string())],
-        )
-        .await
-        {
-            Ok(response) => {
-                last_body = response.body_text.clone();
-                if response.status == HttpStatusCode::OK {
-                    expect_proxy_route_headers(&response, expected_lane_id, dataspace_id, context)?;
-                    if manifest_response_contains_status(
-                        &response.body,
-                        dataspace_id,
-                        expected_status,
-                        context,
-                    )? {
-                        return Ok(());
-                    }
-                    last_error = None;
-                } else {
-                    last_error = Some(format!(
-                        "unexpected status {} body `{}`",
-                        response.status, response.body_text
-                    ));
-                }
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-
-        tokio::time::sleep(STATUS_POLL_INTERVAL).await;
-    }
-
-    let suffix = last_error
-        .map(|err| format!("; last manifests API error: {err}"))
-        .unwrap_or_default();
-    Err(eyre!(
-        "{context}: timed out waiting for manifest status `{expected_status}` on UAID {uaid_literal}; last body `{last_body}`{suffix}"
     ))
 }
 
@@ -1364,8 +995,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 
     let alice_via_ds2 =
         peers[ALICE_WRONG_INGRESS_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
-    let alice_via_ds1 =
-        peers[BOB_WRONG_INGRESS_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
     let alice_on_ds1 =
         peers[BOB_WRONG_INGRESS_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
     let alice_on_ds2 =
@@ -1420,14 +1049,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         account: ALICE_ID.clone(),
     }
     .into();
-    let _alice_publish_ds1_manifest_permission: Permission = CanPublishSpaceDirectoryManifest {
-        dataspace: ds1_dataspace_id,
-    }
-    .into();
-    let bob_publish_ds2_manifest_permission: Permission = CanPublishSpaceDirectoryManifest {
-        dataspace: ds2_dataspace_id,
-    }
-    .into();
 
     rt.block_on(async {
         let alice_probe = alice_via_ds2.build_transaction(
@@ -1476,8 +1097,33 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "bob signed query through ds1 ingress did not route to ds2"
     );
 
-    let alice_assets = rt.block_on(torii_json_get(
+    let alice_account = rt.block_on(torii_json_get(
         &alice_via_ds2,
+        &["v1".to_owned(), "accounts".to_owned(), ALICE_ID.to_string()],
+        &[],
+    ))?;
+    ensure!(
+        alice_account.status == HttpStatusCode::OK,
+        "alice account GET through ds2 ingress failed with {} body `{}`",
+        alice_account.status,
+        alice_account.body_text
+    );
+    expect_proxy_fanout_headers(
+        &alice_account,
+        "alice account GET through ds2 ingress should fan out globally",
+    )?;
+    ensure!(
+        alice_account
+            .body
+            .get("account_id")
+            .and_then(JsonValue::as_str)
+            == Some(ALICE_ID.to_string().as_str()),
+        "alice account GET through ds2 ingress did not return alice's canonical account id"
+    );
+
+    let alice_assets = rt.block_on(torii_json_get_as_account(
+        &alice_via_ds2,
+        &ALICE_ID,
         &[
             "v1".to_owned(),
             "accounts".to_owned(),
@@ -1492,6 +1138,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         alice_assets.status,
         alice_assets.body_text
     );
+    expect_proxy_fanout_headers(&alice_assets, "alice assets query through ds2 ingress")?;
     ensure!(
         account_assets_response_contains(
             &alice_assets.body,
@@ -1501,8 +1148,9 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "alice assets query through ds2 ingress did not include ds1 asset definition"
     );
 
-    let bob_assets = rt.block_on(torii_json_get(
+    let bob_assets = rt.block_on(torii_json_get_as_account(
         &bob_via_ds1,
+        &BOB_ID,
         &[
             "v1".to_owned(),
             "accounts".to_owned(),
@@ -1517,6 +1165,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         bob_assets.status,
         bob_assets.body_text
     );
+    expect_proxy_fanout_headers(&bob_assets, "bob assets query through ds1 ingress")?;
     ensure!(
         account_assets_response_contains(
             &bob_assets.body,
@@ -1524,6 +1173,36 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
             "bob assets query",
         )?,
         "bob assets query through ds1 ingress did not include ds2 asset definition"
+    );
+
+    let alice_assets_hidden_from_bob = rt.block_on(torii_json_get_as_account(
+        &bob_via_ds1,
+        &BOB_ID,
+        &[
+            "v1".to_owned(),
+            "accounts".to_owned(),
+            ALICE_ID.to_string(),
+            "assets".to_owned(),
+        ],
+        &[],
+    ))?;
+    ensure!(
+        alice_assets_hidden_from_bob.status == HttpStatusCode::OK,
+        "alice assets query as bob through ds1 ingress failed with {} body `{}`",
+        alice_assets_hidden_from_bob.status,
+        alice_assets_hidden_from_bob.body_text
+    );
+    expect_proxy_fanout_headers(
+        &alice_assets_hidden_from_bob,
+        "alice assets query as bob through ds1 ingress",
+    )?;
+    ensure!(
+        !account_assets_response_contains(
+            &alice_assets_hidden_from_bob.body,
+            &ds1_asset_definition_id,
+            "alice assets query as bob",
+        )?,
+        "alice private ds1 asset should be omitted when bob lacks ds1 visibility"
     );
 
     let bob_permissions_before = query_account_permissions(&bob_via_ds1, &BOB_ID)?;
@@ -1534,8 +1213,9 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "bob should not start with CanModifyAccountMetadata for alice"
     );
 
-    let bob_permissions_api_before = rt.block_on(torii_json_get(
+    let bob_permissions_api_before = rt.block_on(torii_json_get_as_account(
         &bob_via_ds1,
+        &BOB_ID,
         &[
             "v1".to_owned(),
             "accounts".to_owned(),
@@ -1550,6 +1230,10 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         bob_permissions_api_before.status,
         bob_permissions_api_before.body_text
     );
+    expect_proxy_fanout_headers(
+        &bob_permissions_api_before,
+        "bob permissions query through ds1 ingress before grant",
+    )?;
     ensure!(
         !permission_response_contains(
             &bob_permissions_api_before.body,
@@ -1619,6 +1303,5 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         None,
         "bob permissions app api after account metadata revoke",
     ))?;
-
     Ok(())
 }

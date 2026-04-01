@@ -3149,6 +3149,8 @@ async fn handler_gov_unlock_stats(
 #[cfg(feature = "app_api")]
 async fn handler_account_get(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
@@ -3172,25 +3174,25 @@ async fn handler_account_get(
         &telemetry,
         routing::ENDPOINT_ACCOUNTS_GET,
     )?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_account_read(
-            &app,
-            route,
-            canonical_account_id,
-            format,
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_account_read(&app, canonical_account_id, format).await)
+    let _ = (&method, &uri, parsed_account_id);
+    Ok(execute_torii_account_read_for_routes(
+        &app,
+        torii_all_dataspace_routes(app.as_ref()),
+        canonical_account_id,
+        format,
+    )
+    .await)
 }
 
 #[cfg(feature = "app_api")]
 async fn handler_account_transactions_query(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+    crate::utils::extractors::NoritoJsonWithBytes { value: env, raw }: crate::utils::extractors::NoritoJsonWithBytes<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<Response, Error> {
@@ -3224,19 +3226,22 @@ async fn handler_account_transactions_query(
             "failed to encode routed account transactions query: {error}"
         )))
     })?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountTransactionsQuery,
-            vec![canonical_account_id.to_string()],
-            None,
-            body,
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
         &app,
+        &headers,
+        &method,
+        &uri,
+        raw.as_ref(),
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
+    Ok(execute_torii_list_read_for_routes(
+        &app,
+        routes,
         ToriiReadEndpointV1::AccountTransactionsQuery,
         vec![canonical_account_id.to_string()],
         None,
@@ -3248,6 +3253,8 @@ async fn handler_account_transactions_query(
 #[cfg(feature = "app_api")]
 async fn handler_account_assets(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
@@ -3273,20 +3280,23 @@ async fn handler_account_assets(
         &tel,
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
-    let query_string = encode_torii_proxy_query(&p)?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountAssetsGet,
-            vec![canonical_account_id.to_string()],
-            query_string,
-            Vec::new(),
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
         &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_ACCOUNTS_ASSETS,
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
+    let query_string = encode_torii_proxy_query(&p)?;
+    Ok(execute_torii_list_read_for_routes(
+        &app,
+        routes,
         ToriiReadEndpointV1::AccountAssetsGet,
         vec![canonical_account_id.to_string()],
         query_string,
@@ -3298,6 +3308,8 @@ async fn handler_account_assets(
 #[cfg(feature = "app_api")]
 async fn handler_account_permissions(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
@@ -3317,20 +3329,23 @@ async fn handler_account_permissions(
         &tel,
         "/v1/accounts/{account_id}/permissions",
     )?;
-    let query_string = encode_torii_proxy_query(&p)?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountPermissionsGet,
-            vec![canonical_account_id.to_string()],
-            query_string,
-            Vec::new(),
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
         &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "/v1/accounts/{account_id}/permissions",
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
+    let query_string = encode_torii_proxy_query(&p)?;
+    Ok(execute_torii_list_read_for_routes(
+        &app,
+        routes,
         ToriiReadEndpointV1::AccountPermissionsGet,
         vec![canonical_account_id.to_string()],
         query_string,
@@ -3342,10 +3357,12 @@ async fn handler_account_permissions(
 #[cfg(feature = "app_api")]
 async fn handler_account_assets_query(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+    crate::utils::extractors::NoritoJsonWithBytes { value: env, raw }: crate::utils::extractors::NoritoJsonWithBytes<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
@@ -3371,24 +3388,27 @@ async fn handler_account_assets_query(
         &tel,
         routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        raw.as_ref(),
+        routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
     let body = norito::json::to_vec(&payload.0).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
             "failed to encode routed account assets query: {error}"
         )))
     })?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountAssetsQuery,
-            vec![canonical_account_id.to_string()],
-            None,
-            body,
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_list_read_for_routes(
         &app,
+        routes,
         ToriiReadEndpointV1::AccountAssetsQuery,
         vec![canonical_account_id.to_string()],
         None,
@@ -3400,6 +3420,8 @@ async fn handler_account_assets_query(
 #[cfg(feature = "app_api")]
 async fn handler_account_transactions_get(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
@@ -3426,21 +3448,24 @@ async fn handler_account_transactions_get(
         &telemetry,
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
     let query_string = encode_torii_proxy_query(&params)?;
     let _ = allowed_asset_definition_id;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountTransactionsGet,
-            vec![canonical_account_id.to_string()],
-            query_string,
-            Vec::new(),
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_list_read_for_routes(
         &app,
+        routes,
         ToriiReadEndpointV1::AccountTransactionsGet,
         vec![canonical_account_id.to_string()],
         query_string,
@@ -10728,21 +10753,78 @@ fn torii_preferred_private_ingress_routes(app: &AppState) -> Vec<RoutingDecision
 }
 
 #[cfg(feature = "app_api")]
-fn torii_preferred_account_route(
+fn torii_signed_visibility_headers_present(headers: &HeaderMap) -> bool {
+    headers.get(HEADER_SIGNATURE).is_some()
+        || headers.get(HEADER_TIMESTAMP_MS).is_some()
+        || headers.get(HEADER_NONCE).is_some()
+        || headers.get(HEADER_WITNESS).is_some()
+}
+
+#[cfg(feature = "app_api")]
+fn torii_visibility_account_from_headers(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    endpoint: &'static str,
+) -> Result<Option<AccountId>, Error> {
+    if torii_signed_visibility_headers_present(headers) {
+        return crate::app_auth::verify_canonical_request(
+            &app.state, headers, method, uri, body, None,
+        )
+        .map(|verified| verified.map(|request| request.account));
+    }
+
+    let Some(account_header) = headers.get(HEADER_ACCOUNT) else {
+        return Ok(None);
+    };
+
+    let account_literal = account_header.to_str().map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+            "invalid X-Iroha-Account value".to_owned(),
+        ))
+    })?;
+
+    // TODO: Require canonical request signatures for all caller-scoped reads once the
+    // remaining app-api clients consistently attach signed read headers.
+    routing::parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        account_literal,
+        &app.telemetry_handle(),
+        endpoint,
+    )
+    .map(|(account_id, _)| Some(account_id))
+}
+
+#[cfg(feature = "app_api")]
+fn torii_visible_account_read_routes(
     app: &AppState,
-    account_id: &AccountId,
-) -> Result<Option<RoutingDecision>, Error> {
+    caller: Option<&AccountId>,
+) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
-    if let Some(dataspace_id) = state_view.world().dataspace_for_account(account_id) {
-        return torii_route_for_dataspace_id(app, dataspace_id).map(Some);
+    let world = state_view.world();
+    let nexus = state_view.nexus();
+    let mut visible_dataspaces = BTreeSet::new();
+
+    for lane in nexus.lane_catalog.lanes() {
+        if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public {
+            visible_dataspaces.insert(lane.dataspace_id);
+        }
     }
 
-    let preferred_private_ingress_routes = torii_preferred_private_ingress_routes(app);
-    if preferred_private_ingress_routes.len() == 1 {
-        return Ok(preferred_private_ingress_routes.into_iter().next());
+    if let Some(caller) = caller
+        && let Ok(account) = world.account(caller)
+        && let Some(uaid) = account.value().uaid().copied()
+        && let Some(bindings) = world.uaid_dataspaces().get(&uaid)
+    {
+        visible_dataspaces.extend(bindings.iter().map(|(dataspace_id, _)| *dataspace_id));
     }
 
-    Ok(None)
+    torii_all_dataspace_routes(app)
+        .into_iter()
+        .filter(|route| visible_dataspaces.contains(&route.dataspace_id))
+        .collect()
 }
 
 fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
@@ -11743,6 +11825,17 @@ fn merged_list_response(
         crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
     insert_routed_by_header(&mut response, routed_by);
     Ok(response)
+}
+
+#[cfg(feature = "app_api")]
+fn torii_empty_list_response(routed_by: &'static str) -> Response {
+    let mut root = norito::json::Map::new();
+    root.insert("items".into(), Value::Array(Vec::new()));
+    root.insert("total".into(), Value::from(0_u64));
+    let mut response =
+        crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
+    insert_routed_by_header(&mut response, routed_by);
+    response
 }
 
 #[cfg(feature = "app_api")]
@@ -13898,46 +13991,12 @@ async fn execute_torii_fanout_singleton_read(
 }
 
 #[cfg(feature = "app_api")]
-async fn execute_torii_single_route_account_read(
+async fn execute_torii_account_read_for_routes(
     app: &SharedAppState,
-    route: RoutingDecision,
+    routes: Vec<RoutingDecision>,
     canonical_account_id: String,
     format: ResponseFormat,
 ) -> Response {
-    match torii_json_body::<AccountReadResponse>(
-        execute_torii_single_route_read(
-            app,
-            route,
-            ToriiReadEndpointV1::AccountGet,
-            vec![canonical_account_id],
-            None,
-            Vec::new(),
-        )
-        .await,
-        "account get response",
-    )
-    .await
-    {
-        Ok(payload) => {
-            let mut response = crate::utils::respond_with_format(payload, format);
-            insert_routing_headers(
-                &mut response,
-                route,
-                routed_by_for_routes(app, std::slice::from_ref(&route)),
-            );
-            response
-        }
-        Err(response) => response,
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn execute_torii_fanout_account_read(
-    app: &SharedAppState,
-    canonical_account_id: String,
-    format: ResponseFormat,
-) -> Response {
-    let routes = torii_all_dataspace_routes(app.as_ref());
     if routes.is_empty() {
         return torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -27774,6 +27833,7 @@ pub(crate) mod tests_runtime_handlers {
     fn configure_private_ingress_routes_for_test(
         app: &mut SharedAppState,
     ) -> (LaneId, DataSpaceId) {
+        let nexus_lane = LaneId::new(0);
         let local_validator_keypair = KeyPair::random();
         let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
@@ -27849,7 +27909,17 @@ pub(crate) mod tests_runtime_handlers {
         }
         install_lane_manifest_registry_for_test(
             state,
-            &[(restricted_lane, vec![(local_validator, local_peer_id)])],
+            &[
+                (
+                    nexus_lane,
+                    vec![(local_validator.clone(), local_peer_id.clone())],
+                ),
+                (
+                    governance_lane,
+                    vec![(local_validator.clone(), local_peer_id.clone())],
+                ),
+                (restricted_lane, vec![(local_validator, local_peer_id)]),
+            ],
         );
         let state_view = app_mut.state.view();
         app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
@@ -29152,21 +29222,18 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn handler_account_assets_prefers_single_local_restricted_route_for_local_accounts() {
+    async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-        let (restricted_lane, restricted_dataspace) =
-            configure_private_ingress_routes_for_test(&mut app);
-        let preferred_route = super::torii_preferred_account_route(app.as_ref(), &authority)
-            .expect("account route resolution should succeed");
-        assert_eq!(
-            preferred_route,
-            Some(RoutingDecision::new(restricted_lane, restricted_dataspace)),
-            "local account assets should resolve to the single local restricted route",
-        );
+        configure_multiple_dataspace_routes_for_test(&mut app);
 
+        let uri: axum::http::Uri = format!("/v1/accounts/{authority}/assets")
+            .parse()
+            .expect("valid account assets uri");
         let response = super::handler_account_assets(
             State(app),
+            axum::http::Method::GET,
+            uri,
             HeaderMap::new(),
             crate::loopback_connect_info(),
             AxPath(authority.to_string()),
@@ -29183,21 +29250,61 @@ pub(crate) mod tests_runtime_handlers {
                 .get("x-iroha-routed-by")
                 .and_then(|value| value.to_str().ok()),
             Some("local"),
-            "private ingress account assets should not fan out through public lanes",
+            "account asset reads should still execute locally in unit tests",
         );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-route-lane-id")
-                .and_then(|value| value.to_str().ok()),
-            Some(restricted_lane.as_u32().to_string().as_str()),
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "visible dataspace fanout should not expose a singular route lane",
         );
-        assert_eq!(
+        assert!(
             response
                 .headers()
                 .get("x-iroha-route-dataspace-id")
+                .is_none(),
+            "visible dataspace fanout should not expose a singular dataspace",
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_account_get_fan_outs_across_global_dataspaces() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_multiple_dataspace_routes_for_test(&mut app);
+
+        let uri: axum::http::Uri = format!("/v1/accounts/{authority}")
+            .parse()
+            .expect("valid account uri");
+        let response = super::handler_account_get(
+            State(app),
+            axum::http::Method::GET,
+            uri,
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            AxPath(authority.to_string()),
+        )
+        .await
+        .expect("account get should execute");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
                 .and_then(|value| value.to_str().ok()),
-            Some(restricted_dataspace.as_u64().to_string().as_str()),
+            Some("local"),
+            "global account reads should still execute locally in unit tests",
+        );
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "global account fanout should not expose a singular route lane",
+        );
+        assert!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .is_none(),
+            "global account fanout should not expose a singular dataspace",
         );
     }
 
@@ -30378,6 +30485,10 @@ pub(crate) mod tests_runtime_handlers {
 
         let json_resp = super::handler_account_get(
             State(app.clone()),
+            axum::http::Method::GET,
+            format!("/v1/accounts/{account_id}")
+                .parse()
+                .expect("valid account get uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
@@ -30402,6 +30513,10 @@ pub(crate) mod tests_runtime_handlers {
 
         let norito_resp = super::handler_account_get(
             State(app),
+            axum::http::Method::GET,
+            format!("/v1/accounts/{account_id}")
+                .parse()
+                .expect("valid account get uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             Some(crate::utils::extractors::ExtractAccept(
@@ -30435,6 +30550,10 @@ pub(crate) mod tests_runtime_handlers {
 
         let resp = super::handler_account_get(
             State(app),
+            axum::http::Method::GET,
+            format!("/v1/accounts/{missing}")
+                .parse()
+                .expect("valid missing account uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,

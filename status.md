@@ -2,6 +2,62 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: `iroha_config` governance account defaults parse under chain overrides again
+- Fixed the `iroha_config` fixture/compile break caused by the removed
+  domain-qualified `AccountId::to_account_id(...)` path in
+  `crates/iroha_config/tests/fixtures.rs`, updating the assertions to compare
+  canonical domainless `AccountId` values.
+- Made governance default account literals stable against ambient
+  chain-discriminant overrides during `UserConfig` materialization, and taught
+  config parsing to accept those baseline default literals when a config sets a
+  non-default `common.chain_discriminant`.
+- Added focused regressions for both the stable-default rendering path and the
+  chain-override parse path, and serialized the fixture runtime guard so the
+  shared address-runtime globals are not raced by the parallel Rust test
+  runner.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test fixtures parse_applies_default_account_domain_override_during_config_parse -- --nocapture`
+  - `cargo test -p iroha_config --lib governance_default_account_literals_ -- --nocapture`
+  - `cargo test -p iroha_config -- --nocapture`
+    now leaves only the pre-existing `minimal_config_snapshot` `expect!`
+    mismatch red in `tests/fixtures.rs`
+  - `cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+    still fails on a pre-existing `expect!` snapshot mismatch unrelated to this
+    fix
+
+## 2026-04-01 Follow-up: `iroha_executor` alias-domain permission cleanup compiles again
+- Fixed the `iroha_executor` compile break in domain-permission cleanup by
+  matching account-alias `Domain(...)` permission scopes to `DomainId` by the
+  shared underlying domain `Name` instead of comparing
+  `AccountAliasDomain` directly to `DomainId`.
+- Added a focused executor regression covering both
+  `CanResolveAccountAlias` and `CanManageAccountAlias` for the matching and
+  non-matching domain-name cases.
+- Removed two redundant multisig account-registration branches that were
+  producing unused-variable warnings without affecting behavior.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo build -p iroha_executor`
+  - `cargo test -p iroha_executor account_alias_domain_permissions_match_domain_by_name -- --nocapture`
+  - `cargo test -p iroha_executor`
+    still reports an unrelated existing failure in
+    `default::isi::multisig::transaction::tests::derived_multisig_account_is_rejected`
+
+## 2026-04-01 Follow-up: `iroha_torii_shared` account-read payload tracks `AccountAlias`
+- Fixed the `iroha_torii_shared` compile break caused by importing the removed
+  `iroha_data_model::account::AccountLabel` type.
+- `AccountReadResponse.label` now uses
+  `iroha_data_model::account::AccountAlias`, which matches the current
+  universal-account data model and the Torii routing payloads already emitted
+  from world state.
+- Strengthened the shared DTO roundtrip test to encode/decode a non-empty
+  alias payload instead of only the `None` case.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii_shared --lib -- --nocapture`
+  - `cargo test -p iroha --lib get_account_read_requests_json_and_decodes_typed_payload -- --nocapture`
+
 ## 2026-04-01 Follow-up: workspace builds no longer collide on `gpuzstd` helper exports
 - Removed the Rust dependency edge from `crates/gpuzstd_cuda` to
   `crates/gpuzstd_metal`, so building both helper crates in the same Cargo
@@ -133,8 +189,12 @@ Last updated: 2026-04-01
   - `cargo test -p iroha_torii openapi::tests::account_get_documents_canonical_dual_format_read -- --nocapture`
   - `cargo test -p iroha_torii openapi::tests::pipeline_status_documents_not_found_response -- --nocapture`
   - `python3 -m py_compile python/iroha_torii_client/mock.py`
+  - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_cli_smoke_final cargo test -p iroha_cli dvp_preview_uses_placeholder_currency_for_opaque_asset_ids -- --nocapture`
   - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_cli_smoke_final cargo test -p iroha_cli --test cli_smoke tx_status_command_against_torii_mock -- --nocapture`
   - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_cli_smoke_final cargo test -p iroha_cli --test cli_smoke account_get_command_against_torii_mock -- --nocapture`
+  - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_cli_smoke_final cargo test -p iroha_cli --test cli_smoke address_audit_reports_parsed_and_errors -- --nocapture`
+  - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_cli_smoke_final cargo test -p iroha_cli --test cli_smoke settlement_accepts_commit_atomicity -- --nocapture`
+  - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_cli_smoke_final cargo test -p iroha_cli --test cli_smoke -- --nocapture`
   - `PYTHONPATH=. python3 tests/test_pk_cli.py SurfaceTests.test_settlement_interceptor_deploy_script_embeds_resolved_account_ids SurfaceTests.test_settlement_interceptor_deploy_script_uses_manifest_contract_lifecycle SurfaceTests.test_unified_kotodama_deploy_verifier_requires_cbuae_contract_instance SurfaceTests.test_cbuae_interceptor_deploy_has_no_raw_trigger_fallback_path SurfaceTests.test_cbuae_interceptor_deploy_surfaces_pipeline_tx_status_before_visibility_timeouts SurfaceTests.test_cbuae_interceptor_deploy_keeps_probe_state_updates_out_of_subshells SurfaceTests.test_cbuae_interceptor_deploy_requires_authoritative_account_readiness_for_grants SurfaceTests.test_fi_operator_readiness_uses_torii_on_chain_domains SurfaceTests.test_public_torii_ingress_hardening_script_patches_edge_and_peer_runtime SurfaceTests.test_settlement_asset_resolver_uses_authoritative_torii_only_for_live_account_resolution`
   - `env PKDEPLOY_CACHE_HOME="$(mktemp -d)" python3 -m unittest tests.test_pk_cli -q`
   - `env PKDEPLOY_CACHE_HOME="$(mktemp -d)" python3 -m unittest -q tests.test_pk_cli.SurfaceTests.test_maintained_repo_files_do_not_contain_non_v1_version_markers tests.test_pk_cli.SurfaceTests.test_public_torii_ingress_hardening_script_patches_edge_and_peer_runtime`
@@ -144,10 +204,10 @@ Last updated: 2026-04-01
     verify was executed from this workspace; live acceptance still needs to be
     run against the updated binaries/scripts.
   - broader repo-wide verification is still not fully green from this slice
-    alone: a full `iroha_cli --test cli_smoke` rerun now passes the new
-    `tx status` / `account get` command-path tests but still reports unrelated
-    pre-existing failures in the address-audit and settlement-atomicity smoke
-    cases.
+    alone because `cargo test --workspace` / `cargo clippy --workspace
+    --all-targets -- -D warnings` were not rerun here, even though the full
+    `iroha_cli --test cli_smoke` target is now green on the isolated target
+    directory.
 
 ## 2026-04-01 Follow-up: restart-recovery rerun is green and the integration_tests strict-lint break is fixed
 - Re-ran the previously open

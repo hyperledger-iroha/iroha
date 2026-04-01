@@ -993,7 +993,7 @@ fn mode_activation_lag_tracks_activation_window() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn tick_mode_management_clears_pending_mode_flip() {
-    let mut harness = test_actor_harness(4).await;
+    let mut harness = test_actor_harness(1).await;
     harness.actor.pending_mode_flip = Some(ConsensusMode::Npos);
 
     let progressed = harness.actor.tick_mode_management();
@@ -1011,7 +1011,7 @@ async fn tick_mode_management_clears_pending_mode_flip() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn apply_mode_flip_defers_while_commit_pipeline_active() {
-    let mut harness = test_actor_harness(4).await;
+    let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
     actor.pending_mode_flip = Some(ConsensusMode::Npos);
@@ -12072,6 +12072,58 @@ async fn fetch_pending_block_payload_uses_block_created_for_npos_frontier_height
         other => panic!("expected BlockCreated in NPoS frontier fetch response, got {other:?}"),
     }
 
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_payload_uses_block_created_for_noncanonical_committed_tip() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_like = sample_block(1, 0, None);
+    let committed_block = sample_block(2, 0, Some(genesis_like.hash()));
+    let committed_height = committed_block.header().height().get();
+    let canonical_hash = committed_block.hash();
+    actor
+        .kura
+        .store_block(genesis_like.clone())
+        .expect("store predecessor block");
+    actor
+        .kura
+        .store_block(committed_block)
+        .expect("store committed block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(genesis_like.hash());
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(canonical_hash);
+    let parent_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::prehashed([0xC3; Hash::LENGTH]),
+    ));
+    let conflicting_block = sample_block(committed_height, 0, parent_hash);
+    assert_ne!(
+        conflicting_block.hash(),
+        canonical_hash,
+        "test requires a conflicting same-height block hash"
+    );
+
+    match actor.build_fetch_pending_block_payload(&conflicting_block) {
+        BlockMessage::BlockCreated(created) => {
+            assert_eq!(created.block.hash(), conflicting_block.hash());
+        }
+        other => panic!(
+            "expected BlockCreated for non-canonical committed tip fetch response, got {other:?}"
+        ),
+    }
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     harness.shutdown.send();
 }
 
@@ -59592,6 +59644,71 @@ async fn committed_rbc_cleanup_marks_retained_summary_delivered_without_live_ses
     assert!(
         summary.recovered_from_disk,
         "committed cleanup should preserve recovered-from-disk state",
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn committed_rbc_cleanup_records_payload_bytes_for_retained_summary_without_live_session() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let key = Actor::session_key(&block_hash, height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+
+    actor
+        .kura
+        .store_block(Arc::new(block.clone()))
+        .expect("store committed block");
+    actor.subsystems.da_rbc.rbc.persisted_sessions.insert(key);
+    actor.subsystems.da_rbc.rbc.status_handle.update(
+        super::rbc_status::Summary {
+            block_hash,
+            height,
+            view,
+            total_chunks: 3,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 3,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: Some(payload_hash),
+            recovered_from_disk: true,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        },
+        SystemTime::now(),
+    );
+
+    assert!(
+        actor.clean_rbc_sessions_for_committed_block_if_settled(block_hash, height),
+        "committed cleanup should settle retained exact-frontier summaries without a live session",
+    );
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "committed cleanup should recover canonical payload bytes for retained summaries before runtime state is drained"
     );
 
     harness.shutdown.send();

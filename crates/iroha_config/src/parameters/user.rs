@@ -126,10 +126,28 @@ fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureSch
 }
 
 fn parse_account_id_literal(raw: &str, context: &str) -> AccountId {
-    AccountId::parse_encoded(raw).map_or_else(
-        |err| panic!("{context}: {err}"),
-        iroha_data_model::account::ParsedAccountId::into_account_id,
-    )
+    match AccountId::parse_encoded(raw) {
+        Ok(parsed) => parsed.into_account_id(),
+        Err(err)
+            if err.reason()
+                == iroha_data_model::account::address::AccountAddressErrorCode::UnexpectedNetworkPrefix
+                    .as_str()
+                && iroha_data_model::account::address::chain_discriminant()
+                    != defaults::common::chain_discriminant() =>
+        {
+            // `read_and_complete::<UserConfig>()` materializes account-literal defaults before
+            // `Root::parse()` installs the config-specific chain discriminant. Accept the
+            // baseline-default literals here and canonicalize them into the configured runtime.
+            let _fallback = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                defaults::common::chain_discriminant(),
+            );
+            AccountId::parse_encoded(raw).map_or_else(
+                |fallback_err| panic!("{context}: {fallback_err}"),
+                iroha_data_model::account::ParsedAccountId::into_account_id,
+            )
+        }
+        Err(err) => panic!("{context}: {err}"),
+    }
 }
 
 fn validate_asset_definition_selector_literal(value: &str) -> core::result::Result<String, String> {
@@ -11000,6 +11018,12 @@ impl Default for Nexus {
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
+    ///
+    /// When set, this overrides the legacy `max_disk_usage_bytes` alias and becomes the
+    /// node-local budget automatically split across Kura, tiered-state cold storage, SoraFS, and
+    /// streaming spools.
+    pub local_budget_bytes: Option<Bytes<u64>>,
+    /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     #[config(default = "defaults::nexus::storage::MAX_DISK_USAGE_BYTES")]
     pub max_disk_usage_bytes: Bytes<u64>,
     /// Block interval between disk budget enforcement scans (0 = every block).
@@ -11016,6 +11040,7 @@ pub struct NexusStorage {
 impl Default for NexusStorage {
     fn default() -> Self {
         Self {
+            local_budget_bytes: None,
             max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
@@ -11028,8 +11053,9 @@ impl Default for NexusStorage {
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
+        let max_disk_usage_bytes = self.local_budget_bytes.unwrap_or(self.max_disk_usage_bytes);
         Some(actual::NexusStorage {
-            max_disk_usage_bytes: self.max_disk_usage_bytes,
+            max_disk_usage_bytes,
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             disk_budget_weights: weights,
@@ -18064,6 +18090,63 @@ mod offline_cfg_tests {
     }
 
     #[test]
+    fn governance_default_account_literals_ignore_chain_override() {
+        let expected_bond = defaults::governance::bond_escrow_account();
+        let expected_citizenship = defaults::governance::citizenship_escrow_account();
+        let expected_slash = defaults::governance::slash_receiver_account();
+        let expected_viral_incentive = defaults::governance::viral_incentive_pool_account();
+        let expected_viral_escrow = defaults::governance::viral_escrow_account();
+
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+
+        assert_eq!(defaults::governance::bond_escrow_account(), expected_bond);
+        assert_eq!(
+            defaults::governance::citizenship_escrow_account(),
+            expected_citizenship
+        );
+        assert_eq!(
+            defaults::governance::slash_receiver_account(),
+            expected_slash
+        );
+        assert_eq!(
+            defaults::governance::viral_incentive_pool_account(),
+            expected_viral_incentive
+        );
+        assert_eq!(
+            defaults::governance::viral_escrow_account(),
+            expected_viral_escrow
+        );
+    }
+
+    #[test]
+    fn governance_default_account_literals_parse_under_chain_override() {
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+
+        let parsed = Governance::default().parse();
+
+        assert_eq!(
+            parsed.citizenship_escrow_account,
+            defaults::governance::citizenship_escrow_account_id()
+        );
+        assert_eq!(
+            parsed.bond_escrow_account,
+            defaults::governance::bond_escrow_account_id()
+        );
+        assert_eq!(
+            parsed.slash_receiver_account,
+            defaults::governance::slash_receiver_account_id()
+        );
+        assert_eq!(
+            parsed.viral_incentives.incentive_pool_account,
+            defaults::governance::slash_receiver_account_id()
+        );
+        assert_eq!(
+            parsed.viral_incentives.escrow_account,
+            defaults::governance::slash_receiver_account_id()
+        );
+    }
+
+    #[test]
     fn halo2_defaults_parse() {
         let backend = ZkHalo2Backend::from_str(defaults::zk::halo2::BACKEND)
             .expect("default backend string should parse");
@@ -18221,6 +18304,32 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_000);
         assert!(actual.tiered_state.enabled);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 256);
+    }
+
+    #[test]
+    fn storage_local_budget_bytes_applies_after_parse() {
+        let mut table = base_table();
+        let nexus = table
+            .entry("nexus")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("nexus table");
+        let mut storage = Table::new();
+        storage.insert("local_budget_bytes".into(), Value::Integer(1_024));
+        storage.insert("max_wsv_memory_bytes".into(), Value::Integer(128));
+        let mut weights = Table::new();
+        weights.insert("kura_blocks_bps".into(), Value::Integer(10_000));
+        weights.insert("wsv_snapshots_bps".into(), Value::Integer(0));
+        weights.insert("sorafs_bps".into(), Value::Integer(0));
+        weights.insert("soranet_spool_bps".into(), Value::Integer(0));
+        weights.insert("soravpn_spool_bps".into(), Value::Integer(0));
+        storage.insert("disk_budget_weights".into(), Value::Table(weights));
+        nexus.insert("storage".into(), Value::Table(storage));
+
+        let actual = load_root(table);
+        assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
+        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_024);
+        assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 128);
     }
 
     #[test]
