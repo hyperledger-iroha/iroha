@@ -3076,9 +3076,10 @@ pub mod governance {
     }
 
     fn account_literal_from_account_id(account_id: &AccountId) -> String {
-        // Configuration parsing accepts canonical I105 account literals.
+        // Config defaults must stay stable regardless of any ambient thread-local
+        // chain override active while deserializing `UserConfig`.
         account_id
-            .canonical_i105()
+            .to_i105_for_discriminant(super::common::chain_discriminant())
             .expect("default governance account literal")
     }
 

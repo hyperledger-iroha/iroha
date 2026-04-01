@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: `iroha_config` governance account defaults parse under chain overrides again
+- Fixed the `iroha_config` fixture/compile break caused by the removed
+  domain-qualified `AccountId::to_account_id(...)` path in
+  `crates/iroha_config/tests/fixtures.rs`, updating the assertions to compare
+  canonical domainless `AccountId` values.
+- Made governance default account literals stable against ambient
+  chain-discriminant overrides during `UserConfig` materialization, and taught
+  config parsing to accept those baseline default literals when a config sets a
+  non-default `common.chain_discriminant`.
+- Added focused regressions for both the stable-default rendering path and the
+  chain-override parse path, and serialized the fixture runtime guard so the
+  shared address-runtime globals are not raced by the parallel Rust test
+  runner.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test fixtures parse_applies_default_account_domain_override_during_config_parse -- --nocapture`
+  - `cargo test -p iroha_config --lib governance_default_account_literals_ -- --nocapture`
+  - `cargo test -p iroha_config -- --nocapture`
+    now leaves only the pre-existing `minimal_config_snapshot` `expect!`
+    mismatch red in `tests/fixtures.rs`
+  - `cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+    still fails on a pre-existing `expect!` snapshot mismatch unrelated to this
+    fix
+
 ## 2026-04-01 Follow-up: `iroha_executor` alias-domain permission cleanup compiles again
 - Fixed the `iroha_executor` compile break in domain-permission cleanup by
   matching account-alias `Domain(...)` permission scopes to `DomainId` by the

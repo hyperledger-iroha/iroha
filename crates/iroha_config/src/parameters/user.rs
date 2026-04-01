@@ -126,10 +126,28 @@ fn normalize_jdg_signature_schemes(raw: Vec<String>) -> BTreeSet<JdgSignatureSch
 }
 
 fn parse_account_id_literal(raw: &str, context: &str) -> AccountId {
-    AccountId::parse_encoded(raw).map_or_else(
-        |err| panic!("{context}: {err}"),
-        iroha_data_model::account::ParsedAccountId::into_account_id,
-    )
+    match AccountId::parse_encoded(raw) {
+        Ok(parsed) => parsed.into_account_id(),
+        Err(err)
+            if err.reason()
+                == iroha_data_model::account::address::AccountAddressErrorCode::UnexpectedNetworkPrefix
+                    .as_str()
+                && iroha_data_model::account::address::chain_discriminant()
+                    != defaults::common::chain_discriminant() =>
+        {
+            // `read_and_complete::<UserConfig>()` materializes account-literal defaults before
+            // `Root::parse()` installs the config-specific chain discriminant. Accept the
+            // baseline-default literals here and canonicalize them into the configured runtime.
+            let _fallback = iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                defaults::common::chain_discriminant(),
+            );
+            AccountId::parse_encoded(raw).map_or_else(
+                |fallback_err| panic!("{context}: {fallback_err}"),
+                iroha_data_model::account::ParsedAccountId::into_account_id,
+            )
+        }
+        Err(err) => panic!("{context}: {err}"),
+    }
 }
 
 fn validate_asset_definition_selector_literal(value: &str) -> core::result::Result<String, String> {
@@ -18069,6 +18087,63 @@ mod offline_cfg_tests {
             )
         );
         assert_eq!(parsed.parliament_alternate_size, Some(13));
+    }
+
+    #[test]
+    fn governance_default_account_literals_ignore_chain_override() {
+        let expected_bond = defaults::governance::bond_escrow_account();
+        let expected_citizenship = defaults::governance::citizenship_escrow_account();
+        let expected_slash = defaults::governance::slash_receiver_account();
+        let expected_viral_incentive = defaults::governance::viral_incentive_pool_account();
+        let expected_viral_escrow = defaults::governance::viral_escrow_account();
+
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+
+        assert_eq!(defaults::governance::bond_escrow_account(), expected_bond);
+        assert_eq!(
+            defaults::governance::citizenship_escrow_account(),
+            expected_citizenship
+        );
+        assert_eq!(
+            defaults::governance::slash_receiver_account(),
+            expected_slash
+        );
+        assert_eq!(
+            defaults::governance::viral_incentive_pool_account(),
+            expected_viral_incentive
+        );
+        assert_eq!(
+            defaults::governance::viral_escrow_account(),
+            expected_viral_escrow
+        );
+    }
+
+    #[test]
+    fn governance_default_account_literals_parse_under_chain_override() {
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+
+        let parsed = Governance::default().parse();
+
+        assert_eq!(
+            parsed.citizenship_escrow_account,
+            defaults::governance::citizenship_escrow_account_id()
+        );
+        assert_eq!(
+            parsed.bond_escrow_account,
+            defaults::governance::bond_escrow_account_id()
+        );
+        assert_eq!(
+            parsed.slash_receiver_account,
+            defaults::governance::slash_receiver_account_id()
+        );
+        assert_eq!(
+            parsed.viral_incentives.incentive_pool_account,
+            defaults::governance::slash_receiver_account_id()
+        );
+        assert_eq!(
+            parsed.viral_incentives.escrow_account,
+            defaults::governance::slash_receiver_account_id()
+        );
     }
 
     #[test]

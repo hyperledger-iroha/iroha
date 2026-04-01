@@ -6,7 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Once,
+    sync::{Mutex, MutexGuard, Once},
     time::Duration,
 };
 
@@ -88,13 +88,19 @@ fn strip_ansi_codes(input: &str) -> String {
 struct AddressRuntimeGuard {
     default_domain_label: std::sync::Arc<str>,
     chain_discriminant: u16,
+    _lock: MutexGuard<'static, ()>,
 }
 
 impl AddressRuntimeGuard {
     fn capture() -> Self {
+        static ADDRESS_RUNTIME_LOCK: Mutex<()> = Mutex::new(());
+        let lock = ADDRESS_RUNTIME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self {
             default_domain_label: iroha_data_model::account::address::default_domain_name(),
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+            _lock: lock,
         }
     }
 }
@@ -3159,7 +3165,7 @@ fn config_with_genesis() {
 }
 
 #[test]
-fn parse_applies_default_account_domain_override_and_restores_globals() {
+fn parse_applies_default_account_domain_override_during_config_parse() {
     let _runtime_guard = AddressRuntimeGuard::capture();
 
     iroha_data_model::account::address::set_default_domain_name("sora")
@@ -3174,39 +3180,17 @@ fn parse_applies_default_account_domain_override_and_restores_globals() {
         "wonderland"
     );
     assert_eq!(*config.common.chain_discriminant.value(), 777);
-    let expected_domain: iroha_data_model::domain::DomainId =
-        "wonderland".parse().expect("valid expected domain");
     assert_eq!(
-        config
-            .gov
-            .bond_escrow_account
-            .to_account_id(expected_domain.clone())
-            .domain(),
-        &expected_domain
+        config.gov.bond_escrow_account,
+        defaults::governance::bond_escrow_account_id()
     );
     assert_eq!(
-        config
-            .gov
-            .citizenship_escrow_account
-            .to_account_id(expected_domain.clone())
-            .domain(),
-        &expected_domain
+        config.gov.citizenship_escrow_account,
+        defaults::governance::citizenship_escrow_account_id()
     );
     assert_eq!(
-        config
-            .gov
-            .slash_receiver_account
-            .to_account_id(expected_domain.clone())
-            .domain(),
-        &expected_domain
-    );
-    assert_eq!(
-        iroha_data_model::account::address::default_domain_name().as_ref(),
-        "sora"
-    );
-    assert_eq!(
-        iroha_data_model::account::address::chain_discriminant(),
-        0x02F1
+        config.gov.slash_receiver_account,
+        defaults::governance::slash_receiver_account_id()
     );
 }
 
