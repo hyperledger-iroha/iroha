@@ -4666,9 +4666,11 @@ Latest sync (2026-03-26 Norito now ships an in-tree CUDA-named zstd helper artif
 `crates/norito/src/core/{gpu_zstd.rs,simd_crc64.rs}`
 now close the remaining Norito CUDA-helper backlog on this host.
 
-- `gpuzstd_metal` now exposes its raw-pointer helper implementation for reuse
-  without exporting duplicate C symbols when it is linked as a dependency, and
-  the stale Linux warning noise in that crate is gone;
+- the helper crates now coexist cleanly in the same workspace build graph:
+  `gpuzstd_cuda` keeps its decode path local instead of linking
+  `gpuzstd_metal`, so the exported `gpu_zstd_*` symbols no longer collide when
+  both helper artifacts are built together, and the stale Linux warning noise
+  in `gpuzstd_metal` is gone;
 - the workspace now ships a dedicated `gpuzstd_cuda` crate, so
   `cargo build -p gpuzstd_cuda` produces an in-tree `libgpuzstd_cuda.{so,dll}`
   helper that exports the expected `gpu_zstd_compress` /

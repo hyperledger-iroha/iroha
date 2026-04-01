@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: workspace builds no longer collide on `gpuzstd` helper exports
+- Removed the Rust dependency edge from `crates/gpuzstd_cuda` to
+  `crates/gpuzstd_metal`, so building both helper crates in the same Cargo
+  invocation no longer links duplicate `gpu_zstd_compress` /
+  `gpu_zstd_decompress` symbols into the CUDA helper artifact.
+- `gpuzstd_cuda` now keeps its decode path local with the same standard-zstd
+  CPU fallback semantics the runtime expects, while compression still returns
+  `gpu_unavailable` until dedicated CUDA kernels land.
+- Added a focused regression covering the short-output-buffer decode path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo build -p gpuzstd_metal -p gpuzstd_cuda` (pass)
+  - `cargo test -p gpuzstd_cuda -- --nocapture` (pass)
+  - `cargo clippy -p gpuzstd_cuda --all-targets -- -D warnings` (pass)
+  - `cargo test -p norito --features gpu-compression --lib gpu_ -- --nocapture` (pass)
+
 ## 2026-04-01 Follow-up: permissioned DA soak actor-thread regressions fixed; long soaks completed
 - Fixed the two production-path regressions behind the permissioned DA soak
   liveness collapse in `iroha_core`:
@@ -4175,8 +4191,8 @@ Last updated: 2026-04-01
     format; and
   - `gpuzstd_cuda` now reports `gpu_unavailable` for compression until real
     CUDA kernels land, while `norito::core::gpu_zstd` short-circuits on that
-    return code and continues to use the deterministic decode/shared-frame path
-    so self-tests can distinguish unavailable kernels from actual parity
+    return code and continues to use the helper's standard-frame decode path so
+    self-tests can distinguish unavailable kernels from actual parity
     failures.
 - Validation:
   - `cargo fmt --all` (pass)
