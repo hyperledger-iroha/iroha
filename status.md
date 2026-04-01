@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: test-network startup retries no longer fail on stale bind preflight
+- Fixed `iroha_test_network` restart behavior after partial bootstrap failures by
+  running socket bind preflight only on a peer's first start attempt. Retrying
+  the same `Network` after shutdown no longer trips the harness on transient
+  `AddrInUse` from reused API/P2P ports before `irohad` can rebind them.
+- Added a focused unit regression for the new preflight gating helper and
+  confirmed the original `integration_tests` failure now passes.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_test_network bind_preflight_runs_only_before_first_start_attempt -- --nocapture`
+  - `cargo test -p integration_tests --test address_canonicalisation -- --nocapture`
+
+## 2026-04-01 Follow-up: `ivm` `koto_domain_demo` builds against the canonical `AccountId` API again
+- Fixed `crates/ivm/examples/koto_domain_demo.rs` after the universal-account
+  migration by removing the duplicate `AccountId` import, switching the
+  example helper to `AccountId::new(public_key)`, and passing the canonical
+  caller `AccountId` directly into `WsvHost::new_with_subject(...)` instead of
+  the obsolete `AccountId::from(&...)` conversion.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo build -p ivm --example koto_domain_demo`
+    passes; the build still emits pre-existing unrelated dead-code warnings in
+    `iroha_crypto` and `ivm`
+
 ## 2026-04-01 Follow-up: Nexus routing and cross-dataspace localnet regressions are green again
 - Closed the remaining Nexus regression cluster behind the reported failing
   integration targets:
