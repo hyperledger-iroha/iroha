@@ -25,6 +25,17 @@ Last updated: 2026-04-01
     still need a fresh deploy with the patched artifact before live liveness
     can be confirmed.
 
+## 2026-04-01 Follow-up: Torii RBC endpoint tests now seed the expanded session summary shape
+- Updated the Torii router-level RBC endpoint tests to populate the newer
+  `iroha_core::sumeragi::rbc_status::Summary` metadata fields
+  (`encoding`, shard counts, and reconstruction counters) using the existing
+  `Plain`/zeroed stub values those tests expect.
+- This restores compilation for the seeded-summary test fixtures after the
+  RBC status model grew explicit encoding and reconstruction state.
+- Verification:
+  - `cargo test -p iroha_torii --features telemetry --test sumeragi_rbc_delivered_endpoint --test sumeragi_rbc_sessions_endpoint -- --nocapture`
+  - `cargo fmt --all`
+
 ## 2026-04-01 Follow-up: Sumeragi RBC restart recovery now preserves recovered summaries and settles retained exact-frontier sessions on commit
 - Fixed the actual restart-path bug behind the lingering
   `sumeragi_rbc_recovers_after_peer_restart` timeout cluster:

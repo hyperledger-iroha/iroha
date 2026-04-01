@@ -18,8 +18,8 @@ use iroha_data_model::{
     account::AccountId,
     nexus::{
         DataSpaceId, JurisdictionSet, LaneCompliancePolicy, LaneCompliancePolicyId,
-        LaneComplianceRule, LaneId, LaneStorageProfile, LaneVisibility, ParticipantSelector,
-        LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
+        LaneComplianceRule, LaneId, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
+        LaneStorageProfile, LaneVisibility, ParticipantSelector,
     },
 };
 use iroha_test_samples::ALICE_ID;

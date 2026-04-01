@@ -12,4 +12,6 @@ mod lane_registry;
 mod multilane_kura_layout;
 mod multilane_pipeline;
 mod multilane_router;
+mod privacy_proof_enforcement;
 mod runtime_dataspace_registration_perf;
+mod tx_query_cross_dataspace_routing_localnet;
