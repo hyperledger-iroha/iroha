@@ -1611,8 +1611,8 @@ fn transaction_paths() -> Map {
     let mut pipeline_status = json_get_operation(
         "Transactions",
         "Fetch pipeline transaction status.",
-        "Return the latest pipeline status for a signed transaction hash.",
-        "#/components/schemas/JsonValue",
+        "Return the latest typed pipeline status for a signed transaction hash. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
+        "#/components/schemas/PipelineTransactionStatusResponse",
         vec![
             required_string_query_param("hash", "Transaction hash (hex)."),
             string_query_param(
@@ -1623,6 +1623,15 @@ fn transaction_paths() -> Map {
     );
     if let Some(Value::Object(get_op)) = pipeline_status.get_mut("get") {
         if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
+            responses.insert(
+                "200".to_owned(),
+                Value::Object(single_dual_format_response(
+                    "#/components/schemas/PipelineTransactionStatusResponse",
+                ))
+                .get("200")
+                .cloned()
+                .expect("200 response present"),
+            );
             responses.insert(
                 "404".to_owned(),
                 json_response(
@@ -2799,6 +2808,37 @@ fn account_paths() -> Map {
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
+    );
+    let mut account_get = json_get_operation(
+        "Accounts",
+        "Fetch canonical account detail.",
+        "Fetch the canonical same-route account existence/materialization view for a specific account id or alias. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
+        "#/components/schemas/AccountReadResponse",
+        vec![string_path_param(
+            "account_id",
+            "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+        )],
+    );
+    if let Some(Value::Object(get_op)) = account_get.get_mut("get") {
+        if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
+            responses.insert(
+                "200".to_owned(),
+                Value::Object(single_dual_format_response(
+                    "#/components/schemas/AccountReadResponse",
+                ))
+                .get("200")
+                .cloned()
+                .expect("200 response present"),
+            );
+            responses.insert(
+                "404".to_owned(),
+                json_response("Account not found.", error_schema_reference()),
+            );
+        }
+    }
+    paths.insert(
+        "/v1/accounts/{account_id}".to_owned(),
+        Value::Object(account_get),
     );
     paths.insert(
         "/v1/accounts/faucet/puzzle".to_owned(),
@@ -5140,6 +5180,25 @@ fn single_json_response(schema_ref: &str) -> Map {
     responses
 }
 
+fn single_dual_format_response(schema_ref: &str) -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        norito::json!({
+            "description": "Successful response",
+            "content": {
+                "application/json": {
+                    "schema": { "$ref": schema_ref }
+                },
+                "application/x-norito": {
+                    "schema": { "$ref": schema_ref }
+                }
+            }
+        }),
+    );
+    responses
+}
+
 fn json_request_body(schema_ref: &str) -> Map {
     let mut body = Map::new();
     body.insert("required".into(), Value::Bool(true));
@@ -6931,6 +6990,91 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "array",
             "items": { "$ref": "#/components/schemas/JsonValue" }
+        }),
+    );
+    schemas.insert(
+        "PipelineTransactionStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["Queued", "Approved", "Committed", "Applied", "Rejected", "Expired"],
+                    "description": "Stable pipeline status kind."
+                },
+                "block_height": {
+                    "type": ["integer", "null"],
+                    "format": "uint64",
+                    "description": "Block height reported for the status when available."
+                },
+                "rejection_reason": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Structured rejection reason when `kind` is `Rejected`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "PipelineTransactionStatusResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["hash", "status", "scope", "resolved_from"],
+            "additionalProperties": false,
+            "properties": {
+                "hash": {
+                    "type": "string",
+                    "description": "Canonical signed transaction hash (hex, lowercase)."
+                },
+                "status": {
+                    "$ref": "#/components/schemas/PipelineTransactionStatus"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["local", "auto", "global"],
+                    "description": "Read scope applied by Torii."
+                },
+                "resolved_from": {
+                    "type": "string",
+                    "enum": ["cache", "queue", "state"],
+                    "description": "Source used by Torii to resolve the status."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountReadResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "opaque_ids", "linked_domains"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier rendered as the domainless I105 literal."
+                },
+                "label": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Stable account label when assigned.",
+                    "nullable": true
+                },
+                "uaid": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Universal account identifier bound to this account when registered in Nexus.",
+                    "nullable": true
+                },
+                "opaque_ids": {
+                    "type": "array",
+                    "description": "Opaque identifiers currently mapped to the account UAID.",
+                    "items": { "$ref": "#/components/schemas/JsonValue" }
+                },
+                "linked_domains": {
+                    "type": "array",
+                    "description": "Domains currently linked to the subject in state indexes.",
+                    "items": { "type": "string" }
+                }
+            }
         }),
     );
     schemas.insert(
@@ -10538,6 +10682,22 @@ mod tests {
             responses.contains_key("404"),
             "pipeline status should document 404 for missing cache entries"
         );
+        let response_200 = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .expect("200 response");
+        let content = response_200
+            .get("content")
+            .and_then(Value::as_object)
+            .expect("pipeline status content");
+        assert!(
+            content.contains_key("application/json"),
+            "pipeline status should document default JSON output"
+        );
+        assert!(
+            content.contains_key("application/x-norito"),
+            "pipeline status should document typed Norito output"
+        );
         let params = get
             .get("parameters")
             .and_then(Value::as_array)
@@ -10553,6 +10713,41 @@ mod tests {
             has_scope,
             "pipeline status should document scope query hint"
         );
+    }
+
+    #[test]
+    fn account_get_documents_canonical_dual_format_read() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let account_get = paths
+            .get("/v1/accounts/{account_id}")
+            .and_then(Value::as_object)
+            .expect("account get path");
+        let get = account_get
+            .get("get")
+            .and_then(Value::as_object)
+            .expect("get op");
+        let responses = get
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("responses");
+        assert!(
+            responses.contains_key("404"),
+            "account get should document missing-account behavior"
+        );
+        let response_200 = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .expect("200 response");
+        let content = response_200
+            .get("content")
+            .and_then(Value::as_object)
+            .expect("account get content");
+        assert!(content.contains_key("application/json"));
+        assert!(content.contains_key("application/x-norito"));
     }
 
     #[test]

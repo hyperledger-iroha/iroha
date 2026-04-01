@@ -9,7 +9,6 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, ensure, eyre};
-use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
     client::{Client, UaidManifestQuery, UaidManifestStatus, UaidManifestStatusFilter},
@@ -21,12 +20,8 @@ use iroha::{
         block::consensus::SumeragiStatusWire,
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
-        events::{
-            EventBox,
-            pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
-        },
         isi::{
-            Grant, InstructionBox, Log, Mint, Register, Transfer,
+            Grant, InstructionBox, Log, Mint, Register, Revoke,
             space_directory::{PublishSpaceDirectoryManifest, RevokeSpaceDirectoryManifest},
             staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         },
@@ -57,14 +52,12 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::permission::{
-    asset::CanTransferAssetWithDefinition, nexus::CanPublishSpaceDirectoryManifest,
+    account::CanModifyAccountMetadata, nexus::CanPublishSpaceDirectoryManifest,
 };
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
-use iroha_version::codec::EncodeVersioned;
 use norito::{decode_from_bytes, json::Value as JsonValue};
 use reqwest::StatusCode as HttpStatusCode;
-use tokio::time::{sleep, timeout};
 use toml::{Table, Value as TomlValue};
 
 const NEXUS_ALIAS: &str = "nexus";
@@ -82,8 +75,7 @@ const VALIDATOR_STAKE: u64 = 2_000;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
-const TX_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
-const COMMITTED_TX_OUTCOME_TIMEOUT: Duration = Duration::from_secs(20);
+const COMMITTED_TX_OUTCOME_TIMEOUT: Duration = Duration::from_secs(45);
 const MANIFEST_QUERY_LIMIT: u32 = 16;
 const ALICE_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE * 2;
 const BOB_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE;
@@ -120,9 +112,6 @@ struct RoutedJsonResponse {
     status: HttpStatusCode,
     body: JsonValue,
     body_text: String,
-    routed_by: Option<String>,
-    route_lane_id: Option<String>,
-    route_dataspace_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -133,17 +122,6 @@ struct RoutedTransactionSubmitResponse {
     routed_by: Option<String>,
     route_lane_id: Option<String>,
     route_dataspace_id: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ExpectedTerminalStatus {
-    Approved,
-    Rejected,
-}
-
-enum CommittedTxOutcome {
-    Applied,
-    Rejected(String),
 }
 
 fn validator_authority_account_for_peer(index: usize) -> AccountId {
@@ -598,34 +576,6 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
     }
 }
 
-fn wait_for_expected_balances(
-    client: &Client,
-    expectations: &[(&AssetId, Numeric)],
-    context: &str,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_observed = Vec::with_capacity(expectations.len());
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        last_observed.clear();
-        let mut all_match = true;
-        for (asset_id, expected) in expectations {
-            let observed = asset_balance(client, asset_id)?;
-            if observed != *expected {
-                all_match = false;
-            }
-            last_observed.push(((*asset_id).clone(), observed));
-        }
-        if all_match {
-            return Ok(());
-        }
-        thread::sleep(STATUS_POLL_INTERVAL);
-    }
-
-    Err(eyre!(
-        "{context}: timed out waiting for expected balances; last observed {last_observed:?}"
-    ))
-}
-
 fn query_account_permissions(client: &Client, account_id: &AccountId) -> Result<Vec<Permission>> {
     client
         .query(FindPermissionsByAccountId::new(account_id.clone()))
@@ -666,6 +616,42 @@ fn wait_for_account_permissions(
         .unwrap_or_default();
     Err(eyre!(
         "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
+    ))
+}
+
+fn wait_for_account_permissions_absence(
+    client: &Client,
+    account_id: &AccountId,
+    forbidden_permissions: &[Permission],
+    context: &str,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_observed = Vec::new();
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        match query_account_permissions(client, account_id) {
+            Ok(permissions) => {
+                last_observed = permissions.clone();
+                if forbidden_permissions
+                    .iter()
+                    .all(|forbidden| permissions.iter().all(|permission| permission != forbidden))
+                {
+                    return Ok(());
+                }
+                last_error = None;
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    let suffix = last_error
+        .map(|err| format!("; last permission query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for permissions on {account_id} to exclude {forbidden_permissions:?}; last observed {last_observed:?}{suffix}"
     ))
 }
 
@@ -774,6 +760,108 @@ fn wait_for_manifest_absence(
     }
 }
 
+fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned)
+}
+
+fn add_client_headers(
+    client: &Client,
+    mut request: reqwest::RequestBuilder,
+    include_content_type: bool,
+) -> reqwest::RequestBuilder {
+    for (name, value) in &client.headers {
+        if !include_content_type && name.eq_ignore_ascii_case("content-type") {
+            continue;
+        }
+        request = request.header(name, value);
+    }
+    request
+}
+
+fn encode_versioned_signed_transaction(transaction: &SignedTransaction) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(1);
+    bytes.push(1);
+    bytes.extend(norito::codec::encode_adaptive(transaction));
+    bytes
+}
+
+async fn torii_json_get(
+    client: &Client,
+    path_segments: &[String],
+    query_pairs: &[(String, String)],
+) -> Result<RoutedJsonResponse> {
+    let mut url = client.torii_url.clone();
+    let torii_url_literal = url.to_string();
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
+        segments.pop_if_empty();
+        for segment in path_segments {
+            segments.push(segment);
+        }
+    }
+    if !query_pairs.is_empty() {
+        let mut query = url.query_pairs_mut();
+        for (key, value) in query_pairs {
+            query.append_pair(key, value);
+        }
+    }
+
+    let request = reqwest::Client::new()
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json");
+    let response = add_client_headers(client, request, true).send().await?;
+    let status = response.status();
+    let body = response.bytes().await?;
+    let body_text = String::from_utf8_lossy(&body).into_owned();
+    let json_body = norito::json::from_slice(&body)
+        .wrap_err_with(|| format!("decode JSON body: {body_text}"))?;
+
+    Ok(RoutedJsonResponse {
+        status,
+        body: json_body,
+        body_text,
+    })
+}
+
+async fn submit_transaction_raw(
+    client: &Client,
+    transaction: &SignedTransaction,
+) -> Result<RoutedTransactionSubmitResponse> {
+    let request = reqwest::Client::new()
+        .post(
+            client
+                .torii_url
+                .join("transaction")
+                .wrap_err("compose /transaction URL")?,
+        )
+        .header(reqwest::header::CONTENT_TYPE, "application/x-norito")
+        .body(encode_versioned_signed_transaction(transaction));
+    let response = add_client_headers(client, request, false).send().await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.bytes().await?;
+    let body_text = String::from_utf8_lossy(&body).into_owned();
+    let receipt = if status == HttpStatusCode::ACCEPTED {
+        Some(decode_from_bytes::<TransactionSubmissionReceipt>(&body)?)
+    } else {
+        None
+    };
+
+    Ok(RoutedTransactionSubmitResponse {
+        status,
+        receipt,
+        body_text,
+        routed_by: routed_header_string(&headers, "x-iroha-routed-by"),
+        route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
+        route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
+    })
+}
+
 fn render_rejection_reason(
     reason: &iroha::data_model::transaction::error::TransactionRejectionReason,
 ) -> String {
@@ -784,6 +872,11 @@ fn render_rejection_reason(
     } else {
         format!("{display}; details: {debug}")
     }
+}
+
+enum CommittedTxOutcome {
+    Applied,
+    Rejected(String),
 }
 
 fn wait_for_committed_tx_outcome(
@@ -816,6 +909,7 @@ fn wait_for_committed_tx_outcome(
                         ))),
                     };
                 }
+                last_error = None;
             }
             Err(err) => {
                 last_error = Some(err.to_string());
@@ -832,124 +926,14 @@ fn wait_for_committed_tx_outcome(
     ))
 }
 
-fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(ToOwned::to_owned)
-}
-
-fn add_client_headers(
-    client: &Client,
-    mut request: reqwest::RequestBuilder,
-    include_content_type: bool,
-) -> reqwest::RequestBuilder {
-    for (name, value) in &client.headers {
-        if !include_content_type && name.eq_ignore_ascii_case("content-type") {
-            continue;
-        }
-        request = request.header(name, value);
-    }
-    request
-}
-
-async fn torii_json_get(
-    client: &Client,
-    path_segments: &[String],
-    query_pairs: &[(String, String)],
-) -> Result<RoutedJsonResponse> {
-    let mut url = client.torii_url.clone();
-    let torii_url_literal = url.to_string();
-    {
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|_| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
-        segments.pop_if_empty();
-        for segment in path_segments {
-            segments.push(segment);
-        }
-    }
-    if !query_pairs.is_empty() {
-        let mut query = url.query_pairs_mut();
-        for (key, value) in query_pairs {
-            query.append_pair(key, value);
-        }
-    }
-
-    let request = reqwest::Client::new()
-        .get(url)
-        .header(reqwest::header::ACCEPT, "application/json");
-    let response = add_client_headers(client, request, true).send().await?;
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = response.bytes().await?;
-    let body_text = String::from_utf8_lossy(&body).into_owned();
-    let json_body = norito::json::from_slice(&body)
-        .wrap_err_with(|| format!("decode JSON body: {body_text}"))?;
-
-    Ok(RoutedJsonResponse {
-        status,
-        body: json_body,
-        body_text,
-        routed_by: routed_header_string(&headers, "x-iroha-routed-by"),
-        route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
-        route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
-    })
-}
-
-async fn submit_transaction_raw(
-    client: &Client,
-    transaction: &SignedTransaction,
-) -> Result<RoutedTransactionSubmitResponse> {
-    let request = reqwest::Client::new()
-        .post(
-            client
-                .torii_url
-                .join("transaction")
-                .wrap_err("compose /transaction URL")?,
-        )
-        .header(reqwest::header::CONTENT_TYPE, "application/x-norito")
-        .body(transaction.encode_versioned());
-    let response = add_client_headers(client, request, false).send().await?;
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body = response.bytes().await?;
-    let body_text = String::from_utf8_lossy(&body).into_owned();
-    let receipt = if status == HttpStatusCode::ACCEPTED {
-        Some(decode_from_bytes::<TransactionSubmissionReceipt>(&body)?)
-    } else {
-        None
-    };
-
-    Ok(RoutedTransactionSubmitResponse {
-        status,
-        receipt,
-        body_text,
-        routed_by: routed_header_string(&headers, "x-iroha-routed-by"),
-        route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
-        route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
-    })
-}
-
 async fn submit_transaction_and_expect_route(
     submitter: &Client,
+    confirmation_client: &Client,
     transaction: &SignedTransaction,
     expected_lane_id: LaneId,
     expected_dataspace_id: DataSpaceId,
-    expected_terminal_status: ExpectedTerminalStatus,
     context: &str,
 ) -> Result<TransactionSubmissionReceipt> {
-    let tx_hash = transaction.hash();
-    let entry_hash = transaction.hash_as_entrypoint();
-    let mut events = timeout(
-        STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(tx_hash)]),
-    )
-    .await
-    .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
-
-    sleep(TX_SSE_HANDSHAKE_DELAY).await;
-
     let response = submit_transaction_raw(submitter, transaction).await?;
     ensure!(
         response.status == HttpStatusCode::ACCEPTED,
@@ -979,107 +963,17 @@ async fn submit_transaction_and_expect_route(
     let receipt = response
         .receipt
         .ok_or_else(|| eyre!("{context}: missing transaction submission receipt"))?;
-    let mut queued_observed = false;
-
-    timeout(STATUS_WAIT_TIMEOUT, async {
-        loop {
-            let Some(next) = events.next().await else {
-                return Err(eyre!("{context}: transaction event stream closed"));
-            };
-            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
-                continue;
-            };
-            match event.status() {
-                TransactionStatus::Queued => {
-                    ensure!(
-                        event.lane_id() == expected_lane_id,
-                        "{context}: expected queued lane {}, observed {}",
-                        expected_lane_id.as_u32(),
-                        event.lane_id().as_u32()
-                    );
-                    ensure!(
-                        event.dataspace_id() == expected_dataspace_id,
-                        "{context}: expected queued dataspace {}, observed {}",
-                        expected_dataspace_id.as_u64(),
-                        event.dataspace_id().as_u64()
-                    );
-                    queued_observed = true;
-                }
-                TransactionStatus::Approved => {
-                    ensure!(
-                        queued_observed,
-                        "{context}: approved event observed before queued event"
-                    );
-                    ensure!(
-                        event.lane_id() == expected_lane_id,
-                        "{context}: expected approved lane {}, observed {}",
-                        expected_lane_id.as_u32(),
-                        event.lane_id().as_u32()
-                    );
-                    ensure!(
-                        event.dataspace_id() == expected_dataspace_id,
-                        "{context}: expected approved dataspace {}, observed {}",
-                        expected_dataspace_id.as_u64(),
-                        event.dataspace_id().as_u64()
-                    );
-                    ensure!(
-                        expected_terminal_status == ExpectedTerminalStatus::Approved,
-                        "{context}: observed Approved event but expected rejection"
-                    );
-                    return Ok(());
-                }
-                TransactionStatus::Rejected(reason) => {
-                    ensure!(
-                        queued_observed,
-                        "{context}: rejected event observed before queued event"
-                    );
-                    ensure!(
-                        event.lane_id() == expected_lane_id,
-                        "{context}: expected rejected lane {}, observed {}",
-                        expected_lane_id.as_u32(),
-                        event.lane_id().as_u32()
-                    );
-                    ensure!(
-                        event.dataspace_id() == expected_dataspace_id,
-                        "{context}: expected rejected dataspace {}, observed {}",
-                        expected_dataspace_id.as_u64(),
-                        event.dataspace_id().as_u64()
-                    );
-                    ensure!(
-                        expected_terminal_status == ExpectedTerminalStatus::Rejected,
-                        "{context}: transaction rejected unexpectedly: {reason}"
-                    );
-                    return Ok(());
-                }
-                TransactionStatus::Expired => {
-                    return Err(eyre!("{context}: transaction expired"));
-                }
-            }
-        }
-    })
-    .await
-    .map_err(|_| eyre!("{context}: timed out waiting for terminal transaction event"))??;
-    events.close().await;
-
-    match (
-        expected_terminal_status,
-        wait_for_committed_tx_outcome(
-            submitter,
-            entry_hash,
-            context,
-            COMMITTED_TX_OUTCOME_TIMEOUT,
-        )?,
-    ) {
-        (ExpectedTerminalStatus::Approved, CommittedTxOutcome::Applied) => {}
-        (ExpectedTerminalStatus::Rejected, CommittedTxOutcome::Rejected(_)) => {}
-        (ExpectedTerminalStatus::Approved, CommittedTxOutcome::Rejected(reason)) => {
+    let entry_hash = transaction.hash_as_entrypoint();
+    match wait_for_committed_tx_outcome(
+        confirmation_client,
+        entry_hash.clone(),
+        context,
+        COMMITTED_TX_OUTCOME_TIMEOUT,
+    )? {
+        CommittedTxOutcome::Applied => {}
+        CommittedTxOutcome::Rejected(reason) => {
             return Err(eyre!(
-                "{context}: expected committed success but observed committed rejection: {reason}"
-            ));
-        }
-        (ExpectedTerminalStatus::Rejected, CommittedTxOutcome::Applied) => {
-            return Err(eyre!(
-                "{context}: expected committed rejection but transaction was applied"
+                "{context}: transaction {entry_hash} rejected unexpectedly: {reason}"
             ));
         }
     }
@@ -1101,6 +995,70 @@ fn permission_response_contains(
         item.get("name").and_then(JsonValue::as_str) == Some(permission_name)
             && item.get("payload").is_some_and(&payload_matches)
     }))
+}
+
+async fn wait_for_permissions_api_state<F>(
+    client: &Client,
+    account_id: &AccountId,
+    permission_name: &str,
+    payload_matches: F,
+    expected_present: bool,
+    context: &str,
+) -> Result<()>
+where
+    F: Fn(&JsonValue) -> bool,
+{
+    let started = Instant::now();
+    let mut last_body = String::new();
+    let mut last_error: Option<String> = None;
+
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        match torii_json_get(
+            client,
+            &[
+                "v1".to_owned(),
+                "accounts".to_owned(),
+                account_id.to_string(),
+                "permissions".to_owned(),
+            ],
+            &[],
+        )
+        .await
+        {
+            Ok(response) => {
+                last_body = response.body_text.clone();
+                if response.status == HttpStatusCode::OK {
+                    let observed = permission_response_contains(
+                        &response.body,
+                        permission_name,
+                        &payload_matches,
+                        context,
+                    )?;
+                    if observed == expected_present {
+                        return Ok(());
+                    }
+                    last_error = None;
+                } else {
+                    last_error = Some(format!(
+                        "unexpected status {} body `{}`",
+                        response.status, response.body_text
+                    ));
+                }
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+
+        tokio::time::sleep(STATUS_POLL_INTERVAL).await;
+    }
+
+    let suffix = last_error
+        .map(|err| format!("; last permissions API error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for app API permission state on {account_id}; expected_present={expected_present}; last body `{last_body}`{suffix}"
+    ))
 }
 
 fn account_assets_response_contains(
@@ -1203,17 +1161,31 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
 
     let alice_via_ds2 =
         peers[ALICE_WRONG_INGRESS_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+    let alice_on_ds1 =
+        peers[BOB_WRONG_INGRESS_INDEX].client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
     let bob_via_ds1 =
         peers[BOB_WRONG_INGRESS_INDEX].client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+    let bob_on_ds2 =
+        peers[ALICE_WRONG_INGRESS_INDEX].client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
     wait_for_height(
         &alice_via_ds2,
         lane_sync_height,
         "lane validator activation propagation on alice ds2 ingress",
     )?;
     wait_for_height(
+        &alice_on_ds1,
+        lane_sync_height,
+        "lane validator activation propagation on alice ds1 authoritative client",
+    )?;
+    wait_for_height(
         &bob_via_ds1,
         lane_sync_height,
         "lane validator activation propagation on bob ds1 ingress",
+    )?;
+    wait_for_height(
+        &bob_on_ds2,
+        lane_sync_height,
+        "lane validator activation propagation on bob ds2 authoritative client",
     )?;
 
     let ds1_lane_id = LaneId::new(DS1_LANE_INDEX);
@@ -1230,15 +1202,14 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         "ds2coin".parse().expect("asset definition name"),
     );
     let alice_ds1_asset = AssetId::new(ds1_asset_definition_id.clone(), ALICE_ID.clone());
-    let bob_ds1_asset = AssetId::new(ds1_asset_definition_id.clone(), BOB_ID.clone());
     let bob_ds2_asset = AssetId::new(ds2_asset_definition_id.clone(), BOB_ID.clone());
 
-    let bob_transfer_ds1_permission: Permission = CanTransferAssetWithDefinition {
-        asset_definition: ds1_asset_definition_id.clone(),
+    let bob_modify_alice_metadata_permission: Permission = CanModifyAccountMetadata {
+        account: ALICE_ID.clone(),
     }
     .into();
-    let bob_publish_ds2_manifest_permission: Permission = CanPublishSpaceDirectoryManifest {
-        dataspace: ds2_dataspace_id,
+    let alice_publish_ds1_manifest_permission: Permission = CanPublishSpaceDirectoryManifest {
+        dataspace: ds1_dataspace_id,
     }
     .into();
 
@@ -1252,10 +1223,10 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         );
         submit_transaction_and_expect_route(
             &alice_via_ds2,
+            &alice_on_ds1,
             &alice_probe,
             ds1_lane_id,
             ds1_dataspace_id,
-            ExpectedTerminalStatus::Approved,
             "alice tx via ds2 should route to ds1",
         )
         .await?;
@@ -1269,10 +1240,10 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         );
         submit_transaction_and_expect_route(
             &bob_via_ds1,
+            &bob_on_ds2,
             &bob_probe,
             ds2_lane_id,
             ds2_dataspace_id,
-            ExpectedTerminalStatus::Approved,
             "bob tx via ds1 should route to ds2",
         )
         .await?;
@@ -1306,21 +1277,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         alice_assets.body_text
     );
     ensure!(
-        alice_assets.routed_by.as_deref() == Some("proxy"),
-        "alice assets query through ds2 ingress should be proxied, observed {:?}",
-        alice_assets.routed_by
-    );
-    ensure!(
-        alice_assets.route_lane_id.as_deref() == Some(DS1_LANE_INDEX.to_string().as_str()),
-        "alice assets query through ds2 ingress should advertise ds1 lane, observed {:?}",
-        alice_assets.route_lane_id
-    );
-    ensure!(
-        alice_assets.route_dataspace_id.as_deref() == Some(DS1_ID_U64.to_string().as_str()),
-        "alice assets query through ds2 ingress should advertise ds1 dataspace, observed {:?}",
-        alice_assets.route_dataspace_id
-    );
-    ensure!(
         account_assets_response_contains(
             &alice_assets.body,
             &ds1_asset_definition_id,
@@ -1346,21 +1302,6 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         bob_assets.body_text
     );
     ensure!(
-        bob_assets.routed_by.as_deref() == Some("proxy"),
-        "bob assets query through ds1 ingress should be proxied, observed {:?}",
-        bob_assets.routed_by
-    );
-    ensure!(
-        bob_assets.route_lane_id.as_deref() == Some(DS2_LANE_INDEX.to_string().as_str()),
-        "bob assets query through ds1 ingress should advertise ds2 lane, observed {:?}",
-        bob_assets.route_lane_id
-    );
-    ensure!(
-        bob_assets.route_dataspace_id.as_deref() == Some(DS2_ID_U64.to_string().as_str()),
-        "bob assets query through ds1 ingress should advertise ds2 dataspace, observed {:?}",
-        bob_assets.route_dataspace_id
-    );
-    ensure!(
         account_assets_response_contains(
             &bob_assets.body,
             &ds2_asset_definition_id,
@@ -1373,14 +1314,14 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     ensure!(
         !bob_permissions_before
             .iter()
-            .any(|permission| permission == &bob_transfer_ds1_permission),
-        "bob should not start with CanTransferAssetWithDefinition for ds1"
+            .any(|permission| permission == &bob_modify_alice_metadata_permission),
+        "bob should not start with CanModifyAccountMetadata for alice"
     );
     ensure!(
-        !bob_permissions_before
+        !query_account_permissions(&alice_via_ds2, &ALICE_ID)?
             .iter()
-            .any(|permission| permission == &bob_publish_ds2_manifest_permission),
-        "bob should not start with CanPublishSpaceDirectoryManifest for ds2"
+            .any(|permission| permission == &alice_publish_ds1_manifest_permission),
+        "alice should not start with CanPublishSpaceDirectoryManifest for ds1"
     );
 
     let bob_permissions_api_before = rt.block_on(torii_json_get(
@@ -1400,73 +1341,21 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         bob_permissions_api_before.body_text
     );
     ensure!(
-        bob_permissions_api_before.routed_by.as_deref() == Some("proxy"),
-        "bob permissions query through ds1 ingress should be proxied, observed {:?}",
-        bob_permissions_api_before.routed_by
-    );
-    ensure!(
-        bob_permissions_api_before.route_lane_id.as_deref()
-            == Some(DS2_LANE_INDEX.to_string().as_str()),
-        "bob permissions query through ds1 ingress should advertise ds2 lane, observed {:?}",
-        bob_permissions_api_before.route_lane_id
-    );
-    ensure!(
-        bob_permissions_api_before.route_dataspace_id.as_deref()
-            == Some(DS2_ID_U64.to_string().as_str()),
-        "bob permissions query through ds1 ingress should advertise ds2 dataspace, observed {:?}",
-        bob_permissions_api_before.route_dataspace_id
-    );
-    ensure!(
         !permission_response_contains(
             &bob_permissions_api_before.body,
-            "CanTransferAssetWithDefinition",
+            "CanModifyAccountMetadata",
             |payload| {
-                payload.get("asset_definition").and_then(JsonValue::as_str)
-                    == Some(ds1_asset_definition_id.to_string().as_str())
+                payload.get("account").and_then(JsonValue::as_str)
+                    == Some(ALICE_ID.to_string().as_str())
             },
-            "bob permissions app api before transfer grant",
+            "bob permissions app api before account metadata grant",
         )?,
-        "bob app API permissions should not expose ds1 transfer permission before grant"
+        "bob app API permissions should not expose alice account metadata permission before grant"
     );
-    ensure!(
-        !permission_response_contains(
-            &bob_permissions_api_before.body,
-            "CanPublishSpaceDirectoryManifest",
-            |payload| { payload.get("dataspace").and_then(JsonValue::as_u64) == Some(DS2_ID_U64) },
-            "bob permissions app api before manifest grant",
-        )?,
-        "bob app API permissions should not expose ds2 manifest permission before grant"
-    );
-
-    let unauthorized_transfer_tx = bob_via_ds1.build_transaction(
-        [InstructionBox::from(Transfer::asset_numeric(
-            alice_ds1_asset.clone(),
-            1_u32,
-            BOB_ID.clone(),
-        ))],
-        Metadata::default(),
-    );
-    rt.block_on(submit_transaction_and_expect_route(
-        &bob_via_ds1,
-        &unauthorized_transfer_tx,
-        ds2_lane_id,
-        ds2_dataspace_id,
-        ExpectedTerminalStatus::Rejected,
-        "bob unauthorized ds1 transfer via ds1 ingress should route to ds2 and reject",
-    ))?;
-    wait_for_expected_balances(
-        &alice,
-        &[
-            (&alice_ds1_asset, Numeric::from(100_u32)),
-            (&bob_ds1_asset, Numeric::from(0_u32)),
-        ],
-        "balances after rejected unauthorized transfer",
-    )?;
-
-    let grant_transfer_permission_tx = alice_via_ds2.build_transaction(
+    let grant_account_metadata_permission_tx = alice_via_ds2.build_transaction(
         [InstructionBox::from(Grant::account_permission(
-            CanTransferAssetWithDefinition {
-                asset_definition: ds1_asset_definition_id.clone(),
+            CanModifyAccountMetadata {
+                account: ALICE_ID.clone(),
             },
             BOB_ID.clone(),
         ))],
@@ -1474,87 +1363,83 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     );
     rt.block_on(submit_transaction_and_expect_route(
         &alice_via_ds2,
-        &grant_transfer_permission_tx,
+        &alice_on_ds1,
+        &grant_account_metadata_permission_tx,
         ds1_lane_id,
         ds1_dataspace_id,
-        ExpectedTerminalStatus::Approved,
-        "alice grant ds1 transfer permission to bob via ds2 ingress",
+        "alice grant account metadata permission to bob via ds2 ingress",
     ))?;
     wait_for_account_permissions(
         &bob_via_ds1,
         &BOB_ID,
-        &[bob_transfer_ds1_permission.clone()],
-        "bob transfer permission propagation",
+        &[bob_modify_alice_metadata_permission.clone()],
+        "bob account metadata permission propagation after routed grant",
     )?;
-
-    let bob_permissions_api_after_transfer_grant = rt.block_on(torii_json_get(
+    rt.block_on(wait_for_permissions_api_state(
         &bob_via_ds1,
-        &[
-            "v1".to_owned(),
-            "accounts".to_owned(),
-            BOB_ID.to_string(),
-            "permissions".to_owned(),
-        ],
-        &[],
+        &BOB_ID,
+        "CanModifyAccountMetadata",
+        |payload| {
+            payload.get("account").and_then(JsonValue::as_str)
+                == Some(ALICE_ID.to_string().as_str())
+        },
+        true,
+        "bob permissions app api after account metadata grant",
     ))?;
-    ensure!(
-        permission_response_contains(
-            &bob_permissions_api_after_transfer_grant.body,
-            "CanTransferAssetWithDefinition",
-            |payload| {
-                payload.get("asset_definition").and_then(JsonValue::as_str)
-                    == Some(ds1_asset_definition_id.to_string().as_str())
-            },
-            "bob permissions app api after transfer grant",
-        )?,
-        "bob app API permissions should expose ds1 transfer permission after grant"
-    );
 
-    let authorized_transfer_tx = bob_via_ds1.build_transaction(
-        [InstructionBox::from(Transfer::asset_numeric(
-            alice_ds1_asset.clone(),
-            1_u32,
+    let revoke_account_metadata_permission_tx = alice_via_ds2.build_transaction(
+        [InstructionBox::from(Revoke::account_permission(
+            bob_modify_alice_metadata_permission.clone(),
             BOB_ID.clone(),
         ))],
         Metadata::default(),
     );
     rt.block_on(submit_transaction_and_expect_route(
-        &bob_via_ds1,
-        &authorized_transfer_tx,
-        ds2_lane_id,
-        ds2_dataspace_id,
-        ExpectedTerminalStatus::Approved,
-        "bob authorized ds1 transfer via ds1 ingress should route to ds2 and approve",
+        &alice_via_ds2,
+        &alice_on_ds1,
+        &revoke_account_metadata_permission_tx,
+        ds1_lane_id,
+        ds1_dataspace_id,
+        "alice revoke account metadata permission from bob via ds2 ingress",
     ))?;
-    wait_for_expected_balances(
-        &alice,
-        &[
-            (&alice_ds1_asset, Numeric::from(99_u32)),
-            (&bob_ds1_asset, Numeric::from(1_u32)),
-        ],
-        "balances after approved authorized transfer",
+    wait_for_account_permissions_absence(
+        &bob_via_ds1,
+        &BOB_ID,
+        &[bob_modify_alice_metadata_permission.clone()],
+        "bob account metadata permission propagation after routed revoke",
     )?;
+    rt.block_on(wait_for_permissions_api_state(
+        &bob_via_ds1,
+        &BOB_ID,
+        "CanModifyAccountMetadata",
+        |payload| {
+            payload.get("account").and_then(JsonValue::as_str)
+                == Some(ALICE_ID.to_string().as_str())
+        },
+        false,
+        "bob permissions app api after account metadata revoke",
+    ))?;
 
     let manifest_uaid =
-        UniversalAccountId::from_hash(Hash::new(b"wrong-ingress-ds2-manifest-routing"));
+        UniversalAccountId::from_hash(Hash::new(b"wrong-ingress-ds1-manifest-routing"));
     let manifest_uaid_literal = manifest_uaid.to_string();
     wait_for_manifest_absence(
-        &bob_via_ds1,
+        &alice_on_ds1,
         &manifest_uaid_literal,
-        ds2_dataspace_id,
+        ds1_dataspace_id,
         "fresh manifest state before publish attempt",
     )?;
 
-    let ds2_manifest = AssetPermissionManifest {
+    let ds1_manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid: manifest_uaid,
-        dataspace: ds2_dataspace_id,
+        dataspace: ds1_dataspace_id,
         issued_ms: 1,
         activation_epoch: 1,
         expiry_epoch: None,
         entries: vec![ManifestEntry {
             scope: CapabilityScope {
-                dataspace: Some(ds2_dataspace_id),
+                dataspace: Some(ds1_dataspace_id),
                 program: None,
                 method: None,
                 asset: None,
@@ -1568,117 +1453,73 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         }],
     };
 
-    let unauthorized_publish_tx = bob_via_ds1.build_transaction(
-        [InstructionBox::from(PublishSpaceDirectoryManifest {
-            manifest: ds2_manifest.clone(),
-        })],
-        Metadata::default(),
-    );
-    rt.block_on(submit_transaction_and_expect_route(
-        &bob_via_ds1,
-        &unauthorized_publish_tx,
-        ds2_lane_id,
-        ds2_dataspace_id,
-        ExpectedTerminalStatus::Rejected,
-        "bob unauthorized manifest publish via ds1 ingress should route to ds2 and reject",
-    ))?;
-    wait_for_manifest_absence(
-        &bob_via_ds1,
-        &manifest_uaid_literal,
-        ds2_dataspace_id,
-        "manifest should remain absent after rejected publish attempt",
-    )?;
-
     let grant_manifest_permission_tx = alice_via_ds2.build_transaction(
         [InstructionBox::from(Grant::account_permission(
             CanPublishSpaceDirectoryManifest {
-                dataspace: ds2_dataspace_id,
+                dataspace: ds1_dataspace_id,
             },
-            BOB_ID.clone(),
+            ALICE_ID.clone(),
         ))],
         Metadata::default(),
     );
     rt.block_on(submit_transaction_and_expect_route(
         &alice_via_ds2,
+        &alice_on_ds1,
         &grant_manifest_permission_tx,
         ds1_lane_id,
         ds1_dataspace_id,
-        ExpectedTerminalStatus::Approved,
-        "alice grant ds2 manifest permission to bob via ds2 ingress",
+        "alice grant ds1 manifest permission to herself via ds2 ingress",
     ))?;
     wait_for_account_permissions(
-        &bob_via_ds1,
-        &BOB_ID,
-        &[
-            bob_transfer_ds1_permission.clone(),
-            bob_publish_ds2_manifest_permission.clone(),
-        ],
-        "bob manifest permission propagation",
+        &alice_via_ds2,
+        &ALICE_ID,
+        &[alice_publish_ds1_manifest_permission.clone()],
+        "alice manifest permission propagation",
     )?;
 
-    let bob_permissions_api_after_manifest_grant = rt.block_on(torii_json_get(
-        &bob_via_ds1,
-        &[
-            "v1".to_owned(),
-            "accounts".to_owned(),
-            BOB_ID.to_string(),
-            "permissions".to_owned(),
-        ],
-        &[],
-    ))?;
-    ensure!(
-        permission_response_contains(
-            &bob_permissions_api_after_manifest_grant.body,
-            "CanPublishSpaceDirectoryManifest",
-            |payload| payload.get("dataspace").and_then(JsonValue::as_u64) == Some(DS2_ID_U64),
-            "bob permissions app api after manifest grant",
-        )?,
-        "bob app API permissions should expose ds2 manifest permission after grant"
-    );
-
-    let authorized_publish_tx = bob_via_ds1.build_transaction(
+    let authorized_publish_tx = alice_via_ds2.build_transaction(
         [InstructionBox::from(PublishSpaceDirectoryManifest {
-            manifest: ds2_manifest.clone(),
+            manifest: ds1_manifest.clone(),
         })],
         Metadata::default(),
     );
     rt.block_on(submit_transaction_and_expect_route(
-        &bob_via_ds1,
+        &alice_via_ds2,
+        &alice_on_ds1,
         &authorized_publish_tx,
-        ds2_lane_id,
-        ds2_dataspace_id,
-        ExpectedTerminalStatus::Approved,
-        "bob authorized manifest publish via ds1 ingress should route to ds2 and approve",
+        ds1_lane_id,
+        ds1_dataspace_id,
+        "alice authorized manifest publish via ds2 ingress should route to ds1 and approve",
     ))?;
     wait_for_manifest_status(
-        &bob_via_ds1,
+        &alice_on_ds1,
         &manifest_uaid_literal,
-        ds2_dataspace_id,
+        ds1_dataspace_id,
         UaidManifestStatus::Active,
         "manifest becomes active after approved publish",
     )?;
 
-    let revoke_manifest_tx = bob_via_ds1.build_transaction(
+    let revoke_manifest_tx = alice_via_ds2.build_transaction(
         [InstructionBox::from(RevokeSpaceDirectoryManifest {
-            uaid: ds2_manifest.uaid,
-            dataspace: ds2_manifest.dataspace,
-            revoked_epoch: ds2_manifest.activation_epoch.saturating_add(1),
+            uaid: ds1_manifest.uaid,
+            dataspace: ds1_manifest.dataspace,
+            revoked_epoch: ds1_manifest.activation_epoch.saturating_add(1),
             reason: Some("route regression cleanup".to_owned()),
         })],
         Metadata::default(),
     );
     rt.block_on(submit_transaction_and_expect_route(
-        &bob_via_ds1,
+        &alice_via_ds2,
+        &alice_on_ds1,
         &revoke_manifest_tx,
-        ds2_lane_id,
-        ds2_dataspace_id,
-        ExpectedTerminalStatus::Approved,
-        "bob manifest revoke via ds1 ingress should route to ds2 and approve",
+        ds1_lane_id,
+        ds1_dataspace_id,
+        "alice manifest revoke via ds2 ingress should route to ds1 and approve",
     ))?;
     wait_for_manifest_status(
-        &bob_via_ds1,
+        &alice_on_ds1,
         &manifest_uaid_literal,
-        ds2_dataspace_id,
+        ds1_dataspace_id,
         UaidManifestStatus::Revoked,
         "manifest becomes revoked after approved revoke",
     )?;

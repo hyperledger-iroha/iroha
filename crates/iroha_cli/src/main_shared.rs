@@ -125,6 +125,12 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
+    /// Canonical account reads and account mutations
+    #[command(subcommand)]
+    Account(account::Command),
+    /// Typed transaction status and transaction helpers
+    #[command(subcommand, alias = "transaction")]
+    Tx(transaction::Command),
     /// Ledger data and transaction helpers
     #[command(subcommand)]
     Ledger(ledger::Command),
@@ -380,6 +386,8 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use Command::*;
         match self {
+            Account(variant) => Run::run(variant, context),
+            Tx(variant) => Run::run(variant, context),
             Ledger(variant) => Run::run(variant, context),
             Ops(variant) => Run::run(variant, context),
             Offline(variant) => Run::run(variant, context),
@@ -1683,8 +1691,8 @@ mod account {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
                     let client = context.client_from_config();
-                    let entry: Account = client
-                        .query_single(FindAccountById::new(account_id))
+                    let entry = client
+                        .get_account_read(&account_id)
                         .wrap_err("Failed to get account")?;
                     context.print_data(&entry)
                 }
@@ -4421,6 +4429,8 @@ mod transaction {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
+        /// Read the typed pipeline status of a submitted transaction
+        Status(Status),
         /// Retrieve details of a specific transaction
         Get(Get),
         /// Send an empty transaction that logs a message
@@ -4435,11 +4445,29 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             match self {
+                Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
                 Ping(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
             }
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Status {
+        /// Hash of the signed transaction to inspect
+        #[arg(short('H'), long)]
+        pub hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
+    }
+
+    impl Run for Status {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let client = context.client_from_config();
+            let status = client
+                .get_transaction_status_response(self.hash)?
+                .ok_or_else(|| eyre!("Transaction status not found"))?;
+            context.print_data(&status)
         }
     }
 
@@ -10902,6 +10930,8 @@ mod cli_integration_harness {
     use eyre::eyre;
     use iroha::crypto::KeyPair;
     use iroha::data_model::query::runtime::AbiVersion;
+    #[cfg(feature = "ids_projection")]
+    use iroha::data_model::query::{QueryItemKind, QueryWithFilter};
     use iroha::data_model::{
         account::ScopedAccountId,
         asset::{Asset, AssetId},
@@ -10911,14 +10941,11 @@ mod cli_integration_harness {
         proof::{ProofId, ProofRecord},
         query::{
             QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox,
-            SingularQueryOutputBox,
-            builder::QueryExecutor,
+            SingularQueryOutputBox, builder::QueryExecutor,
         },
         smart_contract::manifest::ContractManifest,
     };
     use iroha_crypto::{Algorithm, Hash};
-    #[cfg(feature = "ids_projection")]
-    use iroha::data_model::query::{QueryItemKind, QueryWithFilter};
     #[cfg(feature = "ids_projection")]
     use norito::codec::Decode;
 
@@ -11953,10 +11980,7 @@ mod cli_integration_harness {
 
     #[test]
     fn harness_singular_account_roundtrip() {
-        use iroha::data_model::{
-            account::Account,
-            query::account::prelude::FindAccountById,
-        };
+        use iroha::data_model::{account::Account, query::account::prelude::FindAccountById};
 
         let account_id = sample_account_id("wonderland", 15);
         let account = Account::new(account_id.clone()).build(&account_id);

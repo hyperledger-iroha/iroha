@@ -37,6 +37,88 @@ Open work for this slice now remains:
 - treat the green NPoS soak matrix as regression coverage for the actor-thread
   fixes, but not as a substitute for the still-red permissioned sustained-load
   envelope.
+Latest sync (2026-04-01 Torii typed status/account contract completion +
+pk-deploy fallback removal):
+the first-release Torii/readiness cleanup is now wired end to end: transaction
+status and account materialization use first-class typed routes, Norito query
+entrypoints fail fast on data-model mismatch instead of speculative decode
+fallbacks, `/status` exposes recent rejection freshness directly, and the
+deployment scripts no longer preserve the interceptor raw-trigger fallback or
+`Find(Account(...))` readiness retry path.
+
+- `/v1/pipeline/transactions/status` now serves the shared typed DTO for both
+  JSON and Norito with JSON-by-default semantics, and
+  `GET /v1/accounts/{account_id}` is the canonical same-route account
+  existence/materialization read for client/CLI/deploy tooling;
+- the Rust client/CLI now use those canonical reads, and the query layer gates
+  all Norito query entrypoints on the compatibility handshake before decode;
+- `/status` now reports `last_rejection_at_ms` and
+  `txs_rejected_recent_5m` from dedicated telemetry-side rolling rejection
+  tracking instead of reusing the cumulative counter as a freshness proxy; and
+- `../pk-deploy` now requires contract-instance-only interceptor convergence,
+  authoritative `GET /v1/accounts/{account_id}` readiness, authoritative-only
+  live alias/account resolution once the lane is up, and sticky public Torii
+  upstream selection keyed from the forwarded client IP.
+
+Open work for this slice now remains:
+- run the live rollout sequence against SBP/AED and the public edge:
+  updated binaries on every pool member, capabilities/data-model-version
+  verification, ingress validation/reload, and the minimal interceptor
+  convergence path on the updated stack
+- rerun the full `pk-deploy` reset/smoke/verify path and require the post-roll
+  invariants:
+  no interceptor raw-trigger activation, no `Find(Account(...))` retry branch,
+  no framed Norito decode failures, and a green aggregate post-reset report
+- rerun broader workspace verification (`cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`) when the time
+  budget allows; this tranche only received targeted crate/script coverage
+
+Latest sync (2026-04-01 restart-recovery rerun + integration_tests strict-lint fix):
+the previously open `sumeragi_rbc_recovers_after_peer_restart` rerun is green
+on the current tree, and the concrete `integration_tests` strict-lint break
+observed during that verification is fixed.
+
+- `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod
+  sumeragi_rbc_recovers_after_peer_restart -- --nocapture` now completes
+  successfully on this checkout; and
+- `cargo clippy -p integration_tests --test mod -- -D warnings` is green again
+  after removing the dead `HashOf` import from the cross-dataspace routing
+  localnet test.
+
+Open work for this slice now remains:
+- rerun the adjacent heavy restart/cold-start recovery scenarios
+  (`sumeragi_rbc_recovers_after_restart_with_roster_change`,
+  `sumeragi_rbc_session_recovers_after_cold_restart`,
+  `sumeragi_rbc_unverified_roster_stash_requests_missing_block`,
+  `sumeragi_da_eviction_rehydrates_block_bodies`) to make sure the now-green
+  restart rerun was not masking a neighboring integration-only regression
+- broader workspace verification (`cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`) still has not been
+  rerun after the latest RBC restart-path and exact-frontier fix tranche
+
+Latest sync (2026-04-01 lock-rejected sink payload-ingress fix):
+the deterministic sink for exact-frontier lock-rejected branch hashes no
+longer self-deactivates when the node already has the rejected block body
+locally or through authoritative RBC ingress, so contiguous child recovery can
+no longer re-request that rejected parent through the exact-frontier body-owner
+path.
+
+- lock-rejected sink activity/pruning now depend on lock continuity,
+  committed-height advancement, and the existing TTL/max-dwell expiry instead
+  of local payload presence for the rejected hash; and
+- focused regressions are green both for the new authoritative-payload
+  suppression case and for the earlier missing-request / slot-owner cleanup
+  paths.
+
+Open work for this slice now remains:
+- build a fresh manifest-backed artifact bundle from this updated tree and run
+  a new `pk-deploy` doctor/reset cycle
+- confirm the reroll clears the current split state where public/SBP are stuck
+  at height `4` while AED has advanced, and verify dataspace-directory
+  publication plus retail bootstrap complete on the redeployed topology
+- broader workspace verification (`cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`) has not been rerun
+  after this sink fix tranche
 
 Latest sync (2026-04-01 exact-frontier lock-reject cleanup):
 the exact-frontier recovery path now fully forgets same-slot branches already

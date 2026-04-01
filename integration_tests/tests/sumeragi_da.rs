@@ -1149,11 +1149,9 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
     };
     let result: Result<()> = async {
         let peers = network.peers();
-        let primary_peer = &peers[0];
-        let restart_peer = &peers[1];
-        let removed_peer = &peers[3];
-        let removed_peer_id = removed_peer.id();
-        let removed_peer_id_check = removed_peer_id.clone();
+        let primary_peer = peers
+            .first()
+            .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let config_layers: Vec<ConfigLayer> = network
             .config_layers()
             .map(|cow| ConfigLayer(cow.into_owned()))
@@ -1162,6 +1160,51 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
         let client = primary_peer.client();
         let status_before = fetch_status(&client).await?;
         let expected_height = status_before.blocks + 1;
+        let roster_change_height = expected_height.saturating_add(1);
+        let prf_seed = chain_epoch_seed(&network.chain_id());
+        let roster_change_leader = resolve_permissioned_leader_peer(
+            peers,
+            roster_change_height,
+            0,
+            Some(prf_seed),
+        )
+        .wrap_err_with(|| {
+            format!(
+                "resolve permissioned leader for roster-change height {roster_change_height}"
+            )
+        })?;
+        let roster_change_leader_id = roster_change_leader.id();
+        let restart_peer = peers
+            .iter()
+            .find(|peer| peer.id() != primary_peer.id() && peer.id() != roster_change_leader_id)
+            .ok_or_else(|| {
+                eyre!(
+                    "failed to pick restart peer distinct from primary {} and roster-change leader {}",
+                    primary_peer.id(),
+                    roster_change_leader_id
+                )
+            })?;
+        let removed_peer = peers
+            .iter()
+            .find(|peer| {
+                peer.id() != primary_peer.id()
+                    && peer.id() != restart_peer.id()
+                    && peer.id() != roster_change_leader_id
+            })
+            .or_else(|| {
+                peers.iter().find(|peer| {
+                    peer.id() != primary_peer.id() && peer.id() != restart_peer.id()
+                })
+            })
+            .ok_or_else(|| {
+                eyre!(
+                    "failed to pick removed peer distinct from primary {} and restart peer {}",
+                    primary_peer.id(),
+                    restart_peer.id()
+                )
+            })?;
+        let removed_peer_id = removed_peer.id();
+        let removed_peer_id_check = removed_peer_id.clone();
 
         let torii_primary = client.torii_url.clone();
         let status_url = torii_primary

@@ -567,6 +567,9 @@ pub struct FetchBlockBody {
 pub enum BlockBodyData {
     /// Full authoritative body delivered as a `BlockCreated` payload.
     BlockCreated(#[skip_try_from] BlockCreated),
+    /// Full authoritative body delivered as a `BlockSyncUpdate` payload with optional commit
+    /// sidecars so lagging peers can recover committed frontier blocks without reproposing them.
+    BlockSyncUpdate(#[skip_try_from] BlockSyncUpdate),
 }
 
 /// Exact frontier block-body response keyed by `(height, view, block_hash)`.

@@ -10462,6 +10462,96 @@ async fn fetch_block_body_releases_dedup_after_miss_for_same_requester_retry() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fetch_block_body_response_for_committed_block_preserves_commit_sidecars() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(genesis_hash));
+    let block_hash = block.hash();
+    actor.kura.store_block(block.clone()).expect("store block");
+
+    let tip_block = sample_block(3, 0, Some(block_hash));
+    actor
+        .kura
+        .store_block(tip_block.clone())
+        .expect("store tip block");
+
+    {
+        let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
+        state.push_block_hash_for_testing(block_hash);
+        state.push_block_hash_for_testing(tip_block.hash());
+    }
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = (0..roster.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let epoch = actor.epoch_for_height(2);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        2,
+        0,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint_signature = aggregate_vote_signature_for_bitmap(
+        &actor.common_config.chain,
+        PERMISSIONED_TAG,
+        block_hash,
+        2,
+        0,
+        epoch,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        2,
+        0,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        roster,
+        signers_bitmap,
+        checkpoint_signature,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    {
+        let mut journal = actor.state.commit_roster_journal.write();
+        journal.upsert(qc.clone(), checkpoint.clone(), None);
+    }
+
+    let response = actor.block_body_response_for_wire(&block);
+    match response.body {
+        super::message::BlockBodyData::BlockSyncUpdate(update) => {
+            assert_eq!(update.block.hash(), block_hash);
+            assert_eq!(update.validator_checkpoint, Some(checkpoint));
+            assert!(
+                update.commit_qc.is_some() || update.validator_checkpoint.is_some(),
+                "committed exact body response should preserve authoritative roster sidecars"
+            );
+            if let Some(commit_qc) = update.commit_qc.as_ref() {
+                assert_eq!(commit_qc.subject_block_hash, qc.subject_block_hash);
+                assert_eq!(commit_qc.height, qc.height);
+            }
+        }
+        super::message::BlockBodyData::BlockCreated(_) => {
+            panic!("committed exact body response should preserve block-sync sidecars")
+        }
+    }
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_body_response_releases_dedup_when_block_created_is_rejected() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -10542,6 +10632,107 @@ async fn block_body_response_releases_dedup_when_block_created_is_rejected() {
     assert!(
         !actor.frontier_block_materialized_locally(block_hash),
         "rejected BlockBodyResponse must not materialize a local payload"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_body_response_routes_block_sync_update_through_commit_sidecar_path() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let now = Instant::now();
+
+    assert!(actor.update_frontier_slot(
+        block_hash,
+        height,
+        view,
+        None,
+        BTreeSet::new(),
+        /*block_created_seen*/ true,
+        /*exact_fetch_armed*/ true,
+        /*body_present*/ false,
+        None,
+        None,
+        now,
+    ));
+
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view,
+        block_hash,
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = Some(qc);
+
+    let sender = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote sender");
+
+    actor
+        .handle_block_body_response(
+            super::message::BlockBodyResponse {
+                block_hash,
+                height,
+                view,
+                body: super::message::BlockBodyData::BlockSyncUpdate(update),
+            },
+            Some(sender),
+        )
+        .expect("block body response handled");
+
+    assert!(
+        !actor.known_block_qc_work.is_empty(),
+        "exact BlockBodyResponse should preserve commit-QC work when it carries BlockSyncUpdate"
+    );
+    assert!(
+        actor.frontier_block_materialized_locally(block_hash),
+        "exact BlockBodyResponse should materialize the frontier payload locally"
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot retained");
+    assert!(
+        slot.body_present,
+        "exact BlockBodyResponse should mark the frontier body as present"
     );
 
     harness.shutdown.send();
@@ -17493,6 +17684,98 @@ async fn delivered_exact_frontier_session_retires_runtime_but_keeps_status_summa
         summary.received_chunks,
         session.received_chunks(),
         "retained summary should preserve chunk progress",
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn delivered_exact_frontier_retirement_records_payload_bytes_metric() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let block_hash = block.hash();
+    let session_key = (block_hash, height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session =
+        RbcSession::test_new(2, Some(payload_hash), None, actor.epoch_for_height(height));
+    session.test_note_chunk(0, vec![0xAA; 8], 0);
+    session.test_set_delivered(true);
+
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+    actor.note_authoritative_slot_owner(height, view, block_hash);
+    actor.update_rbc_status_entry(session_key, &session, false);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(session_key, session);
+
+    assert!(
+        actor.retire_exact_frontier_rbc_runtime(session_key, "test"),
+        "delivered exact-frontier session should retire after local payload convergence",
+    );
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "runtime retirement should emit authoritative payload bytes before dropping the live session"
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn clear_rbc_runtime_state_records_payload_bytes_from_kura_rs16() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    actor.config.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Rs16;
+    actor.config.rbc.data_shards = 4;
+    actor.config.rbc.parity_shards = 2;
+    actor.config.rbc.chunk_max_bytes = 512;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = 2u64;
+    let view = 0u64;
+    let txs: Vec<_> = (0..32).map(|_| sample_transaction()).collect();
+    let block = block_with_txs(height, view, Some(genesis_hash), txs);
+    let block_hash = block.hash();
+    let key = (block_hash, height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+
+    actor
+        .kura
+        .store_block(Arc::new(block.clone()))
+        .expect("store block");
+
+    let mut session = partial_rbc_session_for_block_with_config_chunking(actor, &block);
+    session.test_set_delivered(true);
+    actor.update_rbc_status_entry(key, &session, false);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    actor.clear_rbc_runtime_state_preserving_snapshot(key, false);
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "runtime cleanup should recover canonical RS16 payload bytes from Kura when the live pending block is gone"
     );
 
     harness.shutdown.send();
@@ -32273,6 +32556,175 @@ async fn handle_rbc_deliver_accepts_missing_chunks_when_da_enabled() {
         "authoritative local payload should accept DELIVER without all chunks"
     );
     assert!(stored.deliver_signature.is_some());
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_records_payload_bytes_from_authoritative_local_payload() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let txs: Vec<_> = (0..16).map(|_| sample_transaction()).collect();
+    let block = block_with_txs(height, view, parent, txs);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session = partial_rbc_session_for_block(actor, &block, 1024);
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    session.record_ready(0, vec![0xAA]);
+
+    actor.pending.pending_blocks.insert(
+        block.hash(),
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let deliver = {
+        let session = actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .expect("session");
+        actor.build_rbc_deliver(key, session).expect("deliver")
+    };
+    actor.handle_rbc_deliver(deliver).expect("deliver handled");
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "DELIVER should record canonical payload bytes even when the RBC chunk set is still partial"
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_records_payload_bytes_from_authoritative_local_payload_rs16() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    actor.config.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Rs16;
+    actor.config.rbc.data_shards = 4;
+    actor.config.rbc.parity_shards = 2;
+    actor.config.rbc.chunk_max_bytes = 512;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let txs: Vec<_> = (0..32).map(|_| sample_transaction()).collect();
+    let block = block_with_txs(height, view, parent, txs);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session = partial_rbc_session_for_block_with_config_chunking(actor, &block);
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    session.record_ready(0, vec![0xAA]);
+
+    actor.pending.pending_blocks.insert(
+        block.hash(),
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let deliver = {
+        let session = actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .expect("session");
+        actor.build_rbc_deliver(key, session).expect("deliver")
+    };
+    actor.handle_rbc_deliver(deliver).expect("deliver handled");
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "RS16 DELIVER should record canonical payload bytes even when encoded parity chunks are still missing"
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_records_payload_bytes_from_complete_rs16_chunks() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    actor.config.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Rs16;
+    actor.config.rbc.data_shards = 4;
+    actor.config.rbc.parity_shards = 2;
+    actor.config.rbc.chunk_max_bytes = 1024;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let txs: Vec<_> = (0..128).map(|_| sample_transaction()).collect();
+    let block = block_with_txs(height, view, parent, txs);
+    let key = Actor::session_key(&block.hash(), height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let mut session = Actor::build_rbc_session_from_payload_with_chunking(
+        &payload,
+        payload_hash,
+        super::rbc::RbcChunkingSpec::from_config(&actor.config.rbc),
+        actor.epoch_for_height(height),
+    )
+    .expect("complete RS16 session");
+    session.test_set_block_header_and_signature(&block);
+
+    assert_eq!(
+        session.payload_bytes().as_deref(),
+        Some(payload.as_slice()),
+        "complete RS16 chunk set should round-trip back to the canonical payload bytes"
+    );
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty());
+    session.record_ready(0, vec![0xAA]);
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let deliver = {
+        let session = actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .expect("session");
+        actor.build_rbc_deliver(key, session).expect("deliver")
+    };
+    actor.handle_rbc_deliver(deliver).expect("deliver handled");
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "DELIVER should record payload bytes directly from a complete RS16 chunk set without a local-block fallback"
+    );
 
     harness.shutdown.send();
 }
@@ -104529,6 +104981,38 @@ fn partial_rbc_session_for_block(
     session
 }
 
+fn partial_rbc_session_for_block_with_config_chunking(
+    actor: &Actor,
+    block: &SignedBlock,
+) -> RbcSession {
+    let payload_bytes = super::proposals::block_payload_bytes(block);
+    let payload_hash = Hash::new(&payload_bytes);
+    let mut session = Actor::build_rbc_session_from_payload_with_chunking(
+        &payload_bytes,
+        payload_hash,
+        super::rbc::RbcChunkingSpec::from_config(&actor.config.rbc),
+        actor.epoch_for_height(block.header().height().get()),
+    )
+    .expect("partial RBC session with configured chunking");
+    assert!(
+        session.total_chunks() > 1,
+        "test setup requires a multi-chunk RBC session"
+    );
+    let missing_idx = session
+        .chunks
+        .iter()
+        .position(Option::is_some)
+        .expect("chunk present");
+    session.chunks[missing_idx] = None;
+    session.received_chunks = session.received_chunks.saturating_sub(1);
+    session.test_set_block_header_and_signature(block);
+    assert!(
+        session.received_chunks() < session.total_chunks(),
+        "test setup requires a missing chunk"
+    );
+    session
+}
+
 fn block_with_txs(
     height: u64,
     view: u64,
@@ -108238,7 +108722,9 @@ fn drain_rbc_state_for_block_retains_status_snapshot() {
         &mut pending_rbc,
         &mut session_rosters,
         &mut BTreeMap::new(),
+        None,
         &status_handle,
+        None,
         None,
         None,
         true,
@@ -108282,8 +108768,10 @@ fn drain_rbc_state_for_block_records_delivered_payload_metrics_before_cleanup() 
         &mut BTreeMap::new(),
         &mut BTreeMap::new(),
         &mut BTreeMap::new(),
+        None,
         &rbc_status::register_handle(),
         Some(&telemetry),
+        None,
         None,
         true,
     );
@@ -108291,6 +108779,86 @@ fn drain_rbc_state_for_block_records_delivered_payload_metrics_before_cleanup() 
     assert_eq!(
         metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
         payload.len() as u64
+    );
+}
+
+#[test]
+fn drain_rbc_state_for_block_uses_authoritative_payload_fallback_before_cleanup() {
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x57; 32]));
+    let key = (block_hash, 6, 0);
+    let payload = vec![0x10, 0x20, 0x30, 0x40];
+    let payload_hash = Hash::new(&payload);
+
+    let mut sessions = BTreeMap::new();
+    let mut session = RbcSession::test_new(2, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, vec![0xAA, 0xBB], 0);
+    session.test_set_delivered(true);
+    sessions.insert(key, session);
+
+    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+    let telemetry = crate::telemetry::Telemetry::new(Arc::clone(&metrics), true);
+    let delivered_payload_fallbacks = BTreeMap::from([(key, payload.len() as u64)]);
+
+    let _ = super::drain_rbc_state_for_block(
+        block_hash,
+        &mut sessions,
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        None,
+        &rbc_status::register_handle(),
+        Some(&telemetry),
+        Some(&delivered_payload_fallbacks),
+        None,
+        true,
+    );
+
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "cleanup should record canonical payload bytes before retiring a partial delivered session"
+    );
+}
+
+#[test]
+fn drain_rbc_state_for_block_skips_payload_metric_when_session_was_already_recorded() {
+    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x58; 32]));
+    let key = (block_hash, 7, 0);
+    let payload = vec![0xAA, 0xBB, 0xCC];
+    let payload_hash = Hash::new(&payload);
+
+    let mut sessions = BTreeMap::new();
+    let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+    session.test_note_chunk(0, payload, 0);
+    session.test_set_delivered(true);
+    sessions.insert(key, session);
+
+    let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+    let telemetry = crate::telemetry::Telemetry::new(Arc::clone(&metrics), true);
+    let mut payload_metric_recorded_sessions = BTreeSet::from([key]);
+
+    let _ = super::drain_rbc_state_for_block(
+        block_hash,
+        &mut sessions,
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        &mut BTreeMap::new(),
+        Some(&mut payload_metric_recorded_sessions),
+        &rbc_status::register_handle(),
+        Some(&telemetry),
+        None,
+        None,
+        true,
+    );
+
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        0,
+        "drain cleanup should not re-record payload bytes for a session already accounted for"
+    );
+    assert!(
+        payload_metric_recorded_sessions.is_empty(),
+        "retired sessions should be removed from the once-only payload metric set"
     );
 }
 
@@ -108320,6 +108888,190 @@ fn delivered_payload_metrics_wait_for_complete_payload_and_record_once() {
         None,
         "telemetry should not double count the same delivered payload"
     );
+}
+
+#[test]
+fn delivered_payload_metrics_accept_authoritative_payload_fallback_once() {
+    let mut session = RbcSession::test_new(2, None, None, 0);
+    assert!(
+        session.record_deliver(7, vec![0xAA]),
+        "first DELIVER should be recorded"
+    );
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry_with_fallback(Some(9)),
+        Some(9),
+        "telemetry should accept authoritative payload bytes when encoded chunks are incomplete"
+    );
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry_with_fallback(Some(9)),
+        None,
+        "telemetry fallback should still be recorded exactly once"
+    );
+}
+
+#[test]
+fn complete_rs16_payload_bytes_roundtrip() {
+    let payload = vec![0xAB; 16_384];
+    let payload_hash = Hash::new(&payload);
+    let layout = super::rbc::RbcChunkingSpec {
+        encoding: iroha_data_model::block::consensus::RbcEncoding::Rs16,
+        chunk_size_bytes: 1024,
+        data_shards: 4,
+        parity_shards: 2,
+    };
+    let session =
+        Actor::build_rbc_session_from_payload_with_chunking(&payload, payload_hash, layout, 0)
+            .expect("RS16 session");
+
+    assert_eq!(
+        session.payload_bytes().as_deref(),
+        Some(payload.as_slice()),
+        "RS16 payload reconstruction should preserve canonical payload bytes"
+    );
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn authoritative_payload_bytes_for_telemetry_uses_local_payload_fallback() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = 11u64;
+    let view = 0u64;
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let block_hash = block.hash();
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+
+    let mut session =
+        RbcSession::test_new(2, Some(payload_hash), None, actor.epoch_for_height(height));
+    session.test_note_chunk(0, vec![0xAA; 4], 0);
+    session.test_set_delivered(true);
+
+    let fallback = actor.rbc_session_authoritative_payload_bytes_for_telemetry(key, &session);
+    assert_eq!(
+        fallback,
+        Some(payload.len() as u64),
+        "authoritative local payload should provide telemetry bytes when RBC chunks are incomplete"
+    );
+
+    assert_eq!(
+        session.take_delivered_payload_bytes_for_telemetry_with_fallback(fallback),
+        Some(payload.len() as u64),
+        "fallback bytes should be consumable by the delivered-payload telemetry path"
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn authoritative_payload_bytes_for_telemetry_uses_local_payload_fallback_rs16() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.config.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Rs16;
+    actor.config.rbc.data_shards = 4;
+    actor.config.rbc.parity_shards = 2;
+    actor.config.rbc.chunk_max_bytes = 512;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let txs: Vec<_> = (0..32).map(|_| sample_transaction()).collect();
+    let block = block_with_txs(height, view, parent, txs);
+    let block_hash = block.hash();
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+
+    let session = partial_rbc_session_for_block_with_config_chunking(actor, &block);
+    let fallback = actor.rbc_session_authoritative_payload_bytes_for_telemetry(key, &session);
+    assert_eq!(
+        fallback,
+        Some(payload.len() as u64),
+        "RS16 sessions should recover canonical payload bytes from the local block even when parity-expanded chunks are incomplete"
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn update_rbc_status_entry_records_rs16_payload_bytes_once_before_cleanup() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    actor.config.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Rs16;
+    actor.config.rbc.data_shards = 4;
+    actor.config.rbc.parity_shards = 2;
+    actor.config.rbc.chunk_max_bytes = 512;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let txs: Vec<_> = (0..32).map(|_| sample_transaction()).collect();
+    let block = block_with_txs(height, view, parent, txs);
+    let block_hash = block.hash();
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+
+    let mut session = partial_rbc_session_for_block_with_config_chunking(actor, &block);
+    session.test_set_delivered(true);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, session.clone());
+
+    actor.update_rbc_status_entry(key, &session, false);
+    actor.update_rbc_status_entry(key, &session, false);
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "RBC status updates should record RS16 payload bytes exactly once for a delivered live session"
+    );
+
+    actor.clear_rbc_runtime_state(key, true);
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "cleanup should not double-count payload bytes that were already recorded by the status path"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .contains(&key),
+        "cleanup should clear the active payload-metric marker for the retired session"
+    );
+
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]

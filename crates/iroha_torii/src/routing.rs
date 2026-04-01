@@ -22641,6 +22641,8 @@ const ENDPOINT_ACCOUNTS_LIST: &str = "/v1/accounts";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
 #[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNTS_GET: &str = "/v1/accounts/{account_id}";
+#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
@@ -40768,6 +40770,20 @@ fn account_from_world_entry(
 }
 
 #[cfg(feature = "app_api")]
+fn account_read_response_from_world_entry(
+    entry: iroha_data_model::account::AccountEntry<'_>,
+) -> iroha_torii_shared::AccountReadResponse {
+    let details = entry.value().clone().into_inner();
+    iroha_torii_shared::AccountReadResponse {
+        account_id: entry.id().clone(),
+        label: details.label,
+        uaid: details.uaid,
+        opaque_ids: details.opaque_ids,
+        linked_domains: details.linked_domains.into_iter().collect(),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn collect_subject_accounts(world: &impl WorldReadOnly) -> Vec<iroha_data_model::account::Account> {
     use std::collections::{BTreeMap, btree_map::Entry};
 
@@ -41849,6 +41865,37 @@ pub async fn handle_v1_accounts_onboard_multisig(
         header::HeaderValue::from_static("application/json"),
     );
     Ok((StatusCode::ACCEPTED, resp))
+}
+
+/// GET /v1/accounts — List accounts with basic pagination.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_account_get(
+    state: Arc<CoreState>,
+    axum::extract::Path(account_id): axum::extract::Path<String>,
+    accept: Option<axum::http::HeaderValue>,
+    telemetry: MaybeTelemetry,
+) -> Result<Response, Error> {
+    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let (account_id, _) = parse_account_path_segment_with_state(
+        state.as_ref(),
+        &account_id,
+        &telemetry,
+        ENDPOINT_ACCOUNTS_GET,
+    )?;
+    let world = state.world_view();
+    let response = world
+        .account(&account_id)
+        .map(account_read_response_from_world_entry)
+        .map_err(|_| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    Ok(crate::utils::respond_with_format(response, format))
 }
 
 /// GET /v1/accounts — List accounts with basic pagination.
@@ -58680,6 +58727,12 @@ fn status_value_by_path(status: &Status, tail: &str) -> Option<norito::json::Val
         "commit_time_ms" if segments.next().is_none() => Some(status.commit_time_ms.into()),
         "txs_approved" if segments.next().is_none() => Some(status.txs_approved.into()),
         "txs_rejected" if segments.next().is_none() => Some(status.txs_rejected.into()),
+        "last_rejection_at_ms" if segments.next().is_none() => {
+            Some(json_value(&status.last_rejection_at_ms))
+        }
+        "txs_rejected_recent_5m" if segments.next().is_none() => {
+            Some(status.txs_rejected_recent_5m.into())
+        }
         "uptime" => {
             let duration = status.uptime.0;
             match segments.next() {
@@ -58840,6 +58893,8 @@ mod tests {
     fn status_tail_accesses_field() {
         let metrics = Metrics::default();
         let mut status = Status::from(&metrics);
+        status.last_rejection_at_ms = Some(1_234);
+        status.txs_rejected_recent_5m = 7;
         status.sorafs_micropayments = vec![MicropaymentSampleStatus {
             provider_id_hex: "feed".into(),
             credits: MicropaymentCreditSnapshot {
@@ -58858,6 +58913,12 @@ mod tests {
 
         let peers = status_value_by_path(&status, "peers").unwrap();
         assert_eq!(peers, json_value(&0u64));
+
+        let last_rejection = status_value_by_path(&status, "last_rejection_at_ms").unwrap();
+        assert_eq!(last_rejection, json_value(&Some(1_234u64)));
+
+        let rejected_recent = status_value_by_path(&status, "txs_rejected_recent_5m").unwrap();
+        assert_eq!(rejected_recent, json_value(&7u64));
 
         let secs = status_value_by_path(&status, "uptime/secs").unwrap();
         assert_eq!(secs, json_value(&0u64));

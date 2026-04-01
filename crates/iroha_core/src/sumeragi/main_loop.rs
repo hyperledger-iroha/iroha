@@ -7387,6 +7387,77 @@ impl Actor {
         }
     }
 
+    fn rbc_session_authoritative_payload_bytes_for_telemetry(
+        &self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+    ) -> Option<u64> {
+        if let Some(bytes) = session.delivered_payload_bytes() {
+            return Some(bytes);
+        }
+        if session.is_invalid() {
+            return None;
+        }
+        let expected_payload_hash = session.payload_hash()?;
+        self.with_local_payload_for_progress(
+            key.0,
+            |height, view, payload_bytes, local_payload_hash| {
+                (height == key.1 && view == key.2 && local_payload_hash == expected_payload_hash)
+                    .then(|| u64::try_from(payload_bytes.len()).unwrap_or(u64::MAX))
+            },
+        )
+        .flatten()
+    }
+
+    fn record_rbc_payload_bytes_metric_for_active_session(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        bytes: u64,
+    ) {
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .insert(key)
+            && let Some(telemetry) = self.telemetry_handle()
+        {
+            telemetry.add_rbc_payload_bytes_delivered(bytes);
+        }
+    }
+
+    fn maybe_record_rbc_payload_bytes_metric_for_active_session(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+    ) {
+        if !session.delivered {
+            return;
+        }
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .contains(&key)
+        {
+            return;
+        }
+        if let Some(bytes) =
+            self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
+        {
+            self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
+        }
+    }
+
+    fn clear_rbc_payload_bytes_metric_recorded(&mut self, key: &super::rbc_store::SessionKey) {
+        self.subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .remove(key);
+    }
+
     fn sync_rbc_progress_stage_with_roster(
         &self,
         key: super::rbc_store::SessionKey,
@@ -9676,6 +9747,7 @@ struct RbcState {
     chunk_store: Option<super::rbc_store::ChunkStore>,
     manifest: super::rbc_store::SoftwareManifest,
     sessions: BTreeMap<super::rbc_store::SessionKey, RbcSession>,
+    payload_metric_recorded_sessions: BTreeSet<super::rbc_store::SessionKey>,
     pending: BTreeMap<super::rbc_store::SessionKey, PendingRbcMessages>,
     session_rosters: BTreeMap<super::rbc_store::SessionKey, Vec<PeerId>>,
     session_roster_sources: BTreeMap<super::rbc_store::SessionKey, RbcRosterSource>,
@@ -12762,6 +12834,7 @@ impl Actor {
                         session.deliver_sender = None;
                         session.deliver_signature = None;
                     }
+                    self.clear_rbc_payload_bytes_metric_recorded(&key);
                     self.clear_pending_rbc(&key);
                     self.subsystems
                         .da_rbc
@@ -12821,6 +12894,7 @@ impl Actor {
                             session.deliver_sender = None;
                             session.deliver_signature = None;
                         }
+                        self.clear_rbc_payload_bytes_metric_recorded(&key);
                         self.clear_pending_rbc(&key);
                         self.subsystems
                             .da_rbc
@@ -12888,6 +12962,7 @@ impl Actor {
                                 session.deliver_sender = None;
                                 session.deliver_signature = None;
                             }
+                            self.clear_rbc_payload_bytes_metric_recorded(&key);
                             self.clear_pending_rbc(&key);
                             self.subsystems
                                 .da_rbc
@@ -12953,6 +13028,7 @@ impl Actor {
                         session.deliver_sender = None;
                         session.deliver_signature = None;
                     }
+                    self.clear_rbc_payload_bytes_metric_recorded(&key);
                     self.subsystems
                         .da_rbc
                         .rbc
@@ -15622,6 +15698,7 @@ impl Actor {
             chunk_store,
             manifest: rbc_manifest,
             sessions: rbc_sessions,
+            payload_metric_recorded_sessions: BTreeSet::new(),
             pending: BTreeMap::new(),
             session_rosters: rbc_session_rosters,
             session_roster_sources: rbc_session_roster_sources,
@@ -18167,6 +18244,39 @@ impl Actor {
         false
     }
 
+    fn trim_block_body_response_for_frame_cap(
+        &self,
+        response: &mut super::message::BlockBodyResponse,
+    ) -> bool {
+        let origin = self.common_config.peer.id();
+        let payload_cap = self.consensus_payload_frame_cap;
+        let response_wire_len = |response: &super::message::BlockBodyResponse| {
+            consensus_block_wire_len(origin, &BlockMessage::BlockBodyResponse(response.clone()))
+        };
+
+        if response_wire_len(response) <= payload_cap {
+            return true;
+        }
+
+        let downgrade_block = {
+            let super::message::BlockBodyData::BlockSyncUpdate(update) = &mut response.body else {
+                return false;
+            };
+            let _ = self.trim_block_sync_update_for_frame_cap(update);
+            update.block.clone()
+        };
+
+        if response_wire_len(response) <= payload_cap {
+            return true;
+        }
+
+        response.body = super::message::BlockBodyData::BlockCreated(super::message::BlockCreated {
+            block: downgrade_block,
+            frontier: None,
+        });
+        response_wire_len(response) <= payload_cap
+    }
+
     fn block_message_frame_cap(&self, msg: &BlockMessage) -> usize {
         match msg {
             BlockMessage::BlockCreated(_)
@@ -18196,25 +18306,30 @@ impl Actor {
         let origin = self.common_config.peer.id();
         let mut wire_len = consensus_block_wire_len_wire(origin, msg);
         let cap = self.block_message_frame_cap(msg.as_ref());
-        if matches!(msg.as_ref(), BlockMessage::BlockSyncUpdate(_)) && wire_len > cap {
-            let update = match msg.make_mut() {
-                BlockMessage::BlockSyncUpdate(update) => update,
-                other => {
-                    debug_assert!(
-                        !matches!(other, BlockMessage::BlockSyncUpdate(_)),
-                        "BlockSyncUpdate variant should be preserved"
-                    );
-                    return true;
+        if wire_len > cap {
+            match msg.make_mut() {
+                BlockMessage::BlockSyncUpdate(update) => {
+                    if !self.trim_block_sync_update_for_frame_cap(update) {
+                        warn!(
+                            kind = Self::block_message_kind(msg.as_ref()),
+                            wire_len, cap, "dropping consensus message over frame cap"
+                        );
+                        return false;
+                    }
+                    wire_len = consensus_block_wire_len_wire(origin, msg);
                 }
-            };
-            if !self.trim_block_sync_update_for_frame_cap(update) {
-                warn!(
-                    kind = Self::block_message_kind(msg.as_ref()),
-                    wire_len, cap, "dropping consensus message over frame cap"
-                );
-                return false;
+                BlockMessage::BlockBodyResponse(response) => {
+                    if !self.trim_block_body_response_for_frame_cap(response) {
+                        warn!(
+                            kind = Self::block_message_kind(msg.as_ref()),
+                            wire_len, cap, "dropping consensus message over frame cap"
+                        );
+                        return false;
+                    }
+                    wire_len = consensus_block_wire_len_wire(origin, msg);
+                }
+                _ => {}
             }
-            wire_len = consensus_block_wire_len_wire(origin, msg);
         }
         if wire_len > cap {
             warn!(
@@ -21100,11 +21215,15 @@ impl Actor {
             return Ok(());
         };
 
+        let delivered_payload_bytes_fallback =
+            self.rbc_session_authoritative_payload_bytes_for_telemetry(key, &session);
         let first_deliver = session.record_deliver(deliver.sender, deliver.signature.clone());
         if first_deliver {
             status::record_round_gap_deliver(key.1, key.2, key.0);
         }
-        let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry();
+        let _delivered_bytes = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
+            delivered_payload_bytes_fallback,
+        );
         let ready_count = session.ready_signatures.len();
         let ready_senders: Vec<_> = session
             .ready_signatures
@@ -21134,9 +21253,6 @@ impl Actor {
         if first_deliver {
             if let Some(telemetry) = telemetry_ref {
                 telemetry.inc_rbc_deliver_broadcasts();
-                if let Some(bytes) = delivered_bytes {
-                    telemetry.add_rbc_payload_bytes_delivered(bytes);
-                }
             }
         }
 
@@ -30385,7 +30501,16 @@ impl Actor {
         clear_status_summary: bool,
         preserve_persisted_snapshot: bool,
     ) {
-        self.subsystems.da_rbc.rbc.sessions.remove(&key);
+        if let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) {
+            let delivered_payload_bytes_fallback =
+                self.rbc_session_authoritative_payload_bytes_for_telemetry(key, &session);
+            if let Some(bytes) = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
+                delivered_payload_bytes_fallback,
+            ) {
+                self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
+            }
+        }
+        self.clear_rbc_payload_bytes_metric_recorded(&key);
         self.clear_rbc_session_roster(&key);
         if clear_status_summary {
             self.subsystems.da_rbc.rbc.status_handle.remove(&key);
@@ -30903,6 +31028,7 @@ fn rbc_status_summary_recovered_from_disk(
 
 type RbcLaneTotals = BTreeMap<LaneId, (u64, u64, u64, u64)>;
 type RbcDataspaceTotals = BTreeMap<(LaneId, DataSpaceId), (u64, u64, u64, u64)>;
+type RbcDeliveredPayloadTelemetryFallbacks = BTreeMap<super::rbc_store::SessionKey, u64>;
 
 fn drain_rbc_state_for_block(
     block_hash: HashOf<BlockHeader>,
@@ -30910,8 +31036,10 @@ fn drain_rbc_state_for_block(
     pending_rbc: &mut BTreeMap<super::rbc_store::SessionKey, PendingRbcMessages>,
     rbc_session_rosters: &mut BTreeMap<super::rbc_store::SessionKey, Vec<PeerId>>,
     rbc_session_roster_sources: &mut BTreeMap<super::rbc_store::SessionKey, RbcRosterSource>,
+    payload_metric_recorded_sessions: Option<&mut BTreeSet<super::rbc_store::SessionKey>>,
     rbc_status_handle: &rbc_status::Handle,
     telemetry: Option<&crate::telemetry::Telemetry>,
+    delivered_payload_fallbacks: Option<&RbcDeliveredPayloadTelemetryFallbacks>,
     chunk_store: Option<&super::rbc_store::ChunkStore>,
     purge_persisted_sessions: bool,
 ) -> (RbcLaneTotals, RbcDataspaceTotals) {
@@ -30943,12 +31071,23 @@ fn drain_rbc_state_for_block(
     let mut lane_totals: RbcLaneTotals = BTreeMap::new();
     let mut dataspace_totals: RbcDataspaceTotals = BTreeMap::new();
 
+    let mut payload_metric_recorded_sessions = payload_metric_recorded_sessions;
     for key in keys {
         if let Some(mut session) = rbc_sessions.remove(&key) {
-            if let Some(bytes) = session.take_delivered_payload_bytes_for_telemetry() {
-                if let Some(telemetry) = telemetry {
+            let delivered_payload_bytes_fallback =
+                delivered_payload_fallbacks.and_then(|fallbacks| fallbacks.get(&key).copied());
+            if let Some(bytes) = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
+                delivered_payload_bytes_fallback,
+            ) {
+                let should_record = payload_metric_recorded_sessions
+                    .as_mut()
+                    .is_none_or(|recorded| recorded.insert(key));
+                if should_record && let Some(telemetry) = telemetry {
                     telemetry.add_rbc_payload_bytes_delivered(bytes);
                 }
+            }
+            if let Some(recorded) = payload_metric_recorded_sessions.as_mut() {
+                recorded.remove(&key);
             }
             let ready_count = u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX);
             rbc_status_handle.update(
@@ -33798,13 +33937,20 @@ impl RbcSession {
         Some(u64::try_from(payload.len()).unwrap_or(u64::MAX))
     }
 
-    pub(crate) fn take_delivered_payload_bytes_for_telemetry(&mut self) -> Option<u64> {
-        if self.delivered_payload_bytes_recorded {
+    pub(crate) fn take_delivered_payload_bytes_for_telemetry_with_fallback(
+        &mut self,
+        fallback_bytes: Option<u64>,
+    ) -> Option<u64> {
+        if self.delivered_payload_bytes_recorded || !self.delivered {
             return None;
         }
-        let bytes = self.delivered_payload_bytes()?;
+        let bytes = self.delivered_payload_bytes().or(fallback_bytes)?;
         self.delivered_payload_bytes_recorded = true;
         Some(bytes)
+    }
+
+    pub(crate) fn take_delivered_payload_bytes_for_telemetry(&mut self) -> Option<u64> {
+        self.take_delivered_payload_bytes_for_telemetry_with_fallback(None)
     }
 }
 

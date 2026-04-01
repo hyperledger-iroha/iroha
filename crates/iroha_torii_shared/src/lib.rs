@@ -1,4 +1,10 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
+use iroha_data_model::{
+    account::{AccountId, AccountLabel, OpaqueAccountId},
+    domain::DomainId,
+    nexus::UniversalAccountId,
+    transaction::error::TransactionRejectionReason,
+};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 
 /// Shared data-availability helpers (sampling, assignment).
@@ -219,9 +225,73 @@ pub struct ProofRetentionStatus {
     pub backends: Vec<ProofRetentionBackendStatus>,
 }
 
+/// Typed status payload returned by `/v1/pipeline/transactions/status`.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct PipelineTransactionStatusResponse {
+    /// Canonical signed transaction hash (hex, lowercase).
+    pub hash: String,
+    /// Current pipeline status details.
+    pub status: PipelineTransactionStatus,
+    /// Read scope applied by Torii (`local`, `auto`, `global`).
+    pub scope: String,
+    /// Source used to resolve the status (`cache`, `queue`, `state`).
+    pub resolved_from: String,
+}
+
+/// Status details embedded in [`PipelineTransactionStatusResponse`].
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct PipelineTransactionStatus {
+    /// Stable pipeline status kind (`Queued`, `Approved`, `Committed`, `Applied`, `Rejected`, `Expired`).
+    pub kind: String,
+    /// Block height reported for the status when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub block_height: Option<u64>,
+    /// Structured rejection reason for rejected transactions.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub rejection_reason: Option<TransactionRejectionReason>,
+}
+
+/// Canonical account-read payload returned by `GET /v1/accounts/{account_id}`.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct AccountReadResponse {
+    /// Canonical account identifier (domainless I105 literal).
+    pub account_id: AccountId,
+    /// Stable account label when assigned.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub label: Option<AccountLabel>,
+    /// Universal account identifier bound to this account when registered in Nexus.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub uaid: Option<UniversalAccountId>,
+    /// Opaque identifiers mapped to the account UAID.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub opaque_ids: Vec<OpaqueAccountId>,
+    /// Domains currently linked to the subject in state indexes.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub linked_domains: Vec<DomainId>,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ErrorEnvelope, QueueErrorEnvelope, QueueErrorSnapshot};
+    use iroha_data_model::{
+        ValidationFail, account::AccountId, transaction::error::TransactionRejectionReason,
+    };
+
+    use super::{
+        AccountReadResponse, ErrorEnvelope, PipelineTransactionStatus,
+        PipelineTransactionStatusResponse, QueueErrorEnvelope, QueueErrorSnapshot,
+    };
 
     #[test]
     fn error_envelope_new_sets_fields() {
@@ -253,6 +323,44 @@ mod tests {
         assert_eq!(decoded.queue.capacity, 24);
         assert!(decoded.queue.saturated);
         assert_eq!(decoded.retry_after_seconds, Some(1));
+    }
+
+    #[test]
+    fn pipeline_transaction_status_roundtrip_preserves_typed_rejection_reason() {
+        let payload = PipelineTransactionStatusResponse {
+            hash: "ab".repeat(32),
+            status: PipelineTransactionStatus {
+                kind: "Rejected".to_owned(),
+                block_height: Some(42),
+                rejection_reason: Some(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted("denied".to_owned()),
+                )),
+            },
+            scope: "auto".to_owned(),
+            resolved_from: "state".to_owned(),
+        };
+
+        let encoded = norito::to_bytes(&payload).expect("encode status payload");
+        let decoded: PipelineTransactionStatusResponse =
+            norito::decode_from_bytes(&encoded).expect("decode status payload");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn account_read_response_roundtrip_preserves_subject_metadata() {
+        let key_pair = iroha_crypto::KeyPair::random();
+        let response = AccountReadResponse {
+            account_id: AccountId::new(key_pair.public_key().clone()),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+            linked_domains: Vec::new(),
+        };
+
+        let encoded = norito::to_bytes(&response).expect("encode account response");
+        let decoded: AccountReadResponse =
+            norito::decode_from_bytes(&encoded).expect("decode account response");
+        assert_eq!(decoded, response);
     }
 }
 

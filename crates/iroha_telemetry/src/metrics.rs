@@ -6,11 +6,11 @@ use core::{
     ops::Deref,
 };
 #[cfg(feature = "otel-exporter")]
-use std::{collections::HashMap, sync::Mutex};
+use std::collections::HashMap;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
-        Arc, OnceLock, RwLock,
+        Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicBool, AtomicU64 as StdAtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -60,6 +60,13 @@ pub struct Uptime(pub Duration);
 type MicropaymentSampleSink = Arc<
     dyn Fn(&str, MicropaymentCreditSnapshot, MicropaymentTicketCounters) + Send + Sync + 'static,
 >;
+
+fn current_unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
+}
 
 impl Default for Uptime {
     fn default() -> Self {
@@ -2573,6 +2580,18 @@ mod tests {
     }
 
     #[test]
+    fn recent_rejected_transactions_prune_after_window() {
+        let metrics = Metrics::default();
+        metrics.record_rejected_transactions(2, 1_000);
+        metrics.record_rejected_transactions(3, 2_000);
+
+        assert_eq!(metrics.last_rejection_at_ms(), Some(2_000));
+        assert_eq!(metrics.txs_rejected_recent_5m(2_500), 5);
+        assert_eq!(metrics.txs_rejected_recent_5m(302_000), 3);
+        assert_eq!(metrics.txs_rejected_recent_5m(303_000), 0);
+    }
+
+    #[test]
     fn status_strip_nexus_clears_lane_fields() {
         let mut status = Status {
             teu_lane_commit: vec![sample_lane_teu_status()],
@@ -3218,6 +3237,8 @@ mod serde_tests {
             commit_time_ms: 12,
             txs_approved: 7,
             txs_rejected: 2,
+            last_rejection_at_ms: Some(100),
+            txs_rejected_recent_5m: 2,
             uptime: Uptime(Duration::new(9, 0)),
             view_changes: 4,
             queue_size: 5,
@@ -5116,6 +5137,13 @@ pub struct Status {
     pub txs_approved: u64,
     /// Number of rejected transactions
     pub txs_rejected: u64,
+    /// Millisecond UNIX timestamp when this node most recently observed rejected transactions.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_rejection_at_ms: Option<u64>,
+    /// Number of rejected transactions observed by this node within the last five minutes.
+    #[norito(default)]
+    pub txs_rejected_recent_5m: u64,
     /// Uptime since genesis block creation
     pub uptime: Uptime,
     /// Number of view changes in the current round
@@ -5181,6 +5209,11 @@ struct StatusPayload {
     commit_time_ms: u64,
     txs_approved: u64,
     txs_rejected: u64,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_rejection_at_ms: Option<u64>,
+    #[norito(default)]
+    txs_rejected_recent_5m: u64,
     uptime: Uptime,
     view_changes: u32,
     queue_size: u64,
@@ -5217,6 +5250,8 @@ impl From<&Status> for StatusPayload {
             commit_time_ms: status.commit_time_ms,
             txs_approved: status.txs_approved,
             txs_rejected: status.txs_rejected,
+            last_rejection_at_ms: status.last_rejection_at_ms,
+            txs_rejected_recent_5m: status.txs_rejected_recent_5m,
             uptime: status.uptime,
             view_changes: status.view_changes,
             queue_size: status.queue_size,
@@ -5245,6 +5280,8 @@ impl From<StatusPayload> for Status {
             commit_time_ms: payload.commit_time_ms,
             txs_approved: payload.txs_approved,
             txs_rejected: payload.txs_rejected,
+            last_rejection_at_ms: payload.last_rejection_at_ms,
+            txs_rejected_recent_5m: payload.txs_rejected_recent_5m,
             uptime: payload.uptime,
             view_changes: payload.view_changes,
             queue_size: payload.queue_size,
@@ -5273,6 +5310,8 @@ impl<'a> DecodeFromSlice<'a> for Status {
 
 /// Number of manifest activation records retained in telemetry snapshots.
 pub const GOVERNANCE_MANIFEST_RECENT_CAP: usize = 8;
+const REJECTION_RECENT_WINDOW_MS: u64 = 5 * 60 * 1_000;
+const REJECTION_RECENT_EVENT_CAP: usize = 1_024;
 
 /// Governance-related telemetry snapshot embedded into [`Status`].
 #[derive(
@@ -5926,6 +5965,7 @@ fn collect_da_receipt_cursors(metrics: &Metrics) -> Vec<DaReceiptCursorStatus> {
 
 impl From<&Metrics> for Status {
     fn from(value: &Metrics) -> Self {
+        let now_ms = current_unix_time_ms();
         Self {
             peers: value.connected_peers.get(),
             blocks: value.block_height.get(),
@@ -5933,6 +5973,8 @@ impl From<&Metrics> for Status {
             commit_time_ms: value.last_commit_time_ms.get(),
             txs_approved: value.txs.with_label_values(&["accepted"]).get(),
             txs_rejected: value.txs.with_label_values(&["rejected"]).get(),
+            last_rejection_at_ms: value.last_rejection_at_ms(),
+            txs_rejected_recent_5m: value.txs_rejected_recent_5m(now_ms),
             uptime: Uptime(Duration::from_millis(value.uptime_since_genesis_ms.get())),
             view_changes: value
                 .view_changes
@@ -6318,6 +6360,10 @@ pub struct Metrics {
     taikai_ingest_snapshot_order: Arc<RwLock<VecDeque<(String, String)>>>,
     /// Cached DA receipt cursors keyed by (lane, epoch) for status snapshots.
     da_receipt_cursors: Arc<RwLock<BTreeMap<DaReceiptCursorKey, u64>>>,
+    /// Recent rejected-transaction batches retained for `/status` freshness reporting.
+    recent_rejection_events: Mutex<VecDeque<(u64, u64)>>,
+    /// Millisecond UNIX timestamp when the latest rejected transaction batch was observed.
+    last_rejection_at_ms: StdAtomicU64,
     taikai_alias_rotation_snapshots: TaikaiAliasRotationSnapshots,
     /// Alias service usage grouped by lane and event kind.
     pub alias_usage_total: IntCounterVec,
@@ -8824,6 +8870,9 @@ impl Default for Metrics {
             Arc::new(RwLock::new(BTreeMap::new()));
         let da_receipt_cursors: Arc<RwLock<BTreeMap<DaReceiptCursorKey, u64>>> =
             Arc::new(RwLock::new(BTreeMap::new()));
+        let recent_rejection_events =
+            Mutex::new(VecDeque::with_capacity(REJECTION_RECENT_EVENT_CAP));
+        let last_rejection_at_ms = StdAtomicU64::new(0);
         let alias_usage_total = IntCounterVec::new(
             Opts::new(
                 "alias_usage_total",
@@ -14121,6 +14170,8 @@ impl Default for Metrics {
             taikai_ingest_snapshots,
             taikai_ingest_snapshot_order,
             da_receipt_cursors,
+            recent_rejection_events,
+            last_rejection_at_ms,
             taikai_alias_rotation_snapshots,
             alias_usage_total,
             iso_reference_status,
@@ -14863,6 +14914,16 @@ pub struct LaneSettlementSnapshot<'a> {
 }
 
 impl Metrics {
+    fn prune_recent_rejection_events(events: &mut VecDeque<(u64, u64)>, now_ms: u64) {
+        let cutoff_ms = now_ms.saturating_sub(REJECTION_RECENT_WINDOW_MS);
+        while matches!(events.front(), Some((timestamp_ms, _)) if *timestamp_ms < cutoff_ms) {
+            events.pop_front();
+        }
+        while events.len() > REJECTION_RECENT_EVENT_CAP {
+            events.pop_front();
+        }
+    }
+
     fn to_f64(value: u64) -> f64 {
         #[allow(clippy::cast_precision_loss)]
         {
@@ -14876,6 +14937,43 @@ impl Metrics {
         }
         let ratio = numerator_ms / window_ms;
         ratio.clamp(0.0, 1.0)
+    }
+
+    /// Record a newly observed batch of rejected transactions for `/status` freshness reporting.
+    pub fn record_rejected_transactions(&self, count: u64, observed_at_ms: u64) {
+        if count == 0 {
+            return;
+        }
+        self.last_rejection_at_ms
+            .store(observed_at_ms, Ordering::Relaxed);
+        let mut events = self
+            .recent_rejection_events
+            .lock()
+            .expect("recent rejection event cache poisoned");
+        events.push_back((observed_at_ms, count));
+        Self::prune_recent_rejection_events(&mut events, observed_at_ms);
+    }
+
+    /// Return the latest rejection timestamp observed by this node, if any.
+    #[must_use]
+    pub fn last_rejection_at_ms(&self) -> Option<u64> {
+        match self.last_rejection_at_ms.load(Ordering::Relaxed) {
+            0 => None,
+            timestamp_ms => Some(timestamp_ms),
+        }
+    }
+
+    /// Return the number of rejected transactions observed within the last five minutes.
+    #[must_use]
+    pub fn txs_rejected_recent_5m(&self, now_ms: u64) -> u64 {
+        let mut events = self
+            .recent_rejection_events
+            .lock()
+            .expect("recent rejection event cache poisoned");
+        Self::prune_recent_rejection_events(&mut events, now_ms);
+        events
+            .iter()
+            .fold(0_u64, |total, (_, count)| total.saturating_add(*count))
     }
 
     /// Update stack sizing gauges and counters from the latest snapshot.
@@ -17904,6 +18002,8 @@ mod test {
             da_reschedule_total: 7,
             txs_approved: 31,
             txs_rejected: 3,
+            last_rejection_at_ms: Some(1_234_890),
+            txs_rejected_recent_5m: 2,
             uptime: Uptime(Duration::new(5, 937_000_000)),
             view_changes: 2,
             queue_size: 18,
@@ -18070,6 +18170,8 @@ mod test {
             "da_reschedule_total": 7,
             "txs_approved": 31,
             "txs_rejected": 3,
+            "last_rejection_at_ms": 1_234_890,
+            "txs_rejected_recent_5m": 2,
             "uptime": {
                 "secs": 5,
                 "nanos": 937_000_000
@@ -18228,6 +18330,8 @@ mod test {
               "commit_time_ms": 130,
               "txs_approved": 31,
               "txs_rejected": 3,
+              "last_rejection_at_ms": 1234890,
+              "txs_rejected_recent_5m": 2,
               "uptime": {
                 "secs": 5,
                 "nanos": 937000000

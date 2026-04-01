@@ -51,6 +51,117 @@ Last updated: 2026-04-01
   - the original permissioned liveness collapse has been removed on this
     tree, but the permissioned sustained-load profile is still too slow and
     needs a follow-up throughput investigation before this slice is complete.
+## 2026-04-01 Follow-up: focused wrong-ingress tx/query Nexus routing regression landed
+- Added a dedicated Nexus integration regression in
+  `integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`
+  that boots the 12-peer 3-lane localnet and proves:
+  - a DS1-routed transaction submitted to a DS2 Torii endpoint is proxied and
+    applied on DS1;
+  - a DS2-routed transaction submitted to a DS1 Torii endpoint is proxied and
+    applied on DS2; and
+  - wrong-ingress signed queries and app-API account asset/permission reads
+    still resolve to the expected routed dataspace results.
+- The regression also covers routed permission-state changes:
+  - Alice grants and revokes `CanModifyAccountMetadata { account = ALICE_ID }`
+    for Bob through the wrong DS2 ingress while Bob verifies the resulting
+    permission visibility through his wrong DS1 ingress; and
+  - Alice self-grants `CanPublishSpaceDirectoryManifest { dataspace = DS1 }`
+    through the wrong DS2 ingress, then publishes and revokes a DS1 manifest
+    through that same wrong-ingress Torii path.
+- Registered the new Nexus test module in
+  `integration_tests/tests/nexus/mod.rs`.
+- Verification:
+  - `cargo fmt --all -- integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs integration_tests/tests/nexus/mod.rs crates/iroha_core/src/sumeragi/main_loop/block_sync.rs crates/iroha_torii/src/routing.rs`
+  - `CARGO_TARGET_DIR=target_codex_route_test_2 cargo test -p integration_tests --test mod wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --nocapture`
+
+## 2026-04-01 Follow-up: Torii typed status/account contracts, rejection freshness, and pk-deploy convergence hardening landed
+- Completed the first-release Torii/API cleanup for transaction status and
+  account readiness:
+  - `/v1/pipeline/transactions/status` now serves the shared typed
+    `PipelineTransactionStatusResponse` contract for both JSON and Norito,
+    with JSON as the default when `Accept` is absent or `*/*`;
+  - `GET /v1/accounts/{account_id}` now exists as the canonical same-route
+    account materialization read for JSON and Norito callers; and
+  - OpenAPI/MCP/client helpers now point at the first-class Torii routes
+    instead of the older dynamic/explorer-style paths.
+- The Rust client/CLI surface now matches that contract more closely:
+  - Norito query entrypoints perform the data-model compatibility handshake
+    before the first decode and fail with `DataModelCompatibilityError`
+    instead of falling through to speculative framed decode noise;
+  - `iroha tx status` uses the typed pipeline-status API and prints the full
+    typed payload; and
+  - `iroha account get` uses the canonical `GET /v1/accounts/{account_id}`
+    read.
+- `/status` now carries rejection freshness explicitly:
+  - `last_rejection_at_ms`; and
+  - `txs_rejected_recent_5m`,
+  backed by telemetry-side recent-rejection tracking instead of reusing the
+  cumulative rejection counter as a freshness signal.
+- The deployment-side convergence cleanup landed in `../pk-deploy`:
+  - the SBP/AED PKR interceptor deploy path is contract-instance-only and no
+    longer carries the raw-trigger fallback/replay/success branches;
+  - authoritative account readiness for grants and similar writes now requires
+    `GET /v1/accounts/{account_id}` on the exact Torii base instead of
+    retrying `Find(Account(...))`-style heuristics;
+  - live alias/account resolution no longer accepts retained-artifact or
+    mismatch fallback as a success path once the lane is up; and
+  - the public Torii ingress hardening script now emits sticky upstream
+    selection keyed from the forwarded client IP and validates upstream health
+    before reload.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_telemetry --lib --no-run`
+  - `cargo test -p iroha --lib --no-run`
+  - `cargo test -p iroha_cli --bins --no-run`
+  - `cargo test -p iroha_torii --lib --no-run`
+  - `cargo test -p iroha_torii openapi::tests::account_get_documents_canonical_dual_format_read -- --nocapture`
+  - `cargo test -p iroha_torii openapi::tests::pipeline_status_documents_not_found_response -- --nocapture`
+  - `PYTHONPATH=. python3 tests/test_pk_cli.py SurfaceTests.test_settlement_interceptor_deploy_script_embeds_resolved_account_ids SurfaceTests.test_settlement_interceptor_deploy_script_uses_manifest_contract_lifecycle SurfaceTests.test_unified_kotodama_deploy_verifier_requires_cbuae_contract_instance SurfaceTests.test_cbuae_interceptor_deploy_has_no_raw_trigger_fallback_path SurfaceTests.test_cbuae_interceptor_deploy_surfaces_pipeline_tx_status_before_visibility_timeouts SurfaceTests.test_cbuae_interceptor_deploy_keeps_probe_state_updates_out_of_subshells SurfaceTests.test_cbuae_interceptor_deploy_requires_authoritative_account_readiness_for_grants SurfaceTests.test_fi_operator_readiness_uses_torii_on_chain_domains SurfaceTests.test_public_torii_ingress_hardening_script_patches_edge_and_peer_runtime SurfaceTests.test_settlement_asset_resolver_uses_authoritative_torii_only_for_live_account_resolution`
+- Remaining gap:
+  - no live SBP/AED binary rollout, public-edge reload, minimal interceptor
+    convergence rerun, full `pk-deploy` reset, settlement smoke, or topology
+    verify was executed from this workspace; live acceptance still needs to be
+    run against the updated binaries/scripts.
+
+## 2026-04-01 Follow-up: restart-recovery rerun is green and the integration_tests strict-lint break is fixed
+- Re-ran the previously open
+  `sumeragi_rbc_recovers_after_peer_restart` integration scenario on the
+  current tree and it completed successfully, so the restart-path RBC recovery
+  regression tracked in the roadmap is no longer reproducing in that target.
+- Fixed the concrete strict-lint failure discovered during that rerun:
+  `cargo clippy -p integration_tests --test mod -- -D warnings` was failing on
+  an unused `HashOf` import in
+  `integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`.
+  The dead import is now removed and the target is green again.
+- Verification:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+  - `cargo clippy -p integration_tests --test mod -- -D warnings`
+- Remaining gap:
+  - the adjacent heavy restart/cold-start RBC recovery scenarios listed in the
+    roadmap still need fresh reruns on this tree before the broader restart
+    slice can be called fully closed.
+
+## 2026-04-01 Follow-up: lock-rejected sink now survives local payload ingress
+- Fixed the remaining exact-frontier lock-reject bypass in Sumeragi: a
+  deterministic lock-rejected branch hash no longer drops out of the
+  suppression sink just because the node already has the rejected block body
+  locally or via authoritative RBC ingress.
+- `lock_rejected_block_sink_active(...)` and sink pruning now keep the
+  rejection sink alive until the lock anchor moves, the committed height
+  passes the rejected height, or the existing TTL/max-dwell expiry fires.
+- Added a focused regression covering the live failure mode where
+  `request_missing_parent(...)` sees a lock-rejected parent hash that also has
+  locally available payload data, and verified the existing cleanup
+  regressions still pass on the patched tree.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core request_missing_parent_suppresses_ --lib -- --nocapture`
+  - `cargo test -p iroha_core lock_rejected_branch_with_known_parent_clears_missing_request --lib -- --nocapture`
+  - `cargo test -p iroha_core purge_lock_rejected_block_artifacts_clears_slot_level_owner_and_proposal_state --lib -- --nocapture`
+- Remaining gap:
+  - the fresh manifest-backed live reroll with this additional sink fix has
+    not completed yet, so the SBP/public split-brain at heights `4`/`7` still
+    needs a new deploy attempt from the updated artifact.
 
 ## 2026-04-01 Follow-up: exact-frontier lock rejection now purges rejected slot ownership before recovery
 - Fixed the exact-frontier lock-reject liveness hole in Sumeragi: when a peer
