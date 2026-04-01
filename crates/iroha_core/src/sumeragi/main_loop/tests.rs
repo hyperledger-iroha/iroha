@@ -38552,7 +38552,6 @@ async fn same_height_no_proposal_storm_breaker_cleans_stale_state() {
         (height, block_hash),
         super::LockRejectedBlockSinkState {
             height,
-            block_hash,
             locked_height: height.saturating_sub(1),
             locked_hash: parent_hash,
             first_seen: now,
@@ -42500,6 +42499,91 @@ async fn request_missing_parent_suppresses_active_lock_rejected_parent_hash() {
     assert!(
         actor.range_pull_escalation_cooldowns.is_empty(),
         "lock-rejected parent suppression must not hand the contiguous frontier to block-sync reanchor"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_missing_parent_suppresses_lock_rejected_parent_hash_with_authoritative_payload() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let local_height = u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX);
+    let Some(committed_hash) = actor.committed_block_hash_for_height(local_height) else {
+        super::status::reset_missing_block_fetch_counters_for_tests();
+        harness.shutdown.send();
+        return;
+    };
+    actor.locked_qc = Some(QcHeaderRef {
+        height: local_height,
+        view: 0,
+        epoch: actor.epoch_for_height(local_height),
+        subject_block_hash: committed_hash,
+        phase: Phase::Commit,
+    });
+    super::status::set_locked_qc(local_height, 0, Some(committed_hash));
+
+    let parent_height = local_height.saturating_add(1);
+    let conflicting_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD9; Hash::LENGTH]));
+    let rejected_parent_block = sample_block(parent_height, 0, Some(conflicting_parent));
+    let lock_rejected_parent = rejected_parent_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(
+        &rejected_parent_block,
+    ));
+    actor.pending.pending_blocks.insert(
+        lock_rejected_parent,
+        PendingBlock::new(rejected_parent_block, payload_hash, parent_height, 0),
+    );
+    assert!(
+        actor.authoritative_block_payload_available(lock_rejected_parent),
+        "test setup requires the rejected parent hash to look locally authoritative"
+    );
+
+    actor.note_lock_rejected_block(
+        parent_height,
+        lock_rejected_parent,
+        local_height,
+        committed_hash,
+        "test_request_missing_parent_lock_rejected_authoritative_payload",
+    );
+    assert!(
+        actor
+            .active_lock_rejected_block_sink(parent_height, lock_rejected_parent)
+            .is_some(),
+        "authoritative payload must not deactivate the deterministic lock-rejected sink"
+    );
+
+    let block_height = parent_height.saturating_add(1);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDA; Hash::LENGTH]));
+    let commit_topology = actor.effective_commit_topology();
+    actor.request_missing_parent(
+        block_hash,
+        block_height,
+        0,
+        lock_rejected_parent,
+        commit_topology.as_slice(),
+        Some(commit_topology.as_slice()),
+        None,
+        None,
+        "test_request_missing_parent_lock_rejected_authoritative_payload",
+    );
+
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&lock_rejected_parent),
+        "active lock-rejected parent hashes with local payload must still stay out of missing-parent recovery"
+    );
+    assert!(
+        actor.range_pull_escalation_cooldowns.is_empty(),
+        "authoritative-payload suppression must not hand the contiguous frontier to block-sync reanchor"
     );
 
     super::status::reset_missing_block_fetch_counters_for_tests();

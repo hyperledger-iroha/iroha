@@ -2,6 +2,7 @@
 //! Data availability + RBC integration scenario exercising large payload distribution.
 
 use std::{
+    fmt::Write as _,
     fs,
     io::ErrorKind,
     num::NonZeroU64,
@@ -1048,21 +1049,18 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
             )
         })?;
 
-        if let Err(err) = wait_for_rbc_delivery(
-            http.clone(),
-            sessions_url_primary.clone(),
-            expected_height,
-            restart_start,
-        )
-        .await
-        {
-            // Delivery may be pruned quickly; recovery and commit checks already validate the path.
-            eprintln!(
-                "RBC delivery not observed on primary after restart (height {expected_height}): {err:?}"
-            );
-        }
         let _commit_elapsed =
             wait_for_height(http.clone(), status_url, expected_height, restart_start).await?;
+        let _terminal_observation = wait_for_terminal_rbc_state(
+            http.clone(),
+            peers,
+            sessions_url_primary.clone(),
+            expected_height,
+            &block_hash_hex,
+            Some(persisted.view),
+            restart_start,
+        )
+        .await?;
 
         network.shutdown().await;
         Ok(())
@@ -1296,6 +1294,20 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
         })?;
         let _commit_elapsed =
             wait_for_height(http.clone(), status_url, expected_height, restart_start).await?;
+        let primary_sessions_url = client
+            .torii_url
+            .join("v1/sumeragi/rbc/sessions")
+            .wrap_err("compose primary peer sessions URL")?;
+        let _terminal_observation = wait_for_terminal_rbc_state(
+            http.clone(),
+            peers,
+            primary_sessions_url,
+            expected_height,
+            &block_hash_hex,
+            Some(persisted.view),
+            restart_start,
+        )
+        .await?;
 
         network.shutdown().await;
         Ok(())
@@ -2327,6 +2339,17 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             "total chunk count should remain {expected_total_chunks}, got {}",
             snapshot_after.total_chunks
         );
+        let _terminal_observation = wait_for_terminal_rbc_state(
+            http.clone(),
+            &peers,
+            restart_sessions_url.clone(),
+            session_height,
+            &block_hash_hex,
+            None,
+            recovery_start,
+        )
+        .await
+        .wrap_err("wait for recovered session terminal state after restart")?;
 
         let resume_height = fetch_status(&restarted_client)
             .await
@@ -2599,6 +2622,8 @@ where
                 if let Some(observation) = rbc_observation_from_persisted_snapshot(
                     network.peers(),
                     expected_height,
+                    None,
+                    None,
                     commit_elapsed,
                 ) {
                     eprintln!(
@@ -3609,39 +3634,49 @@ async fn wait_for_recovered_flag(
             .and_then(Value::as_array)
         {
             for item in items {
-                let Some(obj) = item.as_object() else {
-                    continue;
-                };
-                let height =
-                    extract_u64(obj.get("height").ok_or_else(|| eyre!("missing height"))?)?;
-                if height != expected_height {
-                    continue;
-                }
-                let block_hash = extract_string(
-                    obj.get("block_hash")
-                        .ok_or_else(|| eyre!("missing block_hash"))?,
-                )?;
-                if block_hash != block_hash_hex {
-                    continue;
-                }
-                let recovered = extract_bool(
-                    obj.get("recovered")
-                        .ok_or_else(|| eyre!("missing recovered flag"))?,
-                )?;
-                if recovered {
-                    if let Some(from_disk_val) = obj.get("recovered_from_disk") {
-                        let from_disk = extract_bool(from_disk_val)?;
-                        ensure!(
-                            from_disk,
-                            "RBC session reported recovered but not recovered_from_disk"
-                        );
-                    }
+                if assert_recovered_session_identity(item, expected_height, block_hash_hex)? {
                     return Ok(());
                 }
             }
         }
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+fn assert_recovered_session_identity(
+    item: &Value,
+    expected_height: u64,
+    block_hash_hex: &str,
+) -> Result<bool> {
+    let Some(obj) = item.as_object() else {
+        return Ok(false);
+    };
+    let height = extract_u64(obj.get("height").ok_or_else(|| eyre!("missing height"))?)?;
+    if height != expected_height {
+        return Ok(false);
+    }
+    let block_hash = extract_string(
+        obj.get("block_hash")
+            .ok_or_else(|| eyre!("missing block_hash"))?,
+    )?;
+    if block_hash != block_hash_hex {
+        return Ok(false);
+    }
+    let recovered = extract_bool(
+        obj.get("recovered")
+            .ok_or_else(|| eyre!("missing recovered flag"))?,
+    )?;
+    if !recovered {
+        return Ok(false);
+    }
+    if let Some(from_disk_val) = obj.get("recovered_from_disk") {
+        let from_disk = extract_bool(from_disk_val)?;
+        ensure!(
+            from_disk,
+            "RBC session reported recovered but not recovered_from_disk"
+        );
+    }
+    Ok(true)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -4031,8 +4066,66 @@ async fn wait_for_rbc_delivery(
         }
         let body = response.text().await.wrap_err("sessions body")?;
         let value: Value = json::from_str(&body).wrap_err("parse sessions JSON")?;
-        if let Some(observation) = parse_rbc_summary(&value, expected_height, start)? {
+        if let Some(observation) = parse_rbc_summary(&value, expected_height, None, None, start)? {
             return Ok(observation);
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_terminal_rbc_state(
+    http: reqwest::Client,
+    peers: &[NetworkPeer],
+    sessions_url: reqwest::Url,
+    expected_height: u64,
+    block_hash_hex: &str,
+    expected_view: Option<u64>,
+    start: Instant,
+) -> Result<RbcObservation> {
+    let timeout = da_rbc_recovery_timeout();
+    loop {
+        let response = http
+            .get(sessions_url.clone())
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .wrap_err("fetch RBC terminal session state")?;
+        if response.status().is_success() {
+            let body = response.text().await.wrap_err("terminal sessions body")?;
+            let value: Value = json::from_str(&body).wrap_err("parse terminal sessions JSON")?;
+            if let Some(observation) = parse_rbc_summary(
+                &value,
+                expected_height,
+                Some(block_hash_hex),
+                expected_view,
+                start,
+            )? {
+                return Ok(observation);
+            }
+        }
+        if let Some(observation) = rbc_observation_from_persisted_snapshot(
+            peers,
+            expected_height,
+            Some(block_hash_hex),
+            expected_view,
+            start.elapsed(),
+        ) {
+            return Ok(observation);
+        }
+        if start.elapsed() > timeout {
+            let context =
+                match collect_rbc_failure_context(&http, peers, expected_height, block_hash_hex)
+                    .await
+                {
+                    Ok(context) => context,
+                    Err(err) => format!("failed to collect RBC failure context: {err:#}"),
+                };
+            let view_context = expected_view
+                .map(|view| format!(" view {view}"))
+                .unwrap_or_default();
+            return Err(eyre!(
+                "timed out waiting for terminal RBC state at height {expected_height}{view_context} for block {block_hash_hex}\n{context}"
+            ));
         }
         sleep(Duration::from_millis(200)).await;
     }
@@ -4073,6 +4166,8 @@ async fn wait_for_rbc_session(
 fn parse_rbc_summary(
     root: &Value,
     expected_height: u64,
+    expected_block_hash: Option<&str>,
+    expected_view: Option<u64>,
     start: Instant,
 ) -> Result<Option<RbcObservation>> {
     let Some(items) = root
@@ -4090,6 +4185,13 @@ fn parse_rbc_summary(
         if height != expected_height {
             continue;
         }
+        let block_hash = extract_string(
+            obj.get("block_hash")
+                .ok_or_else(|| eyre!("missing block_hash"))?,
+        )?;
+        if expected_block_hash.is_some_and(|expected| block_hash != expected) {
+            continue;
+        }
         let delivered = extract_bool(
             obj.get("delivered")
                 .ok_or_else(|| eyre!("missing delivered"))?,
@@ -4098,6 +4200,9 @@ fn parse_rbc_summary(
             continue;
         }
         let view = extract_u64(obj.get("view").ok_or_else(|| eyre!("missing view"))?)?;
+        if expected_view.is_some_and(|expected| view != expected) {
+            continue;
+        }
         let total_chunks = extract_u64(
             obj.get("total_chunks")
                 .ok_or_else(|| eyre!("missing total_chunks"))?,
@@ -4109,10 +4214,6 @@ fn parse_rbc_summary(
         let ready_count = extract_u64(
             obj.get("ready_count")
                 .ok_or_else(|| eyre!("missing ready_count"))?,
-        )?;
-        let block_hash = extract_string(
-            obj.get("block_hash")
-                .ok_or_else(|| eyre!("missing block_hash"))?,
         )?;
         return Ok(Some(RbcObservation {
             delivered_at: start.elapsed(),
@@ -4134,6 +4235,8 @@ fn parse_rbc_summary(
 fn rbc_observation_from_persisted_snapshot(
     peers: &[NetworkPeer],
     expected_height: u64,
+    expected_block_hash: Option<&str>,
+    expected_view: Option<u64>,
     delivered_at: Duration,
 ) -> Option<RbcObservation> {
     peers
@@ -4143,7 +4246,12 @@ fn rbc_observation_from_persisted_snapshot(
             rbc_status::read_persisted_snapshot(store_dir)
         })
         .filter(|summary| {
-            summary.height == expected_height && summary.delivered && !summary.invalid
+            summary.height == expected_height
+                && expected_block_hash
+                    .is_none_or(|expected| hex::encode(summary.block_hash.as_ref()) == expected)
+                && expected_view.is_none_or(|expected| summary.view == expected)
+                && summary.delivered
+                && !summary.invalid
         })
         .max_by_key(|summary| {
             (
@@ -4161,6 +4269,92 @@ fn rbc_observation_from_persisted_snapshot(
             ready_count: summary.ready_count,
             block_hash: hex::encode(summary.block_hash.as_ref()),
         })
+}
+
+async fn collect_rbc_failure_context(
+    http: &reqwest::Client,
+    peers: &[NetworkPeer],
+    expected_height: u64,
+    block_hash_hex: &str,
+) -> Result<String> {
+    let mut details = String::new();
+    for (idx, peer) in peers.iter().enumerate() {
+        let torii_url = peer.client().torii_url.clone();
+        let status_url = torii_url.join("status").wrap_err("compose status URL")?;
+        let sessions_url = torii_url
+            .join("v1/sumeragi/rbc/sessions")
+            .wrap_err("compose RBC sessions URL")?;
+        let status_body = fetch_failure_endpoint_body(http, &status_url).await;
+        let sessions_body = fetch_failure_endpoint_body(http, &sessions_url).await;
+        let persisted =
+            rbc_status::read_persisted_snapshot(peer.kura_store_dir().join("rbc_sessions"));
+        let persisted =
+            format_persisted_summaries_for_context(&persisted, expected_height, block_hash_hex);
+        let _ = writeln!(
+            details,
+            "peer[{idx}] torii={torii_url} status={status_body} sessions={sessions_body} persisted={persisted}"
+        );
+    }
+    Ok(details)
+}
+
+async fn fetch_failure_endpoint_body(http: &reqwest::Client, url: &reqwest::Url) -> String {
+    match http
+        .get(url.clone())
+        .header("Accept", "application/json")
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let status = response.status();
+            match response.text().await {
+                Ok(body) => format!("{} {}", status, truncate_failure_context(body.trim(), 512)),
+                Err(err) => format!("{status} <body error: {err}>"),
+            }
+        }
+        Err(err) => format!("<request error: {err}>"),
+    }
+}
+
+fn format_persisted_summaries_for_context(
+    summaries: &[rbc_status::Summary],
+    expected_height: u64,
+    block_hash_hex: &str,
+) -> String {
+    let relevant: Vec<_> = summaries
+        .iter()
+        .filter(|summary| {
+            summary.height == expected_height
+                || hex::encode(summary.block_hash.as_ref()) == block_hash_hex
+        })
+        .map(|summary| {
+            format!(
+                "{{height={}, view={}, delivered={}, recovered_from_disk={}, invalid={}, ready={}, chunks={}/{}, hash={}}}",
+                summary.height,
+                summary.view,
+                summary.delivered,
+                summary.recovered_from_disk,
+                summary.invalid,
+                summary.ready_count,
+                summary.received_chunks,
+                summary.total_chunks,
+                hex::encode(summary.block_hash.as_ref())
+            )
+        })
+        .collect();
+    if relevant.is_empty() {
+        String::from("[]")
+    } else {
+        format!("[{}]", relevant.join(", "))
+    }
+}
+
+fn truncate_failure_context(value: &str, max_len: usize) -> String {
+    if value.len() <= max_len {
+        value.to_owned()
+    } else {
+        format!("{}...", &value[..max_len])
+    }
 }
 
 fn extract_u64(value: &Value) -> Result<u64> {

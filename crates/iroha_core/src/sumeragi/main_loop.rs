@@ -3618,12 +3618,12 @@ impl Actor {
         if self.committed_height_snapshot() >= state.height {
             return false;
         }
-        if self.authoritative_block_payload_available(state.block_hash) {
-            return false;
-        }
         let Some(lock) = self.locked_qc else {
             return false;
         };
+        // A locally available payload does not rehabilitate a branch already rejected by the
+        // current lock rule; keep suppressing recovery for that exact hash until the lock moves or
+        // the deterministic sink expires.
         lock.height == state.locked_height && lock.subject_block_hash == state.locked_hash
     }
 
@@ -3643,7 +3643,6 @@ impl Actor {
                 let active = now.saturating_duration_since(state.last_seen) <= ttl
                     && now.saturating_duration_since(state.first_seen) <= max_dwell
                     && committed_height < state.height
-                    && !self.authoritative_block_payload_available(state.block_hash)
                     && lock_matches;
                 (!active).then_some(*key)
             })
@@ -3697,7 +3696,6 @@ impl Actor {
                 if state.locked_height != locked_height || state.locked_hash != locked_hash {
                     *state = LockRejectedBlockSinkState {
                         height,
-                        block_hash,
                         locked_height,
                         locked_hash,
                         first_seen: now,
@@ -3715,7 +3713,6 @@ impl Actor {
             Entry::Vacant(vacant) => {
                 vacant.insert(LockRejectedBlockSinkState {
                     height,
-                    block_hash,
                     locked_height,
                     locked_hash,
                     first_seen: now,
@@ -8570,7 +8567,6 @@ struct CommittedEdgeConflictOwnerState {
 #[derive(Debug, Clone, Copy)]
 struct LockRejectedBlockSinkState {
     height: u64,
-    block_hash: HashOf<BlockHeader>,
     locked_height: u64,
     locked_hash: HashOf<BlockHeader>,
     first_seen: Instant,
