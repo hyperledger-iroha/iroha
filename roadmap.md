@@ -34,31 +34,35 @@ Open work for this slice now remains:
   `scripts/pk topology preflight`, `deploy --mode reset`,
   `settlement-smoke`, and `verify` sequence.
 
-Latest sync (2026-04-01 Nexus implicit local storage budget default):
+Latest sync (2026-04-01 Nexus per-filesystem auto-budget persistence):
 when the operator leaves the Nexus aggregate disk cap unset, `irohad` now
-derives a runtime default from the filesystem backing `kura.store_dir`
-instead of treating the storage budget as absent.
+derives and persists per-filesystem defaults across the effective Nexus storage
+roots instead of treating the storage budget as absent or keying only off
+`kura.store_dir`.
 
-- `nexus.storage.local_budget_bytes` remains the canonical knob and the legacy
-  `nexus.storage.max_disk_usage_bytes` alias still works, but if neither is
-  set the daemon now probes the backing filesystem and uses `80%` of the
-  currently available bytes as the implicit aggregate Nexus budget;
-- `iroha_config` now tracks whether that cap was explicitly configured so
-  config parsing remains machine-independent while `irohad` can inject the
-  runtime-derived default before fanning the budget out to Kura, tiered-state,
-  SoraFS, SoraNet, and SoraVPN; and
-- focused config + daemon tests are green for the explicit/implicit parse
-  paths, the config-layer budget fanout branch, the runtime derivation path,
-  and the existing relative-path config resolution coverage.
+- `nexus.storage.local_budget_bytes` remains the canonical aggregate knob and
+  the legacy `nexus.storage.max_disk_usage_bytes` alias still works, but if
+  neither is set the daemon now requires a writable config path, derives
+  `80%` defaults per filesystem, and persists both the aggregate budget and a
+  human-readable internal `nexus.storage.auto_default` subtable into the active
+  config file;
+- `iroha_config` now tracks Nexus storage budget provenance as
+  `Unset` / `OperatorExplicit` / `AutoDerived`, reuses matching persisted
+  auto-derived metadata on later starts, and treats edited
+  `local_budget_bytes` values as operator overrides whenever they no longer
+  match the stored auto-derived aggregate;
+- auto-derived budgets now fan out per filesystem by normalizing the existing
+  component weights inside each filesystem group, while operator-explicit
+  budgets keep the existing global split behavior; and
+- startup still warns without failing when free space is below budget, but the
+  warning is now emitted once per filesystem: auto-derived configs compare the
+  stored per-filesystem budget against current free space, and operator-explicit
+  configs compare the effective assigned component caps on that filesystem.
 
 Open work for this slice now remains:
-- decide whether operators also need a persisted one-shot "first boot"
-  materialization of the derived value in generated config/state, or whether
-  the current startup-time implicit default should remain the long-term
-  behavior when the knob is unset; and
 - rerun the broader `iroha_config` fixture/workspace gates after the unrelated
   existing fixture breakage around governance account defaults is resolved, so
-  the new runtime-derived storage-budget path is covered by the heavier config
+  the new first-run materialization path is covered by the heavier config
   suites as well.
 
 Latest sync (2026-04-01 Nexus account-read routing / storage-budget doc sync):

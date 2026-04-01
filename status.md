@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: workspace clippy is green again after domainless-account cleanup
+- Cleared the remaining workspace-wide `clippy` backlog caused by stale
+  domain-qualified account assumptions and schema drift across examples,
+  benches, helpers, integration tests, and UI/test telemetry fixtures.
+- Local cleanup in this pass included:
+  - updating stale `ivm` examples/benches/tests to the domainless
+    `AccountId::new(public_key)` shape and removing redundant
+    `AccountId::from(...)` conversions;
+  - removing unused domain scaffolding and restoring missing `#[test]`
+    annotations across `iroha_core`, `integration_tests`, `izanami`, and
+    `mochi-*`; and
+  - refreshing `TelemetryStatus` fixtures to include the new rejection-metrics
+    fields.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo clippy --workspace --all-targets -- -D warnings` (pass)
+
 ## 2026-04-01 Follow-up: broad workspace verification is blocked by unrelated domainless-account cleanup
 - Narrow verification for the current Torii/client/CLI slice is green on a
   fresh isolated target directory:
@@ -47,28 +64,37 @@ Last updated: 2026-04-01
   rebuild and `scripts/pk topology preflight/deploy/settlement-smoke/verify`
   run were not started from this tree in this pass.
 
-## 2026-04-01 Follow-up: Nexus local storage budget now defaults from free disk when unset
-- `irohad` now derives an implicit Nexus local storage budget at startup when
-  the operator leaves both `nexus.storage.local_budget_bytes` and the legacy
-  `nexus.storage.max_disk_usage_bytes` alias unset.
-- The implicit cap is computed from the filesystem backing
-  `kura.store_dir`: `80%` of the currently available bytes on the nearest
-  existing ancestor path, so the budget tracks the actual disk that will host
-  local node storage.
-- Explicit operator configuration still wins. The runtime-derived cap is only
-  used when the aggregate Nexus storage budget was left unset, and it is then
-  fanned out through the existing deterministic per-component weight split for
-  Kura, tiered-state cold storage, SoraFS, SoraNet, and SoraVPN.
-- `iroha_config` now tracks whether the Nexus storage budget was explicitly
-  configured so generic config parsing stays machine-independent while the
-  daemon can still inject the runtime-derived default before applying the
-  storage budget fanout.
+## 2026-04-01 Follow-up: Nexus local storage auto-budget is now persisted per filesystem
+- `iroha_config` now models Nexus storage budget provenance explicitly:
+  `Unset`, `OperatorExplicit`, or `AutoDerived`.
+- `nexus.storage.local_budget_bytes` remains the canonical aggregate knob, and
+  `nexus.storage.max_disk_usage_bytes` still parses as a legacy
+  operator-explicit alias.
+- When the aggregate budget is unset, `irohad` now requires a writable config
+  path and persists both `nexus.storage.local_budget_bytes` and a new internal
+  `nexus.storage.auto_default` subtable before startup continues.
+- Auto-derived defaults are now computed per filesystem across the effective
+  Nexus storage roots after `--sora` and runtime root defaults are applied:
+  Kura, tiered-state cold/DA storage, SoraFS, SoraNet spool, and SoraVPN
+  spool. Each filesystem gets `80%` of its current available bytes, and the
+  persisted aggregate is the sum of those per-filesystem budgets.
+- Later starts reuse the persisted `auto_default` metadata when the stored
+  filesystem identity map still matches the live storage layout. If the layout
+  changes, the daemon regenerates the per-filesystem budgets from current free
+  space and rewrites both the aggregate budget and the internal metadata.
+- Manual operator ownership still works: if `local_budget_bytes` exists without
+  matching `auto_default` metadata, or if the top-level aggregate no longer
+  matches the stored auto-derived aggregate, the daemon treats the budget as
+  operator-explicit and ignores the persisted auto-derived metadata.
+- Startup warnings are now per filesystem and remain non-fatal:
+  auto-derived configs warn when a stored filesystem budget exceeds current
+  free space, and operator-explicit configs warn when the effective assigned
+  component caps on a filesystem exceed current free space.
 - Verification:
   - `cargo fmt --all`
-  - `cargo test -p iroha_config --lib storage_ -- --nocapture`
-  - `cargo test -p iroha_config --lib apply_storage_budget_uses_implicit_budget_when_operator_budget_unset -- --nocapture`
-  - `cargo test -p irohad read_config_derives_implicit_nexus_storage_budget_from_free_disk -- --nocapture`
-  - `cargo test -p irohad relative_file_paths_resolution -- --nocapture`
+  - `cargo test -p iroha_config --lib`
+  - `cargo test -p irohad budget -- --nocapture`
+  - `cargo test -p irohad read_config_regenerates_auto_default_when_storage_layout_changes -- --nocapture`
 
 ## 2026-04-01 Follow-up: Nexus account reads are now ingress-independent, caller-visible fanouts
 - Recorded and verified the Nexus account-read routing split already present in
@@ -94,6 +120,30 @@ Last updated: 2026-04-01
 - Verification:
   - `cargo fmt --all`
   - `cargo test -p integration_tests --test mod tx_query_cross_dataspace_routing_localnet --no-run`
+
+## 2026-04-01 Follow-up: `iroha_config` governance account defaults parse under chain overrides again
+- Fixed the `iroha_config` fixture/compile break caused by the removed
+  domain-qualified `AccountId::to_account_id(...)` path in
+  `crates/iroha_config/tests/fixtures.rs`, updating the assertions to compare
+  canonical domainless `AccountId` values.
+- Made governance default account literals stable against ambient
+  chain-discriminant overrides during `UserConfig` materialization, and taught
+  config parsing to accept those baseline default literals when a config sets a
+  non-default `common.chain_discriminant`.
+- Added focused regressions for both the stable-default rendering path and the
+  chain-override parse path, and serialized the fixture runtime guard so the
+  shared address-runtime globals are not raced by the parallel Rust test
+  runner.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_config --test fixtures parse_applies_default_account_domain_override_during_config_parse -- --nocapture`
+  - `cargo test -p iroha_config --lib governance_default_account_literals_ -- --nocapture`
+  - `cargo test -p iroha_config -- --nocapture`
+    now leaves only the pre-existing `minimal_config_snapshot` `expect!`
+    mismatch red in `tests/fixtures.rs`
+  - `cargo test -p iroha_config --test fixtures minimal_config_snapshot -- --nocapture`
+    still fails on a pre-existing `expect!` snapshot mismatch unrelated to this
+    fix
 
 ## 2026-04-01 Follow-up: `iroha_executor` alias-domain permission cleanup compiles again
 - Fixed the `iroha_executor` compile break in domain-permission cleanup by

@@ -12434,7 +12434,6 @@ pub mod isi {
                 members.push(member);
             }
             let policy = MultisigPolicy::new(threshold, members).expect("multisig policy");
-            let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
             let multisig_id = AccountId::new_multisig(policy);
             Register::account(Account::new(multisig_id.clone()))
                 .execute(&ALICE_ID, stx)

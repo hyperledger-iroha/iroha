@@ -637,7 +637,6 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
     run_or_skip(
         stringify!(only_account_with_permission_can_register_trigger),
         || async {
-            let domain_id: DomainId = "wonderland".parse()?;
             let alice_account_id = ALICE_ID.clone();
             let rabbit_keys = KeyPair::random();
             let rabbit_account_id = AccountId::new(rabbit_keys.public_key().clone());

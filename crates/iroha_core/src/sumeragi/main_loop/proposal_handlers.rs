@@ -1155,6 +1155,7 @@ impl Actor {
             self.pending.pending_blocks.remove(&hash);
             let _ = self.supersede_validation_inflight(hash);
             self.pending.pending_fetch_requests.remove(&hash);
+            self.pending.pending_block_body_requests.remove(&hash);
             self.clear_missing_block_request(&hash, MissingBlockClearReason::Obsolete);
             self.clear_missing_block_view_change(&hash);
             self.clean_rbc_sessions_for_block(hash, height);
@@ -1240,6 +1241,15 @@ impl Actor {
         block: &SignedBlock,
         proposal: &crate::sumeragi::consensus::Proposal,
     ) -> Option<super::message::BlockCreated> {
+        self.frontier_block_created_from_proposal_with_roster_hint(block, proposal, None)
+    }
+
+    fn frontier_block_created_from_proposal_with_roster_hint(
+        &self,
+        block: &SignedBlock,
+        proposal: &crate::sumeragi::consensus::Proposal,
+        roster_hint: Option<&[PeerId]>,
+    ) -> Option<super::message::BlockCreated> {
         let header = block.header();
         let payload_bytes = super::proposals::block_payload_bytes(block);
         let payload_hash = Hash::new(&payload_bytes);
@@ -1260,7 +1270,52 @@ impl Actor {
             header.height().get(),
             header.view_change_index(),
         );
-        let rebuilt_init = match self.rebuild_rbc_init_from_block(block, key) {
+        let rebuilt_init = match self.rebuild_rbc_init_from_block(block, key).or_else(|| {
+            let roster_hint = roster_hint?;
+            let height = header.height().get();
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            let roster =
+                super::roster::canonicalize_roster_for_mode(roster_hint.to_vec(), consensus_mode);
+            if roster.is_empty() {
+                return None;
+            }
+            let epoch = proposal.header.epoch;
+            let session = Self::build_rbc_session_from_payload_with_chunking(
+                &payload_bytes,
+                payload_hash,
+                self::rbc::RbcChunkingSpec::from_config(&self.config.rbc),
+                epoch,
+            )
+            .ok()?;
+            let chunk_digests = session.expected_chunk_digests.clone()?;
+            let chunk_root = session
+                .expected_chunk_root
+                .or_else(|| session.chunk_root())?;
+            let leader_signature = block
+                .signatures()
+                .find(|signature| signature.index() == u64::from(proposal.header.proposer))
+                .cloned()
+                .or_else(|| block.signatures().next().cloned())?;
+            Some(RbcInit {
+                block_hash: key.0,
+                height: key.1,
+                view: key.2,
+                epoch,
+                roster: roster.clone(),
+                roster_hash: self::rbc::rbc_roster_hash(&roster),
+                total_chunks: session.total_chunks(),
+                encoding: session.layout().encoding,
+                chunk_size_bytes: session.layout().chunk_size_bytes,
+                payload_size_bytes: session.layout().payload_size_bytes,
+                data_shards: session.layout().data_shards,
+                parity_shards: session.layout().parity_shards,
+                chunk_digests,
+                payload_hash,
+                chunk_root,
+                block_header: block.header(),
+                leader_signature,
+            })
+        }) {
             Some(init) => init,
             None => {
                 debug!(
@@ -1349,6 +1404,20 @@ impl Actor {
                         super::message::BlockCreated::with_frontier(block.clone(), frontier)
                     })
             })
+    }
+
+    pub(super) fn frontier_block_created_for_local_proposal_wire(
+        &self,
+        block: &SignedBlock,
+        proposal: &crate::sumeragi::consensus::Proposal,
+        proposal_roster: &[PeerId],
+    ) -> Option<super::message::BlockCreated> {
+        self.frontier_block_created_from_proposal_with_roster_hint(
+            block,
+            proposal,
+            Some(proposal_roster),
+        )
+        .or_else(|| self.frontier_block_created_for_proposal_wire(block, proposal))
     }
 
     pub(super) fn frontier_block_created_for_wire(
@@ -1526,6 +1595,7 @@ impl Actor {
                 self.subsystems.validation.inflight.remove(&hash);
                 self.subsystems.validation.superseded_results.remove(&hash);
                 self.pending.pending_fetch_requests.remove(&hash);
+                self.pending.pending_block_body_requests.remove(&hash);
                 if self
                     .deferred_block_sync_updates
                     .remove(&(pending.height, pending.view, hash))
@@ -1703,6 +1773,7 @@ impl Actor {
                 .superseded_results
                 .remove(&block_hash);
             self.pending.pending_fetch_requests.remove(&block_hash);
+            self.pending.pending_block_body_requests.remove(&block_hash);
             self.subsystems
                 .propose
                 .proposal_cache
@@ -1939,6 +2010,7 @@ impl Actor {
                     .superseded_results
                     .remove(&block_hash);
                 self.pending.pending_fetch_requests.remove(&block_hash);
+                self.pending.pending_block_body_requests.remove(&block_hash);
                 let proposal = self
                     .subsystems
                     .propose
@@ -3666,6 +3738,7 @@ impl Actor {
             .superseded_results
             .remove(&block_hash);
         self.pending.pending_fetch_requests.remove(&block_hash);
+        self.pending.pending_block_body_requests.remove(&block_hash);
         self.purge_rbc_state(session_key, block_hash, height, view);
     }
 }

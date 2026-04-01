@@ -1554,6 +1554,7 @@ impl Actor {
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
             });
             self.pending.pending_fetch_requests.remove(&block_hash);
+            self.pending.pending_block_body_requests.remove(&block_hash);
             self.subsystems.validation.inflight.remove(&block_hash);
             self.subsystems
                 .validation

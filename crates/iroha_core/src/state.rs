@@ -8396,9 +8396,9 @@ mod storage_migration_tests {
         let first = AccountId::new(KeyPair::random().public_key().clone());
         let second = AccountId::new(KeyPair::random().public_key().clone());
 
-        let mut first_details =
+        let first_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
-        let mut second_details =
+        let second_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
         world
             .accounts
@@ -28490,7 +28490,7 @@ mod tests {
 
     fn new_account_in_domain(
         account_id: &AccountId,
-        domain_id: &DomainId,
+        _domain_id: &DomainId,
     ) -> iroha_data_model::account::NewAccount {
         Account::new(account_id.clone())
     }
@@ -29387,13 +29387,12 @@ mod tests {
         let desired_excess = oldest_spool_size.saturating_sub(1).max(1);
         let max_disk_usage = total_used.saturating_sub(desired_excess);
 
+        let mut storage = iroha_config::parameters::actual::NexusStorage::default();
+        storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(max_disk_usage);
+        storage.budget_enforce_interval_blocks = 0;
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
-            storage: iroha_config::parameters::actual::NexusStorage {
-                max_disk_usage_bytes: iroha_config::base::util::Bytes(max_disk_usage),
-                budget_enforce_interval_blocks: 0,
-                ..Default::default()
-            },
+            storage,
             ..Default::default()
         };
         state.set_nexus(nexus).expect("apply nexus config");
@@ -29449,13 +29448,12 @@ mod tests {
         let total_used = kura_used.saturating_add(soranet_used);
         let interval_blocks = 10;
 
+        let mut storage = iroha_config::parameters::actual::NexusStorage::default();
+        storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(total_used);
+        storage.budget_enforce_interval_blocks = interval_blocks;
         let nexus_ok = iroha_config::parameters::actual::Nexus {
             enabled: true,
-            storage: iroha_config::parameters::actual::NexusStorage {
-                max_disk_usage_bytes: iroha_config::base::util::Bytes(total_used),
-                budget_enforce_interval_blocks: interval_blocks,
-                ..Default::default()
-            },
+            storage,
             ..Default::default()
         };
         state.set_nexus(nexus_ok).expect("apply nexus config");

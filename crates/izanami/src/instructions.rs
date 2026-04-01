@@ -221,7 +221,7 @@ fn nexus_fee_seed_amount() -> Numeric {
     1_000_000_u64.into()
 }
 
-fn account_from_record(record: &AccountRecord, domain: &DomainId) -> NewAccount {
+fn account_from_record(record: &AccountRecord, _domain: &DomainId) -> NewAccount {
     let builder = Account::new(record.id.clone());
     if let Some(uaid) = record.uaid {
         builder.with_uaid(Some(uaid))

@@ -51,9 +51,6 @@ impl ConcurrentWSV {
     }
 
     fn register_account(&self, id: AccountId) -> bool {
-        if !self.domains.contains(id.domain()) {
-            return false;
-        }
         self.accounts.insert(id)
     }
 

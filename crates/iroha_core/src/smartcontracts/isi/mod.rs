@@ -1024,7 +1024,6 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let wonderland: DomainId = "wonderland".parse()?;
         let (fake_account_id, _fake_account_keypair) = gen_account_in("wonderland");
         let trigger_id = "test_trigger_id".parse::<TriggerId>()?;
 
@@ -1121,7 +1120,6 @@ mod tests {
                 .expect_err("Error expected"),
             Error::InvariantViolation(_)
         ));
-        let wonderland: DomainId = "wonderland".parse()?;
         Register::account(Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()))
             .execute(&account_id, &mut state_transaction)?;
         let genesis_account = state_transaction

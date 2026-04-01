@@ -233,6 +233,7 @@ impl Actor {
             .remove(&(qc.height, qc.view, qc.subject_block_hash));
         self.flush_frontier_body_requesters(block.as_ref());
         self.flush_pending_fetch_requests(block.as_ref());
+        self.flush_pending_block_body_requests_if_ready(block.as_ref());
         self.clear_missing_block_request(
             &qc.subject_block_hash,
             MissingBlockClearReason::PayloadAvailable,

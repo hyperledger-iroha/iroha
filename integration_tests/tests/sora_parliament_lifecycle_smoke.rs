@@ -1212,7 +1212,6 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     let reject_referendum_id = reject_proposal_id_hex.clone();
 
     let gov_domain_id: DomainId = GOV_DOMAIN_ID.parse()?;
-    let wonderland_domain: DomainId = "wonderland".parse()?;
     let asset_def_id = governance_asset_definition_id();
     alice
         .submit(Register::domain(Domain::new(gov_domain_id.clone())))

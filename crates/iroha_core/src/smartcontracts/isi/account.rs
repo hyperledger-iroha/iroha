@@ -1375,6 +1375,7 @@ pub mod query {
             assert_eq!(results, vec![acc1]);
         }
 
+        #[test]
         fn find_accounts_applies_id_literal_predicate() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();

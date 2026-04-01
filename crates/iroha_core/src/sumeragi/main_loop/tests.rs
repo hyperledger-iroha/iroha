@@ -10552,6 +10552,143 @@ async fn fetch_block_body_response_for_committed_block_preserves_commit_sidecars
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fetch_block_body_stashes_canonical_committed_block_until_commit_proof_available() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let predecessor = sample_block(1, 0, None);
+    let committed_block = sample_block(2, 0, Some(predecessor.hash()));
+    let block_hash = committed_block.hash();
+    let height = committed_block.header().height().get();
+    let view = committed_block.header().view_change_index();
+    actor
+        .kura
+        .store_block(predecessor.clone())
+        .expect("store predecessor block");
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(predecessor.hash());
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(block_hash);
+
+    let requester = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote requester");
+
+    let _ = take_background_log(&background_log);
+    actor
+        .handle_fetch_block_body(super::message::FetchBlockBody {
+            requester: requester.clone(),
+            block_hash,
+            height,
+            view,
+        })
+        .expect("fetch block body");
+
+    assert!(
+        actor
+            .pending
+            .pending_block_body_requests
+            .get(&block_hash)
+            .is_some_and(|requesters| requesters.contains(&requester)),
+        "exact committed block fetch should wait for portable commit proof"
+    );
+    assert!(
+        take_background_log(&background_log).is_empty(),
+        "exact committed block fetch should not answer with bare payload before proof is ready"
+    );
+
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..required {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        view,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        commit_topology,
+        signers_bitmap,
+        qc.aggregate.bls_aggregate_signature.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    actor.state.record_commit_roster(&qc, &checkpoint, None);
+
+    match actor.block_body_response_for_wire(&committed_block).body {
+        super::message::BlockBodyData::BlockSyncUpdate(update) => {
+            assert!(
+                update.commit_qc.is_some() || update.validator_checkpoint.is_some(),
+                "portable proof should become available once the commit roster is recorded"
+            );
+        }
+        other => panic!(
+            "expected exact committed block response to preserve sidecars once proof is ready, got {other:?}"
+        ),
+    }
+
+    assert!(
+        actor.flush_pending_block_body_requests_if_ready(&committed_block),
+        "exact committed block fetch should flush once commit proof is available"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_block_body_requests
+            .contains_key(&block_hash),
+        "exact committed block flush should retire the pending requester set"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(|entry| {
+            matches!(
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("BlockBodyResponse"),
+                    peer: Some(peer),
+                } if peer == &requester
+            )
+        }),
+        "expected an exact BlockBodyResponse to be posted once proof is ready"
+    );
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_body_response_releases_dedup_when_block_created_is_rejected() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -76239,6 +76376,8 @@ async fn assemble_proposal_broadcasts_when_candidate_conflicts_with_local_vote_h
 
 #[tokio::test(flavor = "current_thread")]
 async fn assemble_proposal_height_two_records_inline_frontier_manifest() {
+    use std::borrow::Cow;
+
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -76258,6 +76397,13 @@ async fn assemble_proposal_height_two_records_inline_frontier_manifest() {
         subject_block_hash: genesis_hash,
         phase: Phase::Commit,
     };
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(sample_transaction())),
+            actor.state.view(),
+        )
+        .expect("push tx");
     let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
     let local_idx = actor
         .local_validator_index(&actor.state.view())
@@ -87075,6 +87221,87 @@ async fn frontier_block_created_for_proposal_wire_rebuilds_authoritative_frontie
         block.signatures().any(|signature| signature.index() == 0),
         "later-view proposal block should carry the leader signature at index 0"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_block_created_for_local_proposal_wire_uses_live_roster_when_derived_roster_unavailable()
+ {
+    let _history_guard = super::status::commit_history_test_guard();
+    super::status::reset_commit_certs_for_tests();
+    super::status::reset_validator_checkpoints_for_tests();
+    super::status::reset_precommit_signer_history_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    assert_eq!(
+        actor.state.view().height(),
+        0,
+        "test requires the actor state to remain at genesis-precommit height",
+    );
+
+    let height = 2u64;
+    let view = 0u64;
+    let proposal_roster = actor.effective_commit_topology();
+    assert!(
+        !proposal_roster.is_empty(),
+        "test requires a non-empty live proposal roster"
+    );
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, view, None);
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let highest_qc = QcHeaderRef {
+        height: 1,
+        view: 0,
+        epoch: actor.epoch_for_height(1),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x44; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    };
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        highest_qc,
+        0,
+        view,
+        actor.epoch_for_height(height),
+    );
+
+    assert!(
+        actor
+            .rebuild_rbc_init_from_block(&block, Actor::session_key(&block.hash(), height, view))
+            .is_none(),
+        "derived RBC init should stay unavailable when the actor has not committed height one locally"
+    );
+    assert!(
+        actor
+            .frontier_block_created_for_proposal_wire(&block, &proposal)
+            .is_none(),
+        "generic frontier rebuild should depend on the unavailable derived roster in this scenario"
+    );
+
+    let created = actor
+        .frontier_block_created_for_local_proposal_wire(&block, &proposal, &proposal_roster)
+        .expect("local proposal frontier rebuild should use the live proposal roster");
+    let frontier = created
+        .frontier
+        .as_ref()
+        .expect("local proposal frontier wire should preserve frontier metadata");
+
+    assert_eq!(created.block.hash(), block.hash());
+    assert_eq!(frontier.payload_hash, payload_hash);
+    assert_eq!(
+        frontier.roster_hash,
+        super::rbc::rbc_roster_hash(&super::roster::canonicalize_roster_for_mode(
+            proposal_roster.clone(),
+            ConsensusMode::Permissioned,
+        ),),
+        "local proposal frontier rebuild should hash the live proposal roster deterministically",
+    );
+    assert_eq!(frontier.proposer, 0);
 
     harness.shutdown.send();
 }

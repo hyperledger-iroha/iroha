@@ -3882,6 +3882,7 @@ impl Actor {
         self.vote_roster_cache.remove(&block_hash);
         self.block_signer_cache.remove_block(&block_hash);
         self.pending.pending_fetch_requests.remove(&block_hash);
+        self.pending.pending_block_body_requests.remove(&block_hash);
         self.clear_missing_payload_fetch_window_gate_for_block(height, block_hash);
         self.clear_missing_block_view_change(&block_hash);
         let pending_removed =
@@ -9882,6 +9883,7 @@ struct PendingBlockState {
     missing_block_requests: BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     pending_fetch_requests:
         BTreeMap<HashOf<BlockHeader>, BTreeMap<PeerId, PendingFetchRequestMeta>>,
+    pending_block_body_requests: BTreeMap<HashOf<BlockHeader>, BTreeSet<PeerId>>,
     pending_processing: Cell<Option<HashOf<BlockHeader>>>,
     pending_processing_parent: Cell<Option<HashOf<BlockHeader>>>,
     last_commit_pipeline_run: Instant,
@@ -15879,6 +15881,7 @@ impl Actor {
                 pending_blocks: BTreeMap::new(),
                 missing_block_requests: BTreeMap::new(),
                 pending_fetch_requests: BTreeMap::new(),
+                pending_block_body_requests: BTreeMap::new(),
                 pending_processing: Cell::new(None),
                 pending_processing_parent: Cell::new(None),
                 last_commit_pipeline_run: initial_commit_pipeline_run,
@@ -23486,6 +23489,7 @@ impl Actor {
             cleared_heights.insert(request_height);
             self.clear_missing_payload_fetch_window_gate_for_block(request_height, hash);
             self.pending.pending_fetch_requests.remove(&hash);
+            self.pending.pending_block_body_requests.remove(&hash);
 
             if self
                 .pending
@@ -25265,6 +25269,7 @@ impl Actor {
                 self.subsystems.validation.inflight.remove(&hash);
                 self.subsystems.validation.superseded_results.remove(&hash);
                 self.pending.pending_fetch_requests.remove(&hash);
+                self.pending.pending_block_body_requests.remove(&hash);
                 self.clean_rbc_sessions_for_block(hash, pending.height);
                 pending_removed = pending_removed.saturating_add(1);
             }
@@ -25496,6 +25501,7 @@ impl Actor {
             self.subsystems.validation.inflight.remove(&hash);
             self.subsystems.validation.superseded_results.remove(&hash);
             self.pending.pending_fetch_requests.remove(&hash);
+            self.pending.pending_block_body_requests.remove(&hash);
             self.clean_rbc_sessions_for_block(hash, height);
         }
 
@@ -25512,6 +25518,7 @@ impl Actor {
                 missing_removed = missing_removed.saturating_add(1);
                 cleared_heights.insert(height);
                 self.pending.pending_fetch_requests.remove(&hash);
+                self.pending.pending_block_body_requests.remove(&hash);
             }
         }
 

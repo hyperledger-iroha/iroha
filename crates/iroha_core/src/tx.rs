@@ -4317,7 +4317,7 @@ pub mod tests {
 
     fn new_account_in_domain(
         account_id: &AccountId,
-        domain_id: &DomainId,
+        _domain_id: &DomainId,
     ) -> iroha_data_model::account::NewAccount {
         Account::new(account_id.clone())
     }

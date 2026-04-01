@@ -86,18 +86,6 @@ pub fn populate_state(
     asset_definitions: &[AssetDefinitionId],
     owner_id: &AccountId,
 ) -> Vec<InstructionBox> {
-    fn domain_for_index<'a>(
-        domains: &'a [DomainId],
-        total_items: usize,
-        index: usize,
-    ) -> Option<&'a DomainId> {
-        if domains.is_empty() || total_items == 0 {
-            return None;
-        }
-        let domain_index = index.saturating_mul(domains.len()) / total_items;
-        domains.get(domain_index.min(domains.len() - 1))
-    }
-
     let mut instructions: Vec<InstructionBox> =
         vec![Grant::account_permission(CanRegisterDomain, owner_id.clone()).into()];
 
@@ -113,10 +101,7 @@ pub fn populate_state(
         instructions.push(can_unregister_domain.into());
     }
 
-    for (index, account_id) in accounts.iter().enumerate() {
-        let domain_id = domain_for_index(domains, accounts.len(), index)
-            .cloned()
-            .unwrap_or_else(|| "bench".parse().expect("valid bench domain id"));
+    for account_id in accounts {
         let account = Account::new(account_id.clone());
         instructions.push(Register::account(account).into());
         let can_unregister_account = Grant::account_permission(

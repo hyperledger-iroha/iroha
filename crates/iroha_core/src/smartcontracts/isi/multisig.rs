@@ -2535,7 +2535,7 @@ mod tests {
     fn register_account_in_domain(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        domain_id: &iroha_data_model::domain::DomainId,
+        _domain_id: &iroha_data_model::domain::DomainId,
         account_id: &AccountId,
         label: &str,
     ) {

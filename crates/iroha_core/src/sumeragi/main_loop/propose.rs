@@ -1358,9 +1358,12 @@ impl Actor {
                     .propose
                     .proposal_cache
                     .insert_hint(proposal_hint);
-                let block_created = if let Some(block_created) =
-                    self.frontier_block_created_for_proposal_wire(&signed_block, &proposal)
-                {
+                let block_created = if let Some(block_created) = self
+                    .frontier_block_created_for_local_proposal_wire(
+                        &signed_block,
+                        &proposal,
+                        topology.as_ref(),
+                    ) {
                     block_created
                 } else {
                     warn!(

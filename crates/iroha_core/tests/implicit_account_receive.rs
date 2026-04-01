@@ -48,7 +48,7 @@ fn seeded_account(seed_byte: u8) -> (AccountId, KeyPair) {
 
 fn build_account_in_domain(
     account_id: AccountId,
-    domain_id: DomainId,
+    _domain_id: DomainId,
     authority: &AccountId,
 ) -> Account {
     Account::new(account_id.clone()).build(authority)

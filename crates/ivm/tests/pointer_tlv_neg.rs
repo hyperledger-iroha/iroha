@@ -5,7 +5,6 @@ use ivm::{IVM, PointerType, ProgramMetadata};
 mod common;
 
 fn valid_account_id_literal() -> Vec<u8> {
-    let domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("valid domain");
     let public_key: PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()

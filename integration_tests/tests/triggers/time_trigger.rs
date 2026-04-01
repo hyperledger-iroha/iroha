@@ -454,7 +454,6 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
 
     run_or_skip(stringify!(mint_nft_for_every_user_every_1_sec), || async {
         let alice_id = ALICE_ID.clone();
-        let wonderland_domain: DomainId = "wonderland".parse()?;
 
         let accounts: Vec<AccountId> = vec![
             alice_id.clone(),
