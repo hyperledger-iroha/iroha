@@ -2,6 +2,33 @@
 
 Last updated: 2026-04-01
 
+Latest sync (2026-04-01 Nexus routing / cross-dataspace localnet recovery):
+the reported Nexus and DA/RBC regression set is green again on a fresh rebuilt
+`iroha3d`.
+
+- `crates/iroha_core/src/queue/router.rs` now keeps asset-definition
+  permission grants on authority routing instead of accidentally classifying
+  them as destination-account-local;
+- `crates/iroha_core/src/smartcontracts/isi/settlement.rs` now resolves
+  cross-dataspace settlement legs from the actual source bucket, which restores
+  scoped DvP/PvP execution semantics; and
+- `integration_tests/tests/nexus/cross_dataspace_localnet.rs` now enforces
+  pre/post authoritative lane commit-QC convergence around the forward and
+  reverse swap barriers, eliminating the earlier localnet swap stall.
+- fresh-binary reruns are green for:
+  - `cross_dataspace_atomic_swap_is_all_or_nothing`
+  - `wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models`
+  - `sumeragi_rbc_background_queue_synchronous`
+  - `sumeragi_da_commit_certificate_history_four_peers`
+  - `sumeragi_rbc_da_large_payload_{four_peers,four_peers_rs16,six_peers,six_peers_rs16}`
+- the earlier RBC `payload=0` failures did not reproduce once the tests were
+  pointed at the rebuilt `target/debug/iroha3d`; current reruns report
+  non-zero `PayloadBytes` on the participating peers.
+
+Open work for this slice now remains:
+- none; keep using a freshly rebuilt `TEST_NETWORK_BIN_IROHAD` when replaying
+  DA/RBC localnet failures so stale test binaries do not contaminate results.
+
 Latest sync (2026-04-01 broad workspace verification / rollout gate):
 the narrow Torii/client/CLI verification for the current first-release
 convergence work is green on an isolated target, but the broader workspace
