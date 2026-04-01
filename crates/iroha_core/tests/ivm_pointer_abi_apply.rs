@@ -191,7 +191,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let to_raw = std::env::var("IVM_DEBUG_TO_ACCOUNT").expect("IVM_DEBUG_TO_ACCOUNT must be set");
     let asset_raw = std::env::var("IVM_DEBUG_ASSET_DEFINITION")
         .expect("IVM_DEBUG_ASSET_DEFINITION must be set");
-    let domain_raw = std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "sbp".to_owned());
+    let domain_raw = std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "centralbank".to_owned());
 
     let from = iroha_data_model::account::AccountId::parse_encoded(&from_raw)
         .expect("valid encoded source account")
@@ -320,13 +320,13 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
             0x16, 0x19,
         ])
     });
-    let pkr_asset_raw = std::env::var("IVM_DEBUG_PKR_ASSET_DEFINITION").unwrap_or_else(|_| {
+    let cbdc_asset_raw = std::env::var("IVM_DEBUG_CBDC_ASSET_DEFINITION").unwrap_or_else(|_| {
         opaque_asset_definition_literal([
             0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1,
             0x18, 0x9e,
         ])
     });
-    let domain_raw = std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "sbp".to_owned());
+    let domain_raw = std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "centralbank".to_owned());
     let ratio_raw = std::env::var("IVM_DEBUG_RATIO").unwrap_or_else(|_| "76".to_owned());
 
     let reserve = iroha_data_model::account::AccountId::parse_encoded(&reserve_raw)
@@ -336,7 +336,7 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         .expect("valid encoded destination account")
         .into_account_id();
     let aed_asset_def: AssetDefinitionId = aed_asset_raw.parse().expect("valid AED asset");
-    let pkr_asset_def: AssetDefinitionId = pkr_asset_raw.parse().expect("valid PKR asset");
+    let cbdc_asset_def: AssetDefinitionId = cbdc_asset_raw.parse().expect("valid CBDC asset");
     let domain_id: DomainId = domain_raw.parse().expect("valid domain");
     let ratio: u64 = ratio_raw.parse().expect("valid ratio");
 
@@ -350,14 +350,14 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
             let recipient = json_get_account_id(ev, name("account_id"));
             let amount = json_get_int(ev, name("amount_i64"));
             transfer_asset(recipient, account_id("{reserve}"), asset_definition("{aed}"), amount);
-            transfer_asset(account_id("{reserve}"), recipient, asset_definition("{pkr}"), amount * {ratio});
+            transfer_asset(account_id("{reserve}"), recipient, asset_definition("{cbdc}"), amount * {ratio});
         }}
         "#,
         aed = aed_asset_raw,
         domain = domain_raw,
         dst = dst_raw,
         reserve = reserve_raw,
-        pkr = pkr_asset_raw,
+        cbdc = cbdc_asset_raw,
         ratio = ratio,
     );
     let program = compiler.compile_source(&src).expect("compile");
@@ -388,16 +388,16 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let reg_aed = RegisterBox::from(Register::asset_definition(
         AssetDefinition::numeric(aed_asset_def.clone()).with_name("aed".to_owned()),
     ));
-    let reg_pkr = RegisterBox::from(Register::asset_definition(
-        AssetDefinition::numeric(pkr_asset_def.clone()).with_name("pkr".to_owned()),
+    let reg_cbdc = RegisterBox::from(Register::asset_definition(
+        AssetDefinition::numeric(cbdc_asset_def.clone()).with_name("cbdc".to_owned()),
     ));
     let mint_aed = MintBox::from(Mint::asset_numeric(
         1u64,
         AssetId::of(aed_asset_def.clone(), dst.clone()),
     ));
-    let mint_pkr = MintBox::from(Mint::asset_numeric(
+    let mint_cbdc = MintBox::from(Mint::asset_numeric(
         ratio * 2,
-        AssetId::of(pkr_asset_def.clone(), reserve.clone()),
+        AssetId::of(cbdc_asset_def.clone(), reserve.clone()),
     ));
 
     let executor = tx.world.executor().clone();
@@ -407,9 +407,9 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         InstructionBox::from(reg_reserve),
         InstructionBox::from(reg_dst),
         InstructionBox::from(reg_aed),
-        InstructionBox::from(reg_pkr),
+        InstructionBox::from(reg_cbdc),
         InstructionBox::from(mint_aed),
-        InstructionBox::from(mint_pkr),
+        InstructionBox::from(mint_cbdc),
     ] {
         executor
             .execute_instruction(&mut tx, &authority, instr)
@@ -429,11 +429,11 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         .assets()
         .get(&AssetId::of(aed_asset_def, dst.clone()))
         .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
-    let dst_pkr_bal = tx
+    let dst_cbdc_bal = tx
         .world
         .assets()
-        .get(&AssetId::of(pkr_asset_def, dst))
+        .get(&AssetId::of(cbdc_asset_def, dst))
         .map_or_else(|| Numeric::from(0u32), |v| v.clone().into_inner());
     assert_eq!(dst_aed_bal, 0u32.into());
-    assert_eq!(dst_pkr_bal, Numeric::from(ratio));
+    assert_eq!(dst_cbdc_bal, Numeric::from(ratio));
 }

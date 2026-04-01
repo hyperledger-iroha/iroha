@@ -122,7 +122,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
         "zkd".parse().expect("domain id"),
         "rose".parse().expect("asset definition name"),
     );
-    let asset_alias = "rose#sbp";
+    let asset_alias = "rose#centralbank";
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
     {
         let header =

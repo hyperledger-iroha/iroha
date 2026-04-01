@@ -5895,7 +5895,7 @@ impl Actor {
         let (
             ignored,
             first_deliver,
-            _delivered_bytes,
+            delivered_bytes,
             invalidate,
             chunk_root_mismatch,
             defer_reason,
@@ -6199,6 +6199,9 @@ impl Actor {
         }
         if invalidate {
             self.clear_pending_rbc(&key);
+        }
+        if first_deliver && let Some(bytes) = delivered_bytes {
+            self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
         }
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);

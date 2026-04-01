@@ -6962,15 +6962,16 @@ mod tests {
 
     #[test]
     fn resolve_account_alias_accepts_canonical_string() {
-        let program = parse("fn f() { let _acct = resolve_account_alias(\"banking@sbp\"); }")
-            .expect("parse resolve_account_alias");
+        let program =
+            parse("fn f() { let _acct = resolve_account_alias(\"banking@centralbank\"); }")
+                .expect("parse resolve_account_alias");
         analyze(&program).expect("resolve_account_alias should type-check");
     }
 
     #[test]
     fn resolve_account_alias_accepts_alias_bytes() {
         let program = parse(
-            "fn f() { let alias = blob(\"banking@sbp\"); let _acct = resolve_account_alias(alias); }",
+            "fn f() { let alias = blob(\"banking@centralbank\"); let _acct = resolve_account_alias(alias); }",
         )
         .expect("parse resolve_account_alias blob");
         analyze(&program).expect("resolve_account_alias blob should type-check");
@@ -7010,7 +7011,7 @@ mod tests {
             "fn f() { \
                 let ev = trigger_event(); \
                 let dst = json_get_account_id(ev, name(\"account_id\")); \
-                let sink = resolve_account_alias(\"banking@sbp\"); \
+                let sink = resolve_account_alias(\"banking@centralbank\"); \
                 let _same = dst == sink; \
             }",
         )

@@ -4711,7 +4711,7 @@ mod tests {
         ])
         .expect("opaque asset definition id");
         let instruction = InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone()).with_name("pkr".to_owned()),
+            AssetDefinition::numeric(asset_definition_id.clone()).with_name("cbdc".to_owned()),
         ));
 
         let mut stx = block.transaction();

@@ -5842,7 +5842,7 @@ test("getTransactionStatus queries pipeline endpoint", async () => {
 
 test("getTransactionStatus fans out to alternate endpoints in auto scope", async () => {
   const hashHex = "ef".repeat(32);
-  const fallbackBaseUrl = "https://torii-sbp.soramitsu.io";
+  const fallbackBaseUrl = "https://torii-centralbank.soramitsu.io";
   const seenUrls = [];
   const fetchImpl = async (url) => {
     seenUrls.push(url);
@@ -5875,7 +5875,7 @@ test("getTransactionStatus fans out to alternate endpoints in auto scope", async
 
 test("getTransactionStatus local scope does not fan out", async () => {
   const hashHex = "01".repeat(32);
-  const fallbackBaseUrl = "https://torii-sbp.soramitsu.io";
+  const fallbackBaseUrl = "https://torii-centralbank.soramitsu.io";
   const seenUrls = [];
   const fetchImpl = async (url) => {
     seenUrls.push(url);

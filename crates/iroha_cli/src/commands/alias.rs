@@ -93,7 +93,7 @@ pub struct ByAccountArgs {
     /// Canonical I105 account id.
     #[arg(long)]
     pub account_id: String,
-    /// Optional dataspace alias filter such as `sbp`.
+    /// Optional dataspace alias filter such as `centralbank`.
     #[arg(long)]
     pub dataspace: Option<String>,
     /// Optional exact domain filter such as `hbl`.
@@ -481,14 +481,14 @@ mod tests {
             "--account-id",
             SAMPLE_ACCOUNT_ID,
             "--dataspace",
-            "sbp",
+            "centralbank",
             "--domain",
             "hbl",
         ]);
         match wrapper.command {
             Command::ByAccount(args) => {
                 assert_eq!(args.account_id, SAMPLE_ACCOUNT_ID);
-                assert_eq!(args.dataspace.as_deref(), Some("sbp"));
+                assert_eq!(args.dataspace.as_deref(), Some("centralbank"));
                 assert_eq!(args.domain.as_deref(), Some("hbl"));
             }
             _ => panic!("unexpected command"),
@@ -632,12 +632,12 @@ mod tests {
     #[test]
     fn resolve_helper_prints_result() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
-        alias_resolve_with(&mut ctx, "alice@sbp", false, |_, _| {
+        alias_resolve_with(&mut ctx, "alice@centralbank", false, |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .body(norito::json::to_vec(&norito::json!({
-                    "alias": "alice@sbp",
+                    "alias": "alice@centralbank",
                     "account_id": SAMPLE_ACCOUNT_ID,
                     "source": "iso_bridge"
                 }))?)
@@ -662,14 +662,17 @@ mod tests {
     #[test]
     fn resolve_helper_handles_not_found() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
-        let err = alias_resolve_with(&mut ctx, "alice@sbp", false, |_, _| {
+        let err = alias_resolve_with(&mut ctx, "alice@centralbank", false, |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Vec::new())
                 .unwrap())
         })
         .expect_err("expected error");
-        assert!(err.to_string().contains("alias `alice@sbp` not found"));
+        assert!(
+            err.to_string()
+                .contains("alias `alice@centralbank` not found")
+        );
     }
 
     #[test]
@@ -718,7 +721,7 @@ mod tests {
         alias_by_account_with(
             &mut ctx,
             SAMPLE_ACCOUNT_ID,
-            Some("sbp"),
+            Some("centralbank"),
             Some("hbl"),
             |_, _, _, _| {
                 Ok(Response::builder()
@@ -728,8 +731,8 @@ mod tests {
                         "account_id": SAMPLE_ACCOUNT_ID,
                         "total": 1,
                         "items": [{
-                            "alias": "merchant@hbl.sbp",
-                            "dataspace": "sbp",
+                            "alias": "merchant@hbl.centralbank",
+                            "dataspace": "centralbank",
                             "domain": "hbl",
                             "is_primary": true
                         }],
@@ -740,7 +743,7 @@ mod tests {
         )
         .expect("helper should succeed");
         assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("merchant@hbl.sbp"));
+        assert!(ctx.printed[0].contains("merchant@hbl.centralbank"));
     }
 
     #[test]
@@ -749,8 +752,8 @@ mod tests {
             account_id: SAMPLE_ACCOUNT_ID.to_string(),
             total: 1,
             items: vec![AliasLookupByAccountItem {
-                alias: "merchant@hbl.sbp".to_string(),
-                dataspace: "sbp".to_string(),
+                alias: "merchant@hbl.centralbank".to_string(),
+                dataspace: "centralbank".to_string(),
                 domain: Some("hbl".to_string()),
                 is_primary: true,
             }],
@@ -758,7 +761,7 @@ mod tests {
         };
         let text = render_alias_by_account_text(&dto);
         assert!(text.contains("has 1 matching alias(es)"));
-        assert!(text.contains("merchant@hbl.sbp"));
+        assert!(text.contains("merchant@hbl.centralbank"));
     }
 
     #[test]

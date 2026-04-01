@@ -132,12 +132,22 @@ Last updated: 2026-04-01
   - `cargo test -p iroha_torii --lib --no-run`
   - `cargo test -p iroha_torii openapi::tests::account_get_documents_canonical_dual_format_read -- --nocapture`
   - `cargo test -p iroha_torii openapi::tests::pipeline_status_documents_not_found_response -- --nocapture`
+  - `python3 -m py_compile python/iroha_torii_client/mock.py`
+  - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_cli_smoke_final cargo test -p iroha_cli --test cli_smoke tx_status_command_against_torii_mock -- --nocapture`
+  - `env CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_codex_cli_smoke_final cargo test -p iroha_cli --test cli_smoke account_get_command_against_torii_mock -- --nocapture`
   - `PYTHONPATH=. python3 tests/test_pk_cli.py SurfaceTests.test_settlement_interceptor_deploy_script_embeds_resolved_account_ids SurfaceTests.test_settlement_interceptor_deploy_script_uses_manifest_contract_lifecycle SurfaceTests.test_unified_kotodama_deploy_verifier_requires_cbuae_contract_instance SurfaceTests.test_cbuae_interceptor_deploy_has_no_raw_trigger_fallback_path SurfaceTests.test_cbuae_interceptor_deploy_surfaces_pipeline_tx_status_before_visibility_timeouts SurfaceTests.test_cbuae_interceptor_deploy_keeps_probe_state_updates_out_of_subshells SurfaceTests.test_cbuae_interceptor_deploy_requires_authoritative_account_readiness_for_grants SurfaceTests.test_fi_operator_readiness_uses_torii_on_chain_domains SurfaceTests.test_public_torii_ingress_hardening_script_patches_edge_and_peer_runtime SurfaceTests.test_settlement_asset_resolver_uses_authoritative_torii_only_for_live_account_resolution`
+  - `env PKDEPLOY_CACHE_HOME="$(mktemp -d)" python3 -m unittest tests.test_pk_cli -q`
+  - `env PKDEPLOY_CACHE_HOME="$(mktemp -d)" python3 -m unittest -q tests.test_pk_cli.SurfaceTests.test_maintained_repo_files_do_not_contain_non_v1_version_markers tests.test_pk_cli.SurfaceTests.test_public_torii_ingress_hardening_script_patches_edge_and_peer_runtime`
 - Remaining gap:
   - no live SBP/AED binary rollout, public-edge reload, minimal interceptor
     convergence rerun, full `pk-deploy` reset, settlement smoke, or topology
     verify was executed from this workspace; live acceptance still needs to be
     run against the updated binaries/scripts.
+  - broader repo-wide verification is still not fully green from this slice
+    alone: a full `iroha_cli --test cli_smoke` rerun now passes the new
+    `tx status` / `account get` command-path tests but still reports unrelated
+    pre-existing failures in the address-audit and settlement-atomicity smoke
+    cases.
 
 ## 2026-04-01 Follow-up: restart-recovery rerun is green and the integration_tests strict-lint break is fixed
 - Re-ran the previously open

@@ -89,6 +89,14 @@ use crate::{
 
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
 
+/// Return the latest queued routing hint recorded for a transaction hash.
+#[must_use]
+pub fn routing_hint(
+    hash: &HashOf<iroha_data_model::transaction::SignedTransaction>,
+) -> Option<RoutingDecision> {
+    routing_ledger::get(hash)
+}
+
 /// Nexus-derived limits that influence queue telemetry and scheduling defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LaneSchedulingLimits {
@@ -4322,7 +4330,7 @@ pub mod tests {
         };
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
-            alias: "sbp".to_string(),
+            alias: "centralbank".to_string(),
             dataspace: DataSpaceId::GLOBAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,

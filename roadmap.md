@@ -71,7 +71,11 @@ Open work for this slice now remains:
   no framed Norito decode failures, and a green aggregate post-reset report
 - rerun broader workspace verification (`cargo test --workspace`,
   `cargo clippy --workspace --all-targets -- -D warnings`) when the time
-  budget allows; this tranche only received targeted crate/script coverage
+  budget allows; this tranche now has targeted crate/script coverage plus
+  dedicated `iroha tx status` / `iroha account get` smoke coverage and a broad
+  `tests.test_pk_cli -q` pass, but the exhaustive workspace gates are still
+  pending and the full `iroha_cli --test cli_smoke` target still carries
+  unrelated pre-existing red tests outside this slice
 
 Latest sync (2026-04-01 restart-recovery rerun + integration_tests strict-lint fix):
 the previously open `sumeragi_rbc_recovers_after_peer_restart` rerun is green

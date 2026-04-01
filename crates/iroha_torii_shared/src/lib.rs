@@ -1,6 +1,6 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
 use iroha_data_model::{
-    account::{AccountId, AccountLabel, OpaqueAccountId},
+    account::{AccountAlias, AccountId, OpaqueAccountId},
     domain::DomainId,
     nexus::UniversalAccountId,
     transaction::error::TransactionRejectionReason,
@@ -267,7 +267,7 @@ pub struct AccountReadResponse {
     /// Stable account label when assigned.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub label: Option<AccountLabel>,
+    pub label: Option<AccountAlias>,
     /// Universal account identifier bound to this account when registered in Nexus.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]

@@ -4547,7 +4547,7 @@ mod tests {
 
     #[test]
     fn lower_resolve_account_alias_builtin() {
-        let src = "fn main() { let _acct = resolve_account_alias(\"banking@sbp\"); }";
+        let src = "fn main() { let _acct = resolve_account_alias(\"banking@centralbank\"); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");

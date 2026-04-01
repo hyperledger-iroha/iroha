@@ -167,15 +167,15 @@ test("lookupAliasesByAccount posts canonical account ids with optional filters",
       lastRequest = { input, init };
       const parsed = JSON.parse(init.body);
       assert.equal(parsed.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
-      assert.equal(parsed.dataspace, "sbp");
+      assert.equal(parsed.dataspace, "centralbank");
       assert.equal(parsed.domain, "hbl");
       return jsonResponse(200, {
         account_id: VALID_ACCOUNT_ID,
         total: "1",
         items: [
           {
-            alias: "merchant@hbl.sbp",
-            dataspace: "sbp",
+            alias: "merchant@hbl.centralbank",
+            dataspace: "centralbank",
             domain: "hbl",
             is_primary: true,
           },
@@ -185,15 +185,15 @@ test("lookupAliasesByAccount posts canonical account ids with optional filters",
   });
 
   const result = await client.lookupAliasesByAccount(VALID_ACCOUNT_ID, {
-    dataspace: "sbp",
+    dataspace: "centralbank",
     domain: "hbl",
   });
   assert.equal(result.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
   assert.equal(result.total, 1);
   assert.deepEqual(result.items, [
     {
-      alias: "merchant@hbl.sbp",
-      dataspace: "sbp",
+      alias: "merchant@hbl.centralbank",
+      dataspace: "centralbank",
       domain: "hbl",
       is_primary: true,
     },

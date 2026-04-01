@@ -10567,6 +10567,11 @@ impl World {
         &mut self.uaid_dataspaces
     }
 
+    /// Provides mutable access to account permissions for tests and API scaffolding.
+    pub fn account_permissions_mut_for_testing(&mut self) -> &mut Storage<AccountId, Permissions> {
+        &mut self.account_permissions
+    }
+
     /// Provides mutable access to the Space Directory manifest registry for tests and API scaffolding.
     pub fn space_directory_manifests_mut_for_testing(
         &mut self,
@@ -28520,9 +28525,9 @@ mod tests {
 
     #[test]
     fn trigger_args_from_asset_event_use_destination_account_domain() {
-        let recipient_domain: DomainId = "sbp".parse().unwrap();
+        let recipient_domain: DomainId = "centralbank".parse().unwrap();
         let asset_domain: DomainId = "cbuae".parse().unwrap();
-        let (subject, _) = gen_account_in("sbp");
+        let (subject, _) = gen_account_in("centralbank");
         let recipient = subject.clone();
         let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
         let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
@@ -28551,7 +28556,10 @@ mod tests {
         let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
         let obj = payload.as_object().expect("trigger args object");
 
-        assert_eq!(obj.get("account_domain"), Some(&norito::json!("sbp")));
+        assert_eq!(
+            obj.get("account_domain"),
+            Some(&norito::json!("centralbank"))
+        );
         assert_eq!(
             obj.get("account_id"),
             Some(&norito::json!(subject.to_string()))
@@ -28564,7 +28572,7 @@ mod tests {
 
     #[test]
     fn trigger_args_from_asset_event_use_account_label_domain_when_subject_links_missing() {
-        let recipient_domain: DomainId = "sbp".parse().unwrap();
+        let recipient_domain: DomainId = "centralbank".parse().unwrap();
         let asset_domain: DomainId = "cbuae".parse().unwrap();
         let (subject, _) = gen_account_in("ghost");
         let account_label =
@@ -28603,7 +28611,10 @@ mod tests {
         let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
         let obj = payload.as_object().expect("trigger args object");
 
-        assert_eq!(obj.get("account_domain"), Some(&norito::json!("sbp")));
+        assert_eq!(
+            obj.get("account_domain"),
+            Some(&norito::json!("centralbank"))
+        );
         assert_eq!(
             obj.get("account_id"),
             Some(&norito::json!(subject.to_string()))
@@ -37865,7 +37876,7 @@ mod tests {
             .expect("register asset definition");
         }
         Register::asset_definition(
-            AssetDefinition::numeric(opaque_id.clone()).with_name("pkr".to_owned()),
+            AssetDefinition::numeric(opaque_id.clone()).with_name("cbdc".to_owned()),
         )
         .execute(&ALICE_ID, &mut stx)
         .expect("register opaque asset definition");

@@ -7392,11 +7392,18 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         session: &RbcSession,
     ) -> Option<u64> {
+        if session.is_invalid() {
+            return None;
+        }
         if let Some(bytes) = session.delivered_payload_bytes() {
             return Some(bytes);
         }
-        if session.is_invalid() {
-            return None;
+        if let Some(bytes) = session
+            .layout()
+            .payload_size()
+            .and_then(|bytes| u64::try_from(bytes).ok())
+        {
+            return Some(bytes);
         }
         let expected_payload_hash = session.payload_hash()?;
         self.with_local_payload_for_progress(
@@ -21221,7 +21228,7 @@ impl Actor {
         if first_deliver {
             status::record_round_gap_deliver(key.1, key.2, key.0);
         }
-        let _delivered_bytes = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
+        let delivered_bytes = session.take_delivered_payload_bytes_for_telemetry_with_fallback(
             delivered_payload_bytes_fallback,
         );
         let ready_count = session.ready_signatures.len();
@@ -21240,6 +21247,10 @@ impl Actor {
             missing_ready_peers.as_slice(),
             ready_count,
         );
+
+        if first_deliver && let Some(bytes) = delivered_bytes {
+            self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
+        }
 
         self.subsystems.da_rbc.rbc.sessions.insert(key, session);
         if let Some(updated) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
@@ -30510,7 +30521,6 @@ impl Actor {
                 self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
             }
         }
-        self.clear_rbc_payload_bytes_metric_recorded(&key);
         self.clear_rbc_session_roster(&key);
         if clear_status_summary {
             self.subsystems.da_rbc.rbc.status_handle.remove(&key);
@@ -31085,9 +31095,6 @@ fn drain_rbc_state_for_block(
                 if should_record && let Some(telemetry) = telemetry {
                     telemetry.add_rbc_payload_bytes_delivered(bytes);
                 }
-            }
-            if let Some(recorded) = payload_metric_recorded_sessions.as_mut() {
-                recorded.remove(&key);
             }
             let ready_count = u64::try_from(session.ready_signatures.len()).unwrap_or(u64::MAX);
             rbc_status_handle.update(
