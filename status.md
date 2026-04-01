@@ -2,6 +2,18 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: `ivm` `koto_domain_demo` builds against the canonical `AccountId` API again
+- Fixed `crates/ivm/examples/koto_domain_demo.rs` after the universal-account
+  migration by removing the duplicate `AccountId` import, switching the
+  example helper to `AccountId::new(public_key)`, and passing the canonical
+  caller `AccountId` directly into `WsvHost::new_with_subject(...)` instead of
+  the obsolete `AccountId::from(&...)` conversion.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo build -p ivm --example koto_domain_demo`
+    passes; the build still emits pre-existing unrelated dead-code warnings in
+    `iroha_crypto` and `ivm`
+
 ## 2026-04-01 Follow-up: `iroha_config` governance account defaults parse under chain overrides again
 - Fixed the `iroha_config` fixture/compile break caused by the removed
   domain-qualified `AccountId::to_account_id(...)` path in
