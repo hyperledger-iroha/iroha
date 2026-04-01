@@ -1767,7 +1767,7 @@ pub mod query {
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
                         id: iroha_data_model::nexus::DataSpaceId::new(9),
-                        alias: "sbp".to_owned(),
+                        alias: "centralbank".to_owned(),
                         description: None,
                         fault_tolerance: 1,
                     },
@@ -1805,14 +1805,14 @@ pub mod query {
             let view = state.view();
             let aliases = FindAliasesByAccountId::new(
                 account_id.clone(),
-                Some("sbp".to_owned()),
+                Some("centralbank".to_owned()),
                 Some("hbl".to_owned()),
             )
             .execute(&view)
             .unwrap();
             assert_eq!(aliases.len(), 1);
-            assert_eq!(aliases[0].alias, "merchant@hbl.sbp");
-            assert_eq!(aliases[0].dataspace, "sbp");
+            assert_eq!(aliases[0].alias, "merchant@hbl.centralbank");
+            assert_eq!(aliases[0].dataspace, "centralbank");
             assert_eq!(aliases[0].domain.as_deref(), Some("hbl"));
             assert!(aliases[0].is_primary);
         }
@@ -1831,7 +1831,7 @@ pub mod query {
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
                         id: iroha_data_model::nexus::DataSpaceId::new(9),
-                        alias: "sbp".to_owned(),
+                        alias: "centralbank".to_owned(),
                         description: None,
                         fault_tolerance: 1,
                     },
@@ -1869,7 +1869,7 @@ pub mod query {
             let view = state.view();
             let aliases = FindAliasesByAccountId::new(
                 account_id,
-                Some("sbp".to_owned()),
+                Some("centralbank".to_owned()),
                 Some("ubl".to_owned()),
             )
             .execute(&view)
@@ -1889,7 +1889,7 @@ pub mod query {
                     iroha_data_model::nexus::DataSpaceMetadata::default(),
                     iroha_data_model::nexus::DataSpaceMetadata {
                         id: iroha_data_model::nexus::DataSpaceId::new(9),
-                        alias: "sbp".to_owned(),
+                        alias: "centralbank".to_owned(),
                         description: None,
                         fault_tolerance: 1,
                     },
@@ -1921,12 +1921,13 @@ pub mod query {
             state_block.commit().unwrap();
 
             let view = state.view();
-            let aliases = FindAliasesByAccountId::new(account_id, Some("sbp".to_owned()), None)
-                .execute(&view)
-                .unwrap();
+            let aliases =
+                FindAliasesByAccountId::new(account_id, Some("centralbank".to_owned()), None)
+                    .execute(&view)
+                    .unwrap();
             assert_eq!(aliases.len(), 1);
-            assert_eq!(aliases[0].alias, "merchant@sbp");
-            assert_eq!(aliases[0].dataspace, "sbp");
+            assert_eq!(aliases[0].alias, "merchant@centralbank");
+            assert_eq!(aliases[0].dataspace, "centralbank");
             assert_eq!(aliases[0].domain, None);
             assert!(aliases[0].is_primary);
         }

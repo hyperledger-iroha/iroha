@@ -4800,7 +4800,7 @@ pub mod tests {
 
         let chain: ChainId = "multisig-propose-role-allowed".parse().unwrap();
         let home_domain: DomainId = "hbl".parse().unwrap();
-        let target_domain: DomainId = "sbp".parse().unwrap();
+        let target_domain: DomainId = "centralbank".parse().unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4886,7 +4886,7 @@ pub mod tests {
 
         let chain: ChainId = "multisig-propose-lane-validator-bypass".parse().unwrap();
         let home_domain: DomainId = "hbl".parse().unwrap();
-        let target_domain: DomainId = "sbp".parse().unwrap();
+        let target_domain: DomainId = "centralbank".parse().unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4953,12 +4953,12 @@ pub mod tests {
             TestLaneId::SINGLE,
             LaneManifestStatus {
                 lane: TestLaneId::SINGLE,
-                alias: "sbp".to_string(),
+                alias: "centralbank".to_string(),
                 dataspace: TestDataSpaceId::GLOBAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
-                manifest_path: Some(std::path::PathBuf::from("/tmp/sbp.manifest.json")),
+                manifest_path: Some(std::path::PathBuf::from("/tmp/centralbank.manifest.json")),
                 governance_rules: Some(GovernanceRules {
                     validators: vec![validator_id.clone()],
                     ..GovernanceRules::default()

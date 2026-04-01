@@ -17,11 +17,13 @@ use iroha_data_model::{
         smart_contract_code::{RegisterSmartContractBytes, RegisterSmartContractCode},
     },
     nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
+    permission::Permission,
     transaction::Executable,
 };
+use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
 
 use crate::{
-    state::{State, StateView, WorldReadOnly},
+    state::{State, StateReadOnly, StateView, WorldReadOnly},
     tx::AcceptedTransaction,
 };
 use thiserror::Error;
@@ -79,6 +81,22 @@ pub enum RoutingResolveError {
         /// Dataspace selected by the routing policy.
         dataspace_id: DataSpaceId,
     },
+    /// no lane is bound to dataspace {dataspace_id}
+    #[error("no lane is bound to dataspace {dataspace_id}")]
+    NoLaneForDataspace {
+        /// Dataspace selected by the routing policy.
+        dataspace_id: DataSpaceId,
+    },
+    /// transaction mixes dataspace-scoped permission targets {first_dataspace_id} and {second_dataspace_id}
+    #[error(
+        "transaction mixes dataspace-scoped permission targets {first_dataspace_id} and {second_dataspace_id}"
+    )]
+    ConflictingDataspaceScopedPermissions {
+        /// First dataspace target found in the transaction.
+        first_dataspace_id: DataSpaceId,
+        /// Conflicting dataspace target found in the transaction.
+        second_dataspace_id: DataSpaceId,
+    },
 }
 
 impl RoutingResolveError {
@@ -89,6 +107,10 @@ impl RoutingResolveError {
             Self::UnknownLane { .. } => "unknown_lane",
             Self::UnknownDataspace { .. } => "unknown_dataspace",
             Self::LaneDataspaceMismatch { .. } => "lane_dataspace_mismatch",
+            Self::NoLaneForDataspace { .. } => "no_lane_for_dataspace",
+            Self::ConflictingDataspaceScopedPermissions { .. } => {
+                "conflicting_dataspace_scoped_permissions"
+            }
         }
     }
 }
@@ -101,6 +123,11 @@ pub fn evaluate_policy(
     policy: &LaneRoutingPolicy,
     tx: &AcceptedTransaction<'_>,
 ) -> RoutingDecision {
+    if let Some(decision) =
+        dataspace_scoped_permission_routing_decision(tx, None, None).unwrap_or(None)
+    {
+        return decision;
+    }
     let matched_rule = policy
         .rules
         .iter()
@@ -117,6 +144,15 @@ fn evaluate_policy_with_view(
     tx: &AcceptedTransaction<'_>,
     state_view: &StateView<'_>,
 ) -> RoutingDecision {
+    if let Some(decision) = dataspace_scoped_permission_routing_decision(
+        tx,
+        Some(&state_view.nexus().lane_catalog),
+        Some(&state_view.nexus().dataspace_catalog),
+    )
+    .unwrap_or(None)
+    {
+        return decision;
+    }
     let matched_rule = policy
         .rules
         .iter()
@@ -135,8 +171,143 @@ pub fn evaluate_policy_with_catalog(
     dataspace_catalog: &DataSpaceCatalog,
     tx: &AcceptedTransaction<'_>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
+    if let Some(decision) = dataspace_scoped_permission_routing_decision(
+        tx,
+        Some(lane_catalog),
+        Some(dataspace_catalog),
+    )? {
+        return Ok(decision);
+    }
     let decision = evaluate_policy(policy, tx);
     resolve_routing_decision(decision, lane_catalog, dataspace_catalog)
+}
+
+fn dataspace_scoped_permission_routing_decision(
+    tx: &AcceptedTransaction<'_>,
+    lane_catalog: Option<&LaneCatalog>,
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+) -> Result<Option<RoutingDecision>, RoutingResolveError> {
+    let mut target_dataspace: Option<DataSpaceId> = None;
+    let Some(executable) = transaction_executable(tx) else {
+        return Ok(None);
+    };
+
+    match executable {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                let Some(dataspace_id) =
+                    instruction_dataspace_scoped_permission_target(&**instruction)
+                else {
+                    continue;
+                };
+                if let Some(existing) = target_dataspace {
+                    if existing != dataspace_id {
+                        return Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
+                            first_dataspace_id: existing,
+                            second_dataspace_id: dataspace_id,
+                        });
+                    }
+                } else {
+                    target_dataspace = Some(dataspace_id);
+                }
+            }
+        }
+        Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for instruction in &proved.overlay {
+                let Some(dataspace_id) =
+                    instruction_dataspace_scoped_permission_target(&**instruction)
+                else {
+                    continue;
+                };
+                if let Some(existing) = target_dataspace {
+                    if existing != dataspace_id {
+                        return Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
+                            first_dataspace_id: existing,
+                            second_dataspace_id: dataspace_id,
+                        });
+                    }
+                } else {
+                    target_dataspace = Some(dataspace_id);
+                }
+            }
+        }
+    }
+
+    let Some(dataspace_id) = target_dataspace else {
+        return Ok(None);
+    };
+
+    match (lane_catalog, dataspace_catalog) {
+        (Some(lane_catalog), Some(dataspace_catalog)) => {
+            canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn transaction_executable<'tx>(tx: &'tx AcceptedTransaction<'tx>) -> Option<&'tx Executable> {
+    match tx.entrypoint() {
+        iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+            Some(signed.instructions())
+        }
+        iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(_) => None,
+        iroha_data_model::transaction::TransactionEntrypoint::Time(_) => None,
+    }
+}
+
+fn instruction_dataspace_scoped_permission_target(
+    instruction: &dyn Instruction,
+) -> Option<DataSpaceId> {
+    let any = instruction.as_any();
+
+    if let Some(grant) = any.downcast_ref::<GrantBox>() {
+        return match grant {
+            GrantBox::Permission(grant) => dataspace_scoped_permission_target(&grant.object),
+            GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
+        };
+    }
+
+    if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
+        return match revoke {
+            RevokeBox::Permission(revoke) => dataspace_scoped_permission_target(&revoke.object),
+            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
+        };
+    }
+
+    None
+}
+
+fn dataspace_scoped_permission_target(permission: &Permission) -> Option<DataSpaceId> {
+    if permission.name() != "CanPublishSpaceDirectoryManifest" {
+        return None;
+    }
+
+    permission
+        .payload()
+        .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
+        .ok()
+        .map(|token| token.dataspace)
+}
+
+fn canonical_dataspace_route(
+    dataspace_id: DataSpaceId,
+    lane_catalog: &LaneCatalog,
+    dataspace_catalog: &DataSpaceCatalog,
+) -> Result<RoutingDecision, RoutingResolveError> {
+    let lane_id = lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| lane.dataspace_id == dataspace_id)
+        .map(|lane| lane.id)
+        .min()
+        .ok_or(RoutingResolveError::NoLaneForDataspace { dataspace_id })?;
+
+    resolve_routing_decision(
+        RoutingDecision::new(lane_id, dataspace_id),
+        lane_catalog,
+        dataspace_catalog,
+    )
 }
 
 fn evaluate_query_policy_with_view(
@@ -675,6 +846,13 @@ impl LaneRouter for ConfigLaneRouter {
         &self,
         tx: &AcceptedTransaction<'_>,
     ) -> Result<RoutingDecision, RoutingResolveError> {
+        if let Some(decision) = dataspace_scoped_permission_routing_decision(
+            tx,
+            Some(self.lane_catalog.as_ref()),
+            Some(self.dataspace_catalog.as_ref()),
+        )? {
+            return Ok(decision);
+        }
         let decision = evaluate_policy(&self.policy, tx);
         resolve_routing_decision(
             decision,
@@ -688,6 +866,13 @@ impl LaneRouter for ConfigLaneRouter {
         tx: &AcceptedTransaction<'_>,
         state_view: &StateView<'_>,
     ) -> Result<RoutingDecision, RoutingResolveError> {
+        if let Some(decision) = dataspace_scoped_permission_routing_decision(
+            tx,
+            Some(&state_view.nexus().lane_catalog),
+            Some(&state_view.nexus().dataspace_catalog),
+        )? {
+            return Ok(decision);
+        }
         let decision = evaluate_policy_with_view(&self.policy, tx, state_view);
         resolve_routing_decision(
             decision,
@@ -743,9 +928,11 @@ mod tests {
         },
         metadata::Metadata,
         nexus::LaneConfig,
+        permission::Permission,
         prelude::*,
         transaction::TransactionBuilder,
     };
+    use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
 
@@ -1620,5 +1807,120 @@ mod tests {
             decision,
             RoutingDecision::new(LaneId::new(0), DataSpaceId::GLOBAL)
         );
+    }
+
+    #[test]
+    fn dataspace_scoped_permission_grant_routes_by_permission_dataspace() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let dataspace = DataSpaceId::new(7);
+        let lane = LaneId::new(3);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(DataSpaceId::new(1)),
+                matcher: LaneRoutingMatcher {
+                    account: Some(alice_id.to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (lane, dataspace),
+        ]);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: dataspace,
+                alias: "manifest".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                CanPublishSpaceDirectoryManifest { dataspace },
+                alice_id.clone(),
+            ))],
+        );
+
+        let decision = router
+            .try_route(&tx)
+            .expect("dataspace-scoped permission should resolve");
+
+        assert_eq!(decision, RoutingDecision::new(lane, dataspace));
+    }
+
+    #[test]
+    fn dataspace_scoped_permission_grant_rejects_mixed_dataspaces() {
+        let (alice_id, alice_keypair) = gen_account_in("wonderland");
+        let first_dataspace = DataSpaceId::new(7);
+        let second_dataspace = DataSpaceId::new(8);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(3), first_dataspace),
+            (LaneId::new(4), second_dataspace),
+        ]);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: first_dataspace,
+                alias: "first".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: second_dataspace,
+                alias: "second".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
+        let first_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: first_dataspace,
+        }
+        .into();
+        let second_permission: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: second_dataspace,
+        }
+        .into();
+        let tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![
+                InstructionBox::from(Grant::account_permission(
+                    first_permission.clone(),
+                    alice_id.clone(),
+                )),
+                InstructionBox::from(Revoke::account_permission(
+                    second_permission,
+                    alice_id.clone(),
+                )),
+            ],
+        );
+
+        let err = router
+            .try_route(&tx)
+            .expect_err("mixed dataspace-scoped permissions must be rejected");
+
+        assert!(matches!(
+            err,
+            RoutingResolveError::ConflictingDataspaceScopedPermissions { .. }
+        ));
+        assert_eq!(err.as_label(), "conflicting_dataspace_scoped_permissions");
     }
 }

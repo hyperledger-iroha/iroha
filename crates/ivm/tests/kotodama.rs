@@ -638,7 +638,7 @@ fn compile_emits_current_time_syscall() {
 
 #[test]
 fn compile_emits_resolve_account_alias_syscall() {
-    let src = r#"fn f() { let a = resolve_account_alias("banking@sbp"); }"#;
+    let src = r#"fn f() { let a = resolve_account_alias("banking@centralbank"); }"#;
     let code = Compiler::new().compile_source(src).expect("compile");
     let (_, off) = parse_meta_offset(&code).unwrap();
     let mut words = Vec::new();

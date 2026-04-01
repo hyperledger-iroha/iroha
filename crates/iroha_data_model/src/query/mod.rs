@@ -2721,9 +2721,9 @@ pub mod account {
     pub struct AccountAliasBindingRecord {
         /// Canonical account identifier that owns the binding.
         pub account_id: crate::account::AccountId,
-        /// Canonical alias literal such as `merchant@hbl.sbp`.
+        /// Canonical alias literal such as `merchant@hbl.centralbank`.
         pub alias: String,
-        /// Dataspace alias such as `sbp`.
+        /// Dataspace alias such as `centralbank`.
         pub dataspace: String,
         /// Optional domain qualifier such as `hbl`.
         #[norito(default)]
@@ -2786,7 +2786,7 @@ pub mod account {
             pub struct FindAliasesByAccountId {
                 /// Domainless account identifier whose alias bindings should be resolved.
                 pub id: crate::account::AccountId,
-                /// Optional dataspace alias filter such as `sbp`.
+                /// Optional dataspace alias filter such as `centralbank`.
                 #[norito(default)]
                 pub dataspace: Option<String>,
                 /// Optional exact domain filter such as `hbl`.

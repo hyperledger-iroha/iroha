@@ -319,7 +319,7 @@ mod tests {
             SingularQueryBox::FindAliasesByAccountId(
                 crate::query::account::prelude::FindAliasesByAccountId::new(
                     account_id.clone(),
-                    Some("sbp".to_owned()),
+                    Some("centralbank".to_owned()),
                     Some("hbl".to_owned()),
                 ),
             ),

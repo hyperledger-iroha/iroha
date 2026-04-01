@@ -197,7 +197,7 @@ pub enum SingularQueryJson {
     FindAliasesByAccountId {
         /// Account identifier used to resolve the subject.
         account_id: String,
-        /// Optional dataspace alias filter such as `sbp`.
+        /// Optional dataspace alias filter such as `centralbank`.
         dataspace: Option<String>,
         /// Optional exact domain filter such as `hbl`.
         domain: Option<String>,
@@ -1108,7 +1108,7 @@ mod tests {
 
         let singular = SingularQueryJson::FindAliasesByAccountId {
             account_id: account_id.to_string(),
-            dataspace: Some("sbp".to_owned()),
+            dataspace: Some("centralbank".to_owned()),
             domain: Some("hbl".to_owned()),
         };
         let envelope = QueryEnvelopeJson::Singular(singular.clone());
@@ -1122,7 +1122,7 @@ mod tests {
         match query {
             SingularQueryBox::FindAliasesByAccountId(q) => {
                 assert_eq!(q.account_id(), &account_id);
-                assert_eq!(q.dataspace(), Some("sbp"));
+                assert_eq!(q.dataspace(), Some("centralbank"));
                 assert_eq!(q.domain(), Some("hbl"));
             }
             other => panic!("unexpected query variant: {other:?}"),

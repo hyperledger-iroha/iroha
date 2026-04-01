@@ -2813,13 +2813,25 @@ where
             })
             .collect::<Vec<_>>()
             .join("; ");
+        let metrics_context =
+            if peers_with_payload < min_metric_peers || peers_with_deliver < min_metric_peers {
+                collect_rbc_metric_context(
+                    &http,
+                    network.peers(),
+                    expected_height,
+                    &rbc_observation.block_hash,
+                )
+                .await?
+            } else {
+                String::new()
+            };
         assert!(
             peers_with_payload >= min_metric_peers,
-            "expected RBC payload-bytes metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_payload}. {metrics_summary}"
+            "expected RBC payload-bytes metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_payload}. {metrics_summary}\n{metrics_context}"
         );
         assert!(
             peers_with_deliver >= min_metric_peers,
-            "expected RBC DELIVER metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_deliver}. {metrics_summary}"
+            "expected RBC DELIVER metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_deliver}. {metrics_summary}\n{metrics_context}"
         );
     }
 
@@ -4336,6 +4348,35 @@ async fn collect_rbc_failure_context(
         let _ = writeln!(
             details,
             "peer[{idx}] torii={torii_url} status={status_body} sessions={sessions_body} persisted={persisted}"
+        );
+    }
+    Ok(details)
+}
+
+async fn collect_rbc_metric_context(
+    http: &reqwest::Client,
+    peers: &[NetworkPeer],
+    expected_height: u64,
+    block_hash_hex: &str,
+) -> Result<String> {
+    let mut details = String::new();
+    for (idx, peer) in peers.iter().enumerate() {
+        let torii_url = peer.client().torii_url.clone();
+        let rbc_url = torii_url
+            .join("v1/sumeragi/rbc")
+            .wrap_err("compose RBC status URL")?;
+        let sessions_url = torii_url
+            .join("v1/sumeragi/rbc/sessions")
+            .wrap_err("compose RBC sessions URL")?;
+        let rbc_body = fetch_failure_endpoint_body(http, &rbc_url).await;
+        let sessions_body = fetch_failure_endpoint_body(http, &sessions_url).await;
+        let persisted =
+            rbc_status::read_persisted_snapshot(peer.kura_store_dir().join("rbc_sessions"));
+        let persisted =
+            format_persisted_summaries_for_context(&persisted, expected_height, block_hash_hex);
+        let _ = writeln!(
+            details,
+            "peer[{idx}] torii={torii_url} rbc={rbc_body} sessions={sessions_body} persisted={persisted}"
         );
     }
     Ok(details)

@@ -810,7 +810,7 @@ fn local8_literal() -> String {
 
 fn public_key_literal() -> String {
     let public_key = ALICE_KEYPAIR.public_key().to_string();
-    format!("{public_key}@hbl.sbp")
+    format!("{public_key}@hbl.centralbank")
 }
 
 struct KaigiRelaySeed {

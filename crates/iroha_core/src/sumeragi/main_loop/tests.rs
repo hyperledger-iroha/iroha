@@ -108857,8 +108857,8 @@ fn drain_rbc_state_for_block_skips_payload_metric_when_session_was_already_recor
         "drain cleanup should not re-record payload bytes for a session already accounted for"
     );
     assert!(
-        payload_metric_recorded_sessions.is_empty(),
-        "retired sessions should be removed from the once-only payload metric set"
+        payload_metric_recorded_sessions.contains(&key),
+        "the once-only set should retain retired session keys for the life of the process"
     );
 }
 
@@ -109009,6 +109009,42 @@ async fn authoritative_payload_bytes_for_telemetry_uses_local_payload_fallback_r
 
 #[cfg(feature = "telemetry")]
 #[tokio::test(flavor = "current_thread")]
+async fn authoritative_payload_bytes_for_telemetry_uses_layout_payload_size_rs16() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.config.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Rs16;
+    actor.config.rbc.data_shards = 4;
+    actor.config.rbc.parity_shards = 2;
+    actor.config.rbc.chunk_max_bytes = 512;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let txs: Vec<_> = (0..32).map(|_| sample_transaction()).collect();
+    let block = block_with_txs(height, view, parent, txs);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block.hash(), height, view);
+
+    let session = partial_rbc_session_for_block_with_config_chunking(actor, &block);
+    let fallback = actor.rbc_session_authoritative_payload_bytes_for_telemetry(key, &session);
+    assert_eq!(
+        fallback,
+        Some(payload.len() as u64),
+        "RS16 layout metadata should provide canonical payload bytes even when the local block is not cached"
+    );
+    assert_eq!(
+        session.payload_hash(),
+        Some(payload_hash),
+        "test precondition: the partial RS16 session should retain the payload hash"
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
 async fn update_rbc_status_entry_records_rs16_payload_bytes_once_before_cleanup() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -109062,13 +109098,105 @@ async fn update_rbc_status_entry_records_rs16_payload_bytes_once_before_cleanup(
         "cleanup should not double-count payload bytes that were already recorded by the status path"
     );
     assert!(
-        !actor
+        actor
             .subsystems
             .da_rbc
             .rbc
             .payload_metric_recorded_sessions
             .contains(&key),
-        "cleanup should clear the active payload-metric marker for the retired session"
+        "retired sessions should remain marked as already-accounted so late status refreshes cannot re-record them"
+    );
+
+    harness.shutdown.send();
+}
+
+#[cfg(feature = "telemetry")]
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_rbc_deliver_records_rs16_payload_bytes_with_local_authoritative_payload() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+
+    actor.config.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Rs16;
+    actor.config.rbc.data_shards = 4;
+    actor.config.rbc.parity_shards = 2;
+    actor.config.rbc.chunk_max_bytes = 512;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let parent = actor.state.view().latest_block_hash();
+    let txs: Vec<_> = (0..32).map(|_| sample_transaction()).collect();
+    let block = block_with_txs(height, view, parent, txs);
+    let block_hash = block.hash();
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+    let key = (block_hash, height, view);
+
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+
+    let mut session = partial_rbc_session_for_block_with_config_chunking(actor, &block);
+    session.sent_ready = true;
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "commit roster must be non-empty");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    assert!(required > 0, "ready quorum should be non-zero");
+    for idx in 0..required {
+        session.record_ready(
+            u32::try_from(idx).expect("sender fits u32"),
+            vec![u8::try_from(idx).expect("index fits u8")],
+        );
+    }
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(key, roster, super::RbcRosterSource::Derived);
+
+    actor
+        .maybe_emit_rbc_deliver(key)
+        .expect("deliver emission should succeed");
+
+    let live_delivered = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .is_some_and(|session| session.delivered);
+    let retained_delivered = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&key)
+        .is_some_and(|summary| summary.delivered && !summary.invalid);
+    assert!(
+        live_delivered || retained_delivered,
+        "deliver should be observable either on the live session or the retained summary"
+    );
+
+    let metrics = telemetry.metrics().await;
+    assert_eq!(
+        metrics.sumeragi_rbc_deliver_broadcasts_total.get(),
+        1,
+        "local DELIVER emission should increment the broadcast counter"
+    );
+    assert_eq!(
+        metrics.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        payload.len() as u64,
+        "local DELIVER emission should account canonical payload bytes for RS16 sessions"
+    );
+    assert!(
+        actor
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .contains(&key),
+        "RS16 DELIVER emission should mark the session as already accounted"
     );
 
     harness.shutdown.send();

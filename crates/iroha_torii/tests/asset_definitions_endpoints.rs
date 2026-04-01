@@ -28,12 +28,12 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
 
-    let pkr_id = dm::AssetDefinitionId::new(
+    let cbdc_id = dm::AssetDefinitionId::new(
         "wonderland".parse().expect("domain id"),
-        "pkr".parse().expect("asset name"),
+        "cbdc".parse().expect("asset name"),
     );
-    let pkr = dm::AssetDefinition::numeric(pkr_id.clone())
-        .with_name("PKR".to_owned())
+    let cbdc = dm::AssetDefinition::numeric(cbdc_id.clone())
+        .with_name("CBDC".to_owned())
         .build(&authority);
 
     let usd_id = dm::AssetDefinitionId::new(
@@ -45,7 +45,7 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
         .build(&authority);
 
     let state = Arc::new(State::new_for_testing(
-        World::with([domain], [account], [pkr, usd]),
+        World::with([domain], [account], [cbdc, usd]),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
@@ -60,8 +60,8 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
     let mut block = state.block(header);
     let mut tx = block.transaction();
     SetAssetDefinitionAlias::bind(
-        pkr_id.clone(),
-        "pkr#sbp".parse().expect("asset alias"),
+        cbdc_id.clone(),
+        "cbdc#centralbank".parse().expect("asset alias"),
         None,
     )
     .execute(&authority, &mut tx)
@@ -69,7 +69,7 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
     tx.apply();
     block.commit().expect("commit permanent asset alias");
 
-    (state, pkr_id, usd_id)
+    (state, cbdc_id, usd_id)
 }
 
 fn build_app(state: Arc<State>) -> axum::Router {
@@ -133,7 +133,7 @@ fn commit_alias_lease(
 
 #[tokio::test]
 async fn asset_definitions_endpoints_return_name_and_alias() {
-    let (state, pkr_id, _) = seeded_state();
+    let (state, cbdc_id, _) = seeded_state();
     let app = build_app(state);
 
     // GET /v1/assets/definitions
@@ -156,8 +156,8 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
     let items = doc["items"].as_array().expect("items");
     assert_eq!(doc["total"].as_u64(), Some(2));
     assert!(items.iter().any(|item| {
-        item["name"].as_str() == Some("PKR")
-            && item["alias"].as_str() == Some("pkr#sbp")
+        item["name"].as_str() == Some("CBDC")
+            && item["alias"].as_str() == Some("cbdc#centralbank")
             && item["alias_binding"]["status"].as_str() == Some("permanent")
     }));
     assert!(items.iter().any(|item| {
@@ -171,7 +171,7 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/assets/definitions/{pkr_id}"))
+                .uri(format!("/v1/assets/definitions/{cbdc_id}"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -183,11 +183,14 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
     ));
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid json");
-    let pkr_literal = pkr_id.to_string();
-    assert_eq!(doc["id"].as_str(), Some(pkr_literal.as_str()));
-    assert_eq!(doc["name"].as_str(), Some("PKR"));
-    assert_eq!(doc["alias"].as_str(), Some("pkr#sbp"));
-    assert_eq!(doc["alias_binding"]["alias"].as_str(), Some("pkr#sbp"));
+    let cbdc_literal = cbdc_id.to_string();
+    assert_eq!(doc["id"].as_str(), Some(cbdc_literal.as_str()));
+    assert_eq!(doc["name"].as_str(), Some("CBDC"));
+    assert_eq!(doc["alias"].as_str(), Some("cbdc#centralbank"));
+    assert_eq!(
+        doc["alias_binding"]["alias"].as_str(),
+        Some("cbdc#centralbank")
+    );
     assert_eq!(doc["alias_binding"]["status"].as_str(), Some("permanent"));
 
     // POST /v1/assets/definitions/query
@@ -211,8 +214,8 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
     let items = doc["items"].as_array().expect("items");
     assert_eq!(doc["total"].as_u64(), Some(2));
     assert!(items.iter().any(|item| {
-        item["name"].as_str() == Some("PKR")
-            && item["alias"].as_str() == Some("pkr#sbp")
+        item["name"].as_str() == Some("CBDC")
+            && item["alias"].as_str() == Some("cbdc#centralbank")
             && item["alias_binding"]["status"].as_str() == Some("permanent")
     }));
     assert!(items.iter().any(|item| {
@@ -229,9 +232,10 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
 
-    let pkr_id = dm::AssetDefinitionId::new(domain_id.clone(), "pkr".parse().expect("asset name"));
-    let pkr = dm::AssetDefinition::numeric(pkr_id.clone())
-        .with_name("PKR".to_owned())
+    let cbdc_id =
+        dm::AssetDefinitionId::new(domain_id.clone(), "cbdc".parse().expect("asset name"));
+    let cbdc = dm::AssetDefinition::numeric(cbdc_id.clone())
+        .with_name("CBDC".to_owned())
         .build(&authority);
 
     let usd_id = dm::AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
@@ -240,7 +244,7 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
         .build(&authority);
 
     let state = Arc::new(State::new_for_testing(
-        World::with([domain], [account], [pkr, usd]),
+        World::with([domain], [account], [cbdc, usd]),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
@@ -255,8 +259,8 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
     SetAssetDefinitionAlias::bind(
-        pkr_id.clone(),
-        "pkr#sbp".parse().expect("asset alias"),
+        cbdc_id.clone(),
+        "cbdc#centralbank".parse().expect("asset alias"),
         None,
     )
     .execute(&authority, &mut tx)
