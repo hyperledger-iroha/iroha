@@ -50,7 +50,12 @@ Last updated: 2026-04-01
 - Remaining gap:
   - the original permissioned liveness collapse has been removed on this
     tree, but the permissioned sustained-load profile is still too slow and
-    needs a follow-up throughput investigation before this slice is complete.
+    needs a follow-up throughput fix before this slice is complete; the
+    retained localnet artifacts now point at two concrete contributors:
+    the local DA/backlog timeout path repeatedly escalating tip-pending
+    recovery to `timeout_ms=4000` (with `base_timeout_ms=1400`) and
+    recurring commit-QC deferrals where full vote quorum arrives before the
+    block payload is locally recoverable.
 ## 2026-04-01 Follow-up: focused wrong-ingress tx/query Nexus routing regression landed
 - Added a dedicated Nexus integration regression in
   `integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`

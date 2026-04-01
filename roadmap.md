@@ -24,13 +24,21 @@ the attached commit worker instead of synchronously on the actor thread.
   green across `peers4_k2_r2`, `peers6_k3_r2`, and `peers8_k3_r3`.
 
 Open work for this slice now remains:
-- trace why the permissioned sustained-load path still runs at
-  `2.075 sec/block` after the liveness fix, including whether the remaining
-  cost is commit-worker backpressure, DA pacing, or another post-liveness
-  throughput regression in the permissioned topology;
-- inspect the retained permissioned soak artifacts for any recurring
-  late-round view-change / recovery churn that hurts throughput without
-  reintroducing the hard stall;
+- narrow the permissioned throughput fix around the two concrete paths now
+  identified in the retained localnet artifacts:
+  - `maybe_force_view_change_for_stalled_pending(...)` is repeatedly taking
+    the backlog-hysteresis / deferred-QC path to `timeout_ms=4000` on
+    tip-extending pending blocks even though the base DA quorum timeout for
+    this profile is `1400ms`; and
+  - commit QC aggregation still sometimes reaches full vote quorum before the
+    payload is locally known/recoverable, so the permissioned path keeps
+    deferring QC on “block payload missing” instead of staying on the happy
+    path under localnet load;
+- decide whether the permissioned localnet soak should keep the shared
+  sustained-load DA multiplier profile (`quorum=7`, `availability=3`) if the
+  acceptance target remains `secs_per_block <= 1.000`, because that profile
+  leaves very little headroom for localnet-fast expectations once the
+  recovery path leaves the happy path;
 - keep the deferred repo-wide gates paused until the permissioned throughput
   regression is understood and the permissioned soak clears its
   `secs_per_block <= 1.000` bound on the patched tree; and
