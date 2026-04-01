@@ -13,7 +13,7 @@ use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
     client::{Client, UaidManifestQuery, UaidManifestStatus, UaidManifestStatusFilter},
-    crypto::{Hash, HashOf},
+    crypto::Hash,
     data_model::{
         Level, ValidationFail,
         account::{Account, AccountId},

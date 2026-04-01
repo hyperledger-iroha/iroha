@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-01
 
+Latest sync (2026-04-01 restart-recovery rerun + integration_tests strict-lint fix):
+the previously open `sumeragi_rbc_recovers_after_peer_restart` rerun is green
+on the current tree, and the concrete `integration_tests` strict-lint break
+observed during that verification is fixed.
+
+- `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod
+  sumeragi_rbc_recovers_after_peer_restart -- --nocapture` now completes
+  successfully on this checkout; and
+- `cargo clippy -p integration_tests --test mod -- -D warnings` is green again
+  after removing the dead `HashOf` import from the cross-dataspace routing
+  localnet test.
+
+Open work for this slice now remains:
+- rerun the adjacent heavy restart/cold-start recovery scenarios
+  (`sumeragi_rbc_recovers_after_restart_with_roster_change`,
+  `sumeragi_rbc_session_recovers_after_cold_restart`,
+  `sumeragi_rbc_unverified_roster_stash_requests_missing_block`,
+  `sumeragi_da_eviction_rehydrates_block_bodies`) to make sure the now-green
+  restart rerun was not masking a neighboring integration-only regression
+- broader workspace verification (`cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`) still has not been
+  rerun after the latest RBC restart-path and exact-frontier fix tranche
+
 Latest sync (2026-04-01 lock-rejected sink payload-ingress fix):
 the deterministic sink for exact-frontier lock-rejected branch hashes no
 longer self-deactivates when the node already has the rejected block body

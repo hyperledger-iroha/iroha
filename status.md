@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: restart-recovery rerun is green and the integration_tests strict-lint break is fixed
+- Re-ran the previously open
+  `sumeragi_rbc_recovers_after_peer_restart` integration scenario on the
+  current tree and it completed successfully, so the restart-path RBC recovery
+  regression tracked in the roadmap is no longer reproducing in that target.
+- Fixed the concrete strict-lint failure discovered during that rerun:
+  `cargo clippy -p integration_tests --test mod -- -D warnings` was failing on
+  an unused `HashOf` import in
+  `integration_tests/tests/nexus/tx_query_cross_dataspace_routing_localnet.rs`.
+  The dead import is now removed and the target is green again.
+- Verification:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+  - `cargo clippy -p integration_tests --test mod -- -D warnings`
+- Remaining gap:
+  - the adjacent heavy restart/cold-start RBC recovery scenarios listed in the
+    roadmap still need fresh reruns on this tree before the broader restart
+    slice can be called fully closed.
+
 ## 2026-04-01 Follow-up: lock-rejected sink now survives local payload ingress
 - Fixed the remaining exact-frontier lock-reject bypass in Sumeragi: a
   deterministic lock-rejected branch hash no longer drops out of the
