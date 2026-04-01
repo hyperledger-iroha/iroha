@@ -2,6 +2,42 @@
 
 Last updated: 2026-04-01
 
+Latest sync (2026-04-01 permissioned DA soak actor-thread fix tranche):
+the permissioned DA root causes are patched in `iroha_core`: near-tip
+DA/vote-backed commit candidates no longer force inline validation on the
+main actor thread, commit-path validation uses a dedicated DA-safe inline
+fallback timeout floor, and production commit/finalize work now runs through
+the attached commit worker instead of synchronously on the actor thread.
+
+- focused `iroha_core --lib` regressions are green for:
+  - near-tip worker dispatch without forced inline validation;
+  - the DA `750ms` inline-fallback timeout floor;
+  - production `start_commit_job(...)` enqueue/drain behavior; and
+  - queue-full / disconnected commit-worker fallback handling;
+- the permissioned soak override now matches the sustained-load DA profile
+  used by the other soak cases (`quorum_timeout_multiplier=7`,
+  `availability_timeout_multiplier=3`);
+- the fresh isolated permissioned soak rerun completed the full `2000`-block
+  run without reproducing the old `90s` actor-thread stall signature, but it
+  still failed the throughput assertion at `secs_per_block=2.075`; and
+- the full default `scripts/run_sumeragi_soak_matrix.py` NPoS matrix rerun is
+  green across `peers4_k2_r2`, `peers6_k3_r2`, and `peers8_k3_r3`.
+
+Open work for this slice now remains:
+- trace why the permissioned sustained-load path still runs at
+  `2.075 sec/block` after the liveness fix, including whether the remaining
+  cost is commit-worker backpressure, DA pacing, or another post-liveness
+  throughput regression in the permissioned topology;
+- inspect the retained permissioned soak artifacts for any recurring
+  late-round view-change / recovery churn that hurts throughput without
+  reintroducing the hard stall;
+- keep the deferred repo-wide gates paused until the permissioned throughput
+  regression is understood and the permissioned soak clears its
+  `secs_per_block <= 1.000` bound on the patched tree; and
+- treat the green NPoS soak matrix as regression coverage for the actor-thread
+  fixes, but not as a substitute for the still-red permissioned sustained-load
+  envelope.
+
 Latest sync (2026-04-01 exact-frontier lock-reject cleanup):
 the exact-frontier recovery path now fully forgets same-slot branches already
 rejected by the lock rule, so stale slot ownership or missing-parent state can

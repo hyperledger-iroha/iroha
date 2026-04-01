@@ -140,9 +140,15 @@ const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_FLOOR: usize = 8;
 const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 4;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
 const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 150;
-const IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 1;
+// Shared-host permissioned stable soak still needs enough DA slack for late commit votes and
+// payload availability to converge before view rotation. A 1x window over-rotates at 4 peers.
+const IZANAMI_SHARED_HOST_SOAK_DA_QUORUM_TIMEOUT_MULTIPLIER: i64 = 2;
+const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_MULTIPLIER: i64 = 2;
 const IZANAMI_SHARED_HOST_SOAK_DA_AVAILABILITY_TIMEOUT_FLOOR_MS: i64 = 300;
+const IZANAMI_TEST_NETWORK_RBC_STORE_MAX_SESSIONS: i64 = 256;
+const IZANAMI_TEST_NETWORK_RBC_STORE_SOFT_SESSIONS: i64 = 192;
+const IZANAMI_SHARED_HOST_SOAK_RBC_STORE_MAX_SESSIONS: i64 = 4_096;
+const IZANAMI_SHARED_HOST_SOAK_RBC_STORE_SOFT_SESSIONS: i64 = 3_072;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HEIGHT_WINDOW_MS: i64 = 2_000;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_QC_REACQUIRE_WINDOW_MS: i64 = 800;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 2_000;
@@ -2042,6 +2048,22 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
             .write(
                 ["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"],
                 IZANAMI_RBC_SESSION_TTL_MS,
+            )
+            .write(
+                ["sumeragi", "advanced", "rbc", "store_max_sessions"],
+                if is_shared_host_balanced_latency_profile(config) {
+                    IZANAMI_SHARED_HOST_SOAK_RBC_STORE_MAX_SESSIONS
+                } else {
+                    IZANAMI_TEST_NETWORK_RBC_STORE_MAX_SESSIONS
+                },
+            )
+            .write(
+                ["sumeragi", "advanced", "rbc", "store_soft_sessions"],
+                if is_shared_host_balanced_latency_profile(config) {
+                    IZANAMI_SHARED_HOST_SOAK_RBC_STORE_SOFT_SESSIONS
+                } else {
+                    IZANAMI_TEST_NETWORK_RBC_STORE_SOFT_SESSIONS
+                },
             )
             .write(
                 [
@@ -7329,6 +7351,14 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"]),
             Some(IZANAMI_RBC_SESSION_TTL_MS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "advanced", "rbc", "store_max_sessions"]),
+            Some(IZANAMI_SHARED_HOST_SOAK_RBC_STORE_MAX_SESSIONS)
+        );
+        assert_eq!(
+            lookup(&["sumeragi", "advanced", "rbc", "store_soft_sessions"]),
+            Some(IZANAMI_SHARED_HOST_SOAK_RBC_STORE_SOFT_SESSIONS)
         );
         assert_eq!(
             lookup(&[

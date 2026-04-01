@@ -3322,6 +3322,11 @@ impl Actor {
                 true,
                 Instant::now(),
             );
+            if passive_conflicting_same_height && inline_proposal.is_some() {
+                // A later-view frontier BlockCreated still proves that the proposal existed for
+                // this round, even if local same-height vote history keeps the branch passive.
+                self.note_proposal_seen(height, view, payload_hash);
+            }
         }
         if !stale_payload_only {
             if authoritative_frontier_owner_supersede {

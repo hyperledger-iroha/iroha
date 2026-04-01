@@ -2,6 +2,56 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: permissioned DA soak actor-thread regressions fixed; long soaks completed
+- Fixed the two production-path regressions behind the permissioned DA soak
+  liveness collapse in `iroha_core`:
+  - near-tip DA / vote-backed commit candidates now keep
+    `pending_block_validation_priority_reason(...)` as a scheduling hint only
+    and no longer supersede validation workers by forcing inline validation on
+    the main actor thread;
+  - commit-path validation now uses a dedicated inline-fallback timeout, with
+    DA mode clamped to a minimum of `750ms`, for worker supersession,
+    queue-full cutover, and worker-unavailable fallback decisions; and
+  - the commit worker is now attached during actor startup, joined on
+    shutdown, and used by `start_commit_job(...)` for the production commit
+    path instead of executing commit/finalize inline on the actor thread.
+- Cleaned up the permissioned soak-only DA timeout override in
+  `integration_tests/tests/sumeragi_localnet_smoke.rs` so it matches the
+  sustained-load DA profile used by the other soak cases (`quorum=7`,
+  `availability=3`), and fixed the stale comment describing that override.
+- Added focused regressions in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs` covering:
+  - near-tip commit-vote / DA-delivered blocks dispatching to validation
+    workers without forced inline validation;
+  - the DA inline-validation fallback timeout floor staying at `>= 750ms`;
+  - `start_commit_job(...)` enqueuing production commit work into the commit
+    worker; and
+  - queue-full / disconnected commit-worker fallback behavior preserving
+    pending/inflight consistency without blocking the actor thread.
+- Verification completed so far:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib validation_dispatches_near_tip_ -- --nocapture`
+  - `cargo test -p iroha_core --lib da_commit_validation_inline_fallback_timeout_has_750ms_floor -- --nocapture`
+  - `cargo test -p iroha_core --lib start_commit_job_ -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_pipeline_inlines_validation_at_queue_full_cutover -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_pipeline_inlines_validation_when_inflight_is_stalled -- --nocapture`
+- Long-soak verification completed:
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture`
+    completed the full `2000`-block permissioned soak without reproducing the
+    old `90s` no-progress stall, but still failed the sustained-throughput
+    bound with `secs_per_block=2.075` against the test target `<= 1.000`;
+  - `python3 scripts/run_sumeragi_soak_matrix.py --artifacts-root artifacts/sumeragi-soak-matrix-20260401-actor-fix`
+    completed successfully, and all three default NPoS matrix scenarios
+    (`peers4_k2_r2`, `peers6_k3_r2`, `peers8_k3_r3`) passed; and
+  - the retained permissioned soak network directory is
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_G2Qfhj`,
+    while the NPoS matrix artifacts are under
+    `artifacts/sumeragi-soak-matrix-20260401-actor-fix/`.
+- Remaining gap:
+  - the original permissioned liveness collapse has been removed on this
+    tree, but the permissioned sustained-load profile is still too slow and
+    needs a follow-up throughput investigation before this slice is complete.
+
 ## 2026-04-01 Follow-up: exact-frontier lock rejection now purges rejected slot ownership before recovery
 - Fixed the exact-frontier lock-reject liveness hole in Sumeragi: when a peer
   rejects a frontier `BlockCreated` because the parent does not extend the

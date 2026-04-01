@@ -47533,6 +47533,31 @@ fn activate_frontier_catchup_stall_mode_for_tests(
     canonical_height: u64,
     now: Instant,
 ) -> (Duration, Instant) {
+    let frontier_height = actor.committed_height_snapshot().saturating_add(1);
+    if actor.frontier_slot.is_none() {
+        let frontier_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEF; Hash::LENGTH]));
+        actor.frontier_slot = Some(super::FrontierSlot::new(
+            frontier_height,
+            0,
+            frontier_hash,
+            now,
+            Duration::from_millis(1),
+            None,
+            BTreeSet::new(),
+            false,
+            true,
+            false,
+            None,
+            None,
+        ));
+        let _ = actor.apply_frontier_slot_event(
+            now,
+            super::FrontierSlotEvent::OnLagWindowExpired {
+                reason: "frontier_stall_reset",
+            },
+        );
+    }
     let stall_window = actor.frontier_catchup_stall_window();
     let _ = actor.frontier_catchup_window_snapshot(canonical_height, now);
     let activate_at = now + super::saturating_mul_duration(stall_window, 3);
@@ -75812,14 +75837,7 @@ async fn assemble_proposal_reanchors_lock_lag_highest_qc_catchup() {
             .range_pull_escalation_cooldowns
             .keys()
             .any(|(_, _, height, _)| *height == locked_height.saturating_add(1)),
-        "proposal assembly should reanchor range-pull recovery to locked+1 when highest ancestry is missing: direct_defer={}",
-        actor.defer_highest_qc_update_for_lock_catchup(
-            proposal_height,
-            proposal_view,
-            highest_qc,
-            now,
-            "test_lock_lag_diagnostic",
-        )
+        "proposal assembly should reanchor range-pull recovery to locked+1 when highest ancestry is missing"
     );
     assert!(
         !actor
@@ -80706,6 +80724,125 @@ async fn conflicting_higher_view_block_created_stays_passive_after_local_vote() 
         !actor.slot_has_authoritative_payload(height, conflicting_view),
         "passive conflicting BlockCreated must not reactivate generic same-height proposal state"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn conflicting_higher_view_frontier_block_created_marks_round_liveness_but_stays_passive() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.locked_qc = None;
+    let prev_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let epoch = actor.epoch_for_height(height);
+    let canonical_block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, Some(prev_hash));
+    let canonical_hash = insert_validated_pending(actor, canonical_block);
+
+    assert!(
+        actor.emit_precommit_vote(
+            canonical_hash,
+            height,
+            0,
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            None,
+            Some((Hash::new([]), Hash::new([]))),
+        ),
+        "test setup should record a local same-height vote for the canonical branch"
+    );
+
+    let conflicting_view = 1_u64;
+    let conflicting_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        conflicting_view,
+        Some(prev_hash),
+    );
+    let conflicting_hash = conflicting_block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&conflicting_block));
+    let highest_qc = actor.latest_committed_qc().expect("latest committed qc");
+    let mut leader_topology =
+        super::network_topology::Topology::new(actor.effective_commit_topology());
+    let proposer = u32::try_from(
+        actor
+            .leader_index_for(&mut leader_topology, height, conflicting_view)
+            .expect("leader index"),
+    )
+    .expect("proposer fits in u32");
+    let proposal = Actor::build_consensus_proposal(
+        &conflicting_block,
+        payload_hash,
+        highest_qc,
+        proposer,
+        conflicting_view,
+        epoch,
+    );
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_proposal(proposal);
+    let created = actor.frontier_block_created_for_wire(&conflicting_block);
+    assert!(
+        created.frontier.is_some(),
+        "test setup should preserve frontier metadata on the higher-view BlockCreated"
+    );
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .pop_proposal(height, conflicting_view);
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .pop_hint(height, conflicting_view);
+    actor
+        .slot_tracker
+        .proposals_seen
+        .remove(&(height, conflicting_view));
+
+    actor
+        .handle_block_created(created, None)
+        .expect("handle conflicting higher-view frontier BlockCreated");
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&conflicting_hash)
+        .expect("conflicting BlockCreated payload should still be retained");
+    assert!(
+        pending_after.is_retired_same_height(),
+        "conflicting same-height frontier BlockCreated must still be demoted to a passive retained branch"
+    );
+    assert!(
+        actor
+            .slot_tracker
+            .proposals_seen
+            .contains(&(height, conflicting_view)),
+        "frontier-enriched passive conflicting BlockCreated must still mark the round as observed"
+    );
+    assert!(
+        actor.slot_has_round_liveness(height, conflicting_view),
+        "frontier-enriched passive conflicting BlockCreated must satisfy round liveness checks"
+    );
+    assert_eq!(
+        actor.authoritative_slot_owner_hash(height, conflicting_view),
+        None,
+        "passive conflicting frontier BlockCreated must not become the authoritative slot owner"
+    );
+    if let Some(slot) = actor.frontier_slot.as_ref() {
+        assert_ne!(
+            slot.block_hash, conflicting_hash,
+            "passive conflicting frontier BlockCreated must not take active frontier-slot ownership"
+        );
+    }
 
     harness.shutdown.send();
 }
