@@ -1,6 +1,6 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
 use iroha_data_model::{
-    account::{AccountId, AccountLabel, OpaqueAccountId},
+    account::{AccountAlias, AccountId, OpaqueAccountId},
     domain::DomainId,
     nexus::UniversalAccountId,
     transaction::error::TransactionRejectionReason,
@@ -267,7 +267,7 @@ pub struct AccountReadResponse {
     /// Stable account label when assigned.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub label: Option<AccountLabel>,
+    pub label: Option<AccountAlias>,
     /// Universal account identifier bound to this account when registered in Nexus.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -285,7 +285,11 @@ pub struct AccountReadResponse {
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
-        ValidationFail, account::AccountId, transaction::error::TransactionRejectionReason,
+        ValidationFail,
+        account::{AccountAlias, AccountAliasDomain, AccountId},
+        name::Name,
+        nexus::DataSpaceId,
+        transaction::error::TransactionRejectionReason,
     };
 
     use super::{
@@ -351,7 +355,13 @@ mod tests {
         let key_pair = iroha_crypto::KeyPair::random();
         let response = AccountReadResponse {
             account_id: AccountId::new(key_pair.public_key().clone()),
-            label: None,
+            label: Some(AccountAlias::new(
+                "alice".parse::<Name>().expect("valid label"),
+                Some(AccountAliasDomain::new(
+                    "wonderland".parse::<Name>().expect("valid alias domain"),
+                )),
+                DataSpaceId::GLOBAL,
+            )),
             uaid: None,
             opaque_ids: Vec::new(),
             linked_domains: Vec::new(),

@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: `iroha_torii_shared` account-read payload tracks `AccountAlias`
+- Fixed the `iroha_torii_shared` compile break caused by importing the removed
+  `iroha_data_model::account::AccountLabel` type.
+- `AccountReadResponse.label` now uses
+  `iroha_data_model::account::AccountAlias`, which matches the current
+  universal-account data model and the Torii routing payloads already emitted
+  from world state.
+- Strengthened the shared DTO roundtrip test to encode/decode a non-empty
+  alias payload instead of only the `None` case.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii_shared --lib -- --nocapture`
+  - `cargo test -p iroha --lib get_account_read_requests_json_and_decodes_typed_payload -- --nocapture`
+
 ## 2026-04-01 Follow-up: workspace builds no longer collide on `gpuzstd` helper exports
 - Removed the Rust dependency edge from `crates/gpuzstd_cuda` to
   `crates/gpuzstd_metal`, so building both helper crates in the same Cargo
