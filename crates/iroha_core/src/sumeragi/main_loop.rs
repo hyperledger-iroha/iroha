@@ -9887,6 +9887,7 @@ struct PendingFetchRequestMeta {
 struct PendingBlockState {
     pending_blocks: BTreeMap<HashOf<BlockHeader>, PendingBlock>,
     missing_block_requests: BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
+    missing_commit_qc_requests: BTreeMap<HashOf<BlockHeader>, MissingBlockRequest>,
     pending_fetch_requests:
         BTreeMap<HashOf<BlockHeader>, BTreeMap<PeerId, PendingFetchRequestMeta>>,
     pending_block_body_requests: BTreeMap<HashOf<BlockHeader>, BTreeSet<PeerId>>,
@@ -14623,10 +14624,18 @@ impl Actor {
 
     fn frontier_body_next_due(&self, now: Instant) -> Option<Instant> {
         let slot = self.frontier_slot.as_ref()?;
-        if slot.body_present
-            || !slot.exact_fetch_armed
-            || !matches!(slot.mode, FrontierSlotMode::Normal)
-        {
+        let committed_height = self.committed_height_snapshot();
+        let known_block_commit_qc_repair = self.missing_commit_qc_repair_active_for_round(
+            slot.block_hash,
+            slot.height,
+            slot.view,
+            committed_height,
+            now,
+        );
+        if !slot.exact_fetch_armed || !matches!(slot.mode, FrontierSlotMode::Normal) {
+            return None;
+        }
+        if slot.body_present && !known_block_commit_qc_repair {
             return None;
         }
         if Self::frontier_body_fetch_targets(slot).is_empty() {
@@ -14695,7 +14704,17 @@ impl Actor {
         let Some(mut slot) = self.frontier_slot.take() else {
             return false;
         };
-        if slot.body_present || self.frontier_block_materialized_locally(slot.block_hash) {
+        let committed_height = self.committed_height_snapshot();
+        let known_block_commit_qc_repair = self.missing_commit_qc_repair_active_for_round(
+            slot.block_hash,
+            slot.height,
+            slot.view,
+            committed_height,
+            now,
+        );
+        if !known_block_commit_qc_repair
+            && (slot.body_present || self.frontier_block_materialized_locally(slot.block_hash))
+        {
             slot.body_present = true;
             slot.candidate.body_state = FrontierBodyState::Available;
             self.frontier_slot = Some(slot);
@@ -14763,6 +14782,18 @@ impl Actor {
     }
 
     fn retry_frontier_block_body_fetch(&mut self, now: Instant) -> bool {
+        let known_block_commit_qc_repair = self.frontier_slot.as_ref().is_some_and(|slot| {
+            self.missing_commit_qc_repair_active_for_round(
+                slot.block_hash,
+                slot.height,
+                slot.view,
+                self.committed_height_snapshot(),
+                now,
+            )
+        });
+        if known_block_commit_qc_repair {
+            return self.emit_frontier_block_body_fetch(now);
+        }
         matches!(
             self.handle_frontier_slot_event(now, FrontierSlotEvent::OnFetchRetryDue),
             FrontierRecoveryAdvance::CatchUp
@@ -15886,6 +15917,7 @@ impl Actor {
             pending: PendingBlockState {
                 pending_blocks: BTreeMap::new(),
                 missing_block_requests: BTreeMap::new(),
+                missing_commit_qc_requests: BTreeMap::new(),
                 pending_fetch_requests: BTreeMap::new(),
                 pending_block_body_requests: BTreeMap::new(),
                 pending_processing: Cell::new(None),
@@ -17022,7 +17054,8 @@ impl Actor {
         let (missing_block_progress, missing_block_cost) = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.retry_missing_block");
             let step_start = Instant::now();
-            let progress = self.retry_missing_block_requests(now, tick_deadline);
+            let progress = self.retry_missing_block_requests(now, tick_deadline)
+                || self.retry_known_block_commit_qc_requests(now, tick_deadline);
             (progress, step_start.elapsed())
         };
         let (reschedule_progress, reschedule_cost) = {
@@ -21904,6 +21937,54 @@ impl Actor {
             )
     }
 
+    fn missing_commit_qc_request_has_actionable_dependency(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        request: &MissingBlockRequest,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.local_signed_block_for_hash(block_hash)
+            .is_some_and(|block| {
+                let header = block.header();
+                header.height().get() == request.height
+                    && header.view_change_index() == request.view
+                    && self
+                        .cached_commit_qc_for_block(block_hash, request.height, request.view)
+                        .is_none()
+            })
+            && !self.missing_block_request_is_non_actionable_dependency(
+                block_hash,
+                request,
+                committed_height,
+                now,
+            )
+    }
+
+    fn missing_commit_qc_repair_active_for_round(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.pending
+            .missing_commit_qc_requests
+            .get(&block_hash)
+            .is_some_and(|request| {
+                request.phase == crate::sumeragi::consensus::Phase::Commit
+                    && request.height == height
+                    && request.view == view
+                    && self.missing_commit_qc_request_has_actionable_dependency(
+                        block_hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+    }
+
     fn deferred_missing_payload_qc_has_actionable_dependency(
         &self,
         entry: &DeferredQcEntry,
@@ -21950,6 +22031,38 @@ impl Actor {
                     committed_height,
                     now,
                 )
+            })
+            || self
+                .pending
+                .missing_commit_qc_requests
+                .iter()
+                .any(|(hash, request)| {
+                    self.missing_commit_qc_request_has_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+                })
+    }
+
+    fn frontier_known_block_commit_qc_pressure(
+        &self,
+        frontier_height: u64,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
+        self.pending
+            .missing_commit_qc_requests
+            .iter()
+            .any(|(hash, request)| {
+                request.height >= frontier_height
+                    && self.missing_commit_qc_request_has_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
             })
     }
 
@@ -22012,6 +22125,7 @@ impl Actor {
                             now,
                         )
                 })
+            || self.frontier_known_block_commit_qc_pressure(frontier_height, local_height, now)
             || self.deferred_missing_payload_qcs.values().any(|entry| {
                 entry.qc.height >= frontier_height
                     && !self.authoritative_block_payload_available(entry.qc.subject_block_hash)
@@ -22140,6 +22254,7 @@ impl Actor {
                         now,
                     )
             })
+            || self.frontier_known_block_commit_qc_pressure(frontier_height, committed_height, now)
             || self.deferred_missing_payload_qcs.values().any(|entry| {
                 entry.qc.height >= frontier_height
                     && !self.authoritative_block_payload_available(entry.qc.subject_block_hash)
@@ -22214,6 +22329,21 @@ impl Actor {
             .filter_map(|(request, non_actionable_dependency)| {
                 (!non_actionable_dependency).then_some(request.last_dependency_progress)
             })
+            .chain(
+                self.pending
+                    .missing_commit_qc_requests
+                    .iter()
+                    .filter_map(|(hash, request)| {
+                        (request.height >= frontier_height
+                            && self.missing_commit_qc_request_has_actionable_dependency(
+                                *hash,
+                                request,
+                                committed_height,
+                                now,
+                            ))
+                        .then_some(request.last_dependency_progress)
+                    }),
+            )
             .max()
     }
 
@@ -22232,6 +22362,19 @@ impl Actor {
                         now,
                     )
             })
+            || self
+                .pending
+                .missing_commit_qc_requests
+                .iter()
+                .any(|(hash, request)| {
+                    request.height == height
+                        && self.missing_commit_qc_request_has_actionable_dependency(
+                            *hash,
+                            request,
+                            committed_height,
+                            now,
+                        )
+                })
             || self.deferred_missing_payload_qcs.values().any(|entry| {
                 entry.qc.height == height
                     && self.deferred_missing_payload_qc_has_actionable_dependency(
@@ -22277,6 +22420,21 @@ impl Actor {
                     ))
                 .then_some(request.last_dependency_progress)
             })
+            .chain(
+                self.pending
+                    .missing_commit_qc_requests
+                    .iter()
+                    .filter_map(|(hash, request)| {
+                        (request.height == height
+                            && self.missing_commit_qc_request_has_actionable_dependency(
+                                *hash,
+                                request,
+                                committed_height,
+                                now,
+                            ))
+                        .then_some(request.last_dependency_progress)
+                    }),
+            )
             .max()
     }
 
@@ -22310,6 +22468,25 @@ impl Actor {
             self.clear_missing_block_request(&hash, reason);
         }
 
+        let stale_known_block_commit_qc: Vec<_> = self
+            .pending
+            .missing_commit_qc_requests
+            .iter()
+            .filter_map(|(hash, request)| {
+                (request.height == height
+                    && !self.missing_commit_qc_request_has_actionable_dependency(
+                        *hash,
+                        request,
+                        committed_height,
+                        now,
+                    ))
+                .then_some(*hash)
+            })
+            .collect();
+        for hash in stale_known_block_commit_qc.iter().copied() {
+            self.clear_missing_commit_qc_request(&hash, MissingBlockClearReason::Obsolete);
+        }
+
         let stale_deferred: Vec<_> = self
             .deferred_missing_payload_qcs
             .iter()
@@ -22335,7 +22512,7 @@ impl Actor {
         }
 
         self.prune_highest_qc_missing_defer_markers(committed_height);
-        !stale_missing.is_empty() || deferred_removed > 0
+        !stale_missing.is_empty() || !stale_known_block_commit_qc.is_empty() || deferred_removed > 0
     }
 
     fn clear_frontier_catchup_window_gate_for_height(&mut self, frontier_height: u64) {
@@ -23481,7 +23658,14 @@ impl Actor {
             .filter(|(_, request)| request.height.saturating_add(stale_margin) < local_height)
             .map(|(hash, request)| (*hash, request.height))
             .collect();
-        if stale_requests.is_empty() {
+        let stale_known_block_commit_qc: Vec<_> = self
+            .pending
+            .missing_commit_qc_requests
+            .iter()
+            .filter(|(_, request)| request.height.saturating_add(stale_margin) < local_height)
+            .map(|(hash, request)| (*hash, request.height))
+            .collect();
+        if stale_requests.is_empty() && stale_known_block_commit_qc.is_empty() {
             return;
         }
 
@@ -23518,6 +23702,20 @@ impl Actor {
             for key in stale_deferred {
                 self.deferred_block_sync_updates.remove(&key);
             }
+        }
+
+        for (hash, request_height) in stale_known_block_commit_qc {
+            if self
+                .pending
+                .missing_commit_qc_requests
+                .remove(&hash)
+                .is_none()
+            {
+                continue;
+            }
+            pruned = pruned.saturating_add(1);
+            cleared_heights.insert(request_height);
+            self.clear_missing_payload_fetch_window_gate_for_block(request_height, hash);
         }
 
         for height in cleared_heights {
@@ -24667,7 +24865,9 @@ impl Actor {
     }
 
     fn lowest_unresolved_missing_block_height(&self, committed_height: u64) -> Option<u64> {
-        self.pending
+        let now = Instant::now();
+        let payload_missing = self
+            .pending
             .missing_block_requests
             .iter()
             .filter(|(hash, request)| {
@@ -24675,7 +24875,27 @@ impl Actor {
                     && !self.authoritative_block_payload_available(**hash)
             })
             .map(|(_, request)| request.height)
-            .min()
+            .min();
+        let commit_qc_missing = self
+            .pending
+            .missing_commit_qc_requests
+            .iter()
+            .filter(|(hash, request)| {
+                request.height > committed_height
+                    && self.missing_commit_qc_request_has_actionable_dependency(
+                        **hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+            .map(|(_, request)| request.height)
+            .min();
+        match (payload_missing, commit_qc_missing) {
+            (Some(lhs), Some(rhs)) => Some(lhs.min(rhs)),
+            (Some(height), None) | (None, Some(height)) => Some(height),
+            (None, None) => None,
+        }
     }
 
     fn should_skip_missing_block_recovery_escalation(
@@ -25295,6 +25515,24 @@ impl Actor {
             }
         }
 
+        let stale_known_block_commit_qc: Vec<_> = self
+            .pending
+            .missing_commit_qc_requests
+            .iter()
+            .filter(|(_, request)| request.height == height)
+            .map(|(hash, _)| *hash)
+            .collect();
+        for hash in stale_known_block_commit_qc {
+            if self
+                .pending
+                .missing_commit_qc_requests
+                .remove(&hash)
+                .is_some()
+            {
+                missing_removed = missing_removed.saturating_add(1);
+            }
+        }
+
         let hints_before = self.subsystems.propose.proposal_cache.hints.len();
         self.subsystems
             .propose
@@ -25525,6 +25763,26 @@ impl Actor {
                 cleared_heights.insert(height);
                 self.pending.pending_fetch_requests.remove(&hash);
                 self.pending.pending_block_body_requests.remove(&hash);
+            }
+        }
+
+        let stale_known_block_commit_qc: Vec<_> = self
+            .pending
+            .missing_commit_qc_requests
+            .iter()
+            .filter(|(_, request)| request.height > keep_through_height)
+            .map(|(hash, request)| (*hash, request.height))
+            .collect();
+        for (hash, height) in stale_known_block_commit_qc {
+            if self
+                .pending
+                .missing_commit_qc_requests
+                .remove(&hash)
+                .is_some()
+            {
+                missing_removed = missing_removed.saturating_add(1);
+                cleared_heights.insert(height);
+                self.clear_missing_payload_fetch_window_gate_for_block(height, hash);
             }
         }
 
@@ -30781,7 +31039,11 @@ impl Actor {
         }
         let active_queue_len = self.queue.active_len();
         let pending_blocks = self.pending.pending_blocks.len();
-        let missing_blocks = self.pending.missing_block_requests.len();
+        let missing_blocks = self
+            .pending
+            .missing_block_requests
+            .len()
+            .saturating_add(self.pending.missing_commit_qc_requests.len());
         let rbc_sessions = self.subsystems.da_rbc.rbc.sessions.len();
         let commit_inflight = self
             .subsystems

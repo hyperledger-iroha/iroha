@@ -2904,6 +2904,77 @@ async fn reschedule_drops_aborted_pending_when_missing_request_is_non_actionable
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reschedule_retains_aborted_pending_when_missing_commit_qc_request_is_actionable() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.timeouts_overrides.commit = Some(Duration::from_secs(1));
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let now = Instant::now();
+    let quorum_timeout = actor.commit_quorum_timeout();
+    let quorum_reschedule_cooldown = quorum_timeout.max(super::QUORUM_RESCHEDULE_COOLDOWN);
+    let retention_factor = actor
+        .config
+        .recovery
+        .missing_block_signer_fallback_attempts
+        .saturating_add(2)
+        .max(4);
+    let aborted_retention = quorum_reschedule_cooldown.saturating_mul(retention_factor);
+
+    let view = actor.state.view();
+    let height = u64::try_from(view.height()).unwrap_or(0).saturating_add(1);
+    let parent = view.latest_block_hash();
+    drop(view);
+    let block = block_with_txs(height, 0, parent, vec![sample_transaction()]);
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.mark_aborted();
+    pending.inserted_at = now
+        .checked_sub(aborted_retention.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    let block_hash = pending.block.hash();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view: 0,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(10),
+            view_change_window: Some(Duration::from_millis(10)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    assert!(
+        !actor.reschedule_stale_pending_blocks(None),
+        "actionable missing commit-QC recovery should retain the aborted pending payload"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "aborted pending should stay available while missing commit-QC recovery is still actionable"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "missing commit-QC recovery request should stay armed for the retained aborted pending block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn actor_next_tick_deadline_tracks_rbc_rebroadcast_cooldown() {
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
@@ -12377,6 +12448,115 @@ async fn fetch_pending_block_stashes_exact_committed_tip_until_commit_proof_avai
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_serves_historical_committed_block_without_waiting_for_tip_proof() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let predecessor = sample_block(1, 0, None);
+    let historical_block = sample_block(2, 0, Some(predecessor.hash()));
+    let committed_tip = sample_block(3, 0, Some(historical_block.hash()));
+    let block_hash = historical_block.hash();
+    let height = historical_block.header().height().get();
+    let view = historical_block.header().view_change_index();
+
+    actor
+        .kura
+        .store_block(predecessor.clone())
+        .expect("store predecessor block");
+    actor
+        .kura
+        .store_block(historical_block.clone())
+        .expect("store historical committed block");
+    actor
+        .kura
+        .store_block(committed_tip.clone())
+        .expect("store committed tip");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(predecessor.hash());
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(block_hash);
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(committed_tip.hash());
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..required {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        view,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        commit_topology,
+        signers_bitmap,
+        qc.aggregate.bls_aggregate_signature.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    actor.state.record_commit_roster(&qc, &checkpoint, None);
+
+    let request = super::message::FetchPendingBlock {
+        requester: actor.common_config.peer.id.clone(),
+        block_hash,
+        height,
+        view,
+        priority: None,
+        requester_roster_proof_known: None,
+    };
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .handle_fetch_pending_block(request)
+        .expect("fetch historical committed block");
+
+    assert!(
+        !actor
+            .pending
+            .pending_fetch_requests
+            .contains_key(&block_hash),
+        "historical committed block fetch should not wait for exact-tip proof"
+    );
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        posts.iter().any(|post| match post {
+            BackgroundPost::Post { msg, .. } => matches!(
+                msg.as_ref(),
+                BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
+            ),
+            _ => false,
+        }),
+        "expected an immediate historical BlockSyncUpdate response"
+    );
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fetch_pending_block_serves_aborted_pending() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -12497,6 +12677,96 @@ async fn fetch_pending_block_skips_invalid_pending() {
     assert!(
         harness.background_rx.try_iter().next().is_none(),
         "invalid pending block should not be served"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_releases_dedup_after_miss_for_same_requester_retry() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(3, 0, None);
+    let block_hash = block.hash();
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let requester = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote requester");
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::FetchPendingBlock {
+        height,
+        view,
+        block_hash,
+        requester_hash: Hash::new(requester.encode()),
+        priority: super::message::FetchPendingBlockPriority::Background,
+    };
+    let request = super::message::FetchPendingBlock {
+        requester: requester.clone(),
+        block_hash,
+        height,
+        view,
+        priority: None,
+        requester_roster_proof_known: None,
+    };
+
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .handle_fetch_pending_block(request.clone())
+        .expect("initial miss handled");
+    assert!(
+        !actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned")
+            .contains(&dedup_key),
+        "missed FetchPendingBlock must release ingress dedup so the same requester can retry"
+    );
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "missing local payload should not answer the first fetch"
+    );
+
+    let payload_hash = Hash::prehashed([0x44; 32]);
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block.clone(), payload_hash, height, view),
+    );
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+
+    actor
+        .handle_fetch_pending_block(request)
+        .expect("retry handled");
+    assert!(
+        !actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned")
+            .contains(&dedup_key),
+        "served FetchPendingBlock must also release ingress dedup after responding"
+    );
+    assert!(
+        !actor
+            .pending
+            .pending_fetch_requests
+            .contains_key(&block_hash),
+        "retry should consume the stashed fetch request once the payload becomes available"
     );
 
     harness.shutdown.send();
@@ -13840,6 +14110,127 @@ async fn quorum_reschedule_skips_block_created_fallback_when_roster_proof_missin
     assert_eq!(
         block_created_second, 0,
         "duplicate reschedule should respect the payload rebroadcast cooldown"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn quorum_reschedule_requests_known_block_commit_qc_recovery() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let epoch = actor.epoch_for_height(height);
+    let topology_peers = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(topology_peers.clone());
+    let min_votes_for_commit = topology.min_votes_for_commit().max(1);
+    let local_idx = actor
+        .local_validator_index_for_topology(&topology)
+        .expect("local validator index");
+    actor.vote_log.insert(
+        (Phase::Commit, height, view, epoch, local_idx),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: local_idx,
+            bls_sig: Vec::new(),
+        },
+    );
+
+    let pending = PendingBlock::new(block, payload_hash, height, view);
+    let before = super::status::snapshot();
+    assert!(
+        actor.reschedule_pending_quorum_block(
+            pending,
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            min_votes_for_commit,
+            /*vote_count*/ 1,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            None,
+            Instant::now(),
+        ),
+        "vote-backed quorum timeout should trigger retransmit recovery work"
+    );
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    let vote_rebroadcasts = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(msg.as_ref(), BlockMessage::QcVote(_))
+            )
+        })
+        .count();
+    let sync_updates = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
+                    )
+            )
+        })
+        .count();
+    let block_created = posts
+        .iter()
+        .filter(|post| {
+            matches!(
+                post,
+                BackgroundPost::Post { msg, .. }
+                    if matches!(
+                        msg.as_ref(),
+                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
+                    )
+            )
+        })
+        .count();
+    assert!(
+        vote_rebroadcasts > 0,
+        "quorum reschedule should still rebroadcast commit votes"
+    );
+    assert_eq!(
+        sync_updates, 0,
+        "known-block commit-QC recovery should not rebuild BlockSyncUpdate hydration locally"
+    );
+    assert_eq!(
+        block_created, 0,
+        "known-block commit-QC recovery should not fall back to BlockCreated payload broadcast"
+    );
+
+    let after = super::status::snapshot();
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("quorum reschedule should seed missing-block recovery state");
+    assert_eq!(request.phase, Phase::Commit);
+    assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
+    assert_eq!(request.attempts, 1);
+    assert_eq!(
+        after.missing_block_fetch_total,
+        before.missing_block_fetch_total.saturating_add(1),
+        "quorum reschedule should request a pending-block recovery fetch for known blocks missing commit QC"
     );
 
     harness.shutdown.send();
@@ -20288,6 +20679,506 @@ async fn known_block_commit_qc_replay_targets_snapshot_roster() {
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_requests_pending_block_fetch() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let targets = actor.effective_commit_topology();
+    let before = super::status::snapshot();
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_missing_commit_qc",
+        ),
+        "known block without cached commit QC should request a pending-block recovery fetch"
+    );
+    let after = super::status::snapshot();
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("missing-block recovery request recorded");
+    assert_eq!(request.height, height);
+    assert_eq!(request.view, view);
+    assert_eq!(request.phase, Phase::Commit);
+    assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
+    assert_eq!(request.attempts, 1);
+    assert_eq!(
+        after.missing_block_fetch_total,
+        before.missing_block_fetch_total.saturating_add(1),
+        "known-block commit-QC recovery should record a missing-block fetch attempt"
+    );
+    assert_eq!(
+        after.missing_block_fetch_last_targets,
+        u64::try_from(targets.len().saturating_sub(1)).expect("target count fits u64"),
+        "missing-block fetch should target every non-local commit peer"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_requests_fetch_for_retry_aborted_pending() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let targets = actor.effective_commit_topology();
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_retry_aborted_known_block_missing_commit_qc",
+        ),
+        "retry-aborted pending payloads should still request commit-QC recovery"
+    );
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("missing commit-QC recovery request recorded");
+    assert_eq!(request.height, height);
+    assert_eq!(request.view, view);
+    assert_eq!(request.phase, Phase::Commit);
+    assert_eq!(request.priority, super::MissingBlockPriority::Consensus);
+    assert_eq!(request.attempts, 1);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_respects_retry_backoff() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let targets = actor.effective_commit_topology();
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_missing_commit_qc_first",
+        ),
+        "first known-block commit-QC recovery attempt should request a fetch"
+    );
+    let snapshot_after_first = super::status::snapshot();
+
+    assert!(
+        !actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_missing_commit_qc_backoff",
+        ),
+        "second known-block commit-QC recovery attempt inside retry window should back off"
+    );
+    let snapshot_after_second = super::status::snapshot();
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("missing-block recovery request retained");
+    assert_eq!(
+        request.attempts, 1,
+        "retry-window backoff must not consume an extra recovery attempt"
+    );
+    assert_eq!(
+        snapshot_after_second.missing_block_fetch_total,
+        snapshot_after_first
+            .missing_block_fetch_total
+            .saturating_add(1),
+        "retry-window backoff should still record the suppressed recovery decision"
+    );
+    assert_eq!(
+        snapshot_after_second.missing_block_fetch_last_targets, 0,
+        "retry-window backoff should not retain any fetch targets for a suppressed retry"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retry_known_block_commit_qc_requests_reissues_fetch_after_backoff() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let height = block.header().height().get();
+    let view = block.header().view_change_index();
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let targets = actor.effective_commit_topology();
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_missing_commit_qc_seed",
+        ),
+        "initial known-block commit-QC recovery attempt should request a fetch"
+    );
+    let snapshot_after_seed = super::status::snapshot();
+
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get_mut(&block_hash)
+        .expect("known-block commit-QC recovery request recorded");
+    request.retry_window = Duration::ZERO;
+    request.last_requested = Instant::now()
+        .checked_sub(Duration::from_secs(1))
+        .expect("retry timestamp underflow");
+
+    assert!(
+        actor.retry_known_block_commit_qc_requests(Instant::now(), None),
+        "retry loop should reissue the missing commit-QC fetch after backoff expires"
+    );
+
+    let snapshot_after_retry = super::status::snapshot();
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get(&block_hash)
+        .expect("known-block commit-QC recovery request retained");
+    assert_eq!(
+        request.attempts, 2,
+        "retry loop should consume a second recovery attempt after backoff expires"
+    );
+    assert_eq!(
+        snapshot_after_retry.missing_block_fetch_total,
+        snapshot_after_seed
+            .missing_block_fetch_total
+            .saturating_add(1),
+        "retry loop should record the reissued fetch attempt"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_block_body() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    let targets = actor.effective_commit_topology();
+
+    let _ = take_background_log(&background_log);
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_exact_frontier_commit_qc_recovery",
+        ),
+        "frontier known-block commit-QC recovery should arm exact block-body repair"
+    );
+
+    let slot = actor.frontier_slot.as_ref().expect("frontier slot");
+    assert_eq!(slot.height, height);
+    assert_eq!(slot.view, view);
+    assert_eq!(slot.block_hash, block_hash);
+    assert!(
+        slot.exact_fetch_armed,
+        "frontier known-block recovery should keep exact fetch armed"
+    );
+    assert!(
+        !slot.body_present,
+        "frontier known-block recovery should wait for exact-body repair even when the payload is already local"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "frontier known-block recovery should track the missing commit-QC request"
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| {
+                entry.msg_kind != Some("FetchPendingBlock")
+                    && entry.msg_kind != Some("FetchBlockBody")
+            }),
+        "ingress grace should suppress immediate exact-frontier traffic"
+    );
+
+    let grace = actor.authoritative_body_ingress_fetch_grace();
+    let slot = actor
+        .frontier_slot
+        .as_mut()
+        .expect("frontier slot retained");
+    let observed_at = Instant::now()
+        .checked_sub(grace.saturating_add(Duration::from_millis(1)))
+        .unwrap_or_else(Instant::now);
+    slot.timers.observed_at = observed_at;
+    slot.observed_at = observed_at;
+    let _ = take_background_log(&background_log);
+
+    assert!(
+        actor.retry_frontier_block_body_fetch(Instant::now()),
+        "frontier known-block recovery should retry via FetchBlockBody after ingress grace"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("FetchPendingBlock")),
+        "exact frontier commit-QC recovery must not regress to generic FetchPendingBlock"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
+        "frontier known-block recovery should use FetchBlockBody once ingress grace expires"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let owner_view = 2_u64;
+    let repair_view = 0_u64;
+
+    let owner_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        owner_view,
+        Some(parent_hash),
+    );
+    let owner_hash = insert_validated_pending(actor, owner_block);
+    let now = Instant::now();
+    assert!(actor.update_frontier_slot(
+        owner_hash,
+        height,
+        owner_view,
+        None,
+        BTreeSet::new(),
+        /*block_created_seen*/ true,
+        /*exact_fetch_armed*/ true,
+        /*body_present*/ true,
+        None,
+        None,
+        now,
+    ));
+
+    let repair_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        repair_view,
+        Some(parent_hash),
+    );
+    let repair_hash = repair_block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&repair_block));
+    let mut repair_pending =
+        PendingBlock::new(repair_block.clone(), payload_hash, height, repair_view);
+    repair_pending.validation_status = ValidationStatus::Valid;
+    repair_pending.parent_state_root = Some(zero_state_root());
+    repair_pending.post_state_root = Some(zero_state_root());
+    repair_pending.retire_same_height();
+    actor
+        .pending
+        .pending_blocks
+        .insert(repair_hash, repair_pending);
+    actor.pending.missing_commit_qc_requests.insert(
+        repair_hash,
+        super::MissingBlockRequest {
+            height,
+            view: repair_view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(25),
+            view_change_window: Some(Duration::from_millis(200)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let dedup_key = crate::sumeragi::BlockPayloadDedupKey::BlockBodyResponse {
+        height,
+        view: repair_view,
+        block_hash: repair_hash,
+    };
+    {
+        let mut guard = actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        guard.insert(dedup_key, Instant::now());
+    }
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        repair_hash,
+        height,
+        repair_view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        repair_view,
+        repair_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        actor.effective_commit_topology(),
+        signers_bitmap,
+        qc.aggregate.bls_aggregate_signature.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    let mut update = super::message::BlockSyncUpdate::from(&repair_block);
+    update.commit_qc = Some(qc);
+    update.validator_checkpoint = Some(checkpoint);
+    update.commit_votes.clear();
+
+    let sender = actor
+        .effective_commit_topology()
+        .into_iter()
+        .find(|peer| peer != actor.common_config.peer.id())
+        .expect("remote sender");
+
+    actor
+        .handle_block_body_response(
+            super::message::BlockBodyResponse {
+                block_hash: repair_hash,
+                height,
+                view: repair_view,
+                body: super::message::BlockBodyData::BlockSyncUpdate(update),
+            },
+            Some(sender),
+        )
+        .expect("same-height known-block commit-QC repair response handled");
+    drain_known_block_qc_work(actor);
+
+    assert!(
+        !actor
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned")
+            .contains(&dedup_key),
+        "same-height commit-QC repair responses should always release dedup after processing"
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("later same-height owner should remain active");
+    assert_eq!(slot.block_hash, owner_hash);
+    assert_eq!(slot.view, owner_view);
+    assert!(
+        !actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&repair_hash),
+        "accepted same-height commit-QC repair should retire the missing commit-QC request"
+    );
+    assert!(
+        actor
+            .state
+            .view()
+            .world()
+            .commit_qcs()
+            .get(&repair_hash)
+            .is_some(),
+        "same-height commit-QC repair should still record the recovered certificate"
+    );
+
+    harness.shutdown.send();
+}
+
 #[test]
 fn block_sync_update_targets_cover_full_roster_when_limit_allows() {
     let peers: Vec<_> = (0..4)
@@ -25368,6 +26259,105 @@ async fn request_missing_block_for_pending_rbc_holds_initial_frontier_fetch_with
             .iter()
             .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
         "post-grace committed + 1 RBC recovery must switch to exact FetchBlockBody traffic"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_missing_block_for_pending_rbc_preserves_generic_request_on_live_owner_conflict() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let repair_view = 3_u64;
+    let owner_view = repair_view.saturating_add(1);
+    let owner_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+    let repair_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+    let now = Instant::now();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        owner_view,
+        owner_hash,
+        now,
+        Duration::from_secs(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+    actor
+        .frontier_slot
+        .as_mut()
+        .expect("frontier slot")
+        .lock_state = super::FrontierOwnerLockState::LocallyVoted;
+    actor.pending.missing_block_requests.insert(
+        repair_hash,
+        super::MissingBlockRequest {
+            height,
+            view: repair_view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(10),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+    let _ = take_background_log(&background_log);
+
+    actor.request_missing_block_for_pending_rbc(
+        (repair_hash, height, repair_view),
+        "test_frontier_owner_conflict",
+        None,
+    );
+
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&repair_hash),
+        "failed exact-frontier handoff must preserve the generic missing-block request",
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot retained");
+    assert_eq!(
+        slot.block_hash, owner_hash,
+        "RBC recovery fallback must not steal same-height ownership from the live frontier block",
+    );
+    assert_eq!(
+        slot.view, owner_view,
+        "RBC recovery fallback must preserve the later-view frontier owner",
+    );
+    assert_eq!(
+        super::status::snapshot().missing_block_fetch_total,
+        0,
+        "conflicted committed + 1 recovery must stay within ingress grace instead of emitting a generic fetch",
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| {
+                entry.msg_kind != Some("FetchPendingBlock")
+                    && entry.msg_kind != Some("FetchBlockBody")
+            }),
+        "failed exact-frontier handoff must not emit network fetch traffic during ingress grace",
     );
 
     harness.shutdown.send();
@@ -89120,6 +90110,267 @@ async fn frontier_block_sync_commit_qc_replays_deferred_missing_payload_qc_when_
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn frontier_block_sync_checkpoint_only_replays_deferred_missing_payload_qc_when_block_is_already_local()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let qc_key = Actor::qc_tally_key(&qc);
+
+    actor
+        .handle_qc(qc.clone())
+        .expect("handle commit QC before payload");
+
+    assert!(
+        actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "commit QC should defer while the frontier payload is still missing"
+    );
+
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch,
+    };
+    actor.subsystems.commit.inflight = Some(CommitInFlight {
+        id: 1,
+        lock,
+        block_hash,
+        pending,
+        commit_topology: roster.clone(),
+        signature_topology: roster,
+        qc_signers: None,
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        post_commit_qc: None,
+        enqueue_time: Instant::now(),
+    });
+
+    let checkpoint = ValidatorSetCheckpoint::new(
+        qc.height,
+        qc.view,
+        qc.subject_block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        qc.validator_set.clone(),
+        qc.aggregate.signers_bitmap.clone(),
+        qc.aggregate.bls_aggregate_signature.clone(),
+        qc.validator_set_hash_version,
+        None,
+    );
+    let cache_key = (Phase::Commit, block_hash, height, view, epoch);
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = None;
+    update.validator_checkpoint = Some(checkpoint);
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("handle frontier checkpoint-only block sync update");
+    drain_known_block_qc_work(actor);
+
+    assert!(
+        !actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "checkpoint-only frontier block-sync sidecars should replay deferred missing-payload QC repair when the block is already locally recoverable"
+    );
+    assert!(
+        actor.qc_cache.contains_key(&cache_key),
+        "checkpoint-only frontier sidecars should synthesize and cache a usable commit QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_block_sync_checkpoint_only_rejects_uncertified_sidecar_when_block_is_already_local()
+ {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let qc_key = Actor::qc_tally_key(&qc);
+
+    actor
+        .handle_qc(qc.clone())
+        .expect("handle commit QC before payload");
+
+    assert!(
+        actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "commit QC should defer while the frontier payload is still missing"
+    );
+
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch,
+    };
+    actor.subsystems.commit.inflight = Some(CommitInFlight {
+        id: 1,
+        lock,
+        block_hash,
+        pending,
+        commit_topology: roster.clone(),
+        signature_topology: roster,
+        qc_signers: None,
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        post_commit_qc: None,
+        enqueue_time: Instant::now(),
+    });
+
+    let mut checkpoint = ValidatorSetCheckpoint::new(
+        qc.height,
+        qc.view,
+        qc.subject_block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        qc.validator_set.clone(),
+        qc.aggregate.signers_bitmap.clone(),
+        qc.aggregate.bls_aggregate_signature.clone(),
+        qc.validator_set_hash_version,
+        None,
+    );
+    checkpoint.bls_aggregate_signature.clear();
+
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = None;
+    update.validator_checkpoint = Some(checkpoint);
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("handle frontier checkpoint-only block sync update");
+    drain_known_block_qc_work(actor);
+
+    assert!(
+        actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "uncertified checkpoint-only sidecars must not drain deferred missing-payload QC repair"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_from_validator_checkpoint_rejects_uncertified_sidecar() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster);
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let mut checkpoint = ValidatorSetCheckpoint::new(
+        qc.height,
+        qc.view,
+        qc.subject_block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        qc.validator_set.clone(),
+        qc.aggregate.signers_bitmap.clone(),
+        qc.aggregate.bls_aggregate_signature.clone(),
+        qc.validator_set_hash_version,
+        None,
+    );
+    checkpoint.bls_aggregate_signature.clear();
+
+    assert!(
+        actor
+            .commit_qc_from_validator_checkpoint(block_hash, height, view, &checkpoint)
+            .is_none(),
+        "checkpoint-only QC synthesis must reject uncertified sidecars"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_created_drops_hint_when_highest_qc_view_mismatches_parent() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -106656,6 +107907,121 @@ async fn block_sync_update_contiguous_frontier_routes_unknown_block_through_bloc
     assert!(
         actor.deferred_block_sync_updates.is_empty(),
         "contiguous frontier update must not enter deferred block-sync processing"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn keep_exact_frontier_block_sync_repair_in_slot_clears_generic_missing_request() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE1; Hash::LENGTH]));
+    let now = Instant::now();
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_millis(2)),
+            first_seen: now,
+            last_requested: now,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 0,
+        },
+    );
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers = BTreeSet::new();
+    let _ = take_background_log(&background_log);
+
+    assert!(
+        actor.keep_exact_frontier_block_sync_repair_in_slot(
+            block_hash,
+            height,
+            view,
+            &signers,
+            &topology,
+            "test_exact_frontier_block_sync_repair",
+        ),
+        "committed + 1 repair should be promoted into the exact frontier slot",
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .is_none(),
+        "exact frontier repair should retire the generic missing-block request for the same block",
+    );
+    let slot = actor.frontier_slot.as_ref().expect("frontier slot");
+    assert_eq!(slot.height, height);
+    assert_eq!(slot.view, view);
+    assert_eq!(slot.block_hash, block_hash);
+    assert!(
+        slot.exact_fetch_armed,
+        "exact frontier repair should arm exact-body fetch",
+    );
+    assert!(
+        !slot.body_present,
+        "exact frontier repair should keep the body marked missing until fetched",
+    );
+    assert_eq!(
+        super::status::snapshot().missing_block_fetch_total,
+        0,
+        "slot promotion must not emit generic missing-block fetches",
+    );
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| {
+                entry.msg_kind != Some("FetchPendingBlock")
+                    && entry.msg_kind != Some("FetchBlockBody")
+            }),
+        "exact frontier repair should stay within ingress grace initially",
+    );
+
+    let grace = actor.authoritative_body_ingress_fetch_grace();
+    let slot = actor
+        .frontier_slot
+        .as_mut()
+        .expect("frontier slot retained");
+    let observed_at = Instant::now()
+        .checked_sub(grace.saturating_add(Duration::from_millis(1)))
+        .unwrap_or_else(Instant::now);
+    slot.timers.observed_at = observed_at;
+    slot.observed_at = observed_at;
+    let _ = take_background_log(&background_log);
+
+    assert!(
+        actor.retry_frontier_block_body_fetch(Instant::now()),
+        "post-grace retry should use exact FetchBlockBody traffic",
+    );
+    let post_grace_entries = take_background_log(&background_log);
+    assert!(
+        post_grace_entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("FetchPendingBlock")),
+        "exact frontier repair must not regress to generic FetchPendingBlock traffic",
+    );
+    assert!(
+        post_grace_entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
+        "exact frontier repair should emit FetchBlockBody after grace",
     );
 
     harness.shutdown.send();
