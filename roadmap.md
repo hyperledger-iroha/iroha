@@ -2,6 +2,98 @@
 
 Last updated: 2026-04-01
 
+Latest sync (2026-04-01 broad workspace verification / rollout gate):
+the narrow Torii/client/CLI verification for the current first-release
+convergence work is green on an isolated target, but the broader workspace
+gate is still blocked by unrelated domainless-account migration cleanup
+outside this slice.
+
+- green isolated checks so far:
+  - `cargo test -p iroha_data_model --lib --no-run`
+  - `cargo test -p iroha_cli --test cli_smoke -- --nocapture`
+- the broad `cargo clippy --workspace --all-targets -- -D warnings` replay is
+  still uncovering stale canonical-account assumptions across untouched
+  examples, benches, and tests; the current representative blockers are:
+  - `crates/ivm/examples/koto_domain_demo.rs`
+  - `crates/iroha_core/src/block.rs`
+  - `crates/iroha_core/src/executor.rs`
+  - `crates/iroha_core/src/query/snapshot/mod.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/asset.rs`
+- until the broad workspace gate is green or explicitly waived, do not treat
+  the maintained live SBP/AED topology rollout from this tree as cleared.
+
+Open work for this slice now remains:
+- finish the repo-wide domainless-account cleanup exposed by
+  `cargo clippy --workspace --all-targets -- -D warnings`, starting with the
+  remaining `ivm` examples and the untouched `iroha_core` helper/test paths
+  listed above;
+- rerun `cargo clippy --workspace --all-targets -- -D warnings` until green;
+- only after the broad workspace gate is green, rebuild a fresh local
+  artifact bundle from the current tree and run the maintained
+  `scripts/pk topology preflight`, `deploy --mode reset`,
+  `settlement-smoke`, and `verify` sequence.
+
+Latest sync (2026-04-01 Nexus implicit local storage budget default):
+when the operator leaves the Nexus aggregate disk cap unset, `irohad` now
+derives a runtime default from the filesystem backing `kura.store_dir`
+instead of treating the storage budget as absent.
+
+- `nexus.storage.local_budget_bytes` remains the canonical knob and the legacy
+  `nexus.storage.max_disk_usage_bytes` alias still works, but if neither is
+  set the daemon now probes the backing filesystem and uses `80%` of the
+  currently available bytes as the implicit aggregate Nexus budget;
+- `iroha_config` now tracks whether that cap was explicitly configured so
+  config parsing remains machine-independent while `irohad` can inject the
+  runtime-derived default before fanning the budget out to Kura, tiered-state,
+  SoraFS, SoraNet, and SoraVPN; and
+- focused config + daemon tests are green for the explicit/implicit parse
+  paths, the config-layer budget fanout branch, the runtime derivation path,
+  and the existing relative-path config resolution coverage.
+
+Open work for this slice now remains:
+- decide whether operators also need a persisted one-shot "first boot"
+  materialization of the derived value in generated config/state, or whether
+  the current startup-time implicit default should remain the long-term
+  behavior when the knob is unset; and
+- rerun the broader `iroha_config` fixture/workspace gates after the unrelated
+  existing fixture breakage around governance account defaults is resolved, so
+  the new runtime-derived storage-budget path is covered by the heavier config
+  suites as well.
+
+Latest sync (2026-04-01 Nexus account-read routing / storage-budget doc sync):
+the ingress-independent account-read semantics and the
+`nexus.storage.local_budget_bytes` knob are already wired in the tree, and the
+public OpenAPI/docs now describe those semantics accurately.
+
+- `GET /v1/accounts/{account_id}` now behaves as a global account read across
+  configured dataspaces, while `/assets` and `/assets/query` merge only the
+  caller-visible dataspaces and preserve per-scope balances;
+- `/permissions`, `/transactions`, and `/transactions/query` now merge only the
+  caller-visible dataspaces and silently omit inaccessible private-dataspace
+  state; and
+- the stale dead manifest-poll helpers in the Nexus wrong-ingress regression
+  harness are removed, and the aggregate Nexus integration target still
+  compiles cleanly via `cargo test -p integration_tests --test mod
+  tx_query_cross_dataspace_routing_localnet --no-run`.
+
+Open work for this slice now remains:
+- build the actual DA-backed global account-state substrate instead of
+  fanning out every read:
+  canonical account shards, dataspace-presence metadata, and an
+  `AccountAssetPresenceIndex`/locator keyed by canonical account identity;
+- thread that account-state substrate through the existing DA eviction /
+  hydration machinery so account pages are committed, evicted, and rehydrated
+  under `nexus.storage.local_budget_bytes` with node-local cache policy only;
+- add bounded visible-dataspace fallback + asynchronous locator repair for
+  stale/missing account asset presence metadata;
+- extend the Nexus localnet regressions beyond routing semantics into the
+  storage lifecycle:
+  forced account-shard eviction, DA rehydration, and stale-locator repair; and
+- tighten the temporary compatibility path that still accepts
+  `X-Iroha-Account` as an unsigned visibility hint once all read clients send
+  canonical signed headers consistently.
+
 Latest sync (2026-04-01 permissioned DA soak actor-thread fix tranche):
 the permissioned DA root causes are patched in `iroha_core`: near-tip
 DA/vote-backed commit candidates no longer force inline validation on the

@@ -2812,7 +2812,7 @@ fn account_paths() -> Map {
     let mut account_get = json_get_operation(
         "Accounts",
         "Fetch canonical account detail.",
-        "Fetch the canonical same-route account existence/materialization view for a specific account id or alias. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
+        "Fetch the canonical account existence/materialization view for a specific account id or alias. This read is ingress-independent and fans out across the configured Nexus dataspaces, returning the shared canonical account payload when any authoritative dataspace reports it. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
         "#/components/schemas/AccountReadResponse",
         vec![string_path_param(
             "account_id",
@@ -2866,7 +2866,7 @@ fn account_paths() -> Map {
         Value::Object(json_post_operation(
             "Accounts",
             "Query account transactions.",
-            "Query transactions for a specific account.",
+            "Query transactions for a specific account. Results are merged across the caller-visible dataspaces only; private dataspace history the caller cannot read is silently omitted.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
@@ -2886,7 +2886,7 @@ fn account_paths() -> Map {
             json_get_operation(
                 "Accounts",
                 "List account assets.",
-                "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering).",
+                "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering). Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by their existing `scope` values instead of being summed across dataspaces.",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -2897,7 +2897,7 @@ fn account_paths() -> Map {
         Value::Object(json_post_operation(
             "Accounts",
             "Query account assets.",
-            "Query assets held by an account.",
+            "Query assets held by an account. Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by their existing `scope` values instead of being summed across dataspaces.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
@@ -2911,7 +2911,7 @@ fn account_paths() -> Map {
         Value::Object(json_get_operation(
             "Accounts",
             "List account permissions.",
-            "List permissions granted to an account.",
+            "List permissions granted to an account. Results are merged across the caller-visible dataspaces only; inaccessible private-dataspace state is silently omitted.",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
                 "account_id",
@@ -2930,7 +2930,7 @@ fn account_paths() -> Map {
             json_get_operation(
                 "Accounts",
                 "List account transactions.",
-                "List transactions authored by an account (supports pagination and optional asset_id filtering).",
+                "List transactions authored by an account (supports pagination and optional asset_id filtering). Results are merged across the caller-visible dataspaces only; private dataspace history the caller cannot read is silently omitted.",
                 "#/components/schemas/JsonValue",
                 params,
             )

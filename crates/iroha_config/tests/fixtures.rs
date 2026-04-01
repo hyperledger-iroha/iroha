@@ -1303,6 +1303,7 @@ fn minimal_config_snapshot() {
                     max_disk_usage_bytes: Bytes(
                         274877906944,
                     ),
+                    budget_explicitly_configured: false,
                     budget_enforce_interval_blocks: 10,
                     max_wsv_memory_bytes: Bytes(
                         8589934592,
@@ -3174,31 +3175,17 @@ fn parse_applies_default_account_domain_override_and_restores_globals() {
         "wonderland"
     );
     assert_eq!(*config.common.chain_discriminant.value(), 777);
-    let expected_domain: iroha_data_model::domain::DomainId =
-        "wonderland".parse().expect("valid expected domain");
     assert_eq!(
-        config
-            .gov
-            .bond_escrow_account
-            .to_account_id(expected_domain.clone())
-            .domain(),
-        &expected_domain
+        config.gov.bond_escrow_account,
+        defaults::governance::bond_escrow_account_id()
     );
     assert_eq!(
-        config
-            .gov
-            .citizenship_escrow_account
-            .to_account_id(expected_domain.clone())
-            .domain(),
-        &expected_domain
+        config.gov.citizenship_escrow_account,
+        defaults::governance::citizenship_escrow_account_id()
     );
     assert_eq!(
-        config
-            .gov
-            .slash_receiver_account
-            .to_account_id(expected_domain.clone())
-            .domain(),
-        &expected_domain
+        config.gov.slash_receiver_account,
+        defaults::governance::slash_receiver_account_id()
     );
     assert_eq!(
         iroha_data_model::account::address::default_domain_name().as_ref(),

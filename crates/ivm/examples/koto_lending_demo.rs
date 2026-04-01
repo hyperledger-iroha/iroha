@@ -2,15 +2,12 @@
 use std::collections::HashMap;
 
 use ivm::{
-    AccountId, AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,
+    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
 
-fn fixture_account(domain: &str, hex_public_key: &str) -> AccountId {
-    AccountId::new(
-        domain.parse().expect("domain id"),
-        hex_public_key.parse().expect("public key"),
-    )
+fn fixture_account(_domain: &str, hex_public_key: &str) -> AccountId {
+    AccountId::new(hex_public_key.parse().expect("public key"))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -36,12 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize WSV: no balances yet; grant permissions so user can mint via host
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&user, PermissionToken::MintAsset(debt_asset.clone()));
-    wsv.grant_permission(
-        &user,
-        PermissionToken::ReadAccountAssets(AccountId::from(&user)),
-    );
-    let user_subject = AccountId::from(&user);
-    let vault_subject = AccountId::from(&vault);
+    wsv.grant_permission(&user, PermissionToken::ReadAccountAssets(user.clone()));
+    let user_subject = user.clone();
+    let vault_subject = vault.clone();
 
     // 3) Map small integers to domainless account subjects used by syscalls
     let mut account_map = HashMap::new();

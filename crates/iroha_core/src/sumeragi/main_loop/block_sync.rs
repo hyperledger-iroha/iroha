@@ -23,6 +23,28 @@ fn allow_uncertified_block_sync_roster(
 }
 
 impl Actor {
+    fn should_defer_exact_committed_tip_fetch_response(
+        &self,
+        block: &SignedBlock,
+        msg: &BlockMessage,
+    ) -> bool {
+        let block_hash = block.hash();
+        let block_height = block.header().height().get();
+        if block_height != self.committed_height_snapshot() {
+            return false;
+        }
+        if self.committed_block_hash_for_height(block_height) != Some(block_hash) {
+            return false;
+        }
+        match msg {
+            BlockMessage::BlockCreated(_) => true,
+            BlockMessage::BlockSyncUpdate(update) => {
+                update.commit_qc.is_none() && update.validator_checkpoint.is_none()
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn block_sync_qc_is_missing_context_error(err: &QcValidationError) -> bool {
         matches!(
             err,
@@ -992,6 +1014,23 @@ impl Actor {
         );
     }
 
+    pub(super) fn flush_pending_fetch_requests_if_ready(&mut self, block: &SignedBlock) -> bool {
+        let block_hash = block.hash();
+        if !self
+            .pending
+            .pending_fetch_requests
+            .contains_key(&block_hash)
+        {
+            return false;
+        }
+        let msg = self.build_fetch_pending_block_payload(block);
+        if self.should_defer_exact_committed_tip_fetch_response(block, &msg) {
+            return false;
+        }
+        self.flush_pending_fetch_requests(block);
+        true
+    }
+
     pub(super) fn should_drop_future_block_sync_update(
         &self,
         block_hash: &HashOf<BlockHeader>,
@@ -1280,7 +1319,10 @@ impl Actor {
             && frontier_lane_owned
             && has_commit_evidence
             && (requested_missing_block || block_known_locally);
-        if frontier_lane_owned && !frontier_lane_deep_catchup {
+        let frontier_lane_fast_path = frontier_lane_owned
+            && !frontier_lane_deep_catchup
+            && (block_known_locally || incoming_qc.is_some() || validator_checkpoint.is_some());
+        if frontier_lane_fast_path {
             let mut processed_votes = 0usize;
             let mut dropped_votes = 0usize;
             for vote in commit_votes {
@@ -3679,6 +3721,25 @@ impl Actor {
                             request_meta.requester_roster_proof_known;
                     })
                     .or_insert(request_meta);
+                let response = self.build_fetch_pending_block_payload(block);
+                if self.should_defer_exact_committed_tip_fetch_response(block, &response) {
+                    debug!(
+                        height = block.header().height().get(),
+                        view = block.header().view_change_index(),
+                        block = %block_hash,
+                        peer = %peer,
+                        "deferring exact-tip fetch response until commit proof is available"
+                    );
+                    self.pending
+                        .pending_fetch_requests
+                        .insert(block_hash, requesters);
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::FetchPendingBlock,
+                        super::status::ConsensusMessageOutcome::Deferred,
+                        super::status::ConsensusMessageReason::NotFound,
+                    );
+                    return Ok(());
+                }
                 self.send_fetch_pending_block_responses(
                     requesters,
                     block,

@@ -13,9 +13,7 @@ use ivm::{
         TouchManifest,
     },
     host::DefaultHost,
-    mock_wsv::{
-        AccountId, DataspaceAxtPolicy, DomainId as HostDomainId, MockWorldStateView, WsvHost,
-    },
+    mock_wsv::{AccountId, DataspaceAxtPolicy, MockWorldStateView, WsvHost},
     syscalls,
 };
 
@@ -38,7 +36,6 @@ fn store_tlv(vm: &mut IVM, ty: PointerType, value: &[u8]) -> u64 {
 fn sample_wsv_caller() -> AccountId {
     let kp = KeyPair::random();
     let (public_key, _) = kp.into_parts();
-    let domain: HostDomainId = "wonderland".parse().expect("domain id");
     AccountId::new(public_key)
 }
 

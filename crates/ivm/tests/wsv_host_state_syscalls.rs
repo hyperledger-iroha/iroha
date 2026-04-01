@@ -8,7 +8,7 @@ use std::{
 use iroha_crypto::PublicKey;
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{AccountId, DomainId, MockWorldStateView, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
     syscalls,
 };
 mod common;
@@ -26,8 +26,7 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
-fn account(domain: &str, public_key: &str) -> AccountId {
-    let domain: DomainId = domain.parse().expect("domain id");
+fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
 }

@@ -5680,7 +5680,13 @@ pub fn read_config_and_genesis(
     if args.sora {
         config.apply_sora_profile();
     }
-    config.apply_storage_budget();
+    let implicit_storage_budget = derive_implicit_local_storage_budget_bytes(&config);
+    if let Some(bytes) = implicit_storage_budget {
+        config.nexus.storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(bytes);
+    }
+    config.apply_storage_budget_with_implicit_max_disk(
+        implicit_storage_budget.map(iroha_config::base::util::Bytes),
+    );
 
     let sorafs_enabled = config.torii.sorafs_storage.enabled
         || config.torii.sorafs_discovery.discovery_enabled
@@ -5802,6 +5808,65 @@ pub fn read_config_and_genesis(
     config.logger.terminal_colors = args.terminal_colors;
 
     Ok((config, genesis))
+}
+
+fn derive_implicit_local_storage_budget_bytes(config: &Config) -> Option<u64> {
+    if !config.nexus.enabled || config.nexus.storage.budget_explicitly_configured {
+        return None;
+    }
+
+    let probe_root = normalize_budget_probe_path(config.kura.store_dir.resolve_relative_path())?;
+    let probe_path = nearest_existing_ancestor(&probe_root)?;
+    let available_bytes = filesystem_available_bytes(&probe_path)?;
+    let budget_bytes = available_bytes.saturating_mul(80).saturating_div(100);
+    if budget_bytes == 0 {
+        iroha_logger::warn!(
+            path = %probe_path.display(),
+            available_bytes,
+            "derived implicit Nexus local storage budget is zero; leaving storage budget unset"
+        );
+        return None;
+    }
+
+    iroha_logger::info!(
+        path = %probe_path.display(),
+        available_bytes,
+        budget_bytes,
+        "derived implicit Nexus local storage budget from free disk space"
+    );
+    Some(budget_bytes)
+}
+
+fn normalize_budget_probe_path(path: PathBuf) -> Option<PathBuf> {
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        std::env::current_dir().ok().map(|cwd| cwd.join(path))
+    }
+}
+
+fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    let mut current = path.to_path_buf();
+    loop {
+        if current.exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+#[cfg(unix)]
+fn filesystem_available_bytes(path: &Path) -> Option<u64> {
+    let stats = rustix::fs::statvfs(path).ok()?;
+    let fragment_size = stats.f_frsize.max(stats.f_bsize);
+    Some(stats.f_bavail.saturating_mul(fragment_size))
+}
+
+#[cfg(not(unix))]
+fn filesystem_available_bytes(_path: &Path) -> Option<u64> {
+    None
 }
 
 pub(crate) fn apply_ivm_acceleration_config(
@@ -8939,8 +9004,11 @@ mod tests {
             F: FnMut(&mut toml::Table, &KeyPair),
         {
             let genesis_key_pair = KeyPair::random();
+            let chain_discriminant = iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT;
             let manifest_json = norito::json!({
                 "chain": "chain",
+                "chain_discriminant": chain_discriminant,
+                "executor": null,
                 "ivm_dir": ".",
                 "consensus_mode": "Permissioned",
                 "transactions": [
@@ -9009,8 +9077,11 @@ mod tests {
             // Given
 
             let genesis_key_pair = KeyPair::random();
+            let chain_discriminant = iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT;
             let manifest_json = norito::json!({
                 "chain": "chain",
+                "chain_discriminant": chain_discriminant,
+                "executor": null,
                 "ivm_dir": ".",
                 "consensus_mode": "Permissioned",
                 "transactions": [
@@ -9097,6 +9168,42 @@ mod tests {
                     .absolutize()?,
                 dir.path().join("logs/telemetry")
             );
+
+            Ok(())
+        }
+
+        #[test]
+        fn read_config_derives_implicit_nexus_storage_budget_from_free_disk() -> eyre::Result<()>
+        {
+            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
+                iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
+            })?;
+
+            let expected_budget =
+                derive_implicit_local_storage_budget_bytes(&config).expect("implicit budget");
+            assert_eq!(config.nexus.storage.max_disk_usage_bytes.get(), expected_budget);
+
+            let weights = config.nexus.storage.disk_budget_weights;
+            let total_bps = u64::from(weights.total_bps());
+            let base_kura_budget =
+                expected_budget.saturating_mul(u64::from(weights.kura_blocks_bps)) / total_bps;
+            let wsv_budget =
+                expected_budget.saturating_mul(u64::from(weights.wsv_snapshots_bps)) / total_bps;
+            let sorafs_budget =
+                expected_budget.saturating_mul(u64::from(weights.sorafs_bps)) / total_bps;
+            let soranet_budget =
+                expected_budget.saturating_mul(u64::from(weights.soranet_spool_bps)) / total_bps;
+            let soravpn_budget =
+                expected_budget.saturating_mul(u64::from(weights.soravpn_spool_bps)) / total_bps;
+            let allocated = base_kura_budget
+                .saturating_add(wsv_budget)
+                .saturating_add(sorafs_budget)
+                .saturating_add(soranet_budget)
+                .saturating_add(soravpn_budget);
+            let expected_kura_budget = base_kura_budget
+                .saturating_add(expected_budget.saturating_sub(allocated));
+
+            assert_eq!(config.kura.max_disk_usage_bytes.get(), expected_kura_budget);
 
             Ok(())
         }

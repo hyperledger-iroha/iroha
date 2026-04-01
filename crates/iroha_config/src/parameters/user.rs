@@ -33,10 +33,8 @@ use std::{
 };
 
 use error_stack::{Report, ResultExt};
-#[cfg(test)]
-use iroha_config_base::ParameterId;
 use iroha_config_base::{
-    ParameterOrigin, ReadConfig, WithOrigin,
+    ParameterId, ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     env::FromEnvStr,
     read::{ConfigReader, FinalWrap, ReadConfig as ReadConfigTrait},
@@ -10997,7 +10995,7 @@ impl Default for Nexus {
 }
 
 /// User-level configuration container for Nexus storage budgets.
-#[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     ///
@@ -11007,7 +11005,7 @@ pub struct NexusStorage {
     pub local_budget_bytes: Option<Bytes<u64>>,
     /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
     #[config(default = "defaults::nexus::storage::MAX_DISK_USAGE_BYTES")]
-    pub max_disk_usage_bytes: Bytes<u64>,
+    pub max_disk_usage_bytes: WithOrigin<Bytes<u64>>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     #[config(default = "defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS")]
     pub budget_enforce_interval_blocks: u64,
@@ -11023,7 +11021,14 @@ impl Default for NexusStorage {
     fn default() -> Self {
         Self {
             local_budget_bytes: None,
-            max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+            max_disk_usage_bytes: WithOrigin::new(
+                defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+                ParameterOrigin::default(ParameterId::from([
+                    "nexus",
+                    "storage",
+                    "max_disk_usage_bytes",
+                ])),
+            ),
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
@@ -11035,9 +11040,13 @@ impl Default for NexusStorage {
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
-        let max_disk_usage_bytes = self.local_budget_bytes.unwrap_or(self.max_disk_usage_bytes);
+        let (legacy_budget, legacy_origin) = self.max_disk_usage_bytes.into_tuple();
+        let budget_explicitly_configured = self.local_budget_bytes.is_some()
+            || !matches!(legacy_origin, ParameterOrigin::Default { .. });
+        let max_disk_usage_bytes = self.local_budget_bytes.unwrap_or(legacy_budget);
         Some(actual::NexusStorage {
             max_disk_usage_bytes,
+            budget_explicitly_configured,
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             disk_budget_weights: weights,
@@ -18226,6 +18235,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         nexus.insert("storage".into(), Value::Table(storage));
 
         let actual = load_root(table);
+        assert!(actual.nexus.storage.budget_explicitly_configured);
         assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_000);
         assert!(actual.tiered_state.enabled);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 256);
@@ -18252,9 +18262,16 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         nexus.insert("storage".into(), Value::Table(storage));
 
         let actual = load_root(table);
+        assert!(actual.nexus.storage.budget_explicitly_configured);
         assert_eq!(actual.nexus.storage.max_disk_usage_bytes.get(), 1_024);
         assert_eq!(actual.kura.max_disk_usage_bytes.get(), 1_024);
         assert_eq!(actual.tiered_state.hot_retained_bytes.get(), 128);
+    }
+
+    #[test]
+    fn storage_budget_is_not_explicit_when_left_unset() {
+        let actual = load_root(base_table());
+        assert!(!actual.nexus.storage.budget_explicitly_configured);
     }
 
     #[test]

@@ -2023,6 +2023,7 @@ impl Actor {
                     }
                 }
                 self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
+                self.flush_pending_fetch_requests_if_ready(committed_block.as_ref());
                 if pending_height == 1 {
                     // Seed the genesis roster after the block is durably persisted.
                     self.ensure_genesis_commit_roster();

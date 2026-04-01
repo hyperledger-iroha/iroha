@@ -12128,6 +12128,118 @@ async fn fetch_pending_block_payload_uses_block_created_for_noncanonical_committ
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn fetch_pending_block_stashes_exact_committed_tip_until_commit_proof_available() {
+    use crate::sumeragi::status;
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let predecessor = sample_block(1, 0, None);
+    let committed_block = sample_block(2, 0, Some(predecessor.hash()));
+    let block_hash = committed_block.hash();
+    let height = committed_block.header().height().get();
+    let view = committed_block.header().view_change_index();
+    actor
+        .kura
+        .store_block(predecessor.clone())
+        .expect("store predecessor block");
+    actor
+        .kura
+        .store_block(committed_block.clone())
+        .expect("store committed block");
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(predecessor.hash());
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .push_block_hash_for_testing(block_hash);
+
+    let request = super::message::FetchPendingBlock {
+        requester: actor.common_config.peer.id.clone(),
+        block_hash,
+        height,
+        view,
+        priority: None,
+        requester_roster_proof_known: None,
+    };
+    let _ = harness.background_rx.try_iter().count();
+    actor
+        .handle_fetch_pending_block(request)
+        .expect("fetch pending block");
+
+    assert!(
+        actor
+            .pending
+            .pending_fetch_requests
+            .contains_key(&block_hash),
+        "exact committed-tip fetch should wait for portable commit proof"
+    );
+    assert!(
+        harness.background_rx.try_iter().next().is_none(),
+        "no response should be sent until commit proof is available"
+    );
+
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..required {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        view,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        commit_topology,
+        signers_bitmap,
+        qc.aggregate.bls_aggregate_signature.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+    actor.state.record_commit_roster(&qc, &checkpoint, None);
+
+    assert!(
+        actor.flush_pending_fetch_requests_if_ready(&committed_block),
+        "fetch requests should flush once commit proof is available"
+    );
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        posts.iter().any(|post| match post {
+            BackgroundPost::Post { msg, .. } => matches!(
+                msg.as_ref(),
+                BlockMessage::BlockSyncUpdate(update)
+                    if update.block.hash() == block_hash
+                        && (update.commit_qc.is_some() || update.validator_checkpoint.is_some())
+            ),
+            _ => false,
+        }),
+        "expected a certified BlockSyncUpdate once commit proof becomes available"
+    );
+
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn fetch_pending_block_serves_aborted_pending() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -15685,6 +15797,203 @@ async fn commit_outcome_persists_roster_sidecar_from_cached_qc() {
     );
 
     status::reset_commit_certs_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_outcome_persists_roster_sidecar_from_vote_log_and_flushes_fetch_requests() {
+    use crate::sumeragi::status;
+
+    let _history_guard = status::commit_history_test_guard();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
+    status::reset_precommit_signer_history_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    let (kura, _kura_dir) = persistent_kura_for_tests();
+    let mut harness = test_actor_harness_with_config_and_height_and_kura(
+        4,
+        consensus_cfg,
+        None,
+        0,
+        Arc::clone(&kura),
+    )
+    .await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = 2_u64;
+    let view = 0_u64;
+    let commit_topology = actor.effective_commit_topology();
+    assert!(
+        !commit_topology.is_empty(),
+        "test needs a non-empty commit topology"
+    );
+    let leader_peer = commit_topology.first().expect("commit topology not empty");
+    let leader_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == leader_peer.public_key())
+        .expect("leader keypair exists");
+    let block = heartbeat_block_for_state(
+        actor.state.as_ref(),
+        &actor.common_config.chain,
+        height,
+        view,
+        Some(genesis_hash),
+        leader_kp,
+        0,
+    );
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view);
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..required {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    for signer in &signers {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view,
+            epoch: 0,
+            highest_qc: None,
+            signer: *signer,
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view(
+            &mut vote,
+            &actor.common_config.chain,
+            &topology,
+            &harness.key_pairs,
+        );
+        actor
+            .vote_log
+            .insert((Phase::Commit, height, view, 0, *signer), vote);
+    }
+
+    let request = super::message::FetchPendingBlock {
+        requester: actor.common_config.peer.id.clone(),
+        block_hash,
+        height,
+        view,
+        priority: None,
+        requester_roster_proof_known: None,
+    };
+    actor
+        .handle_fetch_pending_block(request)
+        .expect("stash fetch request before commit result");
+    assert!(
+        actor
+            .pending
+            .pending_fetch_requests
+            .contains_key(&block_hash),
+        "fetch request should remain stashed before the block commits"
+    );
+
+    let lock = QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        height,
+        view,
+        epoch: 0,
+    };
+    let inflight = CommitInFlight {
+        id: 19,
+        lock,
+        block_hash,
+        pending,
+        commit_topology: commit_topology.clone(),
+        signature_topology: commit_topology.clone(),
+        qc_signers: Some(signers.clone()),
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        post_commit_qc: None,
+        enqueue_time: Instant::now(),
+    };
+    actor.subsystems.commit.inflight = Some(inflight);
+
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    actor.subsystems.commit.result_rx = Some(result_rx);
+
+    let work = commit::CommitWork {
+        id: 19,
+        block: block.clone(),
+        validated_commit_artifact: None,
+        commit_topology: commit_topology.clone(),
+        signature_topology: commit_topology.clone(),
+        consensus_mode: actor.consensus_context_for_height(height).0,
+        qc_signers: Some(signers),
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        allow_signature_index_recovery: false,
+        persist_required: true,
+        events_sender: actor.events_sender.clone(),
+    };
+    let (outcome, timings) = commit::execute_commit_work(
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        &actor.common_config.chain,
+        &actor.genesis_account,
+        work,
+    );
+    result_tx
+        .send(commit::CommitResult {
+            id: 19,
+            outcome,
+            timings,
+        })
+        .expect("send commit result");
+
+    assert!(
+        actor.poll_commit_results(),
+        "commit outcome should be applied"
+    );
+    let snapshot = actor
+        .state
+        .commit_roster_snapshot_for_block(height, block_hash)
+        .expect("commit roster snapshot persisted from vote-log path");
+    assert_eq!(snapshot.commit_qc.subject_block_hash, block_hash);
+
+    match actor.build_fetch_pending_block_payload(&block) {
+        BlockMessage::BlockSyncUpdate(update) => {
+            assert_eq!(update.block.hash(), block_hash);
+            assert!(
+                update.commit_qc.is_some() || update.validator_checkpoint.is_some(),
+                "committed exact tip should expose portable commit proof"
+            );
+        }
+        other => panic!(
+            "expected BlockSyncUpdate with commit proof after ordinary commit path, got {other:?}"
+        ),
+    }
+
+    let posts: Vec<_> = harness.background_rx.try_iter().collect();
+    assert!(
+        posts.iter().any(|post| match post {
+            BackgroundPost::Post { msg, .. } => matches!(
+                msg.as_ref(),
+                BlockMessage::BlockSyncUpdate(update)
+                    if update.block.hash() == block_hash
+                        && (update.commit_qc.is_some() || update.validator_checkpoint.is_some())
+            ),
+            _ => false,
+        }),
+        "stashed fetch requests should flush once the commit proof is recorded"
+    );
+
+    status::reset_precommit_signer_history_for_tests();
+    status::reset_commit_certs_for_tests();
+    status::reset_validator_checkpoints_for_tests();
     harness.shutdown.send();
 }
 
@@ -106405,6 +106714,76 @@ async fn block_sync_update_accepts_partial_vote_sparse_recovery_for_explicit_mis
     assert!(
         actor.vote_log.contains_key(&vote_key),
         "accepted sparse recovery update should still ingest attached partial commit votes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_tracks_missing_qc_for_unknown_frontier_vote_only_update() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let view = actor.state.view();
+    let height = u64::try_from(view.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    drop(view);
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, Some(genesis_hash));
+    let block_hash = block.hash();
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let commit_quorum = topology.min_votes_for_commit().max(1);
+    assert!(
+        block.signatures().count() < commit_quorum,
+        "test requires sparse block signatures"
+    );
+
+    let epoch = actor.epoch_for_height(height);
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view: 0,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    let chain = actor.common_config.chain.clone();
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &chain,
+        &topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_votes = vec![vote.clone()];
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("vote-only frontier block sync update");
+
+    assert!(
+        !actor.block_known_locally(block_hash),
+        "unknown frontier vote-only updates must not bypass missing-QC recovery through the owner fast-path"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "vote-only frontier updates without an explicit missing request must not materialize a pending body"
+    );
+    let vote_key = (Phase::Commit, height, 0, epoch, vote.signer);
+    assert!(
+        actor.vote_log.contains_key(&vote_key),
+        "vote-only frontier updates should still ingest attached commit votes"
     );
 
     harness.shutdown.send();

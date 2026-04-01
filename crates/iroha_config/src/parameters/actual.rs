@@ -432,6 +432,20 @@ impl Root {
     ///
     /// This is a best-effort configuration pass that only affects Nexus-enabled nodes.
     pub fn apply_storage_budget(&mut self) {
+        self.apply_storage_budget_with_implicit_max_disk(None);
+    }
+
+    /// Apply Nexus storage budgets using an optional runtime-derived implicit disk budget.
+    ///
+    /// When the operator explicitly configured `nexus.storage.local_budget_bytes` or the legacy
+    /// `max_disk_usage_bytes` alias, that configured value always wins. Otherwise the provided
+    /// `implicit_max_disk_usage_bytes` is used for this pass, allowing the daemon to derive a
+    /// node-local default from the active filesystem without making generic config parsing
+    /// machine-dependent.
+    pub fn apply_storage_budget_with_implicit_max_disk(
+        &mut self,
+        implicit_max_disk_usage_bytes: Option<Bytes<u64>>,
+    ) {
         if !self.nexus.enabled {
             return;
         }
@@ -452,7 +466,12 @@ impl Root {
             }
         }
 
-        let max_disk = self.nexus.storage.max_disk_usage_bytes.get();
+        let max_disk = if self.nexus.storage.budget_explicitly_configured {
+            self.nexus.storage.max_disk_usage_bytes
+        } else {
+            implicit_max_disk_usage_bytes.unwrap_or(Bytes(0))
+        }
+        .get();
         if max_disk == 0 {
             return;
         }
@@ -754,6 +773,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let mut root = minimal_root();
         root.nexus.enabled = true;
         root.nexus.storage.max_disk_usage_bytes = Bytes(1_000);
+        root.nexus.storage.budget_explicitly_configured = true;
         root.nexus.storage.max_wsv_memory_bytes = Bytes(512);
         root.nexus.storage.disk_budget_weights = NexusStorageWeights {
             kura_blocks_bps: 5_000,
@@ -789,6 +809,39 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .as_os_str(),
             defaults::tiered_state::DEFAULT_COLD_STORE_ROOT
         );
+    }
+
+    #[test]
+    fn apply_storage_budget_uses_implicit_budget_when_operator_budget_unset() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        root.nexus.storage.max_disk_usage_bytes = Bytes(0);
+        root.nexus.storage.max_wsv_memory_bytes = Bytes(256);
+        root.nexus.storage.disk_budget_weights = NexusStorageWeights {
+            kura_blocks_bps: 5_000,
+            wsv_snapshots_bps: 2_000,
+            sorafs_bps: 2_000,
+            soranet_spool_bps: 500,
+            soravpn_spool_bps: 500,
+        };
+        root.tiered_state.enabled = false;
+        root.tiered_state.cold_store_root = None;
+        root.tiered_state.da_store_root = None;
+        root.kura.max_disk_usage_bytes = Bytes(0);
+        root.tiered_state.max_cold_bytes = Bytes(0);
+        root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
+        root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
+        root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
+
+        root.apply_storage_budget_with_implicit_max_disk(Some(Bytes(2_000)));
+
+        assert_eq!(root.nexus.storage.max_disk_usage_bytes.get(), 0);
+        assert_eq!(root.kura.max_disk_usage_bytes.get(), 1_000);
+        assert_eq!(root.tiered_state.max_cold_bytes.get(), 400);
+        assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 400);
+        assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 100);
+        assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 100);
+        assert_eq!(root.tiered_state.hot_retained_bytes.get(), 256);
     }
 
     #[test]
@@ -2419,6 +2472,8 @@ impl Default for LaneRelayEmergency {
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget (bytes).
     pub max_disk_usage_bytes: Bytes<u64>,
+    /// Whether the aggregate disk budget was explicitly configured by the operator.
+    pub budget_explicitly_configured: bool,
     /// Block interval between disk budget enforcement scans (0 = every block).
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic payload size budget (bytes).
@@ -2431,6 +2486,7 @@ impl Default for NexusStorage {
     fn default() -> Self {
         Self {
             max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+            budget_explicitly_configured: false,
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,

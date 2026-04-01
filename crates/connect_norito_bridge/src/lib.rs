@@ -8242,9 +8242,6 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("default", 0);
-        let authority_id = AccountId::parse_encoded(authority.to_str().unwrap())
-            .expect("authority account id")
-            .into_account_id();
         let scoped_account = cstring(authority.to_str().unwrap());
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
