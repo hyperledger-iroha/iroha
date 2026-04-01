@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: `iroha_executor` alias-domain permission cleanup compiles again
+- Fixed the `iroha_executor` compile break in domain-permission cleanup by
+  matching account-alias `Domain(...)` permission scopes to `DomainId` by the
+  shared underlying domain `Name` instead of comparing
+  `AccountAliasDomain` directly to `DomainId`.
+- Added a focused executor regression covering both
+  `CanResolveAccountAlias` and `CanManageAccountAlias` for the matching and
+  non-matching domain-name cases.
+- Removed two redundant multisig account-registration branches that were
+  producing unused-variable warnings without affecting behavior.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo build -p iroha_executor`
+  - `cargo test -p iroha_executor account_alias_domain_permissions_match_domain_by_name -- --nocapture`
+  - `cargo test -p iroha_executor`
+    still reports an unrelated existing failure in
+    `default::isi::multisig::transaction::tests::derived_multisig_account_is_rejected`
+
+## 2026-04-01 Follow-up: `iroha_torii_shared` account-read payload tracks `AccountAlias`
+- Fixed the `iroha_torii_shared` compile break caused by importing the removed
+  `iroha_data_model::account::AccountLabel` type.
+- `AccountReadResponse.label` now uses
+  `iroha_data_model::account::AccountAlias`, which matches the current
+  universal-account data model and the Torii routing payloads already emitted
+  from world state.
+- Strengthened the shared DTO roundtrip test to encode/decode a non-empty
+  alias payload instead of only the `None` case.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii_shared --lib -- --nocapture`
+  - `cargo test -p iroha --lib get_account_read_requests_json_and_decodes_typed_payload -- --nocapture`
+
 ## 2026-04-01 Follow-up: workspace builds no longer collide on `gpuzstd` helper exports
 - Removed the Rust dependency edge from `crates/gpuzstd_cuda` to
   `crates/gpuzstd_metal`, so building both helper crates in the same Cargo

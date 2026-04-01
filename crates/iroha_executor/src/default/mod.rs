@@ -841,6 +841,15 @@ pub mod domain {
         permission: &Permission,
         domain_id: &DomainId,
     ) -> bool {
+        fn alias_domain_matches_domain_id(
+            domain: &iroha_smart_contract::data_model::account::rekey::AccountAliasDomain,
+            domain_id: &DomainId,
+        ) -> bool {
+            // TODO: Remove this legacy name-only comparison once alias-domain permissions become
+            // fully dataspace-qualified across executor cleanup paths.
+            domain.name() == domain_id.name()
+        }
+
         let Ok(permission) = AnyPermission::try_from(permission) else {
             return false;
         };
@@ -852,14 +861,14 @@ pub mod domain {
                 matches!(
                     permission.scope,
                     iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
-                        if domain == domain_id
+                        if alias_domain_matches_domain_id(domain, domain_id)
                 )
             }
             AnyPermission::CanManageAccountAlias(permission) => {
                 matches!(
                     permission.scope,
                     iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
-                        if domain == domain_id
+                        if alias_domain_matches_domain_id(domain, domain_id)
                 )
             }
             AnyPermission::CanUnregisterAssetDefinition(permission) => {
@@ -2523,6 +2532,7 @@ pub mod trigger {
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_executor_data_model::permission::{
+            account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
             asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
             nexus::CanUseFeeSponsor,
             sorafs::{
@@ -2678,6 +2688,42 @@ pub mod trigger {
             assert!(
                 !is_permission_trigger_associated(&permission, &trigger_id),
                 "fee sponsor permission should not bind to triggers"
+            );
+        }
+
+        #[test]
+        fn account_alias_domain_permissions_match_domain_by_name() {
+            let domain_id = DomainId::from_str("test").expect("domain id must be valid");
+            let other_domain = DomainId::from_str("other").expect("domain id must be valid");
+            let alias_domain: crate::data_model::account::rekey::AccountAliasDomain =
+                "test".parse().expect("alias domain segment must be valid");
+
+            let resolve_permission = Permission::from(AnyPermission::CanResolveAccountAlias(
+                CanResolveAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(alias_domain.clone()),
+                },
+            ));
+            let manage_permission = Permission::from(AnyPermission::CanManageAccountAlias(
+                CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(alias_domain),
+                },
+            ));
+
+            assert!(
+                domain::is_permission_domain_associated(&resolve_permission, &domain_id),
+                "alias resolve permission should bind to the matching domain name"
+            );
+            assert!(
+                !domain::is_permission_domain_associated(&resolve_permission, &other_domain),
+                "alias resolve permission should not bind to other domain names"
+            );
+            assert!(
+                domain::is_permission_domain_associated(&manage_permission, &domain_id),
+                "alias manage permission should bind to the matching domain name"
+            );
+            assert!(
+                !domain::is_permission_domain_associated(&manage_permission, &other_domain),
+                "alias manage permission should not bind to other domain names"
             );
         }
     }
