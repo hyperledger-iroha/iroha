@@ -27,6 +27,26 @@ Last updated: 2026-04-02
   - `CARGO_TARGET_DIR=target_codex_multisig_cancel IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" TEST_NETWORK_BIN_IROHA="$PWD/target/debug/iroha" cargo test -p integration_tests --test multisig multisig_cancel_route_persists_canceled_terminal_state -- --exact --nocapture --test-threads=1` (pass)
   - `CARGO_TARGET_DIR=target_codex_multisig_cancel IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" TEST_NETWORK_BIN_IROHA="$PWD/target/debug/iroha" cargo test -p integration_tests --test multisig -- --nocapture --test-threads=1` (replay reached green results for the originally failing non-upgrade cases before the later executor-upgrade tranche was left running alongside additional overlapping local reruns; rerun cleanly before treating the whole shard as closed)
 
+## 2026-04-02 Follow-up: `iroha_cli` live integration tests now pin the daemon and CLI to the same debug profile before network startup
+- Fixed the reported `integration_tests/tests/iroha_cli.rs` Soracloud HF
+  live-control-plane flakes by initializing the CLI test environment before
+  any test network starts. The file had been defaulting the CLI binary to
+  `target/iroha-test-network/debug/iroha` only when `program()` was first
+  called, but many tests started `iroha3d` earlier, so the daemon could come
+  from the default `release` profile while the CLI came from `debug`.
+- `integration_tests/tests/iroha_cli.rs` now shares one
+  `prepare_iroha_cli_test_environment()` helper between network startup and CLI
+  invocation, and the new value-level build-profile helper keeps the default
+  profile pinned to `debug` whenever `IROHA_TEST_BUILD_PROFILE` is unset or
+  blank.
+- Added focused helper regressions for the build-profile selection logic.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test iroha_cli iroha_cli_test_build_profile_override -- --nocapture`
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_ -- --nocapture`
+  - `cargo test -p integration_tests --test iroha_cli -- --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test iroha_cli -- --nocapture`
+
 ## 2026-04-02 Follow-up: `iroha_cli` binary reuse now pins the sibling `iroha3d` daemon to the same target/profile
 - Fixed the reported `integration_tests/tests/iroha_cli.rs`
   Soracloud-training timeout slice by tightening the test-only binary reuse

@@ -26,6 +26,25 @@ Open work for this slice now remains:
   so the executor-upgrade variants can finish without the extra local parallel
   network load introduced during this repair session.
 
+Latest sync (2026-04-02 `iroha_cli` live-test profile alignment follow-up):
+the reported Soracloud HF `iroha_cli` failure slice is green again after
+pinning the test daemon and CLI to the same debug profile before network
+startup.
+
+- `integration_tests/tests/iroha_cli.rs` now initializes the CLI test
+  environment ahead of every live network-backed test, so `Program::Irohad`
+  no longer resolves from the default `release` profile before `program()`
+  later forces the CLI onto `debug`;
+- added a small value-level regression for the default build-profile helper;
+  and
+- fresh reruns are green for the helper unit tests, the parallel
+  `soracloud_hf_` slice, the full `iroha_cli` test target under the default
+  runner, and the same target when serialized with `--test-threads=1`.
+
+Open work for this slice now remains:
+- none for this `iroha_cli` profile-alignment slice; broader repo-wide gates
+  remain tracked in the older roadmap entries below.
+
 Latest sync (2026-04-02 targeted integration-test repair follow-up):
 the reported `connected_peers`, runtime Nexus registration benchmark, and
 account-created trigger regressions are green again on targeted reruns.
