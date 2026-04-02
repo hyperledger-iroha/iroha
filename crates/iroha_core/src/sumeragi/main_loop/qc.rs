@@ -1759,6 +1759,24 @@ impl Actor {
             self.clear_missing_block_view_change(&block_hash);
         }
         if deferred {
+            if defer_view_change {
+                if let Some((first_seen, attempts)) = self
+                    .pending
+                    .missing_block_requests
+                    .get(&block_hash)
+                    .map(|stats| (stats.first_seen, stats.attempts))
+                {
+                    debug!(
+                        height,
+                        view,
+                        block = ?block_hash,
+                        dwell_ms = now.saturating_duration_since(first_seen).as_millis(),
+                        attempts,
+                        "missing block dwell remains deferred while payload backlog is unresolved"
+                    );
+                }
+                return true;
+            }
             let view_change_state =
                 self.pending
                     .missing_block_requests
@@ -2791,6 +2809,13 @@ impl Actor {
         }
         let within_backlog_extension =
             |actor: &Self| dwell < actor.backlog_extended_view_change_timeout(base_window, true);
+        let within_payload_recovery_backlog_window = |actor: &Self| {
+            let backlog_timeout = actor.backlog_extended_view_change_timeout(base_window, true);
+            let recovery_timeout =
+                super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2)
+                    .max(backlog_timeout);
+            dwell < recovery_timeout
+        };
         if self.queue_drop_backpressure_active(now, self.payload_rebroadcast_cooldown()) {
             return within_backlog_extension(self);
         }
@@ -2799,36 +2824,16 @@ impl Actor {
         }
         let queue_depths = super::status::worker_queue_depth_snapshot();
         if queue_depths.block_payload_rx > 0 || queue_depths.rbc_chunk_rx > 0 {
-            return within_backlog_extension(self);
+            return within_payload_recovery_backlog_window(self);
         }
         if self.has_unresolved_rbc_backlog() {
-            return within_backlog_extension(self);
+            return within_payload_recovery_backlog_window(self);
         }
         if !self.runtime_da_enabled() {
             return false;
         }
         let lower = height.saturating_sub(1);
         let upper = height.saturating_add(1);
-        let pending_block_near_height =
-            self.pending.pending_blocks.values().any(|pending| {
-                !pending.aborted && pending.height >= lower && pending.height <= upper
-            });
-        if pending_block_near_height {
-            return within_backlog_extension(self);
-        }
-        let inflight_pending_near_height =
-            self.subsystems
-                .commit
-                .inflight
-                .as_ref()
-                .is_some_and(|inflight| {
-                    !inflight.pending.aborted
-                        && inflight.pending.height >= lower
-                        && inflight.pending.height <= upper
-                });
-        if inflight_pending_near_height {
-            return within_backlog_extension(self);
-        }
         let ready_deferral_near_height = self
             .subsystems
             .da_rbc
@@ -2837,7 +2842,7 @@ impl Actor {
             .keys()
             .any(|key| key.1 >= lower && key.1 <= upper);
         if ready_deferral_near_height {
-            return within_backlog_extension(self);
+            return within_payload_recovery_backlog_window(self);
         }
         let deliver_deferral_near_height = self
             .subsystems
@@ -2847,7 +2852,7 @@ impl Actor {
             .keys()
             .any(|key| key.1 >= lower && key.1 <= upper);
         if deliver_deferral_near_height {
-            return within_backlog_extension(self);
+            return within_payload_recovery_backlog_window(self);
         }
         let outbound_backlog_near_height =
             self.subsystems
@@ -2859,7 +2864,7 @@ impl Actor {
                     key.1 >= lower && key.1 <= upper && outbound.cursor < outbound.chunks.len()
                 });
         if outbound_backlog_near_height {
-            return within_backlog_extension(self);
+            return within_payload_recovery_backlog_window(self);
         }
         let rbc_backlog_near_height =
             self.subsystems
@@ -2871,7 +2876,7 @@ impl Actor {
                     key.1 >= lower && key.1 <= upper && !session.is_invalid() && !session.delivered
                 });
         if rbc_backlog_near_height {
-            return within_backlog_extension(self);
+            return within_payload_recovery_backlog_window(self);
         }
         let pending_backlog_near_height = self
             .subsystems
@@ -2881,7 +2886,7 @@ impl Actor {
             .keys()
             .any(|key| key.1 >= lower && key.1 <= upper);
         if pending_backlog_near_height {
-            return within_backlog_extension(self);
+            return within_payload_recovery_backlog_window(self);
         }
         let key = (*block_hash, height, view);
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
@@ -3078,28 +3083,6 @@ impl Actor {
             );
             return;
         }
-        if phase == crate::sumeragi::consensus::Phase::Commit {
-            // Avoid aggregating a lower-view commit QC once a higher NEW_VIEW quorum exists,
-            // to prevent divergent commits during view changes.
-            if let Some(higher_view) = self
-                .subsystems
-                .propose
-                .new_view_tracker
-                .highest_quorum_view_for_height(height, required, topology.as_ref())
-            {
-                if higher_view > view {
-                    iroha_logger::info!(
-                        height,
-                        view,
-                        higher_view,
-                        block = ?block_hash,
-                        "skipping commit QC aggregation: higher NEW_VIEW quorum observed"
-                    );
-                    return;
-                }
-            }
-        }
-
         let snapshot = self.qc_signer_snapshot(
             phase,
             block_hash,
@@ -3634,7 +3617,11 @@ impl Actor {
                     now,
                 );
                 let exact_retry_emitted = if exact_owner_routed {
-                    self.retry_frontier_block_body_fetch(now)
+                    if matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
+                        self.emit_frontier_block_body_fetch_urgent(now)
+                    } else {
+                        self.retry_frontier_block_body_fetch(now)
+                    }
                 } else {
                     false
                 };

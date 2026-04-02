@@ -3154,7 +3154,7 @@ impl Actor {
                         hash,
                         pending_height,
                         pending_view,
-                        false,
+                        true,
                     );
                     if rebroadcasted > 0 {
                         pending.mark_precommit_rebroadcast(now);
@@ -3447,7 +3447,7 @@ impl Actor {
             if *peer == local_peer_id {
                 continue;
             }
-            self.schedule_background_via_queue(BackgroundRequest::Post {
+            self.schedule_background(BackgroundRequest::Post {
                 peer: peer.clone(),
                 msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
@@ -3533,12 +3533,12 @@ impl Actor {
         let replayed = if let Some(commit_qc) = commit_qc {
             self.broadcast_cached_commit_qc_to_targets(commit_qc, &targets)
         } else {
-            self.rebroadcast_block_votes(
+            self.rebroadcast_block_votes_to_targets(
                 crate::sumeragi::consensus::Phase::Commit,
                 block_hash,
                 height,
                 view,
-                true,
+                &targets,
             )
         };
         if replayed == 0 {
@@ -3919,44 +3919,17 @@ impl Actor {
         let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
         self.ensure_collector_plan(&signature_topology, height, view);
         self.restore_initial_precommit_collector_state();
-        let mut collector_targets: Vec<_> = self
-            .subsystems
-            .propose
-            .collectors_contacted
-            .iter()
-            .cloned()
-            .collect();
-        let mut fallback_to_topology = false;
-        if collector_targets.is_empty() {
-            fallback_to_topology = true;
-            collector_targets = signature_topology.as_ref().to_vec();
-        }
-        let local_peer_id = self.common_config.peer.id().clone();
-        collector_targets.retain(|peer| peer != &local_peer_id);
-        if collector_targets.is_empty() {
-            fallback_to_topology = true;
-            collector_targets = signature_topology.as_ref().to_vec();
-            collector_targets.retain(|peer| peer != &local_peer_id);
-        }
-        let mut parallel_added = 0usize;
-        if !fallback_to_topology {
-            let parallel = self.config.collectors.parallel_topology_fanout;
-            if parallel > 0 {
-                let mut parallel_targets: Vec<_> = signature_topology
-                    .topology_fanout_from_tail(parallel)
-                    .into_iter()
-                    .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
-                    .collect();
-                parallel_targets.retain(|peer| peer != &local_peer_id);
-                for peer in parallel_targets {
-                    if collector_targets.iter().all(|existing| existing != &peer) {
-                        collector_targets.push(peer);
-                        parallel_added = parallel_added.saturating_add(1);
-                    }
-                }
-            }
-        }
-        let initial_targets = u64::try_from(collector_targets.len()).unwrap_or(u64::MAX);
+        let min_votes_for_commit = signature_topology.min_votes_for_commit().max(1);
+        let vote_count = self.pending_block_commit_votes_count(block_hash, height, view);
+        let vote_targets = self.quorum_retransmit_targets_for_missing_votes(
+            block_hash,
+            height,
+            view,
+            topology.as_ref(),
+            min_votes_for_commit,
+            vote_count,
+        );
+        let initial_targets = u64::try_from(vote_targets.len()).unwrap_or(u64::MAX);
         super::status::set_collectors_targeted_current(initial_targets);
         #[cfg(feature = "telemetry")]
         self.telemetry
@@ -3966,13 +3939,12 @@ impl Actor {
             view,
             block = ?block_hash,
             signer = local_idx,
-            initial_targets = collector_targets.len(),
-            seeded_collectors = self.subsystems.propose.collectors_contacted.len(),
-            parallel_added,
-            fallback_to_topology,
+            initial_targets = vote_targets.len(),
+            commit_votes = vote_count,
+            min_votes_for_commit,
             "sending initial precommit vote"
         );
-        if fallback_to_topology && collector_targets.is_empty() {
+        if vote_targets.is_empty() {
             debug!(
                 height,
                 view,
@@ -3981,7 +3953,7 @@ impl Actor {
                 "initial precommit vote had no remote targets after local-only topology fallback"
             );
         }
-        for peer in collector_targets {
+        for peer in vote_targets {
             self.schedule_background(BackgroundRequest::Post {
                 peer,
                 msg: BlockMessageWire::with_encoded(
@@ -4209,7 +4181,7 @@ impl Actor {
             );
         }
         for peer in targets {
-            self.schedule_background_via_queue(BackgroundRequest::Post {
+            self.schedule_background(BackgroundRequest::Post {
                 peer,
                 msg: BlockMessageWire::with_encoded(
                     Arc::clone(&vote_msg),
@@ -4411,6 +4383,48 @@ impl Actor {
         view: u64,
         target_missing_only: bool,
     ) -> usize {
+        if target_missing_only {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            let mut topology_peers =
+                self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+            if topology_peers.is_empty() {
+                topology_peers = self.effective_commit_topology();
+            }
+            if topology_peers.is_empty() {
+                return 0;
+            }
+            let topology = super::network_topology::Topology::new(topology_peers.clone());
+            let votes: Vec<_> = self
+                .vote_log
+                .values()
+                .filter(|vote| {
+                    vote.phase == phase
+                        && vote.block_hash == block_hash
+                        && vote.height == height
+                        && vote.view == view
+                })
+                .cloned()
+                .collect();
+            if votes.is_empty() {
+                return 0;
+            }
+            let min_votes_for_commit = topology.min_votes_for_commit().max(1);
+            let missing_targets = self.quorum_retransmit_targets_for_missing_votes(
+                block_hash,
+                height,
+                view,
+                &topology_peers,
+                min_votes_for_commit,
+                votes.len(),
+            );
+            return self.rebroadcast_block_votes_to_targets(
+                phase,
+                block_hash,
+                height,
+                view,
+                &missing_targets,
+            );
+        }
         if self.relay_backpressure_active(Instant::now(), self.control_plane_rebroadcast_cooldown())
         {
             debug!(
@@ -4497,32 +4511,6 @@ impl Actor {
             );
         }
 
-        let mut missing_targets = 0usize;
-        let mut targeted_to_missing = false;
-        if target_missing_only {
-            let signer_peers: BTreeSet<PeerId> = votes
-                .iter()
-                .filter_map(|vote| usize::try_from(vote.signer).ok())
-                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
-                .collect();
-            let missing_target_set: BTreeSet<PeerId> = signature_topology
-                .as_ref()
-                .iter()
-                .filter(|peer| *peer != &local_peer_id && !signer_peers.contains(*peer))
-                .cloned()
-                .collect();
-            if missing_target_set.is_empty() {
-                return 0;
-            }
-            missing_targets = missing_target_set.len();
-            collector_targets.retain(|peer| missing_target_set.contains(peer));
-            if collector_targets.is_empty() {
-                fallback_to_topology = true;
-                collector_targets = missing_target_set.into_iter().collect();
-            }
-            targeted_to_missing = true;
-        }
-
         debug!(
             height,
             view,
@@ -4532,8 +4520,6 @@ impl Actor {
             fallback_to_topology,
             parallel_added,
             target_missing_only,
-            targeted_to_missing,
-            missing_targets,
             "rebroadcasting votes"
         );
 
@@ -4547,7 +4533,83 @@ impl Actor {
             let msg = Arc::new(msg);
             let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
             for peer in &collector_targets {
-                self.schedule_background_via_queue(BackgroundRequest::Post {
+                self.schedule_background(BackgroundRequest::Post {
+                    peer: peer.clone(),
+                    msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+                });
+            }
+            rebroadcasted = rebroadcasted.saturating_add(1);
+        }
+
+        rebroadcasted
+    }
+
+    pub(super) fn rebroadcast_block_votes_to_targets(
+        &mut self,
+        phase: crate::sumeragi::consensus::Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        targets: &[PeerId],
+    ) -> usize {
+        if self.relay_backpressure_active(Instant::now(), self.control_plane_rebroadcast_cooldown())
+        {
+            debug!(
+                height,
+                view,
+                block = ?block_hash,
+                phase = ?phase,
+                "skipping vote rebroadcast due to relay backpressure"
+            );
+            return 0;
+        }
+        let mut explicit_targets: Vec<_> = targets
+            .iter()
+            .filter(|peer| *peer != self.common_config.peer.id())
+            .cloned()
+            .collect();
+        if explicit_targets.is_empty() {
+            return 0;
+        }
+        explicit_targets.sort();
+        explicit_targets.dedup();
+
+        let votes: Vec<_> = self
+            .vote_log
+            .values()
+            .filter(|vote| {
+                vote.phase == phase
+                    && vote.block_hash == block_hash
+                    && vote.height == height
+                    && vote.view == view
+            })
+            .cloned()
+            .collect();
+        if votes.is_empty() {
+            return 0;
+        }
+
+        debug!(
+            height,
+            view,
+            block = ?block_hash,
+            phase = ?phase,
+            targets = explicit_targets.len(),
+            explicit_targets = true,
+            "rebroadcasting votes"
+        );
+
+        let mut rebroadcasted = 0usize;
+        for vote in votes {
+            let msg = match phase {
+                crate::sumeragi::consensus::Phase::Prepare
+                | crate::sumeragi::consensus::Phase::Commit
+                | crate::sumeragi::consensus::Phase::NewView => BlockMessage::QcVote(vote),
+            };
+            let msg = Arc::new(msg);
+            let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+            for peer in &explicit_targets {
+                self.schedule_background(BackgroundRequest::Post {
                     peer: peer.clone(),
                     msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                 });
@@ -4988,9 +5050,12 @@ impl Actor {
         out
     }
 
-    #[allow(dead_code)]
     #[allow(clippy::needless_pass_by_value)]
-    fn broadcast_block_created(&mut self, created: super::message::BlockCreated, peers: &[PeerId]) {
+    pub(super) fn broadcast_block_created(
+        &mut self,
+        created: super::message::BlockCreated,
+        peers: &[PeerId],
+    ) {
         let msg = Arc::new(BlockMessage::BlockCreated(created));
         let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         for peer in peers {

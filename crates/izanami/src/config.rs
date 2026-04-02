@@ -12,11 +12,11 @@ use iroha_config::{
         toml::{TomlSource, Writer as TomlWriter},
     },
     parameters::actual::{
-        Commit, ConsensusMode, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule,
+        Commit, ConsensusMode, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule, LaneValidatorMode,
         Nexus as ActualNexus, Sumeragi as ActualSumeragi,
     },
 };
-use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog};
+use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId};
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use toml::{Table, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -413,6 +413,7 @@ impl IzanamiArgs {
 pub struct NexusProfile {
     pub lane_catalog: LaneCatalog,
     pub dataspace_catalog: DataSpaceCatalog,
+    pub bootstrap_public_lanes: Vec<LaneId>,
     pub routing_policy: LaneRoutingPolicy,
     pub fusion: Fusion,
     pub commit: Commit,
@@ -492,11 +493,13 @@ impl NexusProfile {
 
         let nexus = actual.nexus.clone();
         let sumeragi = actual.sumeragi;
+        let bootstrap_public_lanes = derive_bootstrap_public_lanes(&nexus);
         let config_layer = build_nexus_layer(&nexus, &sumeragi);
 
         Ok(Self {
             lane_catalog: nexus.lane_catalog,
             dataspace_catalog: nexus.dataspace_catalog,
+            bootstrap_public_lanes,
             routing_policy: nexus.routing_policy,
             fusion: nexus.fusion,
             commit: nexus.commit,
@@ -505,6 +508,29 @@ impl NexusProfile {
             config_layer,
         })
     }
+}
+
+fn derive_bootstrap_public_lanes(nexus: &ActualNexus) -> Vec<LaneId> {
+    let lanes: Vec<LaneId> = if nexus.lane_catalog.lanes().is_empty() {
+        vec![LaneId::SINGLE]
+    } else {
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.id)
+            .collect()
+    };
+
+    lanes
+        .into_iter()
+        .filter(|lane| {
+            matches!(
+                nexus.staking.validator_mode(*lane, &nexus.lane_catalog),
+                LaneValidatorMode::StakeElected
+            )
+        })
+        .collect()
 }
 
 fn normalize_lane_metadata(raw: &mut Table) {
@@ -935,6 +961,16 @@ mod tests {
             mode,
             Some("npos"),
             "nexus profile must force consensus_mode=npos"
+        );
+    }
+
+    #[test]
+    fn nexus_profile_derives_bootstrap_public_lanes() {
+        let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        assert_eq!(
+            profile.bootstrap_public_lanes,
+            vec![LaneId::new(0), LaneId::new(1), LaneId::new(2)],
+            "embedded nexus profile should expose every stake-elected bootstrap lane"
         );
     }
 

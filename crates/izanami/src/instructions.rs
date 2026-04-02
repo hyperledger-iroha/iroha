@@ -221,7 +221,7 @@ fn nexus_fee_seed_amount() -> Numeric {
     1_000_000_u64.into()
 }
 
-fn account_from_record(record: &AccountRecord, domain: &DomainId) -> NewAccount {
+fn account_from_record(record: &AccountRecord, _domain: &DomainId) -> NewAccount {
     let builder = Account::new(record.id.clone());
     if let Some(uaid) = record.uaid {
         builder.with_uaid(Some(uaid))
@@ -257,6 +257,7 @@ pub struct PreparedChaos {
 /// Build post-topology NPoS bootstrap instructions using an explicit minimum self-bond.
 pub fn npos_post_topology_instructions(
     peer_count: usize,
+    bootstrap_public_lanes: &[LaneId],
     min_self_bond: u64,
 ) -> Vec<InstructionBox> {
     let effective_peers = peer_count.max(1);
@@ -265,18 +266,20 @@ pub fn npos_post_topology_instructions(
     for index in 0..effective_peers {
         let key_pair = peer_keypair(index);
         let validator_id = AccountId::new(key_pair.public_key().clone());
-        instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
-            lane_id: LaneId::SINGLE,
-            validator: validator_id.clone(),
-            peer_id: PeerId::from(validator_id.signatory().clone()),
-            stake_account: validator_id.clone(),
-            initial_stake: stake_amount.clone(),
-            metadata: Metadata::default(),
-        }));
-        instructions.push(InstructionBox::from(ActivatePublicLaneValidator {
-            lane_id: LaneId::SINGLE,
-            validator: validator_id,
-        }));
+        for &lane_id in bootstrap_public_lanes {
+            instructions.push(InstructionBox::from(RegisterPublicLaneValidator {
+                lane_id,
+                validator: validator_id.clone(),
+                peer_id: PeerId::from(validator_id.signatory().clone()),
+                stake_account: validator_id.clone(),
+                initial_stake: stake_amount.clone(),
+                metadata: Metadata::default(),
+            }));
+            instructions.push(InstructionBox::from(ActivatePublicLaneValidator {
+                lane_id,
+                validator: validator_id.clone(),
+            }));
+        }
     }
     instructions
 }
@@ -355,6 +358,9 @@ pub fn prepare_state(
             }
         })
         .unwrap_or_else(|| vec![LaneId::SINGLE]);
+    let bootstrap_public_lanes: Vec<LaneId> = nexus
+        .map(|profile| profile.bootstrap_public_lanes.clone())
+        .unwrap_or_default();
 
     let sorafs_replication = if nexus.is_some() {
         let manifest_digest = ManifestDigest::new(*Hash::new(b"izanami-sorafs-manifest").as_ref());
@@ -407,7 +413,9 @@ pub fn prepare_state(
             .parse()
             .map_err(|_| eyre!("failed to parse nexus fee asset id"))?;
         let stake_amount_value = SumeragiNposParameters::default().min_self_bond();
-        let stake_amount: Numeric = stake_amount_value.into();
+        let bootstrap_lane_count = u64::try_from(bootstrap_public_lanes.len()).unwrap_or(u64::MAX);
+        let total_bootstrap_stake_value = stake_amount_value.saturating_mul(bootstrap_lane_count);
+        let total_bootstrap_stake: Numeric = total_bootstrap_stake_value.into();
         npos_bootstrap_stake = Some(stake_amount_value);
 
         nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
@@ -446,10 +454,12 @@ pub fn prepare_state(
         }
 
         for validator in &validator_accounts {
-            nexus_genesis.push(InstructionBox::from(Mint::asset_numeric(
-                stake_amount.clone(),
-                AssetId::new(stake_asset.clone(), validator.id.clone()),
-            )));
+            if total_bootstrap_stake_value > 0 {
+                nexus_genesis.push(InstructionBox::from(Mint::asset_numeric(
+                    total_bootstrap_stake.clone(),
+                    AssetId::new(stake_asset.clone(), validator.id.clone()),
+                )));
+            }
         }
 
         nexus_genesis.push(InstructionBox::from(Grant::account_permission(
@@ -625,19 +635,25 @@ pub fn prepare_state(
     state.asset_instances.insert(treasury_asset_id);
     if let (Some(stake_amount), Some(setup)) = (npos_bootstrap_stake, state.nexus_staking.as_ref())
     {
-        let lane = LaneId::SINGLE;
         let validator_ids: Vec<AccountId> = setup
             .validator_accounts
             .iter()
             .map(|record| record.id.clone())
             .collect();
         if !validator_ids.is_empty() {
-            for validator_id in &validator_ids {
-                state.add_public_lane_stake_share(lane, validator_id, validator_id, stake_amount);
+            for &lane in &bootstrap_public_lanes {
+                for validator_id in &validator_ids {
+                    state.add_public_lane_stake_share(
+                        lane,
+                        validator_id,
+                        validator_id,
+                        stake_amount,
+                    );
+                }
+                state
+                    .public_lane_validators
+                    .insert(lane, validator_ids.iter().cloned().collect());
             }
-            state
-                .public_lane_validators
-                .insert(lane, validator_ids.into_iter().collect());
         }
     }
     let mut recipes = match workload_profile {
@@ -3118,6 +3134,7 @@ mod tests {
 
         let post_topology = npos_post_topology_instructions(
             setup.validator_accounts.len(),
+            profile.bootstrap_public_lanes.as_slice(),
             SumeragiNposParameters::default().min_self_bond(),
         );
         let mut registered_validators = HashSet::new();
@@ -3127,13 +3144,13 @@ mod tests {
                 .as_any()
                 .downcast_ref::<RegisterPublicLaneValidator>()
             {
-                registered_validators.insert(register.validator.clone());
+                registered_validators.insert((register.lane_id, register.validator.clone()));
             }
             if let Some(activate) = instruction
                 .as_any()
                 .downcast_ref::<ActivatePublicLaneValidator>()
             {
-                activated_validators.insert(activate.validator.clone());
+                activated_validators.insert((activate.lane_id, activate.validator.clone()));
             }
         }
 
@@ -3152,32 +3169,41 @@ mod tests {
                 "validator account {} should be registered in genesis",
                 validator.id
             );
-            assert!(
-                registered_validators.contains(&validator.id),
-                "validator {} should be registered for staking in genesis",
-                validator.id
-            );
-            assert!(
-                activated_validators.contains(&validator.id),
-                "validator {} should be activated in genesis",
-                validator.id
-            );
+            for &lane_id in &profile.bootstrap_public_lanes {
+                assert!(
+                    registered_validators.contains(&(lane_id, validator.id.clone())),
+                    "validator {} should be registered for staking on lane {} in genesis",
+                    validator.id,
+                    lane_id
+                );
+                assert!(
+                    activated_validators.contains(&(lane_id, validator.id.clone())),
+                    "validator {} should be activated on lane {} in genesis",
+                    validator.id,
+                    lane_id
+                );
+            }
         }
     }
 
     #[test]
     fn npos_post_topology_instructions_use_requested_min_self_bond() {
         let min_self_bond = 2_048_u64;
-        let instructions = npos_post_topology_instructions(4, min_self_bond);
+        let bootstrap_public_lanes = [LaneId::new(0), LaneId::new(1)];
+        let instructions =
+            npos_post_topology_instructions(4, &bootstrap_public_lanes, min_self_bond);
 
         let mut register_count = 0usize;
         let mut activate_count = 0usize;
+        let mut registered_pairs = HashSet::new();
+        let mut activated_pairs = HashSet::new();
         for instruction in &instructions {
             if let Some(register) = instruction
                 .as_any()
                 .downcast_ref::<RegisterPublicLaneValidator>()
             {
                 register_count = register_count.saturating_add(1);
+                registered_pairs.insert((register.lane_id, register.validator.clone()));
                 let stake = u64::try_from(register.initial_stake.clone())
                     .expect("stake should remain integer-valued");
                 assert_eq!(
@@ -3192,16 +3218,127 @@ mod tests {
             {
                 activate_count = activate_count.saturating_add(1);
             }
+            if let Some(activate) = instruction
+                .as_any()
+                .downcast_ref::<ActivatePublicLaneValidator>()
+            {
+                activated_pairs.insert((activate.lane_id, activate.validator.clone()));
+            }
         }
 
         assert_eq!(
-            register_count, 4,
-            "expected one validator registration per peer"
+            register_count,
+            4 * bootstrap_public_lanes.len(),
+            "expected one validator registration per peer and bootstrap lane"
         );
         assert_eq!(
-            activate_count, 4,
-            "expected one validator activation per peer"
+            activate_count,
+            4 * bootstrap_public_lanes.len(),
+            "expected one validator activation per peer and bootstrap lane"
         );
+        for index in 0..4 {
+            let validator = AccountId::new(peer_keypair(index).public_key().clone());
+            for &lane_id in &bootstrap_public_lanes {
+                assert!(
+                    registered_pairs.contains(&(lane_id, validator.clone())),
+                    "validator {} should be registered on lane {}",
+                    validator,
+                    lane_id
+                );
+                assert!(
+                    activated_pairs.contains(&(lane_id, validator.clone())),
+                    "validator {} should be activated on lane {}",
+                    validator,
+                    lane_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nexus_prepare_state_seeds_all_bootstrap_public_lanes() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let PreparedChaos { state, .. } =
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let validator_ids: HashSet<_> = state
+            .nexus_staking
+            .as_ref()
+            .expect("staking setup")
+            .validator_accounts
+            .iter()
+            .map(|record| record.id.clone())
+            .collect();
+
+        let seeded_lanes: HashSet<_> = state.public_lane_validators.keys().copied().collect();
+        let expected_lanes: HashSet<_> = profile.bootstrap_public_lanes.iter().copied().collect();
+        assert_eq!(
+            seeded_lanes, expected_lanes,
+            "prepared chaos state should seed validator registry for every bootstrap lane"
+        );
+        for lane_id in &profile.bootstrap_public_lanes {
+            let seeded_validators = state
+                .public_lane_validators
+                .get(lane_id)
+                .expect("bootstrap lane should have seeded validators");
+            assert_eq!(
+                seeded_validators, &validator_ids,
+                "bootstrap lane {} should seed every validator account",
+                lane_id
+            );
+            for validator_id in &validator_ids {
+                assert_eq!(
+                    state.available_public_lane_stake_share(*lane_id, validator_id, validator_id),
+                    SumeragiNposParameters::default().min_self_bond(),
+                    "bootstrap lane {} should seed validator {} with min self-bond",
+                    lane_id,
+                    validator_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nexus_prepare_state_prefunds_validator_stake_for_all_bootstrap_lanes() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let PreparedChaos { state, genesis, .. } =
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let setup = state.nexus_staking.as_ref().expect("staking setup");
+        let expected_stake = SumeragiNposParameters::default()
+            .min_self_bond()
+            .saturating_mul(
+                u64::try_from(profile.bootstrap_public_lanes.len()).unwrap_or(u64::MAX),
+            );
+        let minted_stake_accounts: HashMap<AccountId, u64> = genesis
+            .iter()
+            .flatten()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<MintBox>()
+                    .and_then(|mint| match mint {
+                        MintBox::Asset(asset)
+                            if asset.destination.definition() == &setup.stake_asset =>
+                        {
+                            Some((
+                                asset.destination.account().clone(),
+                                u64::try_from(asset.object.clone())
+                                    .expect("stake mint should remain integer-valued"),
+                            ))
+                        }
+                        _ => None,
+                    })
+            })
+            .collect();
+        for validator in &setup.validator_accounts {
+            assert_eq!(
+                minted_stake_accounts.get(&validator.id).copied(),
+                Some(expected_stake),
+                "validator {} should be prefunded for every bootstrap lane",
+                validator.id
+            );
+        }
     }
 
     #[test]

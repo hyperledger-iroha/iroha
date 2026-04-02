@@ -120,12 +120,8 @@ pub(super) fn contiguous_frontier_vote_backed_resend_window(
     vote_count: usize,
     min_votes_for_commit: usize,
 ) -> Duration {
-    if min_votes_for_commit > 0 && vote_count.saturating_add(1) >= min_votes_for_commit {
-        rebroadcast_cooldown
-    } else {
-        super::saturating_mul_duration(rebroadcast_cooldown, 2)
-    }
-    .max(Duration::from_millis(1))
+    let _ = (vote_count, min_votes_for_commit);
+    rebroadcast_cooldown.max(Duration::from_millis(1))
 }
 
 pub(super) fn contiguous_frontier_vote_backed_fast_resend_window(
@@ -254,10 +250,18 @@ impl Actor {
             usize,
             usize,
         )> = Vec::new();
+        let mut preemptive_vote_retransmit_candidates: Vec<(
+            super::rbc_store::SessionKey,
+            usize,
+            usize,
+            Duration,
+            Duration,
+        )> = Vec::new();
         let mut reschedule_backoff_skipped = 0usize;
         let mut missing_data_backoff_skipped = 0usize;
         let mut quorum_stall_escalations = 0usize;
         let mut near_quorum_preemptive_escalations = 0usize;
+        let mut preemptive_vote_retransmits = 0usize;
         let mut stale_removed = 0usize;
         let mut aborted_removed = 0usize;
         for (hash, pending) in &self.pending.pending_blocks {
@@ -464,10 +468,12 @@ impl Actor {
                 Self::near_quorum_queue_depth_threshold(self.config.queues.rbc_chunks);
             let block_threshold =
                 Self::near_quorum_queue_depth_threshold(self.config.queues.blocks);
+            let consensus_threshold =
+                Self::near_quorum_queue_depth_threshold(self.config.queues.control);
             let near_quorum_queue_backlog = queue_depths.rbc_chunk_rx >= rbc_chunk_threshold
                 || queue_depths.block_payload_rx >= block_payload_threshold
                 || queue_depths.block_rx >= block_threshold
-                || queue_depths.consensus_rx >= NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR;
+                || queue_depths.consensus_rx >= consensus_threshold;
             let missing_local_data = da_enabled && !payload_available;
             let near_quorum_timeout = near_quorum_payload_timeout(self.rebroadcast_cooldown());
             let near_quorum_fast_timeout_allowed = near_commit_quorum
@@ -520,12 +526,13 @@ impl Actor {
                 );
                 continue;
             }
-            let quorum_stall_age =
-                if (has_votes || has_qc) && pending.last_quorum_reschedule.is_some() {
-                    pending.progress_age(now)
-                } else {
-                    pending_age
-                };
+            // Once any vote/QC progress exists, quorum staleness must be measured from the
+            // latest observed progress, not from the original block insertion time.
+            let quorum_stall_age = if has_votes || has_qc {
+                pending.progress_age(now)
+            } else {
+                pending_age
+            };
             let progress_stall_age = if has_votes || has_qc {
                 pending.progress_age(now)
             } else {
@@ -593,6 +600,40 @@ impl Actor {
                     near_quorum_recovery_window,
                     vote_count,
                     min_votes_for_commit,
+                ));
+            }
+            let rbc_availability_unresolved = self.rbc_availability_unresolved_for_reschedule(
+                rbc_key,
+                &commit_topology,
+                progress_stall_age,
+                availability_timeout,
+            );
+            let contiguous_frontier_fast_resend_window =
+                contiguous_frontier_vote_backed_fast_resend_window(
+                    self.rebroadcast_cooldown(),
+                    pending.height == committed_height.saturating_add(1),
+                    vote_count,
+                    min_votes_for_commit,
+                    relay_backpressure,
+                    vote_queue_backlog,
+                    rbc_availability_unresolved,
+                );
+            if let Some(fast_resend_window) = contiguous_frontier_fast_resend_window
+                && has_votes
+                && !has_qc
+                && !validation_inflight
+                && !missing_local_data
+                && !same_height_actionable_progress_active
+                && progress_stall_age >= fast_resend_window
+                && progress_stall_age < effective_quorum_timeout
+                && pending.precommit_rebroadcast_due(now, fast_resend_window)
+            {
+                preemptive_vote_retransmit_candidates.push((
+                    key,
+                    vote_count,
+                    min_votes_for_commit,
+                    progress_stall_age,
+                    fast_resend_window,
                 ));
             }
             if missing_quorum_stale(quorum_stall_age, effective_quorum_timeout, quorum_reached) {
@@ -749,12 +790,6 @@ impl Actor {
                     );
                     continue;
                 }
-                let rbc_availability_unresolved = self.rbc_availability_unresolved_for_reschedule(
-                    rbc_key,
-                    &commit_topology,
-                    progress_stall_age,
-                    availability_timeout,
-                );
                 if rbc_availability_unresolved {
                     debug!(
                         height = pending.height,
@@ -782,16 +817,6 @@ impl Actor {
                         effective_quorum_timeout,
                         vote_count,
                         min_votes_for_commit,
-                    );
-                let contiguous_frontier_fast_resend_window =
-                    contiguous_frontier_vote_backed_fast_resend_window(
-                        self.rebroadcast_cooldown(),
-                        pending.height == committed_height.saturating_add(1),
-                        vote_count,
-                        min_votes_for_commit,
-                        relay_backpressure,
-                        vote_queue_backlog,
-                        rbc_availability_unresolved,
                     );
                 let effective_reschedule_backoff =
                     if let Some(fast_resend_window) = contiguous_frontier_fast_resend_window {
@@ -960,6 +985,29 @@ impl Actor {
         }
 
         let mut progress = aborted_removed > 0;
+        for (key, vote_count, min_votes, progress_stall_age, fast_resend_window) in
+            preemptive_vote_retransmit_candidates
+        {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                budget_exhausted = true;
+                break;
+            }
+            if self.pending.pending_blocks.get(&key.0).is_none() {
+                continue;
+            }
+            let action_taken = self.preemptive_rebroadcast_vote_backed_frontier_block(
+                key,
+                min_votes,
+                vote_count,
+                progress_stall_age,
+                fast_resend_window,
+                now,
+            );
+            if action_taken {
+                preemptive_vote_retransmits = preemptive_vote_retransmits.saturating_add(1);
+                progress = true;
+            }
+        }
         for (
             key,
             age,
@@ -1125,6 +1173,7 @@ impl Actor {
                 missing_data_skipped = missing_data_backoff_skipped,
                 stall_escalations = quorum_stall_escalations,
                 near_quorum_preemptive_escalations,
+                preemptive_vote_retransmits,
                 budget_exhausted,
                 scan_ms = scan_cost.as_millis(),
                 total_ms = total_cost.as_millis(),
@@ -1133,6 +1182,59 @@ impl Actor {
         }
 
         progress
+    }
+
+    fn preemptive_rebroadcast_vote_backed_frontier_block(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        min_votes_for_commit: usize,
+        vote_count: usize,
+        progress_stall_age: Duration,
+        fast_resend_window: Duration,
+        now: Instant,
+    ) -> bool {
+        let Some(mut pending) = self.pending.pending_blocks.remove(&key.0) else {
+            return false;
+        };
+        let (consensus_mode, _, _) = self.consensus_context_for_height(key.1);
+        let mut topology_peers =
+            self.roster_for_vote_with_mode(key.0, key.1, key.2, consensus_mode);
+        if topology_peers.is_empty() {
+            topology_peers = self.effective_commit_topology();
+        }
+        if topology_peers.is_empty() {
+            self.pending.pending_blocks.insert(key.0, pending);
+            return false;
+        }
+        let rebroadcast = self.rebroadcast_pending_block_updates(
+            &mut pending,
+            key.0,
+            key.1,
+            key.2,
+            false,
+            &topology_peers,
+            min_votes_for_commit,
+            vote_count,
+            now,
+        );
+        let action_taken = rebroadcast.votes > 0 || rebroadcast.block_sync || rebroadcast.block;
+        self.pending.pending_blocks.insert(key.0, pending);
+        if action_taken {
+            debug!(
+                block = %key.0,
+                height = key.1,
+                view = key.2,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                progress_stall_age_ms = progress_stall_age.as_millis(),
+                resend_window_ms = fast_resend_window.as_millis(),
+                rebroadcasted_votes = rebroadcast.votes,
+                rebroadcasted_block_sync = rebroadcast.block_sync,
+                rebroadcasted_block = rebroadcast.block,
+                "triggered pre-timeout vote-backed frontier retransmit"
+            );
+        }
+        action_taken
     }
 
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1181,6 +1283,25 @@ impl Actor {
             return false;
         }
 
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let mut topology_peers =
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        if topology_peers.is_empty() {
+            topology_peers = self.effective_commit_topology();
+        }
+        let emitted_local_vote = if topology_peers.is_empty() {
+            false
+        } else {
+            self.with_registered_pending_block(block_hash, &mut pending, |actor| {
+                actor.maybe_emit_local_commit_vote_for_pending_event(
+                    block_hash,
+                    height,
+                    view,
+                    &topology_peers,
+                    "quorum_reschedule",
+                )
+            })
+        };
         let mut precommit_vote_count =
             self.pending_block_commit_votes_count(block_hash, height, view);
         // Local commit votes are emitted before async vote verification drains into vote_log.
@@ -1194,12 +1315,6 @@ impl Actor {
         let last_reschedule_ms = pending
             .last_quorum_reschedule
             .map(|ts| now.saturating_duration_since(ts).as_millis());
-        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-        let mut topology_peers =
-            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
-        if topology_peers.is_empty() {
-            topology_peers = self.effective_commit_topology();
-        }
         let stake_quorum_missing = vote_count > 0
             && self
                 .commit_vote_quorum_status_for_block_detail(block_hash, height, view)
@@ -1392,7 +1507,7 @@ impl Actor {
                     view,
                     &topology_peers,
                     min_votes_for_commit,
-                    vote_count,
+                    reschedule_vote_count,
                 )
                 .is_empty()
         {
@@ -1482,11 +1597,13 @@ impl Actor {
             drop_pending,
             &topology_peers,
             min_votes_for_commit,
-            vote_count,
+            reschedule_vote_count,
             now,
         );
         let action_taken = drop_pending
             || requeued > 0
+            || emitted_local_vote
+            || rebroadcast.local_vote
             || rebroadcast.votes > 0
             || rebroadcast.block_sync
             || rebroadcast.block;
@@ -1533,8 +1650,14 @@ impl Actor {
             }
             return false;
         }
-        if has_reschedule_votes {
-            pending.mark_vote_backed_quorum_reschedule(now, reschedule_vote_count);
+        let mut recorded_vote_count = self
+            .pending_block_commit_votes_count(block_hash, height, view)
+            .max(reschedule_vote_count);
+        if recorded_vote_count == 0 && pending.local_commit_vote_emitted() {
+            recorded_vote_count = 1;
+        }
+        if recorded_vote_count > 0 {
+            pending.mark_vote_backed_quorum_reschedule(now, recorded_vote_count);
         } else {
             pending.mark_quorum_reschedule(now);
         }
@@ -1680,6 +1803,25 @@ impl Actor {
         vote_count: usize,
         now: Instant,
     ) -> RescheduleRebroadcast {
+        let local_vote = if drop_pending || topology_peers.is_empty() {
+            false
+        } else {
+            self.with_registered_pending_block(block_hash, pending, |actor| {
+                actor.maybe_emit_local_commit_vote_for_pending_event(
+                    block_hash,
+                    height,
+                    view,
+                    topology_peers,
+                    "quorum_reschedule",
+                )
+            })
+        };
+        let mut current_vote_count =
+            self.pending_block_commit_votes_count(block_hash, height, view);
+        if current_vote_count == 0 && pending.local_commit_vote_emitted() {
+            current_vote_count = 1;
+        }
+        current_vote_count = current_vote_count.max(vote_count);
         if self.relay_backpressure_active(now, self.rebroadcast_cooldown()) {
             super::status::inc_retransmit_skip_relay_backpressure();
             debug!(
@@ -1689,6 +1831,7 @@ impl Actor {
                 "skipping reschedule rebroadcast due to relay backpressure"
             );
             return RescheduleRebroadcast {
+                local_vote,
                 votes: 0,
                 block_sync: false,
                 block: false,
@@ -1700,7 +1843,7 @@ impl Actor {
             view,
             topology_peers,
             min_votes_for_commit,
-            vote_count,
+            current_vote_count,
         );
         if retransmit_targets.is_empty() {
             super::status::inc_retransmit_skip_no_targets();
@@ -1711,6 +1854,7 @@ impl Actor {
                 "skipping reschedule rebroadcast because no peers are missing votes"
             );
             return RescheduleRebroadcast {
+                local_vote,
                 votes: 0,
                 block_sync: false,
                 block: false,
@@ -1730,6 +1874,7 @@ impl Actor {
                 "skipping reschedule rebroadcast due to adaptive cooldown"
             );
             return RescheduleRebroadcast {
+                local_vote,
                 votes: 0,
                 block_sync: false,
                 block: false,
@@ -1746,6 +1891,7 @@ impl Actor {
                 "skipping reschedule rebroadcast due to backlog pacing"
             );
             return RescheduleRebroadcast {
+                local_vote,
                 votes: 0,
                 block_sync: false,
                 block: false,
@@ -1757,6 +1903,7 @@ impl Actor {
         if retransmit_targets.is_empty() {
             super::status::inc_retransmit_skip_backlog_pacing();
             return RescheduleRebroadcast {
+                local_vote,
                 votes: 0,
                 block_sync: false,
                 block: false,
@@ -1764,34 +1911,69 @@ impl Actor {
         }
         super::status::record_retransmit_target_set_size(retransmit_targets.len());
 
-        let votes = self.rebroadcast_block_votes(
+        let votes = self.rebroadcast_block_votes_to_targets(
             crate::sumeragi::consensus::Phase::Commit,
             block_hash,
             height,
             view,
-            true,
+            &retransmit_targets,
         );
         let mut block_sync = false;
         if !drop_pending && !retransmit_targets.is_empty() {
-            block_sync = self.maybe_replay_known_block_commit_evidence(
-                block_hash,
-                height,
-                view,
-                &retransmit_targets,
-                "quorum_reschedule",
-            );
+            block_sync = self.with_registered_pending_block(block_hash, pending, |actor| {
+                actor.maybe_replay_known_block_commit_evidence(
+                    block_hash,
+                    height,
+                    view,
+                    &retransmit_targets,
+                    "quorum_reschedule",
+                )
+            });
         }
-        // Keep quorum reschedule single-owner: retransmit votes and verifiable block-sync updates,
-        // but do not switch back into BlockCreated payload broadcast from this late recovery path.
-        let block = false;
-        if votes > 0 || block_sync || block {
+        let mut block = false;
+        if !drop_pending && !retransmit_targets.is_empty() {
+            let created = self.frontier_block_created_for_wire(&pending.block);
+            self.broadcast_block_created(created, &retransmit_targets);
+            block = true;
+        }
+        if local_vote || votes > 0 || block_sync || block {
             pending.mark_precommit_rebroadcast(now);
         }
         RescheduleRebroadcast {
+            local_vote,
             votes,
             block_sync,
             block,
         }
+    }
+
+    fn with_registered_pending_block<T>(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &mut PendingBlock,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let placeholder = PendingBlock::new(
+            pending.block.clone(),
+            pending.payload_hash,
+            pending.height,
+            pending.view,
+        );
+        let detached = std::mem::replace(pending, placeholder);
+        let replaced = self.pending.pending_blocks.insert(block_hash, detached);
+        debug_assert!(
+            replaced.is_none(),
+            "quorum reschedule should only temporarily register detached pending blocks"
+        );
+        let result = f(self);
+        let restored = self.pending.pending_blocks.remove(&block_hash);
+        if let Some(previous) = replaced {
+            self.pending.pending_blocks.insert(block_hash, previous);
+        }
+        if let Some(restored) = restored {
+            *pending = restored;
+        }
+        result
     }
 
     pub(super) fn quorum_retransmit_targets_for_missing_votes(
@@ -1873,6 +2055,7 @@ impl Actor {
 
 #[derive(Clone, Copy, Debug)]
 struct RescheduleRebroadcast {
+    local_vote: bool,
     votes: usize,
     block_sync: bool,
     block: bool,

@@ -17183,6 +17183,61 @@ async fn handler_post_contract_call(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_bridge_proof_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: crate::utils::extractors::JsonOnly<crate::routing::BridgeProofSubmitDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_proof"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/bridge/proofs/submit",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("bridge_proof"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_bridge_proof_submit(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_proof"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_contract_view(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -22957,6 +23012,10 @@ impl Torii {
                     post(handler_post_contract_instance_activate),
                 )
                 .route("/v1/contracts/call", post(handler_post_contract_call))
+                .route(
+                    "/v1/bridge/proofs/submit",
+                    post(handler_post_bridge_proof_submit),
+                )
                 .route("/v1/contracts/view", post(handler_post_contract_view))
                 .route(
                     "/v1/contracts/call/multisig/propose",
@@ -36811,15 +36870,11 @@ mod tests {
         let authority_account = Account::new(authority.clone()).build(&authority);
         let account_id = authority.clone();
         let account = Account::new(account_id.account().clone())
-            .with_label(Some(alias_label))
+            .with_label(Some(alias_label.clone()))
             .build(&authority);
         let world = World::with([domain], [authority_account, account], []);
         let app = mk_app_state_for_tests_with_world(world);
         {
-            let alias_label = iroha_data_model::account::rekey::AccountLabel::new(
-                "sbp".parse::<DomainId>().expect("domain id"),
-                "banking".parse::<Name>().expect("label"),
-            );
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = app.state.block(header);
             let mut tx = block.transaction();
@@ -36868,9 +36923,12 @@ mod tests {
     #[tokio::test]
     async fn alias_resolve_uses_rekey_record_when_alias_index_is_missing() {
         let alias = "banking@sbp.universal";
-        let alias_label = iroha_data_model::account::rekey::AccountLabel::new(
-            "sbp".parse::<DomainId>().expect("domain id"),
+        let alias_label = iroha_data_model::account::rekey::AccountAlias::new(
             "banking".parse::<Name>().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "sbp".parse::<Name>().expect("domain id"),
+            )),
+            iroha_data_model::nexus::DataSpaceId::GLOBAL,
         );
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
@@ -38237,8 +38295,7 @@ mod tests {
             Name::from_str("pkr").expect("asset name token"),
         );
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let mut app = mk_app_state_for_tests_with_world(World::with([domain], [account], []));
         let app_state = Arc::get_mut(&mut app).expect("unique app state");
         app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
@@ -38258,8 +38315,7 @@ mod tests {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "issuer".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account =
-            Account::new_in_domain(authority.clone(), domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let mut app = mk_app_state_for_tests_with_world(World::with([domain], [account], []));
         let app_state = Arc::get_mut(&mut app).expect("unique app state");
         app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {

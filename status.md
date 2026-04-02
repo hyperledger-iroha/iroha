@@ -1,6 +1,381 @@
 # Status
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
+
+## 2026-04-02 Follow-up: full stable NPoS soak is green on the latest tree, but full stable permissioned still stalls under ingress distress
+- Reran the full stable envelopes on the latest release binaries from
+  `/tmp/iroha_target_bugfix_reschedule/release` after the vote-backed frontier
+  resend + late `BlockCreated` recovery fixes.
+- Full stable permissioned soak:
+  - retained log:
+    `/tmp/izanami_permissioned_full_20260402T181053.log`
+  - retained peer dirs:
+    `/tmp/iroha-soak-permissioned-20260402T181053-full`
+  - result:
+    - failed at strict/quorum height `532` on
+      `no strict block height progress for 600s`;
+    - final Izanami summary was
+      `successes=3637 failures=65 izanami_ingress_failover_total=168 izanami_ingress_endpoint_unhealthy_total=140`;
+    - retained artifacts show `0` `route_unavailable`,
+      `0` `view change triggered, cause: "missing_qc"`, and
+      `0` same-height vote-history conflicts; and
+    - the tail is dominated by ingress confirmation timeouts /
+      `transaction queued for too long`, so this is no longer failing with the
+      old consensus-liveness signature.
+- Full stable NPoS soak:
+  - retained log:
+    `/tmp/izanami_npos_full_20260402T181053.log`
+  - retained peer dirs:
+    `/tmp/iroha-soak-npos-20260402T181053-full`
+  - result:
+    - hit the actual sign-off gate at
+      `2026-04-02T15:06:05.173812Z` with
+      `quorum_min_height=2000 strict_min_height=2000`,
+      `interval_p95_ms=2504`, and
+      `elapsed=3284.525910334s`;
+    - completed the full `3600s` stable window at
+      `quorum_min_height=2156 strict_min_height=2156`;
+    - final Izanami summary was
+      `successes=17977 failures=1 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`;
+    - retained artifacts show `0` `route_unavailable`,
+      `0` `view change triggered, cause: "missing_qc"`,
+      `0` same-height vote-history conflicts, and only `34` retained late
+      quorum-reschedule warnings across the entire run; and
+    - after the KPI had already been reached, the retained log shows peer
+      teardown panics in `iroha_test_network/src/lib.rs:5737`; the overall
+      process still exited `0`, so this looks like a harness cleanup issue,
+      not a consensus failure.
+- Interpretation:
+  - the original NPoS stable-soak failure mode is green on this tree; and
+  - permissioned still has an open ingress-driven stall that is now separate
+    from the fixed NPoS frontier-recovery bug.
+
+## 2026-04-02 Follow-up: NPoS stable soak now clears the old `700+` recovery cliff, but permissioned still has a separate ingress/liveness failure
+- Landed two additional `iroha_core` reschedule fixes in `crates/iroha_core`:
+  - `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs` now keeps the
+    contiguous-frontier vote-backed fast resend window at a single rebroadcast
+    cooldown for both single-vote and near-quorum cases instead of letting the
+    "fast" path collapse to the full quorum timeout; and
+  - the same late recovery path now resends `BlockCreated` to the peers missing
+    commit votes so the missing validator can recover the frontier block body
+    instead of seeing only replayed votes / commit evidence.
+- Focused validation on the patched tree:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_bugfix_reschedule cargo test -p iroha_core --lib contiguous_frontier_vote_backed_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_bugfix_reschedule cargo test -p iroha_core --lib single_vote_frontier_fast_resend_window_stays_below_default -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_bugfix_reschedule cargo test -p iroha_core --lib preemptively_retransmits -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_bugfix_reschedule cargo test -p iroha_core --lib vote_backed_frontier_retransmits_block_created -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_bugfix_reschedule cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`
+- Retargeted stable-soak validation with the rebuilt release binaries:
+  - permissioned command:
+    `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) TEST_NETWORK_TMP_DIR=/tmp/iroha-soak-permissioned-20260402T173955-bodyfix TEST_NETWORK_BIN_IROHAD=/tmp/iroha_target_bugfix_reschedule/release/iroha3d /tmp/iroha_target_bugfix_reschedule/release/izanami --allow-net --peers 4 --faulty 0 --duration 1800s --target-blocks 1000 --progress-interval 10s --progress-timeout 600s --tps 5 --max-inflight 8 --workload-profile stable`
+  - permissioned retained log:
+    `/tmp/izanami_permissioned_1000_20260402T173955_bodyfix.log`
+  - permissioned retained peer dirs:
+    `/tmp/iroha-soak-permissioned-20260402T173955-bodyfix`
+  - permissioned result:
+    - still failed, but with a different shape than the earlier `missing_qc`
+      churn: it stalled at strict/quorum height `432` and aborted on
+      `no strict block height progress for 600s`;
+    - the tail is dominated by workload-side ingress failures
+      (`transaction queued for too long`, confirmation timeouts,
+      `izanami_ingress_failover_total=135`,
+      `izanami_ingress_endpoint_unhealthy_total=123`) rather than
+      `missing_qc` view changes;
+    - recorded `0` `route_unavailable` and `0`
+      `view change triggered, cause: "missing_qc"` in the retained artifacts; and
+    - kept the late quorum-reschedule count much lower than the previous
+      permissioned reruns (`18` retained
+      `commit quorum missing past timeout; rescheduling block for reassembly`
+      lines before the stall).
+  - NPoS command:
+    `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) TEST_NETWORK_TMP_DIR=/tmp/iroha-soak-npos-20260402T173955-bodyfix TEST_NETWORK_BIN_IROHAD=/tmp/iroha_target_bugfix_reschedule/release/iroha3d /tmp/iroha_target_bugfix_reschedule/release/izanami --allow-net --nexus --peers 4 --faulty 0 --duration 1800s --target-blocks 1000 --progress-interval 10s --progress-timeout 600s --tps 5 --max-inflight 8 --workload-profile stable`
+  - NPoS retained log:
+    `/tmp/izanami_npos_1000_20260402T173955_bodyfix.log`
+  - NPoS retained peer dirs:
+    `/tmp/iroha-soak-npos-20260402T173955-bodyfix`
+  - NPoS result:
+    - reached the `1000`-block target cleanly at strict/quorum height `1006`
+      in `1698.935266458s`;
+    - finished with `interval_p95_ms=2506` /
+      `strict_interval_p95_ms=2506`, which is below the `3000ms` sign-off bar;
+    - recorded `0` `route_unavailable`, `0`
+      `view change triggered, cause: "missing_qc"`,
+      `izanami_ingress_failover_total=0`, and
+      `izanami_ingress_endpoint_unhealthy_total=0`; and
+    - carried only `28` retained late quorum-reschedule warnings through the
+      old `700+` degradation band that used to trigger the comparable stall.
+- Interpretation:
+  - the original NPoS frontier-recovery bug is materially improved on this
+    tree: the soak now clears the old `700+` cliff and hits a throughput/p95
+    envelope that projects to a plausible full `2000`-block sign-off rerun;
+  - permissioned is no longer failing for the same reason, but it still has an
+    unresolved ingress-driven liveness/throughput problem that wedges the
+    workload and eventually the strict-height monitor.
+
+## 2026-04-02 Follow-up: full stable permissioned and NPoS soaks stay live after the consensus hot-path fix, but both still miss the 2000-block pace target
+- Revalidated the consensus-side fix before rerunning the long envelopes:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib stale_view_async_commit_votes_for_known_pending_block_still_form_qc -- --nocapture`
+  - `cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`
+- Fresh full permissioned stable soak rerun on the patched release tree:
+  - command:
+    `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) TEST_NETWORK_TMP_DIR=/tmp/iroha-soak-permissioned-20260402T141606 TEST_NETWORK_BIN_IROHAD=/Users/mtakemiya/dev/iroha/target/release/iroha3d /Users/mtakemiya/dev/iroha/target/release/izanami --allow-net --peers 4 --faulty 0 --duration 3600s --target-blocks 2000 --progress-interval 10s --progress-timeout 600s --tps 5 --max-inflight 8 --workload-profile stable`
+  - retained log:
+    `/tmp/izanami_permissioned_full_20260402T141606.log`
+  - retained peer dirs:
+    `/tmp/iroha-soak-permissioned-20260402T141606/irohad_test_network_bH9JGy`
+  - result:
+    - stayed live for the full `3600s` window with strict/quorum heights aligned
+      throughout and reached strict height `1680`;
+    - achieved an amortized average of `2.143s/block` (`1680` blocks over
+      `3600s`), but failed the duration-deadline acceptance gate on
+      `quorum p95 block interval 3335ms exceeded threshold 3000ms`;
+    - final Izanami summary was
+      `successes=17975 failures=0 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`; and
+    - recorded `0` `route_unavailable` and `0` `no strict block height progress`
+      in the top-level log / retained peer logs.
+- Fresh full NPoS stable soak rerun on the same patched release tree:
+  - command:
+    `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) TEST_NETWORK_TMP_DIR=/tmp/iroha-soak-npos-20260402T141606 TEST_NETWORK_BIN_IROHAD=/Users/mtakemiya/dev/iroha/target/release/iroha3d /Users/mtakemiya/dev/iroha/target/release/izanami --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 2000 --progress-interval 10s --progress-timeout 600s --tps 5 --max-inflight 8 --workload-profile stable`
+  - retained log:
+    `/tmp/izanami_npos_full_20260402T141606.log`
+  - retained peer dirs:
+    `/tmp/iroha-soak-npos-20260402T141606/irohad_test_network_JjPTBL`
+  - result:
+    - likewise stayed live for the full `3600s` window with strict/quorum
+      heights aligned and reached strict height `1640`;
+    - achieved an amortized average of `2.195s/block`, but failed the same
+      duration-deadline acceptance gate on
+      `quorum p95 block interval 3335ms exceeded threshold 3000ms`;
+    - final Izanami summary was
+      `successes=17949 failures=2 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`; and
+    - recorded `0` `route_unavailable` and `0` `no strict block height progress`.
+- Peer-log interpretation on the patched tree:
+  - the old same-height hard-liveness signature is gone:
+    - `0` `assembled candidate conflicts with local same-height vote history`;
+    - `0` `no proposal observed for view before changing view`; and
+    - `0` ingress `route_unavailable` in both retained networks;
+  - the remaining churn is intermittent `missing_qc` view-change clustering on
+    otherwise aligned heights (`permissioned=464`, `NPoS=112`);
+  - those retained `missing_qc` lines show `pending_blocks=1`,
+    `missing_blocks=0`, `rbc_sessions=0`, and active queue growth into the
+    teens / twenties, which points to steady-state QC/commit production under
+    backlog rather than the earlier routing failure or same-height vote-history
+    conflict loop.
+
+## 2026-04-02 Follow-up: fresh-binary full stable soaks still fail, but the old lane-1 `route_unavailable` symptom is gone
+- Rebuilt the direct Izanami soak binaries from the patched tree after
+  discovering the earlier ad-hoc `target/debug/izanami` / `target/debug/iroha3d`
+  binaries predated the `crates/izanami` bootstrap edits:
+  - reclaimed disk with `cargo clean` after the first rebuild attempt hit
+    `No space left on device`;
+  - rebuilt with
+    `CARGO_INCREMENTAL=0 cargo build -p izanami --bin izanami -p irohad --bin iroha3d`;
+  - binary mtimes now postdate the patched source files, so the reruns below
+    are the first valid direct-binary soak measurements for this change.
+- Fresh full permissioned stable soak rerun:
+  - command:
+    `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) TEST_NETWORK_TMP_DIR=/private/tmp/iroha-soak-permissioned-full-20260402T074016 TEST_NETWORK_BIN_IROHAD=/Users/mtakemiya/dev/iroha/target/debug/iroha3d /Users/mtakemiya/dev/iroha/target/debug/izanami --allow-net --peers 4 --faulty 0 --duration 3600s --target-blocks 2000 --progress-interval 10s --progress-timeout 600s --latency-p95-threshold 3s --tps 5 --max-inflight 8 --workload-profile stable`
+  - retained log:
+    `/tmp/izanami_permissioned_full_20260402T074016.log`
+  - result:
+    - advanced strict height `1 -> 14` in `40.015960s`
+      (`3.078s` per advanced block) before stalling;
+    - then hit `target progress monitoring failed` after `600s` with
+      `strict_min_height=14` / `quorum_min_height=14`;
+    - recorded `0` `route_unavailable`, `108` transaction confirmation
+      timeouts, `7` `transaction queued for too long`, and
+      `59` repeated `strict block height is stalled with no lagging peers`
+      warnings; and
+    - final Izanami summary was
+      `successes=379 failures=60 izanami_ingress_failover_total=171 izanami_ingress_endpoint_unhealthy_total=149`.
+- Fresh full NPoS stable soak rerun:
+  - command:
+    `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) TEST_NETWORK_TMP_DIR=/private/tmp/iroha-soak-npos-full-20260402T074016 TEST_NETWORK_BIN_IROHAD=/Users/mtakemiya/dev/iroha/target/debug/iroha3d /Users/mtakemiya/dev/iroha/target/debug/izanami --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 2000 --progress-interval 10s --progress-timeout 600s --latency-p95-threshold 3s --tps 5 --max-inflight 8 --workload-profile stable`
+  - retained log:
+    `/tmp/izanami_npos_full_20260402T074016.log`
+  - result:
+    - advanced strict height `1 -> 8` in `40.020674s`
+      (`5.717s` per advanced block) before stalling;
+    - then hit `target progress monitoring failed` after `600s` with
+      `strict_min_height=8` / `quorum_min_height=8`;
+    - recorded `0` `route_unavailable`, `107` transaction confirmation
+      timeouts, `5` `transaction queued for too long`, and
+      `59` repeated `strict block height is stalled with no lagging peers`
+      warnings; and
+    - final Izanami summary was
+      `successes=344 failures=53 izanami_ingress_failover_total=178 izanami_ingress_endpoint_unhealthy_total=165`.
+- Interpretation:
+  - the multi-lane Nexus bootstrap fix appears to have removed the previous
+    `route_unavailable: no authoritative peer binding is registered for lane 1
+    dataspace 1` symptom on the fresh binaries; but
+  - the comparable full stable soaks are still throughput-red and liveness-red
+    for a different reason: both modes wedge with all peers aligned at the same
+    height while ingress submissions time out or queue too long, and NPoS is
+    currently worse than permissioned on that fresh-binary envelope.
+
+## 2026-04-02 Follow-up: PR label workflow re-enabled on safe trigger
+- Fixed `.github/workflows/pr_labels.yml` for
+  `https://github.com/hyperledger-iroha/iroha/issues/5534` by switching the
+  `Pull Request Labeler` workflow from `pull_request_target` to
+  `pull_request`.
+- Kept the existing minimal labeler job shape (`actions/labeler@v5` with
+  `contents: read` and `pull-requests: write`) so the fix only removes the
+  unsafe trigger that caused GitHub to disable the workflow.
+- Targeted verification completed:
+  - `actionlint .github/workflows/pr_labels.yml`
+
+## 2026-04-02 Follow-up: Izanami now bootstraps every stake-elected Nexus lane for `--nexus` runs
+- Fixed the Izanami NPoS/Nexus bootstrap gap in `crates/izanami`:
+  - `NexusProfile::sora_defaults()` now derives and stores
+    `bootstrap_public_lanes` from the loaded embedded Nexus profile by applying
+    the effective staking validator-mode policy to every configured lane;
+  - prepared chaos state bootstrap now seeds
+    `public_lane_validators` / `public_lane_stakes` for every derived
+    stake-elected lane instead of only `LaneId::SINGLE`;
+  - validator stake prefunding in genesis now scales with the number of
+    bootstrap lanes so repeated per-lane registrations have enough initial
+    self-bond; and
+  - post-topology NPoS bootstrap generation plus Izanami’s NPoS preflight
+    audit now operate on `(lane, validator)` pairs instead of assuming one
+    single public lane.
+- Targeted verification completed:
+  - `cargo fmt --all`
+  - `cargo test -p izanami bootstrap_public_lanes -- --nocapture`
+  - `cargo test -p izanami nexus_prepare_state_prefunds_validator_stake_for_all_bootstrap_lanes -- --nocapture`
+  - `cargo test -p izanami npos_post_topology_instructions_use_requested_min_self_bond -- --nocapture`
+  - `cargo test -p izanami npos_preflight_audit_passes_for_generated_genesis -- --nocapture`
+  - `cargo test -p izanami nexus_staking_genesis_registers_fee_sink_and_validators -- --nocapture`
+- Comparable stable NPoS soak rerun on the patched tree:
+  - command:
+    `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) TEST_NETWORK_TMP_DIR=/private/tmp/iroha-soak-npos-bootstrapfix-20260402T094500 TEST_NETWORK_BIN_IROHAD=/Users/mtakemiya/dev/iroha/target/debug/iroha3d /Users/mtakemiya/dev/iroha/target/debug/izanami --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 2000 --progress-interval 10s --progress-timeout 600s --latency-p95-threshold 3s --tps 5 --max-inflight 8 --workload-profile stable`
+  - retained log:
+    `/tmp/izanami_npos_bootstrapfix_20260402T094500.log`
+  - retained network dir:
+    `/private/tmp/iroha-soak-npos-bootstrapfix-20260402T094500/irohad_test_network_Co9M91`
+  - result:
+    - advanced strict height `1 -> 210` (`209` advanced blocks) from
+      `2026-04-02T06:37:51.241738Z` to `2026-04-02T06:47:52.827802Z`,
+      which is `601.586064s` total / `2.878s` per advanced block on the
+      debug build;
+    - crossed the earlier `height 195` failure region without reproducing the
+      old ingress stall;
+    - recorded `0` `route_unavailable`, `0` `no block height progress`, and
+      `0` `target progress monitoring failed` log entries before I stopped the
+      debug soak after it had cleared the old stall shape.
+- Regression follow-up:
+  - started the default NPoS soak matrix rerun with
+    `python3 scripts/run_sumeragi_soak_matrix.py --artifacts-root artifacts/sumeragi-soak-matrix-20260402-bootstrapfix`;
+  - the matrix was still running when this status entry was written; current
+    artifacts are under
+    `artifacts/sumeragi-soak-matrix-20260402-bootstrapfix/`.
+
+## 2026-04-02 Follow-up: comparable NPoS stable soak still stalls well before the 2000-block target
+- Ran the NPoS stable soak using the same preserved-peer Izanami envelope as the
+  permissioned comparison run, but with `--nexus` enabled:
+  - `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) TEST_NETWORK_TMP_DIR=/tmp/iroha-soak-npos-20260402T093600 TEST_NETWORK_BIN_IROHAD=/Users/mtakemiya/dev/iroha/target/debug/iroha3d /Users/mtakemiya/dev/iroha/target/debug/izanami --allow-net --nexus --peers 4 --faulty 0 --duration 3600s --target-blocks 2000 --progress-interval 10s --progress-timeout 600s --latency-p95-threshold 3s --tps 5 --max-inflight 8 --workload-profile stable`
+- Result:
+  - the run never approached the `2000`-block KPI and aborted on the strict
+    no-progress guard after stalling at quorum/strict height `195`;
+  - productive progress lasted from `2026-04-02T05:36:06.189610Z` to
+    `2026-04-02T05:50:26.588121Z`, which is `194` advanced blocks in
+    `860.398511s`, or `4.435s/block`;
+  - including the final `600s` dead-stall window, the run consumed
+    `1460.641375s` to reach only height `195`, or `7.529s/block` amortized to
+    abort; and
+  - the preserved log is `/tmp/izanami_npos_compare_20260402T093531.log`, with
+    peer artifacts under
+    `/tmp/iroha-soak-npos-20260402T093600/irohad_test_network_Hoshnk`.
+- Failure shape:
+  - after the last progress at `quorum_min_height=195`, the run emitted
+    repeated `route_unavailable: no authoritative peer binding is registered
+    for lane 1 dataspace 1` workload errors and then hit
+    `target progress monitoring failed; stopping run` after `600s` with no
+    lagging-peer divergence;
+  - final Izanami summary was
+    `successes=3644 failures=78 izanami_ingress_failover_total=165 izanami_ingress_endpoint_unhealthy_total=128`.
+
+## 2026-04-02 Follow-up: dedicated full NPoS telemetry soak is green again
+- Fixed the dedicated long-running NPoS telemetry soak wiring in
+  `integration_tests/tests/sumeragi_telemetry.rs` by setting
+  `CommitTimeMs(900)` before `BlockTimeMs(900)`, matching the validated
+  ordering already used by the other NPoS soak/performance tests.
+- Verification:
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_telemetry npos_telemetry_soak_matches_metrics_under_adversarial_collectors -- --nocapture`
+- Result:
+  - the test now starts the 5-peer NPoS network successfully, runs the full
+    telemetry soak path, and exits `ok` in `24.52s`;
+  - retained artifacts are under
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_1ZXH62`; and
+  - no startup or liveness stall reproduced in this target after the fix.
+- Notes:
+  - this test validates telemetry/Prometheus consistency across multiple block
+    advances under adversarial collector conditions; it does not emit a single
+    sustained-load `secs_per_block` summary comparable to the permissioned
+    localnet soak.
+
+## 2026-04-01 Follow-up: permissioned throughput root-cause tranche improved liveness but remains throughput-red
+- Implemented the permissioned localnet throughput follow-up in `iroha_core`:
+  - stalled-pending timeout selection now uses an explicit internal timeout
+    classifier instead of the earlier intertwined backlog booleans, so healthy
+    tip-pending blocks stay on the base DA quorum timeout path and only real
+    recovery backlog can take the longer recovery classification;
+  - commit-QC payload repair on the contiguous frontier now uses the eager
+    recovery path instead of passively waiting in generic deferred-QC grace;
+  - same-height frontier ownership, stale-view recovery acceptance, and first
+    vote-backed reschedule timing were tightened so authoritative frontier
+    work and recent vote progress are preserved through recovery; and
+  - focused regressions landed for timeout classification, vote-progress
+    reschedule timing, vote-locked frontier ownership, same-height block-sync
+    conflicts without certified evidence, stale-view block-sync recovery, and
+    commit-QC local-payload rehydration.
+- Targeted verification completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib reschedule_uses_vote_progress_age_for_first_near_quorum_timeout -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib 'stalled_pending_timeout_decision_' -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib 'maybe_force_view_change_for_stalled_pending_' -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib reschedule_defers_near_commit_quorum_with_recent_progress_without_backlog -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib reschedule_near_quorum_vote_backed_defers_during_first_frontier_settle_window -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib reschedule_defers_first_single_vote_quorum_timeout_past_legacy_frontier_settle_window -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib 'qc_missing_block_defer_' -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_defers_reproposal_after_missing_qc_view_advance_with_vote_locked_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib later_view_block_created_becomes_passive_when_frontier_owner_has_vote_locked_commit_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_assembles_fresh_proposal_after_missing_qc_view_advance_with_stale_frontier_vote_only_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib 'reschedule_near_quorum_' -- --nocapture`
+  - `cargo test -p iroha_core --lib 'deferred_qc_' -- --nocapture`
+  - `cargo test -p iroha_core --lib 'frontier_block_sync_commit_qc_' -- --nocapture`
+  - `cargo test -p iroha_core --lib commit_qc_rehydrates_deferred_local_payload_after_missing_highest_qc_repair -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_update_same_height_conflict_with_block_quorum_stays_passive_without_certified_evidence -- --nocapture`
+  - `cargo test -p iroha_core --lib allow_stale_block_created_requires_missing_request_or_retained_match -- --nocapture`
+- Long verification completed:
+  - the first fresh permissioned soak rerun failed only at preflight because
+    `target/iroha-test-network` hit `No space left on device`; after removing
+    only generated build artifacts, the clean rerun succeeded in running to
+    completion;
+  - `IROHA_TEST_NETWORK_KEEP_DIRS=1 cargo test -p integration_tests --test sumeragi_localnet_smoke permissioned_localnet_soak_thousands -- --ignored --nocapture`
+    completed all `2000` blocks without reproducing the old `90s` no-progress
+    stall, but still failed the throughput gate with
+    `elapsed=2588.656342625s`, `secs_per_block=1.294`, target `<= 1.000`;
+  - retained permissioned artifacts are under
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_HTmB9P`;
+  - the retained permissioned logs show:
+    - `430` `active pending block stalled past quorum timeout` warnings,
+      all on the `base_quorum` / `1400ms` path rather than the old `4000ms`
+      backlog timeout class;
+    - `13` `commit quorum missing past timeout` reschedules; and
+    - no `quorum of votes observed but block payload missing` warnings and no
+      sign of the old `active_recovery_backlog` / `timeout_ms=4000` path; and
+  - `python3 scripts/run_sumeragi_soak_matrix.py --artifacts-root artifacts/sumeragi-soak-matrix-20260402-throughput-fix`
+    completed successfully with all three default NPoS scenarios
+    (`peers4_k2_r2`, `peers6_k3_r2`, `peers8_k3_r3`) passing.
+- Current assessment:
+  - the throughput tranche removed the old permissioned dead-stall shape and
+    the specific `4000ms` backlog-timeout regression, but permissioned localnet
+    is still not meeting the sustained-load throughput budget; the remaining
+    red path is now dominated by repeated `1400ms` base-quorum recoveries and
+    a smaller number of commit-quorum reschedules rather than the earlier
+    missing-payload / deferred-QC collapse.
 
 ## 2026-04-01 Follow-up: workspace builds no longer collide on `gpuzstd` helper exports
 - Removed the Rust dependency edge from `crates/gpuzstd_cuda` to
@@ -17068,3 +17443,39 @@ Last updated: 2026-04-01
   - `cargo test -p iroha_cli signed_hf_deploy_request_uses_verifiable_signature -- --nocapture`
   - `cargo test -p integration_tests --test iroha_cli soracloud_ -- --nocapture`
   - attempted `cargo test -p iroha_core agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state -- --nocapture`, but that test currently fails earlier on an unrelated SNS domain-name lease precondition for `wonderland`
+
+## 2026-04-01 Permissioned Stable Soak Gate Reset
+- Confirmed the preserved-peer permissioned stable soak is liveness-clean on the current consensus fixes and shared-host recovery tuning:
+  - full rerun used the existing release binaries at `/tmp/iroha-codex-target/release/{iroha3d,izanami}` because the current branch cannot rebuild `izanami` cleanly while `crates/iroha_torii_shared/src/lib.rs:3` still imports missing `iroha_data_model::account::AccountLabel`;
+  - rerun command kept the unchanged stable envelope and supplied the equivalent explicit latency override `--latency-p95-threshold 3s` to validate the new shared-host default gate behavior;
+  - artifacts: `/tmp/iroha-soak-permissioned-20260401-152629/irohad_test_network_wt8pl5`.
+- Stable-soak outcome:
+  - reached `target_blocks=2000` with aligned `strict/quorum=2000` after `2580.616925709s`;
+  - target snapshot: `interval_p50_ms=1251`, `interval_p95_ms=2001`, `strict_interval_p50_ms=1251`, `strict_interval_p95_ms=2001`, `interval_samples=1991`;
+  - phase snapshot at target: `propose=1ms`, `collect_da=656ms`, `collect_precommit=343ms`, `pipeline_total=1000ms`, `pipeline_total_ema=814ms`;
+  - completed the full `3600s` duration with aligned `strict/quorum=2640`;
+  - final summary: `izanami run complete successes=17983 failures=1 expected_failures=0 unexpected_successes=0 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`.
+- Preserved-peer diagnostics for the successful duration run:
+  - zero `RBC chunk store exceeded hard limit; evicted sessions` warnings on all four peers;
+  - residual recovery churn stayed bounded (`no proposal observed`: `9/9/15/9`; quorum reschedules: `19/25/20/19`) and did not recreate the prior fixed-height collapse.
+- Validation:
+  - `cargo fmt --all`
+  - attempted `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p izanami shared_host_stable_soak_profile_caps_load_and_timeout -- --nocapture`, but the build is currently blocked by unrelated `iroha_torii_shared` import drift (`AccountLabel` missing at `crates/iroha_torii_shared/src/lib.rs:3`)
+  - attempted `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p izanami shared_host_stable_soak_profile_applies_to_permissioned_long_run -- --nocapture`, blocked by the same unrelated import error
+  - attempted `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo build --release --locked -p izanami --bin izanami`, blocked by the same unrelated import error
+  - `RUST_LOG=izanami::summary=info,izanami::progress=info,izanami::workload=warn,iroha_core::sumeragi::main_loop=info,iroha_core::sumeragi=info,iroha_p2p=info IROHA_TEST_NETWORK_KEEP_DIRS=1 IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) TEST_NETWORK_TMP_DIR=/tmp/iroha-soak-permissioned-20260401-152629 TEST_NETWORK_BIN_IROHAD=/tmp/iroha-codex-target/release/iroha3d /tmp/iroha-codex-target/release/izanami --allow-net --peers 4 --faulty 0 --duration 3600s --target-blocks 2000 --progress-interval 10s --progress-timeout 600s --latency-p95-threshold 3s --tps 5 --max-inflight 8 --workload-profile stable`
+
+## 2026-04-02 Permissioned Missing-QC Local Vote Recovery
+- Patched the remaining permissioned `missing_qc` recovery hole in `crates/iroha_core/src/sumeragi/main_loop/reschedule.rs`:
+  - quorum reschedule now temporarily re-registers detached pending blocks so recovery can reuse the existing local commit-vote helper on valid pending blocks;
+  - the local commit vote is emitted before vote-count / retransmit-target decisions, so zero-local-vote detached pending blocks no longer get stuck resending only `BlockCreated`;
+  - retransmit target selection now uses the effective current commit-vote count after local-vote recovery, and vote-backed quorum bookkeeping records locally emitted votes as real recovery progress;
+  - known-block commit-evidence replay in the reschedule path now also runs against the temporarily re-registered pending block instead of silently no-oping on detached state.
+- Updated `crates/iroha_core/src/sumeragi/main_loop/tests.rs` to cover the fixed behavior and to align stale assertions with the current `BlockCreated`-retransmit policy.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib quorum_reschedule_emits_local_vote_for_detached_valid_pending_block -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_vote_backed_frontier_retransmits_block_created_to_missing_vote_targets -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window -- --nocapture`
+  - `cargo test -p iroha_core --lib quorum_reschedule_near_quorum_rebroadcasts_votes_and_block_created_without_hydration_rebroadcast -- --nocapture`
+- One additional stale-test rerun was updated but not cleanly re-verified in this shell because the follow-up `cargo test -p iroha_core --lib quorum_reschedule_rebroadcasts_block_created_while_skipping_block_sync_without_roster_proof -- --nocapture` process remained sleeping without an active child after the assertion update; rerun that one in a fresh cargo process before treating the focused suite as fully closed.

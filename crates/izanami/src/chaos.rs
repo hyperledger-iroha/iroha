@@ -1483,14 +1483,17 @@ fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> u64 {
 fn audit_npos_preflight_instructions<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     peer_count: usize,
+    bootstrap_public_lanes: &[LaneId],
     min_self_bond: u64,
 ) -> Result<NposGenesisPreflightSummary> {
     let expected_peers = peer_count.max(1);
+    let expected_bootstrap_bindings = expected_peers.saturating_mul(bootstrap_public_lanes.len());
+    let expected_bootstrap_lanes: BTreeSet<_> = bootstrap_public_lanes.iter().copied().collect();
     let mut peer_with_pop_count = 0usize;
     let mut register_validator_count = 0usize;
     let mut activate_validator_count = 0usize;
-    let mut validator_stakes = BTreeMap::<AccountId, u64>::new();
-    let mut activated_validators = BTreeSet::<AccountId>::new();
+    let mut validator_stakes = BTreeMap::<(LaneId, AccountId), u64>::new();
+    let mut activated_validators = BTreeSet::<(LaneId, AccountId)>::new();
 
     for instruction in instructions {
         if instruction
@@ -1505,6 +1508,15 @@ fn audit_npos_preflight_instructions<'a>(
             .downcast_ref::<RegisterPublicLaneValidator>()
         {
             register_validator_count = register_validator_count.saturating_add(1);
+            if !expected_bootstrap_lanes.is_empty()
+                && !expected_bootstrap_lanes.contains(&register.lane_id)
+            {
+                return Err(eyre!(
+                    "Izanami NPoS preflight failed: unexpected bootstrap lane {} for validator {}",
+                    register.lane_id,
+                    register.validator
+                ));
+            }
             let stake = u64::try_from(register.initial_stake.clone()).map_err(|_| {
                 eyre!(
                     "Izanami NPoS preflight failed: validator {} has non-integer initial_stake {}",
@@ -1520,14 +1532,14 @@ fn audit_npos_preflight_instructions<'a>(
                     min_self_bond
                 ));
             }
-            validator_stakes.insert(register.validator.clone(), stake);
+            validator_stakes.insert((register.lane_id, register.validator.clone()), stake);
         }
         if let Some(activate) = instruction
             .as_any()
             .downcast_ref::<ActivatePublicLaneValidator>()
         {
             activate_validator_count = activate_validator_count.saturating_add(1);
-            activated_validators.insert(activate.validator.clone());
+            activated_validators.insert((activate.lane_id, activate.validator.clone()));
         }
     }
 
@@ -1538,18 +1550,18 @@ fn audit_npos_preflight_instructions<'a>(
             expected_peers
         ));
     }
-    if register_validator_count != expected_peers {
+    if register_validator_count != expected_bootstrap_bindings {
         return Err(eyre!(
             "Izanami NPoS preflight failed: RegisterPublicLaneValidator count={} expected={}",
             register_validator_count,
-            expected_peers
+            expected_bootstrap_bindings
         ));
     }
-    if activate_validator_count != expected_peers {
+    if activate_validator_count != expected_bootstrap_bindings {
         return Err(eyre!(
             "Izanami NPoS preflight failed: ActivatePublicLaneValidator count={} expected={}",
             activate_validator_count,
-            expected_peers
+            expected_bootstrap_bindings
         ));
     }
 
@@ -1579,7 +1591,7 @@ fn audit_npos_preflight_instructions<'a>(
     for stake in validator_stakes.values().copied() {
         *stake_distribution.entry(stake).or_insert(0) += 1;
     }
-    if stake_distribution.len() != 1 {
+    if expected_bootstrap_bindings > 0 && stake_distribution.len() != 1 {
         return Err(eyre!(
             "Izanami NPoS preflight failed: validator initial_stake distribution is non-uniform: {:?}",
             stake_distribution
@@ -1598,6 +1610,7 @@ fn audit_npos_preflight_instructions<'a>(
 fn audit_npos_genesis_preflight(
     genesis: &GenesisBlock,
     peer_count: usize,
+    bootstrap_public_lanes: &[LaneId],
 ) -> Result<NposGenesisPreflightSummary> {
     let min_self_bond = npos_min_self_bond_from_genesis(genesis);
     let mut instructions = Vec::<InstructionBox>::new();
@@ -1607,7 +1620,12 @@ fn audit_npos_genesis_preflight(
         };
         instructions.extend(tx_instructions.iter().cloned());
     }
-    audit_npos_preflight_instructions(instructions.iter(), peer_count, min_self_bond)
+    audit_npos_preflight_instructions(
+        instructions.iter(),
+        peer_count,
+        bootstrap_public_lanes,
+        min_self_bond,
+    )
 }
 
 fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
@@ -1831,6 +1849,11 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
         builder =
             builder.with_genesis_post_topology_isi(instructions::npos_post_topology_instructions(
                 config.peer_count,
+                config
+                    .nexus
+                    .as_ref()
+                    .map(|profile| profile.bootstrap_public_lanes.as_slice())
+                    .unwrap_or(&[]),
                 npos_params.min_self_bond(),
             ));
     }
@@ -2289,7 +2312,15 @@ impl IzanamiRunner {
         let network = builder.start().await?;
         if config.nexus.is_some() {
             let genesis = network.genesis();
-            let preflight = audit_npos_genesis_preflight(&genesis, config.peer_count)?;
+            let preflight = audit_npos_genesis_preflight(
+                &genesis,
+                config.peer_count,
+                config
+                    .nexus
+                    .as_ref()
+                    .map(|profile| profile.bootstrap_public_lanes.as_slice())
+                    .unwrap_or(&[]),
+            )?;
             info!(
                 target: "izanami::preflight",
                 peer_with_pop_count = preflight.peer_with_pop_count,
@@ -4098,6 +4129,7 @@ mod tests {
 
     fn synthetic_npos_preflight_instructions(
         peer_count: usize,
+        bootstrap_public_lanes: &[LaneId],
         include_pop: bool,
         include_activation: bool,
         stake_values: &[u64],
@@ -4118,27 +4150,29 @@ mod tests {
                     ),
                 );
             }
-            instructions.push(
-                <RegisterPublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
-                    Box::new(RegisterPublicLaneValidator {
-                        lane_id: LaneId::SINGLE,
-                        validator: validator.clone(),
-                        peer_id: PeerId::new(key_pair.public_key().clone()),
-                        stake_account: validator.clone(),
-                        initial_stake: Numeric::from(stake),
-                        metadata: Metadata::default(),
-                    }),
-                ),
-            );
-            if include_activation {
+            for &lane_id in bootstrap_public_lanes {
                 instructions.push(
-                    <ActivatePublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
-                        Box::new(ActivatePublicLaneValidator {
-                            lane_id: LaneId::SINGLE,
-                            validator,
+                    <RegisterPublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
+                        Box::new(RegisterPublicLaneValidator {
+                            lane_id,
+                            validator: validator.clone(),
+                            peer_id: PeerId::new(key_pair.public_key().clone()),
+                            stake_account: validator.clone(),
+                            initial_stake: Numeric::from(stake),
+                            metadata: Metadata::default(),
                         }),
                     ),
                 );
+                if include_activation {
+                    instructions.push(
+                        <ActivatePublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
+                            Box::new(ActivatePublicLaneValidator {
+                                lane_id,
+                                validator: validator.clone(),
+                            }),
+                        ),
+                    );
+                }
             }
         }
         instructions
@@ -4595,10 +4629,29 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let network = make_network_builder(&config, genesis).build();
-        let summary = audit_npos_genesis_preflight(&network.genesis(), config.peer_count)?;
+        let summary = audit_npos_genesis_preflight(
+            &network.genesis(),
+            config.peer_count,
+            config
+                .nexus
+                .as_ref()
+                .map(|profile| profile.bootstrap_public_lanes.as_slice())
+                .unwrap_or(&[]),
+        )?;
+        let expected_bootstrap_bindings = config.nexus.as_ref().map_or(0, |profile| {
+            config
+                .peer_count
+                .saturating_mul(profile.bootstrap_public_lanes.len())
+        });
         assert_eq!(summary.peer_with_pop_count, config.peer_count);
-        assert_eq!(summary.register_validator_count, config.peer_count);
-        assert_eq!(summary.activate_validator_count, config.peer_count);
+        assert_eq!(
+            summary.register_validator_count,
+            expected_bootstrap_bindings
+        );
+        assert_eq!(
+            summary.activate_validator_count,
+            expected_bootstrap_bindings
+        );
         assert_eq!(
             summary.stake_distribution.len(),
             1,
@@ -4611,10 +4664,20 @@ mod tests {
     fn npos_preflight_audit_fails_on_missing_activation() {
         init_instruction_registry();
         let min_self_bond = SumeragiNposParameters::default().min_self_bond();
-        let instructions =
-            synthetic_npos_preflight_instructions(4, true, false, &[min_self_bond; 4]);
-        let err = audit_npos_preflight_instructions(instructions.iter(), 4, min_self_bond)
-            .expect_err("missing activation should fail preflight");
+        let instructions = synthetic_npos_preflight_instructions(
+            4,
+            &[LaneId::SINGLE],
+            true,
+            false,
+            &[min_self_bond; 4],
+        );
+        let err = audit_npos_preflight_instructions(
+            instructions.iter(),
+            4,
+            &[LaneId::SINGLE],
+            min_self_bond,
+        )
+        .expect_err("missing activation should fail preflight");
         let message = err.to_string();
         assert!(
             message.contains("ActivatePublicLaneValidator count="),
@@ -4626,10 +4689,20 @@ mod tests {
     fn npos_preflight_audit_fails_on_missing_pop() {
         init_instruction_registry();
         let min_self_bond = SumeragiNposParameters::default().min_self_bond();
-        let instructions =
-            synthetic_npos_preflight_instructions(4, false, true, &[min_self_bond; 4]);
-        let err = audit_npos_preflight_instructions(instructions.iter(), 4, min_self_bond)
-            .expect_err("missing pop should fail preflight");
+        let instructions = synthetic_npos_preflight_instructions(
+            4,
+            &[LaneId::SINGLE],
+            false,
+            true,
+            &[min_self_bond; 4],
+        );
+        let err = audit_npos_preflight_instructions(
+            instructions.iter(),
+            4,
+            &[LaneId::SINGLE],
+            min_self_bond,
+        )
+        .expect_err("missing pop should fail preflight");
         let message = err.to_string();
         assert!(
             message.contains("RegisterPeerWithPop count="),
@@ -4643,6 +4716,7 @@ mod tests {
         let min_self_bond = SumeragiNposParameters::default().min_self_bond();
         let instructions = synthetic_npos_preflight_instructions(
             4,
+            &[LaneId::SINGLE],
             true,
             true,
             &[
@@ -4652,8 +4726,13 @@ mod tests {
                 min_self_bond,
             ],
         );
-        let err = audit_npos_preflight_instructions(instructions.iter(), 4, min_self_bond)
-            .expect_err("unequal initial stake should fail preflight");
+        let err = audit_npos_preflight_instructions(
+            instructions.iter(),
+            4,
+            &[LaneId::SINGLE],
+            min_self_bond,
+        )
+        .expect_err("unequal initial stake should fail preflight");
         let message = err.to_string();
         assert!(
             message.contains("non-uniform"),
