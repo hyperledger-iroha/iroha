@@ -2458,6 +2458,10 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
             .and_then(Value::as_u64),
         Some(12_000)
     );
+    let current_window_expires_at_ms = renew_pool
+        .get("window_expires_at_ms")
+        .and_then(Value::as_u64)
+        .expect("current window expiry");
 
     let blocked_leave = run_soracloud_command(
         dir.path(),
@@ -2486,10 +2490,16 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         "unexpected queued sponsor leave stderr: {blocked_leave_stderr}"
     );
 
-    tokio::time::sleep(Duration::from_millis(
-        lease_term_ms_value.saturating_add(1_500),
-    ))
-    .await;
+    // Wait until just after the authoritative current window expires. Sleeping
+    // for a full extra lease term from the renew response can overshoot on
+    // slower localnets and land in the post-queued `CreateWindow` path instead
+    // of exercising queued-window promotion.
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+    let promote_after_ms = u128::from(current_window_expires_at_ms).saturating_add(250);
+    let wait_ms = promote_after_ms
+        .saturating_sub(now_ms)
+        .min(u128::from(u64::MAX)) as u64;
+    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
 
     let promote = run_soracloud_command(
         dir.path(),
