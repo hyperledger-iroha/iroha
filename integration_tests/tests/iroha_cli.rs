@@ -36,7 +36,7 @@ use reqwest::Url;
 
 fn program() -> PathBuf {
     enable_reentrant_builds_for_tests();
-    configure_cli_program_override_from_existing_binary();
+    configure_program_overrides_from_existing_binaries();
     iroha_test_network::Program::Iroha.resolve().unwrap()
 }
 
@@ -52,19 +52,37 @@ fn enable_reentrant_builds_for_tests() {
     });
 }
 
-fn configure_cli_program_override_from_existing_binary() {
+fn configure_program_overrides_from_existing_binaries() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         const TEST_NETWORK_BIN_IROHA: &str = "TEST_NETWORK_BIN_IROHA";
-        if std::env::var_os(TEST_NETWORK_BIN_IROHA).is_some() {
-            return;
-        }
+        const TEST_NETWORK_BIN_IROHAD: &str = "TEST_NETWORK_BIN_IROHAD";
         if !should_reuse_existing_cli_binary_for_tests() {
             return;
         }
-        if let Some(path) = find_existing_cli_binary_path() {
+
+        let cli_path =
+            if let Some(path) = std::env::var_os(TEST_NETWORK_BIN_IROHA).map(PathBuf::from) {
+                Some(path)
+            } else {
+                find_existing_cli_binary_path()
+            };
+
+        if std::env::var_os(TEST_NETWORK_BIN_IROHA).is_none()
+            && let Some(path) = cli_path.as_ref()
+        {
             let value = path.to_string_lossy().into_owned();
             set_env_var(TEST_NETWORK_BIN_IROHA, &value);
+        }
+
+        if std::env::var_os(TEST_NETWORK_BIN_IROHAD).is_none()
+            && let Some(path) = cli_path
+                .as_deref()
+                .and_then(matching_irohad_binary_path_from_cli_path)
+                .or_else(find_existing_irohad_binary_path)
+        {
+            let value = path.to_string_lossy().into_owned();
+            set_env_var(TEST_NETWORK_BIN_IROHAD, &value);
         }
     });
 }
@@ -80,15 +98,14 @@ fn should_reuse_existing_cli_binary_for_tests_from_value(value: Option<&str>) ->
 }
 
 fn find_existing_cli_binary_path() -> Option<PathBuf> {
-    const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
     let mut target_roots = Vec::new();
     if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
         let target_dir = PathBuf::from(target_dir);
-        target_roots.push(target_dir.join(IROHA_TEST_TARGET_SUBDIR));
+        target_roots.push(target_dir.join("iroha-test-network"));
         target_roots.push(target_dir);
     }
     let workspace_target = workspace_root().join("target");
-    target_roots.push(workspace_target.join(IROHA_TEST_TARGET_SUBDIR));
+    target_roots.push(workspace_target.join("iroha-test-network"));
     target_roots.push(workspace_target);
 
     let mut profiles = Vec::new();
@@ -112,7 +129,46 @@ fn find_existing_cli_binary_path_from_roots(
     target_roots: &[PathBuf],
     profiles: &[String],
 ) -> Option<PathBuf> {
-    let binary_name = if cfg!(windows) { "iroha.exe" } else { "iroha" };
+    find_existing_binary_path_from_roots(target_roots, profiles, cli_binary_name())
+}
+
+fn find_existing_irohad_binary_path() -> Option<PathBuf> {
+    let mut target_roots = Vec::new();
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        let target_dir = PathBuf::from(target_dir);
+        target_roots.push(target_dir.join("iroha-test-network"));
+        target_roots.push(target_dir);
+    }
+    let workspace_target = workspace_root().join("target");
+    target_roots.push(workspace_target.join("iroha-test-network"));
+    target_roots.push(workspace_target);
+
+    let mut profiles = Vec::new();
+    if let Ok(profile) = std::env::var("PROFILE")
+        && !profile.trim().is_empty()
+    {
+        profiles.push(profile);
+    }
+    if !profiles.iter().any(|value| value == "debug") {
+        profiles.push("debug".to_owned());
+    }
+    if !profiles.iter().any(|value| value == "release") {
+        profiles.push("release".to_owned());
+    }
+
+    find_existing_binary_path_from_roots(&target_roots, &profiles, irohad_binary_name())
+}
+
+fn matching_irohad_binary_path_from_cli_path(path: &Path) -> Option<PathBuf> {
+    let candidate = path.parent()?.join(irohad_binary_name());
+    candidate.is_file().then_some(candidate)
+}
+
+fn find_existing_binary_path_from_roots(
+    target_roots: &[PathBuf],
+    profiles: &[String],
+    binary_name: &str,
+) -> Option<PathBuf> {
     for target_root in target_roots {
         for profile in profiles {
             let candidate = target_root.join(profile).join(binary_name);
@@ -122,6 +178,18 @@ fn find_existing_cli_binary_path_from_roots(
         }
     }
     None
+}
+
+const fn cli_binary_name() -> &'static str {
+    if cfg!(windows) { "iroha.exe" } else { "iroha" }
+}
+
+const fn irohad_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "iroha3d.exe"
+    } else {
+        "iroha3d"
+    }
 }
 
 fn binary_supports_training_job_commands(path: &std::path::Path) -> bool {
@@ -259,6 +327,37 @@ fn find_existing_cli_binary_path_from_roots_returns_none_when_missing() {
     let profiles = vec!["debug".to_owned(), "release".to_owned()];
     let found = find_existing_cli_binary_path_from_roots(&[root], &profiles);
     assert!(found.is_none());
+}
+
+#[test]
+fn find_existing_binary_path_from_roots_returns_daemon_match() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("target");
+    let expected = root.join("debug").join(irohad_binary_name());
+    std::fs::create_dir_all(expected.parent().expect("parent dir")).expect("create dirs");
+    std::fs::write(&expected, b"binary").expect("create fake binary");
+
+    let profiles = vec!["debug".to_owned(), "release".to_owned()];
+    let found = find_existing_binary_path_from_roots(
+        std::slice::from_ref(&root),
+        &profiles,
+        irohad_binary_name(),
+    );
+    assert_eq!(found, Some(expected));
+}
+
+#[test]
+fn matching_irohad_binary_path_from_cli_path_uses_sibling_binary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let profile_dir = temp.path().join("debug");
+    std::fs::create_dir_all(&profile_dir).expect("create dirs");
+    let cli = profile_dir.join(cli_binary_name());
+    let daemon = profile_dir.join(irohad_binary_name());
+    std::fs::write(&cli, b"cli").expect("write cli");
+    std::fs::write(&daemon, b"daemon").expect("write daemon");
+
+    let found = matching_irohad_binary_path_from_cli_path(&cli);
+    assert_eq!(found, Some(daemon));
 }
 
 #[test]

@@ -2,6 +2,24 @@
 
 Last updated: 2026-04-02
 
+## 2026-04-02 Follow-up: `iroha_cli` binary reuse now pins the sibling `iroha3d` daemon to the same target/profile
+- Fixed the reported `integration_tests/tests/iroha_cli.rs`
+  Soracloud-training timeout slice by tightening the test-only binary reuse
+  helper: when the `iroha_cli` integration file opts into reusing an existing
+  `iroha` binary, it now also exports `TEST_NETWORK_BIN_IROHAD` from the
+  sibling `iroha3d` in the same target/profile when present, and falls back to
+  the same target-root search if needed.
+- This keeps the CLI and daemon on the same built artifact set during
+  `IROHA_TEST_SKIP_BUILD` / existing-binary reuse flows and avoids version skew
+  where a newer Soracloud CLI can drive an older `iroha3d` binary during the
+  live Torii control-plane tests.
+- Added focused helper regressions for daemon-path discovery and sibling
+  `iroha`/`iroha3d` pairing.
+- Verification:
+  - `cargo test -p integration_tests --test iroha_cli find_existing_binary_path_from_roots_returns_daemon_match -- --exact --test-threads=1`
+  - `cargo test -p integration_tests --test iroha_cli matching_irohad_binary_path_from_cli_path_uses_sibling_binary -- --exact --test-threads=1`
+  - `TEST_NETWORK_BIN_IROHA="$PWD/target/debug/iroha" TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" cargo test -p integration_tests --test iroha_cli soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane -- --exact --nocapture --test-threads=1`
+
 ## 2026-04-02 Follow-up: `iroha_cli` binary-reuse helper tests no longer poison process-wide CLI selection
 - Fixed the reported `integration_tests/tests/iroha_cli.rs` failure pair by
   removing process-wide `IROHA_TEST_SKIP_BUILD` mutation from the
