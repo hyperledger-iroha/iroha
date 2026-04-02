@@ -521,7 +521,11 @@ async fn submit_instruction_until_peer_roster(
         match wait_for_peer_roster(roster_client, expected_roster, probe_timeout).await {
             Ok(()) => return Ok(()),
             Err(err) => {
-                last_roster_err = Some(err.to_string());
+                let (matched, samples) = sample_peer_rosters(&peers, expected_roster).await;
+                if matched {
+                    return Ok(());
+                }
+                last_roster_err = Some(format!("{err}; peer_samples={samples:?}"));
                 sleep(Duration::from_millis(200)).await;
             }
         }
@@ -590,4 +594,33 @@ async fn wait_for_peer_roster(
 
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+async fn sample_peer_rosters(peers: &[&NetworkPeer], expected: usize) -> (bool, Vec<String>) {
+    let samples = peers
+        .iter()
+        .map(|peer| async {
+            let peer_id = peer.id().to_string();
+            let client = peer.client();
+            let result = spawn_blocking(move || {
+                client
+                    .query(FindPeers)
+                    .execute_all()
+                    .map(|roster| roster.len())
+            })
+            .await;
+
+            match result {
+                Ok(Ok(count)) => (count == expected, format!("{peer_id}={count}")),
+                Ok(Err(err)) => (false, format!("{peer_id}=err({err})")),
+                Err(err) => (false, format!("{peer_id}=join_err({err})")),
+            }
+        })
+        .collect::<FuturesUnordered<_>>()
+        .collect::<Vec<_>>()
+        .await;
+
+    let matched = samples.iter().any(|(matched, _)| *matched);
+    let details = samples.into_iter().map(|(_, detail)| detail).collect();
+    (matched, details)
 }

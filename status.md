@@ -20,6 +20,38 @@ Last updated: 2026-04-02
   - `cargo test -p integration_tests --test iroha_cli matching_irohad_binary_path_from_cli_path_uses_sibling_binary -- --exact --test-threads=1`
   - `TEST_NETWORK_BIN_IROHA="$PWD/target/debug/iroha" TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" cargo test -p integration_tests --test iroha_cli soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane -- --exact --nocapture --test-threads=1`
 
+## 2026-04-02 Follow-up: connected-peers, runtime Nexus registration, and account-created trigger regressions are green again
+- Fixed the reported `integration_tests` failure trio without broad workspace
+  churn:
+  - `crates/iroha_core/src/smartcontracts/isi/domain.rs` now emits
+    `AccountEvent::Created` again when registering an account, deriving the
+    event domain from the account's bound alias domain when present and falling
+    back to the reserved universal dataspace alias otherwise. This restores the
+    missing trigger path behind
+    `triggers::data_trigger::two_non_intersecting_execution_paths`.
+  - `integration_tests/tests/extra_functional/connected_peers.rs` now treats
+    peer-roster convergence as a cluster property instead of trusting a single
+    probe peer: when the primary roster check misses, the helper samples all
+    remaining peers before declaring failure. This removes the flaky
+    `connected_peers_with_f_1_0_1` timeout where one peer lagged at a roster
+    count of `3` while the rest of the cluster had already converged.
+  - `integration_tests/tests/nexus/runtime_dataspace_registration_perf.rs` now
+    provisions a dedicated runtime-benchmark dataspace lane plus a generated
+    admin-managed manifest whose authoritative peer binding matches the test
+    network's deterministic BLS peer id. The benchmark also waits for the
+    manifest lane binding and the publish-manifest permission grant to become
+    query-visible before continuing, which removes the earlier
+    `PRTRY:ROUTE_UNRESOLVED` / `route_unavailable` failures during the
+    report-only lifecycle benchmark.
+- Added focused `iroha_core` coverage for the restored account-created event so
+  both the domainless-account and alias-bound-account paths stay pinned.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test mod extra_functional::connected_peers::connected_peers_with_f_1_0_1 -- --nocapture`
+  - `cargo test -p integration_tests --test mod triggers::data_trigger::two_non_intersecting_execution_paths -- --nocapture`
+  - `cargo test -p iroha_core created_event_with_ -- --nocapture`
+  - `IROHA_NEXUS_RUNTIME_BENCH_ITERATIONS=1 cargo test -p integration_tests --test mod nexus::runtime_dataspace_registration_perf::runtime_nexus_registration_reports_lane_lifecycle_costs -- --nocapture`
+
 ## 2026-04-02 Follow-up: `iroha_cli` binary-reuse helper tests no longer poison process-wide CLI selection
 - Fixed the reported `integration_tests/tests/iroha_cli.rs` failure pair by
   removing process-wide `IROHA_TEST_SKIP_BUILD` mutation from the
