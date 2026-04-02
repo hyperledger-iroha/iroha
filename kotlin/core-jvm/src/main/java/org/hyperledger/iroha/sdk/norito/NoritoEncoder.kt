@@ -17,7 +17,7 @@ class NoritoEncoder(@JvmField val flags: Int) {
     }
 
     fun writeBytes(data: ByteArray) {
-        buffer.writeBytes(data)
+        buffer.write(data, 0, data.size)
     }
 
     fun writeUInt(value: Long, bits: Int) {

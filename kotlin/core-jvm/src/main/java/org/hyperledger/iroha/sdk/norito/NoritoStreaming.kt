@@ -356,7 +356,7 @@ object NoritoStreaming {
             if (other !is StreamMetadata) return false
             if (title != other.title) return false
             if (description != other.description) return false
-            if (_accessPolicyId.isEmpty && other._accessPolicyId.isEmpty) {
+            if (!_accessPolicyId.isPresent && !other._accessPolicyId.isPresent) {
                 return tags == other.tags
             }
             if (_accessPolicyId.isPresent != other._accessPolicyId.isPresent) return false
@@ -537,7 +537,7 @@ object NoritoStreaming {
         }
 
         private fun optionalBytesEquals(a: Optional<ByteArray>, b: Optional<ByteArray>): Boolean {
-            if (a.isEmpty && b.isEmpty) return true
+            if (!a.isPresent && !b.isPresent) return true
             if (a.isPresent != b.isPresent) return false
             return a.get().contentEquals(b.get())
         }
@@ -592,7 +592,7 @@ object NoritoStreaming {
             if (kind == ResolutionKind.CUSTOM) {
                 require(custom.isPresent) { "custom resolution requires parameters" }
             } else {
-                require(custom.isEmpty) { "non-custom resolution must not carry parameters" }
+                require(!custom.isPresent) { "non-custom resolution must not carry parameters" }
             }
         }
     }
@@ -1384,7 +1384,7 @@ object NoritoStreaming {
         override fun encode(encoder: NoritoEncoder, value: Resolution) {
             RESOLUTION_KIND_ADAPTER.encode(encoder, value.kind)
             if (value.kind == ResolutionKind.CUSTOM) {
-                RESOLUTION_CUSTOM_ADAPTER.encode(encoder, value.custom.orElseThrow())
+                RESOLUTION_CUSTOM_ADAPTER.encode(encoder, value.custom.orElseThrow { NoSuchElementException() })
             }
         }
 

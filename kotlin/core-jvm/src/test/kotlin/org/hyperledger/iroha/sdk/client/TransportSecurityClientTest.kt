@@ -12,6 +12,7 @@ import org.hyperledger.iroha.sdk.client.stream.ToriiEventStreamOptions
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.client.transport.TransportWebSocket
 import org.hyperledger.iroha.sdk.client.websocket.ToriiWebSocketClient
 import org.hyperledger.iroha.sdk.client.websocket.ToriiWebSocketListener
 import org.hyperledger.iroha.sdk.client.websocket.ToriiWebSocketOptions
@@ -135,7 +136,7 @@ class TransportSecurityClientTest {
         val client = ToriiWebSocketClient.builder()
             .setBaseUri(URI.create("http://example.com"))
             .setWebSocketConnector { _, _, _, _ ->
-                CompletableFuture.failedFuture(IllegalStateException("should not connect"))
+                CompletableFuture<TransportWebSocket>().also { it.completeExceptionally(IllegalStateException("should not connect")) }
             }
             .build()
 

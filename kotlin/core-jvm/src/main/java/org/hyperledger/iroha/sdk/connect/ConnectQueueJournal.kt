@@ -198,7 +198,8 @@ class ConnectQueueJournal @Throws(ConnectJournalException::class) constructor(
                 }
                 val buffer = ByteArrayOutputStream()
                 for (record in records) {
-                    buffer.writeBytes(record.encode())
+                    val encoded = record.encode()
+                    buffer.write(encoded, 0, encoded.size)
                 }
                 val temp = path.resolveSibling(
                     "${path.fileName}.tmp-${System.nanoTime()}",
