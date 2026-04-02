@@ -2674,7 +2674,7 @@ impl NexusStorageBudgetComponent {
 
     /// Parse a persisted component label.
     #[must_use]
-    pub fn from_str(label: &str) -> Option<Self> {
+    pub fn parse_label(label: &str) -> Option<Self> {
         match label {
             "kura" => Some(Self::Kura),
             "wsv_cold" => Some(Self::WsvCold),
@@ -2693,6 +2693,14 @@ impl NexusStorageBudgetComponent {
             Self::SoranetSpool => weights.soranet_spool_bps,
             Self::SoravpnSpool => weights.soravpn_spool_bps,
         }
+    }
+}
+
+impl FromStr for NexusStorageBudgetComponent {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::parse_label(s).ok_or(())
     }
 }
 
@@ -8746,6 +8754,31 @@ impl Default for FraudMonitoring {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nexus_storage_budget_component_from_str_matches_persisted_labels() {
+        assert_eq!(
+            "kura".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::Kura)
+        );
+        assert_eq!(
+            "wsv_cold".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::WsvCold)
+        );
+        assert_eq!(
+            "sorafs".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::Sorafs)
+        );
+        assert_eq!(
+            "soranet_spool".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::SoranetSpool)
+        );
+        assert_eq!(
+            "soravpn_spool".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::SoravpnSpool)
+        );
+        assert!("unknown".parse::<NexusStorageBudgetComponent>().is_err());
+    }
 
     #[test]
     fn npos_timeouts_from_block_time_defaults() {

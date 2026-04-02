@@ -1,8 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! App API canonical request auth smoke test: GET + POST endpoints accept
-//! `X-Iroha-Account`/`X-Iroha-Signature`/`X-Iroha-Timestamp-Ms`/`X-Iroha-Nonce`
-//! headers signed over the canonical method/path/query/body envelope plus the
-//! freshness fields.
+//! the canonical signed header set
+//! (`X-Iroha-Account`/`X-Iroha-Signature`/`X-Iroha-Timestamp-Ms`/`X-Iroha-Nonce`)
+//! over the canonical method/path/query/body envelope plus freshness metadata.
 
 use eyre::Result;
 use integration_tests::sandbox;
@@ -18,6 +18,13 @@ use iroha_torii::{
 use norito::json::Value as JsonValue;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+fn signing_uri(url: &reqwest::Url) -> Result<Uri> {
+    match url.query() {
+        Some(query) => Ok(format!("{}?{query}", url.path()).parse()?),
+        None => Ok(url.path().parse()?),
+    }
+}
 
 #[test]
 fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
@@ -41,7 +48,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         .as_millis()
         .try_into()?;
 
-    // GET /v1/accounts/{account}/assets with canonical headers
+    // GET /v1/accounts/{account}/assets with canonical signed headers.
     let mut assets_url = reqwest::Url::parse(&peer.torii_url())?;
     {
         let mut segments = assets_url
@@ -55,7 +62,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
     }
     assets_url.query_pairs_mut().append_pair("limit", "1");
     let assets_endpoint = assets_url.as_str().to_owned();
-    let assets_uri: Uri = assets_url.as_str().parse()?;
+    let assets_uri = signing_uri(&assets_url)?;
     let assets_nonce = "app-api-canonical-auth-get";
     let assets_msg = canonical_request_signature_message(
         &Method::GET,
@@ -102,7 +109,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         "assets endpoint should accept canonical auth"
     );
 
-    // POST /v1/accounts/{account}/transactions/query with canonical headers + body hash
+    // POST /v1/accounts/{account}/transactions/query with canonical signed headers + body hash
     let envelope = QueryEnvelope {
         pagination: Pagination {
             limit: Some(4),
@@ -124,7 +131,7 @@ fn app_api_accepts_canonical_headers_for_get_and_post() -> Result<()> {
         segments.push("transactions");
         segments.push("query");
     }
-    let tx_uri: Uri = tx_url.as_str().parse()?;
+    let tx_uri = signing_uri(&tx_url)?;
     let tx_nonce = "app-api-canonical-auth-post";
     let tx_msg =
         canonical_request_signature_message(&Method::POST, &tx_uri, &body, timestamp_ms, tx_nonce);

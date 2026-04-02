@@ -30,6 +30,10 @@ impl Actor {
     ) -> bool {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
+        let local_committed_height = self.committed_height_snapshot();
+        if block_height != local_committed_height {
+            return false;
+        }
         if self.committed_block_hash_for_height(block_height) != Some(block_hash) {
             return false;
         }
@@ -40,6 +44,97 @@ impl Actor {
             }
             _ => false,
         }
+    }
+
+    pub(super) fn commit_qc_from_validator_checkpoint(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        checkpoint: &ValidatorSetCheckpoint,
+    ) -> Option<crate::sumeragi::consensus::Qc> {
+        if checkpoint.block_hash != block_hash {
+            warn!(
+                expected = %block_hash,
+                actual = %checkpoint.block_hash,
+                "ignoring validator checkpoint that does not match block hash"
+            );
+            return None;
+        }
+        if checkpoint.height != block_height {
+            warn!(
+                expected = block_height,
+                actual = checkpoint.height,
+                block = %block_hash,
+                "ignoring validator checkpoint that does not match block height"
+            );
+            return None;
+        }
+        if checkpoint.view != block_view {
+            warn!(
+                expected = block_view,
+                actual = checkpoint.view,
+                block = %block_hash,
+                height = block_height,
+                "ignoring validator checkpoint that does not match block view"
+            );
+            return None;
+        }
+        let (consensus_mode, mode_tag, _prf_seed) = self.consensus_context_for_height(block_height);
+        let expected_epoch = self.epoch_for_height(block_height);
+        let stake_snapshot = match consensus_mode {
+            ConsensusMode::Permissioned => None,
+            ConsensusMode::Npos => self
+                .roster_validation_cache
+                .stake_snapshot_for_roster(&checkpoint.validator_set),
+        };
+        let inputs = self.roster_validation_cache.inputs_for_roster(
+            &checkpoint.validator_set,
+            consensus_mode,
+            stake_snapshot.as_ref(),
+        );
+        let allow_genesis_stub = block_height == 1 && block_view == 0;
+        if let Err(err) = super::validate_checkpoint_roster_cached(
+            &self.roster_validation_cache,
+            checkpoint,
+            block_hash,
+            block_height,
+            Some(block_view),
+            consensus_mode,
+            &self.common_config.chain,
+            mode_tag,
+            expected_epoch,
+            Some((checkpoint.parent_state_root, checkpoint.post_state_root)),
+            allow_genesis_stub,
+            &inputs,
+        ) {
+            warn!(
+                ?err,
+                block = %block_hash,
+                height = block_height,
+                view = block_view,
+                "ignoring uncertified validator checkpoint sidecar"
+            );
+            return None;
+        }
+        Some(crate::sumeragi::consensus::Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: checkpoint.block_hash,
+            parent_state_root: checkpoint.parent_state_root,
+            post_state_root: checkpoint.post_state_root,
+            height: checkpoint.height,
+            view: checkpoint.view,
+            epoch: expected_epoch,
+            mode_tag: mode_tag.to_string(),
+            highest_qc: None,
+            validator_set_hash: checkpoint.validator_set_hash,
+            validator_set_hash_version: checkpoint.validator_set_hash_version,
+            validator_set: checkpoint.validator_set.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: checkpoint.signers_bitmap.clone(),
+                bls_aggregate_signature: checkpoint.bls_aggregate_signature.clone(),
+            },
+        })
     }
 
     pub(super) fn block_sync_qc_is_missing_context_error(err: &QcValidationError) -> bool {
@@ -154,6 +249,39 @@ impl Actor {
             reason,
             "forcing block-sync fetch for quarantined QC"
         );
+    }
+
+    pub(super) fn keep_exact_frontier_block_sync_repair_in_slot(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        block_height: u64,
+        block_view: u64,
+        signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
+        topology: &super::network_topology::Topology,
+        reason: &'static str,
+    ) -> bool {
+        let now = Instant::now();
+        if !self.handle_frontier_body_gap_with_topology(
+            block_hash,
+            block_height,
+            block_view,
+            signers,
+            topology,
+            true,
+            now,
+        ) {
+            return false;
+        }
+        debug!(
+            height = block_height,
+            view = block_view,
+            block = %block_hash,
+            signer_count = signers.len(),
+            roster_len = topology.as_ref().len(),
+            reason,
+            "routing contiguous frontier block sync recovery through exact body repair"
+        );
+        true
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1412,7 +1540,17 @@ impl Actor {
                     has_checkpoint = validator_checkpoint.is_some(),
                     "ignoring frontier-lane BlockSyncUpdate sidecars for a locally known block"
                 );
-                if incoming_qc.is_some() || validator_checkpoint.is_some() {
+                let sidecar_qc = incoming_qc.take().or_else(|| {
+                    validator_checkpoint.as_ref().and_then(|checkpoint| {
+                        self.commit_qc_from_validator_checkpoint(
+                            block_hash,
+                            block_height,
+                            block_view,
+                            checkpoint,
+                        )
+                    })
+                });
+                if sidecar_qc.is_some() {
                     let _ = self.try_replay_deferred_qcs();
                     let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
                     self.request_commit_pipeline_for_pending(
@@ -1421,7 +1559,7 @@ impl Actor {
                         None,
                     );
                 }
-                if let Some(qc) = incoming_qc.take() {
+                if let Some(qc) = sidecar_qc {
                     let world_view = self.state.world_view();
                     let consensus_mode = super::effective_consensus_mode_for_height_from_world(
                         &world_view,
@@ -1512,7 +1650,16 @@ impl Actor {
             }
             if result.is_ok()
                 && let Some(local_block) = local_block_for_qc
-                && let Some(qc) = incoming_qc.take()
+                && let Some(qc) = incoming_qc.take().or_else(|| {
+                    validator_checkpoint.as_ref().and_then(|checkpoint| {
+                        self.commit_qc_from_validator_checkpoint(
+                            block_hash,
+                            block_height,
+                            block_view,
+                            checkpoint,
+                        )
+                    })
+                })
             {
                 let world_view = self.state.world_view();
                 let consensus_mode = super::effective_consensus_mode_for_height_from_world(
@@ -2128,6 +2275,21 @@ impl Actor {
                     let fallback_topology = super::network_topology::Topology::new(fallback_roster);
                     let empty_signers =
                         BTreeSet::<crate::sumeragi::consensus::ValidatorIndex>::new();
+                    if self.keep_exact_frontier_block_sync_repair_in_slot(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        &empty_signers,
+                        &fallback_topology,
+                        "block_sync_update_missing_roster",
+                    ) {
+                        self.record_consensus_message_handling(
+                            super::status::ConsensusMessageKind::BlockSyncUpdate,
+                            super::status::ConsensusMessageOutcome::Deferred,
+                            super::status::ConsensusMessageReason::RosterMissing,
+                        );
+                        return Ok(());
+                    }
                     if self.maybe_request_pending_block_for_missing_qc(
                         block_hash,
                         block_height,
@@ -2865,6 +3027,21 @@ impl Actor {
                     view = block_view,
                     "sparse block sync update remained unrequested after recovery planning"
                 );
+            }
+            if self.keep_exact_frontier_block_sync_repair_in_slot(
+                block_hash,
+                block_height,
+                block_view,
+                &block_signers,
+                &topology,
+                "block_sync_update_missing_commit_quorum",
+            ) {
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockSyncUpdate,
+                    super::status::ConsensusMessageOutcome::Deferred,
+                    super::status::ConsensusMessageReason::QuorumMissing,
+                );
+                return Ok(());
             }
             super::status::inc_block_sync_drop_invalid_signatures();
             let warn_cooldown = self
@@ -3652,6 +3829,13 @@ impl Actor {
         let request_priority = request
             .priority
             .unwrap_or(FetchPendingBlockPriority::Background);
+        let dedup_key = super::BlockPayloadDedupKey::FetchPendingBlock {
+            height: request.height,
+            view: request.view,
+            block_hash,
+            requester_hash: CryptoHash::new(peer.encode()),
+            priority: request_priority,
+        };
         let requester_roster_proof_known = request.requester_roster_proof_known.unwrap_or(false);
         let request_meta = super::PendingFetchRequestMeta {
             priority: request_priority,
@@ -3700,6 +3884,7 @@ impl Actor {
                 /*allow_highest_qc_bypass*/ true,
                 /*allow_hintless_block_sync_bypass*/ false,
             );
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
 
@@ -3734,6 +3919,7 @@ impl Actor {
                 /*allow_highest_qc_bypass*/ true,
                 /*allow_hintless_block_sync_bypass*/ false,
             );
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
 
@@ -3761,6 +3947,7 @@ impl Actor {
                 /*allow_highest_qc_bypass*/ true,
                 /*allow_hintless_block_sync_bypass*/ false,
             );
+            self.release_block_payload_dedup(&dedup_key);
             return Ok(());
         }
 
@@ -3793,6 +3980,7 @@ impl Actor {
                         super::status::ConsensusMessageOutcome::Deferred,
                         super::status::ConsensusMessageReason::NotFound,
                     );
+                    self.release_block_payload_dedup(&dedup_key);
                     return Ok(());
                 }
                 self.send_fetch_pending_block_responses(
@@ -3802,6 +3990,7 @@ impl Actor {
                     /*allow_highest_qc_bypass*/ true,
                     /*allow_hintless_block_sync_bypass*/ true,
                 );
+                self.release_block_payload_dedup(&dedup_key);
                 return Ok(());
             }
         }
@@ -3820,6 +4009,7 @@ impl Actor {
             super::status::ConsensusMessageOutcome::Deferred,
             super::status::ConsensusMessageReason::NotFound,
         );
+        self.release_block_payload_dedup(&dedup_key);
         Ok(())
     }
 
@@ -3924,6 +4114,13 @@ impl Actor {
                         now,
                     )
             })
+            || self.missing_commit_qc_repair_active_for_round(
+                response.block_hash,
+                response.height,
+                response.view,
+                committed_height,
+                now,
+            )
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -4594,6 +4791,7 @@ impl Actor {
             ),
             qc.clone(),
         );
+        self.clear_missing_commit_qc_request(&block_hash, MissingBlockClearReason::Obsolete);
         debug!(
             incoming_hash = %block_hash,
             signers = tally.voting_signers.len(),

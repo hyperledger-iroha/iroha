@@ -11163,7 +11163,7 @@ impl NexusStorageAutoDefaultFilesystemGroup {
         let mut components = Vec::with_capacity(self.components.len());
         let mut seen_components = BTreeSet::new();
         for component_label in self.components {
-            let Some(component) = actual::NexusStorageBudgetComponent::from_str(&component_label)
+            let Ok(component) = component_label.parse::<actual::NexusStorageBudgetComponent>()
             else {
                 emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
                     "unknown nexus.storage.auto_default component `{component_label}`"

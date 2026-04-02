@@ -16,6 +16,59 @@ Last updated: 2026-04-02
   - `cargo fmt --all`
   - `cargo test -p integration_tests --test app_api_canonical_auth -- --nocapture`
 
+## 2026-04-01 Follow-up: app-api canonical-auth integration smoke matches the current signed-request contract again
+- Fixed `integration_tests/tests/app_api_canonical_auth.rs` so it now signs the
+  same request-target form Torii verifies in production: the path/query portion
+  of the request, not the absolute URL.
+- The smoke test now sends the full canonical signed header set
+  (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`,
+  `X-Iroha-Nonce`) for both the GET `/v1/accounts/{account_id}/assets` read and
+  the POST `/v1/accounts/{account_id}/transactions/query` read, using distinct
+  nonces and the freshness-aware signature payload Torii currently requires.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test app_api_canonical_auth -- --nocapture`
+
+## 2026-04-01 Follow-up: exact-frontier known-block commit-QC repair now uses `FetchBlockBody`, and the targeted RBC recovery matrix is green
+- Fixed the remaining lagging-peer / same-height frontier recovery gap in the
+  Sumeragi exact-frontier lane:
+  - committed+1 known-block commit-QC recovery now promotes into the existing
+    exact-frontier `FetchBlockBody` repair path instead of staying on generic
+    `FetchPendingBlock` retries;
+  - exact-frontier `FetchBlockBody` retries now stay armed even when the block
+    body is already materialized locally, as long as the missing dependency is
+    still the frontier commit proof for that exact `(block_hash, height, view)`;
+  - same-height `BlockBodyResponse` repair acceptance now includes
+    `missing_commit_qc_requests`, so delayed exact-body responses for the older
+    frontier owner are still applied after local frontier ownership advances to
+    a newer same-height view; and
+  - accepted known-block block-sync QCs now retire the matching
+    `missing_commit_qc_requests` entry immediately instead of leaving stale
+    retry state behind.
+- Tightened the focused `iroha_core` coverage for this tranche:
+  - historical committed-block fetch now seeds the required commit-roster proof
+    before asserting an immediate `BlockSyncUpdate`;
+  - committed+1 known-block commit-QC recovery now has a regression asserting
+    exact-frontier promotion plus post-grace `FetchBlockBody` traffic; and
+  - same-height delayed `BlockBodyResponse` recovery now has a regression for
+    the “frontier owner advanced, old commit proof arrives later” case.
+- Fresh targeted end-to-end reruns on the patched tree are green:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_restart_with_roster_change -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_session_recovers_after_cold_restart -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_da_eviction_rehydrates_block_bodies -- --nocapture`
+- Focused unit/regression verification for the new exact-frontier repair path is
+  also green:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core fetch_pending_block_serves_historical_committed_block_without_waiting_for_tip_proof --lib -- --nocapture`
+  - `cargo test -p iroha_core known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_block_body --lib -- --nocapture`
+  - `cargo test -p iroha_core block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances --lib -- --nocapture`
+- Remaining verification gap after this tranche:
+  - the broader repo-wide gates (`cargo test --workspace`,
+    `cargo clippy --workspace --all-targets -- -D warnings`) still have not
+    been rerun on this checkout.
+
 ## 2026-04-01 Follow-up: test-network startup retries no longer fail on stale bind preflight
 - Fixed `iroha_test_network` restart behavior after partial bootstrap failures by
   running socket bind preflight only on a peer's first start attempt. Retrying
