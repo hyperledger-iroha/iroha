@@ -1,6 +1,20 @@
 # Status
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
+
+## 2026-04-02 Follow-up: app-api canonical auth smoke test matches Torii's signed request contract again
+- Fixed the reported `integration_tests/tests/app_api_canonical_auth.rs`
+  failure by updating the smoke test to send the full signed header set that
+  `iroha_torii` now requires for single-signature canonical request auth:
+  `X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and
+  `X-Iroha-Nonce`.
+- The test now also constructs request URLs through `reqwest::Url`
+  path-segment builders before parsing them into `Uri` for signing, so the
+  signed path matches the percent-encoded on-wire request URI for canonical
+  I105 account literals with non-ASCII characters.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test app_api_canonical_auth -- --nocapture`
 
 ## 2026-04-01 Follow-up: test-network startup retries no longer fail on stale bind preflight
 - Fixed `iroha_test_network` restart behavior after partial bootstrap failures by
