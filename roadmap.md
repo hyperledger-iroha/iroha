@@ -2,6 +2,33 @@
 
 Last updated: 2026-04-01
 
+Latest sync (2026-04-01 Nexus routing / cross-dataspace localnet recovery):
+the reported Nexus and DA/RBC regression set is green again on a fresh rebuilt
+`iroha3d`.
+
+- `crates/iroha_core/src/queue/router.rs` now keeps asset-definition
+  permission grants on authority routing instead of accidentally classifying
+  them as destination-account-local;
+- `crates/iroha_core/src/smartcontracts/isi/settlement.rs` now resolves
+  cross-dataspace settlement legs from the actual source bucket, which restores
+  scoped DvP/PvP execution semantics; and
+- `integration_tests/tests/nexus/cross_dataspace_localnet.rs` now enforces
+  pre/post authoritative lane commit-QC convergence around the forward and
+  reverse swap barriers, eliminating the earlier localnet swap stall.
+- fresh-binary reruns are green for:
+  - `cross_dataspace_atomic_swap_is_all_or_nothing`
+  - `wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models`
+  - `sumeragi_rbc_background_queue_synchronous`
+  - `sumeragi_da_commit_certificate_history_four_peers`
+  - `sumeragi_rbc_da_large_payload_{four_peers,four_peers_rs16,six_peers,six_peers_rs16}`
+- the earlier RBC `payload=0` failures did not reproduce once the tests were
+  pointed at the rebuilt `target/debug/iroha3d`; current reruns report
+  non-zero `PayloadBytes` on the participating peers.
+
+Open work for this slice now remains:
+- none; keep using a freshly rebuilt `TEST_NETWORK_BIN_IROHAD` when replaying
+  DA/RBC localnet failures so stale test binaries do not contaminate results.
+
 Latest sync (2026-04-01 broad workspace verification / rollout gate):
 the narrow Torii/client/CLI verification for the current first-release
 convergence work is green on an isolated target, but the broader workspace
@@ -175,25 +202,29 @@ Open work for this slice now remains:
   `tests.test_pk_cli -q` pass, and the full `iroha_cli --test cli_smoke`
   target is green again; the exhaustive workspace gates are still pending
 
-Latest sync (2026-04-01 restart-recovery rerun + integration_tests strict-lint fix):
-the previously open `sumeragi_rbc_recovers_after_peer_restart` rerun is green
-on the current tree, and the concrete `integration_tests` strict-lint break
-observed during that verification is fixed.
+Latest sync (2026-04-01 exact-frontier known-block commit-QC repair + targeted recovery matrix):
+the remaining committed+1 lagging-peer gap is fixed in the exact-frontier
+repair lane, and the targeted RBC recovery matrix around that path is now
+green on the current tree.
 
-- `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod
-  sumeragi_rbc_recovers_after_peer_restart -- --nocapture` now completes
-  successfully on this checkout; and
-- `cargo clippy -p integration_tests --test mod -- -D warnings` is green again
-  after removing the dead `HashOf` import from the cross-dataspace routing
-  localnet test.
+- committed+1 known-block commit-QC recovery now promotes into exact-frontier
+  `FetchBlockBody` repair instead of staying on generic `FetchPendingBlock`
+  retries, and the exact-body lane now keeps retrying while the missing
+  dependency is still the frontier commit proof even if the block body is
+  already local;
+- same-height delayed `BlockBodyResponse` repair now accepts actionable
+  `missing_commit_qc_requests`, so older frontier-owner proof responses still
+  apply after local frontier ownership advances to a newer same-height view;
+- accepted known-block block-sync QCs now retire the matching
+  `missing_commit_qc_requests` entry immediately; and
+- the following targeted integration reruns are green on this checkout:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_restart_with_roster_change -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_session_recovers_after_cold_restart -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_da_eviction_rehydrates_block_bodies -- --nocapture`
 
 Open work for this slice now remains:
-- rerun the adjacent heavy restart/cold-start recovery scenarios
-  (`sumeragi_rbc_recovers_after_restart_with_roster_change`,
-  `sumeragi_rbc_session_recovers_after_cold_restart`,
-  `sumeragi_rbc_unverified_roster_stash_requests_missing_block`,
-  `sumeragi_da_eviction_rehydrates_block_bodies`) to make sure the now-green
-  restart rerun was not masking a neighboring integration-only regression
 - broader workspace verification (`cargo test --workspace`,
   `cargo clippy --workspace --all-targets -- -D warnings`) still has not been
   rerun after the latest RBC restart-path and exact-frontier fix tranche
