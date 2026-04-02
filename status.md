@@ -2,6 +2,19 @@
 
 Last updated: 2026-04-01
 
+## 2026-04-01 Follow-up: app-api canonical-auth integration smoke matches the current signed-request contract again
+- Fixed `integration_tests/tests/app_api_canonical_auth.rs` so it now signs the
+  same request-target form Torii verifies in production: the path/query portion
+  of the request, not the absolute URL.
+- The smoke test now sends the full canonical signed header set
+  (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`,
+  `X-Iroha-Nonce`) for both the GET `/v1/accounts/{account_id}/assets` read and
+  the POST `/v1/accounts/{account_id}/transactions/query` read, using distinct
+  nonces and the freshness-aware signature payload Torii currently requires.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test app_api_canonical_auth -- --nocapture`
+
 ## 2026-04-01 Follow-up: test-network startup retries no longer fail on stale bind preflight
 - Fixed `iroha_test_network` restart behavior after partial bootstrap failures by
   running socket bind preflight only on a peer's first start attempt. Retrying
