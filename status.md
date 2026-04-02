@@ -2,6 +2,20 @@
 
 Last updated: 2026-04-02
 
+## 2026-04-02 Follow-up: `iroha_cli` binary-reuse helper tests no longer poison process-wide CLI selection
+- Fixed the reported `integration_tests/tests/iroha_cli.rs` failure pair by
+  removing process-wide `IROHA_TEST_SKIP_BUILD` mutation from the
+  `should_reuse_existing_cli_binary_for_tests_*` tests.
+- The helper now keeps its runtime env lookup, but the tests exercise the
+  parsing logic through a value-level helper instead of mutating global env
+  state in parallel. That prevents a transient truthy `IROHA_TEST_SKIP_BUILD`
+  from racing with other `iroha_cli` integration tests and forcing
+  `program()` to cache `TEST_NETWORK_BIN_IROHA` against an unintended reused
+  binary.
+- Verification:
+  - `cargo test -p integration_tests --test iroha_cli should_reuse_existing_cli_binary_for_tests -- --nocapture`
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture --exact --test-threads=1` on a fresh built binary (pass in isolated replay before/after the test-only fix)
+
 ## 2026-04-02 Follow-up: app-api canonical auth smoke test matches Torii's signed request contract again
 - Fixed the reported `integration_tests/tests/app_api_canonical_auth.rs`
   failure by updating the smoke test to send the full signed header set that

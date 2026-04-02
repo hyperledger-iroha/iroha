@@ -70,9 +70,13 @@ fn configure_cli_program_override_from_existing_binary() {
 }
 
 fn should_reuse_existing_cli_binary_for_tests() -> bool {
-    std::env::var("IROHA_TEST_SKIP_BUILD")
-        .ok()
-        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+    should_reuse_existing_cli_binary_for_tests_from_value(
+        std::env::var("IROHA_TEST_SKIP_BUILD").ok().as_deref(),
+    )
+}
+
+fn should_reuse_existing_cli_binary_for_tests_from_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 fn find_existing_cli_binary_path() -> Option<PathBuf> {
@@ -140,13 +144,6 @@ fn binary_supports_training_job_commands(path: &std::path::Path) -> bool {
 fn set_env_var(key: &str, value: &str) {
     unsafe {
         std::env::set_var(key, value);
-    }
-}
-
-#[allow(unsafe_code)]
-fn remove_env_var(key: &str) {
-    unsafe {
-        std::env::remove_var(key);
     }
 }
 
@@ -304,26 +301,26 @@ fn binary_supports_training_job_commands_accepts_help_with_subcommand() {
 
 #[test]
 fn should_reuse_existing_cli_binary_for_tests_defaults_to_false() {
-    let previous = std::env::var("IROHA_TEST_SKIP_BUILD").ok();
-    remove_env_var("IROHA_TEST_SKIP_BUILD");
-    assert!(!should_reuse_existing_cli_binary_for_tests());
-    if let Some(value) = previous {
-        set_env_var("IROHA_TEST_SKIP_BUILD", &value);
-    }
+    assert!(!should_reuse_existing_cli_binary_for_tests_from_value(None));
+    assert!(!should_reuse_existing_cli_binary_for_tests_from_value(
+        Some("0")
+    ));
+    assert!(!should_reuse_existing_cli_binary_for_tests_from_value(
+        Some("false")
+    ));
 }
 
 #[test]
 fn should_reuse_existing_cli_binary_for_tests_accepts_truthy_values() {
-    let previous = std::env::var("IROHA_TEST_SKIP_BUILD").ok();
-    set_env_var("IROHA_TEST_SKIP_BUILD", "true");
-    assert!(should_reuse_existing_cli_binary_for_tests());
-    set_env_var("IROHA_TEST_SKIP_BUILD", "1");
-    assert!(should_reuse_existing_cli_binary_for_tests());
-    if let Some(value) = previous {
-        set_env_var("IROHA_TEST_SKIP_BUILD", &value);
-    } else {
-        remove_env_var("IROHA_TEST_SKIP_BUILD");
-    }
+    assert!(should_reuse_existing_cli_binary_for_tests_from_value(Some(
+        "true"
+    )));
+    assert!(should_reuse_existing_cli_binary_for_tests_from_value(Some(
+        "TRUE"
+    )));
+    assert!(should_reuse_existing_cli_binary_for_tests_from_value(Some(
+        "1"
+    )));
 }
 
 fn local_program_config() -> ProgramConfig {
