@@ -1,6 +1,38 @@
 # Status
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
+
+## 2026-04-02 Follow-up: JS SDK now ships first-class ExecuteTrigger and multisig helper builders
+- Added the next ergonomic layer in `javascript/iroha_js` on top of the
+  canonical Norito path already proven for multisig-critical direct contract
+  calls:
+  - exported `buildExecuteTriggerInstruction(...)` and
+    `buildExecuteTriggerNorito(...)` so callers no longer have to hand-assemble
+    low-level `ExecuteTrigger` JSON before encoding;
+  - added `buildMultisigTriggerArgs(...)` presets for the current lifecycle and
+    lookup Kotodama trigger-argument shapes;
+  - added `isMultisigSignerAuthorized(...)`, strict signer validation support,
+    and `buildProposeMultisigExecuteTriggerInstruction(...)` /
+    `buildProposeMultisigExecuteTriggerNorito(...)` for the on-chain multisig
+    proposal path; and
+  - added normalized Torii request builders for
+    `proposeMultisigContractCall` / `approveMultisigContractCall`, while also
+    backfilling the missing multisig contract-call and proposal-query method
+    declarations in `javascript/iroha_js/index.d.ts`.
+- Updated the JS README to reflect current JS-only Norito behavior: the pure-JS
+  fallback now emits canonical binary Norito for
+  `Mint.Asset`, `Mint.TriggerRepetitions`, `Burn.Asset`,
+  `Burn.TriggerRepetitions`, `Transfer.Asset`, and `ExecuteTrigger`, rather
+  than falling back to UTF-8 JSON for those families.
+- Closed the pre-existing JS Norito drift in the focused suite by updating the
+  asset-definition registration expectation to match the current decoded shape.
+- Verification:
+  - `node --test javascript/iroha_js/test/multisigExecuteTriggerHelpers.test.js javascript/iroha_js/test/multisigProposalInstruction.test.js javascript/iroha_js/test/multisigRegisterInstruction.test.js javascript/iroha_js/test/norito_fallback.test.js javascript/iroha_js/test/norito.test.js`
+- Residual gap after this tranche:
+  - the broader JS-only fallback still covers only the current limited
+    instruction slice; awkward contract-call families beyond `ExecuteTrigger`
+    may still need additional pure-JS coverage or explicit host bridging in
+    follow-up work.
 
 ## 2026-04-01 Follow-up: exact-frontier known-block commit-QC repair now uses `FetchBlockBody`, and the targeted RBC recovery matrix is green
 - Fixed the remaining lagging-peer / same-height frontier recovery gap in the

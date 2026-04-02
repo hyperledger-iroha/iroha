@@ -37,10 +37,14 @@ const REGISTER_ASSET = {
   Register: {
     AssetDefinition: {
       id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+      name: "",
+      description: null,
+      alias: null,
       logo: null,
       metadata: {},
       mintable: "Infinitely",
       spec: { scale: null },
+      balance_scope_policy: "Global",
       confidential_policy: {
         mode: "TransparentOnly",
         vk_set_hash: null,
@@ -121,6 +125,21 @@ test("norito encode/decode supports transfer asset instructions", () => {
         source: loadAssetIdFromFixture("mint_asset_numeric.json"),
         object: "10",
         destination: ACCOUNT_ID,
+      },
+    },
+  };
+  const encoded = noritoEncodeInstruction(instruction);
+  const decoded = noritoDecodeInstruction(encoded);
+  assert.deepEqual(decoded, instruction);
+});
+
+test("norito encode/decode supports ExecuteTrigger instructions", () => {
+  const instruction = {
+    ExecuteTrigger: {
+      trigger: "staged_mint_request_hbl",
+      args: {
+        action: "create",
+        request_id: "mr1",
       },
     },
   };

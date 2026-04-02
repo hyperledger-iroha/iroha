@@ -1,6 +1,35 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
+
+Latest sync (2026-04-02 JS ExecuteTrigger / multisig helper layer):
+the JS SDK now has first-class helper builders for the canonical
+`ExecuteTrigger` path, the wrapped multisig proposal flow, and the normalized
+Torii multisig contract-call request bodies.
+
+- shipped in `javascript/iroha_js`:
+  - `buildExecuteTriggerInstruction(...)` /
+    `buildExecuteTriggerNorito(...)`;
+  - `buildMultisigTriggerArgs(...)` presets for the current lifecycle and
+    lookup schemas;
+  - `isMultisigSignerAuthorized(...)` plus optional strict signer validation;
+  - `buildProposeMultisigExecuteTriggerInstruction(...)` /
+    `buildProposeMultisigExecuteTriggerNorito(...)`; and
+  - `buildMultisigContractCallProposeRequest(...)` /
+    `buildMultisigContractCallApproveRequest(...)`, alongside the missing
+    multisig Torii method declarations in `index.d.ts`.
+- focused verification is green, including a JS-vs-native parity regression for
+  a real multisig-controlled account id on the supported `Transfer.Asset`
+  fallback path.
+
+Open work for this slice now remains:
+- expand the pure-JS Norito fallback beyond the current supported instruction
+  subset when additional direct-contract or multisig flows need to run without
+  the native binding;
+- generalize the pure-JS public-key/account-controller handling beyond the
+  currently exercised ed25519-centric path; and
+- extend the higher-level helper surface if/when more Kotodama trigger schemas
+  or proposal lifecycle helpers become stable enough to expose as presets.
 
 Latest sync (2026-04-01 Nexus routing / cross-dataspace localnet recovery):
 the reported Nexus and DA/RBC regression set is green again on a fresh rebuilt

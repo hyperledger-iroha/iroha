@@ -72,8 +72,8 @@ use iroha_data_model::{
     domain::{Domain, DomainId, NewDomain},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, Instruction as InstructionTrait,
-        InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register,
+        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger,
+        Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register,
         RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop, RemoveKeyValue,
         ReportKaigiRelayHealth, SetKaigiRelayManifest, SetKeyValue, Transfer, TransferBox,
         Unregister, UnregisterBox,
@@ -5546,6 +5546,19 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported Burn instruction variant; expected keys: Asset or TriggerRepetitions",
                 ));
             }
+            if let Some(json::Value::Object(mut execute_fields)) = map.remove("ExecuteTrigger") {
+                let trigger: TriggerId = json::from_value(required_value(
+                    &mut execute_fields,
+                    "trigger",
+                    "ExecuteTrigger",
+                )?)
+                .map_err(norito_to_napi)?;
+                let args = execute_fields
+                    .remove("args")
+                    .map(Json::from)
+                    .unwrap_or_default();
+                return Ok(InstructionBox::from(ExecuteTrigger { trigger, args }));
+            }
             if let Some(json::Value::Object(mut transfer_map)) = map.remove("Transfer") {
                 if let Some(json::Value::Object(mut asset_fields)) = transfer_map.remove("Asset") {
                     let source_value = asset_fields.remove("source").ok_or_else(|| {
@@ -6829,6 +6842,24 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             outer.insert("Burn".to_owned(), json::Value::Object(burn_map));
             return Ok(json::Value::Object(outer));
         }
+    }
+
+    if let Some(execute_trigger) = instruction_ref.as_any().downcast_ref::<ExecuteTrigger>() {
+        let mut payload = json::Map::new();
+        payload.insert(
+            "trigger".to_owned(),
+            json::to_value(execute_trigger.trigger()).map_err(norito_to_napi)?,
+        );
+        let args = json::parse_value(execute_trigger.args().get()).map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("ExecuteTrigger.args is not valid JSON: {error}"),
+            )
+        })?;
+        payload.insert("args".to_owned(), args);
+        let mut outer = json::Map::new();
+        outer.insert("ExecuteTrigger".to_owned(), json::Value::Object(payload));
+        return Ok(json::Value::Object(outer));
     }
 
     if let Some(rwa_box) = instruction_ref.as_any().downcast_ref::<RwaInstructionBox>() {

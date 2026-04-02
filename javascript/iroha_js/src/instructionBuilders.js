@@ -495,6 +495,199 @@ function normalizeMultisigSpecPayload(spec, path) {
   return builder.build().toPayload();
 }
 
+function normalizeSafeIntegerJson(value, name, { allowNegative = false } = {}) {
+  if (typeof value === "bigint") {
+    if ((!allowNegative && value < 0n) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
+      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+    }
+    if (value > MAX_SAFE_INTEGER_BIGINT) {
+      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+    }
+    return Number(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value)) {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be an integer`, name);
+    }
+    if (!allowNegative && value < 0) {
+      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must be non-negative`, name);
+    }
+    if (!Number.isSafeInteger(value)) {
+      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+    }
+    return value;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    const pattern = allowNegative ? /^-?\d+$/ : /^\d+$/;
+    if (!pattern.test(trimmed)) {
+      fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be an integer literal`, name);
+    }
+    const numeric = BigInt(trimmed);
+    if ((!allowNegative && numeric < 0n) || numeric < BigInt(Number.MIN_SAFE_INTEGER)) {
+      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+    }
+    if (numeric > MAX_SAFE_INTEGER_BIGINT) {
+      fail(ValidationErrorCode.VALUE_OUT_OF_RANGE, `${name} must fit in JavaScript's safe integer range`, name);
+    }
+    return Number(numeric);
+  }
+  fail(ValidationErrorCode.INVALID_NUMERIC, `${name} must be an integer`, name);
+}
+
+function normalizeExecuteTriggerBuilderInput(triggerOrOptions, args, context = "executeTrigger") {
+  if (typeof triggerOrOptions === "string") {
+    return {
+      trigger: assertString(triggerOrOptions, `${context}.trigger`),
+      args:
+        args === undefined
+          ? null
+          : normalizeJsonValue(args, `${context}.args`),
+    };
+  }
+  const source = assertPlainObject(triggerOrOptions, context);
+  return {
+    trigger: assertString(
+      source.trigger ?? source.triggerId,
+      `${context}.trigger`,
+    ),
+    args:
+      source.args === undefined
+        ? null
+        : normalizeJsonValue(source.args, `${context}.args`),
+  };
+}
+
+function resolveMultisigTriggerArgs(options, context) {
+  if (options.args !== undefined) {
+    return normalizeJsonValue(options.args, `${context}.args`);
+  }
+  const preset = options.argPreset ?? options.preset;
+  if (preset === undefined || preset === null) {
+    return null;
+  }
+  return buildMultisigTriggerArgs(
+    preset,
+    options.argInput ?? options.presetInput ?? options.input ?? {},
+  );
+}
+
+function normalizeMultisigExecuteTriggerOptions(options, context) {
+  const source = assertPlainObject(options, context);
+  const normalized = {
+    trigger: assertString(source.trigger, `${context}.trigger`),
+    args: resolveMultisigTriggerArgs(source, context),
+    signerAccountId:
+      source.signerAccountId === undefined || source.signerAccountId === null
+        ? null
+        : normalizeAccountId(source.signerAccountId, `${context}.signerAccountId`),
+    strictSignerCheck: Boolean(source.strictSignerCheck ?? source.strict_signer_check),
+    multisigSpec:
+      source.multisigSpec === undefined && source.spec === undefined
+        ? null
+        : normalizeMultisigSpecPayload(
+            source.multisigSpec ?? source.spec,
+            `${context}.multisigSpec`,
+          ),
+  };
+
+  if (normalized.strictSignerCheck) {
+    if (!normalized.multisigSpec) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.multisigSpec is required when strictSignerCheck is true`,
+        `${context}.multisigSpec`,
+      );
+    }
+    if (!normalized.signerAccountId) {
+      fail(
+        ValidationErrorCode.INVALID_ACCOUNT_ID,
+        `${context}.signerAccountId is required when strictSignerCheck is true`,
+        `${context}.signerAccountId`,
+      );
+    }
+    if (!isMultisigSignerAuthorized(normalized.multisigSpec, normalized.signerAccountId)) {
+      fail(
+        ValidationErrorCode.INVALID_ACCOUNT_ID,
+        `${context}.signerAccountId is not present in multisigSpec.signatories`,
+        `${context}.signerAccountId`,
+      );
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeMultisigAccountSelectorInput(source, context) {
+  const hasAccountId =
+    source.multisigAccountId !== undefined ||
+    source.multisig_account_id !== undefined;
+  const hasAlias =
+    source.multisigAccountAlias !== undefined ||
+    source.multisig_account_alias !== undefined;
+  if ((hasAccountId ? 1 : 0) + (hasAlias ? 1 : 0) !== 1) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires exactly one of multisigAccountId or multisigAccountAlias`,
+      context,
+    );
+  }
+  if (hasAccountId) {
+    return {
+      multisig_account_id: normalizeAccountId(
+        source.multisigAccountId ?? source.multisig_account_id,
+        `${context}.multisigAccountId`,
+      ),
+    };
+  }
+  const alias = assertString(
+    source.multisigAccountAlias ?? source.multisig_account_alias,
+    `${context}.multisigAccountAlias`,
+  );
+  const aliasParts = alias.split("@");
+  const scopeParts = aliasParts[1]?.split(".") ?? [];
+  if (
+    aliasParts.length !== 2 ||
+    !aliasParts[0] ||
+    !aliasParts[1] ||
+    scopeParts.length < 1 ||
+    scopeParts.length > 2 ||
+    scopeParts.some((part) => !part) ||
+    /\s/.test(alias)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${context}.multisigAccountAlias must use name@dataspace or name@domain.dataspace form`,
+      `${context}.multisigAccountAlias`,
+    );
+  }
+  return {
+    multisig_account_alias: alias,
+  };
+}
+
+function normalizeOptionalHexString(value, name) {
+  const literal = assertString(value, name);
+  const compact = literal.replace(/^0x/i, "");
+  if (!/^[0-9A-Fa-f]{64}$/.test(compact)) {
+    fail(ValidationErrorCode.INVALID_HEX, `${name} must be a 32-byte hex string`, name);
+  }
+  return compact.toLowerCase();
+}
+
+function normalizeOptionalBase64String(value, name) {
+  const literal = assertString(value, name);
+  if (literal.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must not be empty`, name);
+  }
+  try {
+    Buffer.from(literal, "base64");
+  } catch (error) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be valid base64`, name);
+  }
+  return literal;
+}
+
 function asNonNegativeInteger(value, name) {
   if (typeof value === "bigint") {
     if (value < 0n) {
@@ -2279,6 +2472,143 @@ export function buildRegisterAccountInstruction({
 }
 
 /**
+ * Build an `ExecuteTrigger` instruction payload.
+ * @param {string | { trigger: string, args?: any }} triggerOrOptions
+ * @param {any} [args]
+ * @returns {{ExecuteTrigger: {trigger: string, args: any}}}
+ */
+export function buildExecuteTriggerInstruction(triggerOrOptions, args) {
+  const normalized = normalizeExecuteTriggerBuilderInput(
+    triggerOrOptions,
+    args,
+    "executeTrigger",
+  );
+  return {
+    ExecuteTrigger: normalized,
+  };
+}
+
+/**
+ * Encode an `ExecuteTrigger` instruction payload to canonical Norito.
+ * @param {string | { trigger: string, args?: any }} triggerOrOptions
+ * @param {any} [args]
+ * @returns {Buffer}
+ */
+export function buildExecuteTriggerNorito(triggerOrOptions, args) {
+  return noritoEncodeInstruction(buildExecuteTriggerInstruction(triggerOrOptions, args));
+}
+
+/**
+ * Build common Kotodama trigger-argument payloads for multisig/direct-contract flows.
+ * @param {"lifecycle" | "lookup"} preset
+ * @param {object} [input]
+ * @returns {object}
+ */
+export function buildMultisigTriggerArgs(preset, input = {}) {
+  const normalizedPreset = assertString(preset, "preset");
+  const source = assertPlainObject(input, "input");
+  if (normalizedPreset === "lifecycle") {
+    const payload = {
+      action: assertString(source.action, "input.action"),
+      request_id: assertString(
+        source.requestId ?? source.request_id,
+        "input.requestId",
+      ),
+    };
+    const fiId = source.fiId ?? source.fi_id;
+    if (fiId !== undefined && fiId !== null) {
+      payload.fi_id = assertString(fiId, "input.fiId");
+    }
+    const toAccountId = source.toAccountId ?? source.to_account_id;
+    if (toAccountId !== undefined && toAccountId !== null) {
+      payload.to_account_id = normalizeAccountId(toAccountId, "input.toAccountId");
+    }
+    const amountI64 = source.amountI64 ?? source.amount_i64;
+    if (amountI64 !== undefined && amountI64 !== null) {
+      payload.amount_i64 = normalizeSafeIntegerJson(amountI64, "input.amountI64", {
+        allowNegative: true,
+      });
+    }
+    const requestedByActorId =
+      source.requestedByActorId ?? source.requested_by_actor_id;
+    if (requestedByActorId !== undefined) {
+      payload.requested_by_actor_id = normalizeJsonValue(
+        requestedByActorId,
+        "input.requestedByActorId",
+      );
+    }
+    const createdAtMs = source.createdAtMs ?? source.created_at_ms;
+    if (createdAtMs !== undefined && createdAtMs !== null) {
+      payload.created_at_ms = asNonNegativeInteger(createdAtMs, "input.createdAtMs");
+    }
+    const expiresAtMs = source.expiresAtMs ?? source.expires_at_ms;
+    if (expiresAtMs !== undefined && expiresAtMs !== null) {
+      payload.expires_at_ms = asNonNegativeInteger(expiresAtMs, "input.expiresAtMs");
+    }
+    return payload;
+  }
+  if (normalizedPreset === "lookup") {
+    const payload = {
+      request_id: assertString(
+        source.requestId ?? source.request_id,
+        "input.requestId",
+      ),
+    };
+    const requestedByActorId =
+      source.requestedByActorId ?? source.requested_by_actor_id;
+    if (requestedByActorId !== undefined) {
+      payload.requested_by_actor_id = normalizeJsonValue(
+        requestedByActorId,
+        "input.requestedByActorId",
+      );
+    }
+    return payload;
+  }
+  fail(
+    ValidationErrorCode.INVALID_STRING,
+    'preset must be either "lifecycle" or "lookup"',
+    "preset",
+  );
+}
+
+/**
+ * Check whether a signer is present in a multisig spec.
+ * @param {MultisigSpec | object} spec
+ * @param {string} signerAccountId
+ * @returns {boolean}
+ */
+export function isMultisigSignerAuthorized(spec, signerAccountId) {
+  const normalizedSpec = normalizeMultisigSpecPayload(spec, "spec");
+  const normalizedSigner = normalizeAccountId(signerAccountId, "signerAccountId");
+  return Object.prototype.hasOwnProperty.call(
+    normalizedSpec.signatories,
+    normalizedSigner,
+  );
+}
+
+/**
+ * Build an `ExecuteTrigger` instruction with optional strict signer validation against a multisig spec.
+ * @param {{ trigger: string, args?: any, argPreset?: "lifecycle" | "lookup", argInput?: object, signerAccountId?: string, multisigSpec?: MultisigSpec | object, spec?: MultisigSpec | object, strictSignerCheck?: boolean }} options
+ * @returns {{ExecuteTrigger: {trigger: string, args: any}}}
+ */
+export function buildMultisigExecuteTriggerInstruction(options) {
+  const normalized = normalizeMultisigExecuteTriggerOptions(
+    options,
+    "multisigExecuteTrigger",
+  );
+  return buildExecuteTriggerInstruction(normalized.trigger, normalized.args);
+}
+
+/**
+ * Encode an `ExecuteTrigger` instruction with optional strict signer validation against a multisig spec.
+ * @param {{ trigger: string, args?: any, argPreset?: "lifecycle" | "lookup", argInput?: object, signerAccountId?: string, multisigSpec?: MultisigSpec | object, spec?: MultisigSpec | object, strictSignerCheck?: boolean }} options
+ * @returns {Buffer}
+ */
+export function buildMultisigExecuteTriggerNorito(options) {
+  return noritoEncodeInstruction(buildMultisigExecuteTriggerInstruction(options));
+}
+
+/**
  * Build a multisig registration instruction payload.
  * @param {{ accountId: string, spec: MultisigSpec | object }} options
  * @returns {{Custom: {payload: {Register: {account: string, spec: object}}}}}
@@ -2344,6 +2674,226 @@ export function buildProposeMultisigInstruction({
       },
     },
   };
+}
+
+/**
+ * Build a multisig proposal wrapping a single `ExecuteTrigger` instruction.
+ * @param {{ accountId: string, trigger: string, args?: any, argPreset?: "lifecycle" | "lookup", argInput?: object, spec: MultisigSpec | object, signerAccountId?: string, strictSignerCheck?: boolean, transactionTtlMs?: number | null }} options
+ * @returns {{Custom: {payload: {Propose: {account: string, instructions: object[], transaction_ttl_ms?: number}}}}}
+ */
+export function buildProposeMultisigExecuteTriggerInstruction(options) {
+  const source = assertPlainObject(options, "proposeMultisigExecuteTrigger");
+  const normalized = normalizeMultisigExecuteTriggerOptions(
+    {
+      trigger: source.trigger,
+      args: source.args,
+      argPreset: source.argPreset ?? source.preset,
+      argInput: source.argInput ?? source.presetInput,
+      signerAccountId: source.signerAccountId,
+      multisigSpec: source.spec,
+      strictSignerCheck: source.strictSignerCheck,
+    },
+    "proposeMultisigExecuteTrigger",
+  );
+  return buildProposeMultisigInstruction({
+    accountId: source.accountId,
+    instructions: [buildExecuteTriggerInstruction(normalized.trigger, normalized.args)],
+    spec: source.spec,
+    transactionTtlMs: source.transactionTtlMs ?? source.transaction_ttl_ms,
+  });
+}
+
+/**
+ * Encode a multisig proposal wrapping a single `ExecuteTrigger` instruction.
+ * @param {{ accountId: string, trigger: string, args?: any, argPreset?: "lifecycle" | "lookup", argInput?: object, spec: MultisigSpec | object, signerAccountId?: string, strictSignerCheck?: boolean, transactionTtlMs?: number | null }} options
+ * @returns {Buffer}
+ */
+export function buildProposeMultisigExecuteTriggerNorito(options) {
+  return noritoEncodeInstruction(buildProposeMultisigExecuteTriggerInstruction(options));
+}
+
+/**
+ * Build a normalized payload for `ToriiClient.proposeMultisigContractCall(...)`.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildMultisigContractCallProposeRequest(options) {
+  const source = assertPlainObject(options, "multisigContractCallPropose");
+  const selector = normalizeMultisigAccountSelectorInput(
+    source,
+    "multisigContractCallPropose",
+  );
+  const normalized = normalizeMultisigExecuteTriggerOptions(
+    {
+      trigger: source.trigger,
+      args: source.args,
+      argPreset: source.argPreset ?? source.preset,
+      argInput: source.argInput ?? source.presetInput,
+      signerAccountId: source.signerAccountId,
+      multisigSpec: source.multisigSpec ?? source.spec,
+      strictSignerCheck: source.strictSignerCheck,
+    },
+    "multisigContractCallPropose",
+  );
+  const payload = {
+    ...selector,
+    signer_account_id: normalized.signerAccountId ?? normalizeAccountId(
+      source.signerAccountId,
+      "multisigContractCallPropose.signerAccountId",
+    ),
+    namespace: assertString(source.namespace, "multisigContractCallPropose.namespace"),
+    contract_id: assertString(
+      source.contractId ?? source.contract_id,
+      "multisigContractCallPropose.contractId",
+    ),
+    entrypoint: assertString(
+      source.entrypoint,
+      "multisigContractCallPropose.entrypoint",
+    ),
+    payload:
+      source.payload !== undefined
+        ? normalizeJsonValue(source.payload, "multisigContractCallPropose.payload")
+        : {
+            trigger: normalized.trigger,
+            args: normalized.args,
+          },
+  };
+
+  const gasAssetId = source.gasAssetId ?? source.gas_asset_id;
+  if (gasAssetId !== undefined && gasAssetId !== null) {
+    payload.gas_asset_id = normalizeAssetId(
+      gasAssetId,
+      "multisigContractCallPropose.gasAssetId",
+    );
+  }
+  const feeSponsor = source.feeSponsor ?? source.fee_sponsor;
+  if (feeSponsor !== undefined && feeSponsor !== null) {
+    payload.fee_sponsor = normalizeAccountId(
+      feeSponsor,
+      "multisigContractCallPropose.feeSponsor",
+    );
+  }
+  const gasLimit = source.gasLimit ?? source.gas_limit;
+  if (gasLimit !== undefined && gasLimit !== null) {
+    payload.gas_limit = asPositiveInteger(gasLimit, "multisigContractCallPropose.gasLimit");
+  }
+  const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
+  if (publicKeyHex !== undefined && publicKeyHex !== null) {
+    payload.public_key_hex = normalizeOptionalHexString(
+      publicKeyHex,
+      "multisigContractCallPropose.publicKeyHex",
+    );
+  }
+  const signatureB64 = source.signatureB64 ?? source.signature_b64;
+  if (signatureB64 !== undefined && signatureB64 !== null) {
+    payload.signature_b64 = normalizeOptionalBase64String(
+      signatureB64,
+      "multisigContractCallPropose.signatureB64",
+    );
+  }
+  const creationTimeMs = source.creationTimeMs ?? source.creation_time_ms;
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    payload.creation_time_ms = asNonNegativeInteger(
+      creationTimeMs,
+      "multisigContractCallPropose.creationTimeMs",
+    );
+  }
+  const privateKey = source.privateKey ?? source.private_key;
+  if (privateKey !== undefined && privateKey !== null) {
+    if (
+      typeof privateKey !== "string" &&
+      !Buffer.isBuffer(privateKey) &&
+      !ArrayBuffer.isView(privateKey) &&
+      !(privateKey instanceof ArrayBuffer)
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        "multisigContractCallPropose.privateKey must be a string or binary payload",
+        "multisigContractCallPropose.privateKey",
+      );
+    }
+    payload.private_key = privateKey;
+  }
+  return payload;
+}
+
+/**
+ * Build a normalized payload for `ToriiClient.approveMultisigContractCall(...)`.
+ * @param {object} options
+ * @returns {object}
+ */
+export function buildMultisigContractCallApproveRequest(options) {
+  const source = assertPlainObject(options, "multisigContractCallApprove");
+  const selector = normalizeMultisigAccountSelectorInput(
+    source,
+    "multisigContractCallApprove",
+  );
+  const payload = {
+    ...selector,
+    signer_account_id: normalizeAccountId(
+      source.signerAccountId ?? source.signer_account_id,
+      "multisigContractCallApprove.signerAccountId",
+    ),
+  };
+  const proposalId = source.proposalId ?? source.proposal_id;
+  if (proposalId !== undefined && proposalId !== null) {
+    payload.proposal_id = assertString(
+      proposalId,
+      "multisigContractCallApprove.proposalId",
+    );
+  }
+  const instructionsHash = source.instructionsHash ?? source.instructions_hash;
+  if (instructionsHash !== undefined && instructionsHash !== null) {
+    payload.instructions_hash = normalizeOptionalHexString(
+      instructionsHash,
+      "multisigContractCallApprove.instructionsHash",
+    );
+  }
+  if (!payload.proposal_id && !payload.instructions_hash) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      "multisigContractCallApprove requires proposalId or instructionsHash",
+      "multisigContractCallApprove",
+    );
+  }
+  const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
+  if (publicKeyHex !== undefined && publicKeyHex !== null) {
+    payload.public_key_hex = normalizeOptionalHexString(
+      publicKeyHex,
+      "multisigContractCallApprove.publicKeyHex",
+    );
+  }
+  const signatureB64 = source.signatureB64 ?? source.signature_b64;
+  if (signatureB64 !== undefined && signatureB64 !== null) {
+    payload.signature_b64 = normalizeOptionalBase64String(
+      signatureB64,
+      "multisigContractCallApprove.signatureB64",
+    );
+  }
+  const creationTimeMs = source.creationTimeMs ?? source.creation_time_ms;
+  if (creationTimeMs !== undefined && creationTimeMs !== null) {
+    payload.creation_time_ms = asNonNegativeInteger(
+      creationTimeMs,
+      "multisigContractCallApprove.creationTimeMs",
+    );
+  }
+  const privateKey = source.privateKey ?? source.private_key;
+  if (privateKey !== undefined && privateKey !== null) {
+    if (
+      typeof privateKey !== "string" &&
+      !Buffer.isBuffer(privateKey) &&
+      !ArrayBuffer.isView(privateKey) &&
+      !(privateKey instanceof ArrayBuffer)
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        "multisigContractCallApprove.privateKey must be a string or binary payload",
+        "multisigContractCallApprove.privateKey",
+      );
+    }
+    payload.private_key = privateKey;
+  }
+  return payload;
 }
 
 /**

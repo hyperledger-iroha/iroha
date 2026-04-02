@@ -39,10 +39,12 @@ build is unavailable), run tests with `npm run test:js`, which sets
 `IROHA_JS_DISABLE_NATIVE=1`. The default `npm test` still exercises the native
 binding when present.
 
-In JS-only mode `noritoEncodeInstruction`/`noritoDecodeInstruction` operate on
-plain JSON strings (UTF-8 bytes) instead of the binary Norito codec so tooling
-can keep running without the Rust bridge. For canonical Norito payloads build
-the native module first.
+In JS-only mode `noritoEncodeInstruction`/`noritoDecodeInstruction` still emit
+canonical binary Norito for the currently supported fallback instruction slice:
+`Mint.Asset`, `Mint.TriggerRepetitions`, `Burn.Asset`,
+`Burn.TriggerRepetitions`, `Transfer.Asset`, and `ExecuteTrigger`. Other
+instruction families still require the native module for canonical binary
+encoding/decoding.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)
@@ -244,6 +246,58 @@ only need a non-throwing preview for relayer TTL hints.
 > Multisig controllers must never use derived keys. Supply an explicit account id in the
 > signatory domain (random keys are fine; private halves should be discarded). Nodes will reject
 > derived multisig ids at admission.
+
+## ExecuteTrigger and multisig helper builders
+
+```js
+import {
+  buildExecuteTriggerNorito,
+  buildMultisigTriggerArgs,
+  buildProposeMultisigExecuteTriggerInstruction,
+  buildMultisigContractCallProposeRequest,
+} from "@iroha/iroha-js";
+
+const args = buildMultisigTriggerArgs("lifecycle", {
+  action: "create",
+  requestId: "mr1",
+  fiId: "hbl",
+  toAccountId: "sorauロ1PケiコPヨソRhgラ1EコリNソnhレdシユAYGwワテYqケGLニwKヘaQUJKW1",
+  amountI64: 10,
+  createdAtMs: Date.now(),
+  expiresAtMs: Date.now() + 60_000,
+});
+
+// Direct ExecuteTrigger Norito bytes for the canonical multisig-critical path.
+const directNorito = buildExecuteTriggerNorito("staged_mint_request_hbl", args);
+
+// Wrap the same trigger call into a multisig proposal instruction.
+const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
+  accountId: "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL",
+  trigger: "staged_mint_request_hbl",
+  args,
+  spec,
+  signerAccountId: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
+  strictSignerCheck: true,
+  transactionTtlMs: 45_000,
+});
+
+// Build the normalized Torii request body for the multisig contract-call flow.
+const request = buildMultisigContractCallProposeRequest({
+  multisigAccountAlias: "mintops@hbl",
+  signerAccountId: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
+  namespace: "apps",
+  contractId: "mint",
+  entrypoint: "execute",
+  trigger: "staged_mint_request_hbl",
+  args,
+  multisigSpec: spec,
+  strictSignerCheck: true,
+});
+```
+
+Use `isMultisigSignerAuthorized(spec, signerAccountId)` when you only need the
+membership check without building a payload, and `buildExecuteTriggerInstruction(...)`
+when you want the JSON form before Norito encoding.
 
 ```js
 import {

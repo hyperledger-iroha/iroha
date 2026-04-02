@@ -1837,3 +1837,11 @@ function i105ChecksumDigits(canonical) {
   const base32 = convertToBase32(canonical);
   return bech32mChecksum(base32);
 }
+
+export {
+  curveIdFromAlgorithm,
+  curveIdToAlgorithm,
+  ensureCurveIdEnabled,
+  normalizeBytes,
+  validatePublicKeyForCurve,
+};
