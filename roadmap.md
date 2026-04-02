@@ -1,6 +1,23 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-01
+Last updated: 2026-04-02
+
+Latest sync (2026-04-02 targeted integration-test repair follow-up):
+the reported `connected_peers`, runtime Nexus registration benchmark, and
+account-created trigger regressions are green again on targeted reruns.
+
+- restored `AccountEvent::Created` emission for account registration so the
+  non-intersecting data-trigger path fires again;
+- hardened the connected-peers integration helper to sample roster visibility
+  across the cluster instead of failing on a single lagging probe peer; and
+- gave the runtime registration benchmark its own routed dataspace lane plus a
+  deterministic admin-managed manifest binding, then waited for authoritative
+  binding and permission visibility before running the report-only benchmark.
+
+Open work for this slice now remains:
+- replay the broader `integration_tests --test mod` shard, or the next larger
+  workspace gate that covers these paths, on a fresh binary; this fix set was
+  verified with targeted reruns only.
 
 Latest sync (2026-04-01 Nexus routing / cross-dataspace localnet recovery):
 the reported Nexus and DA/RBC regression set is green again on a fresh rebuilt
