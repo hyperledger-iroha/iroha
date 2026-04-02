@@ -2,6 +2,8 @@ package org.hyperledger.iroha.sdk.tx.norito
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
+import kotlin.io.path.readText
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
@@ -45,7 +47,7 @@ internal object AndroidFixtureSupport {
 
     fun loadPayloadFixtures(): List<TransactionPayloadFixture> {
         val path = resolveSharedResource("transaction_payloads.json")
-        val parsed = JsonParser.parse(Files.readString(path))
+        val parsed = JsonParser.parse(path.readText())
         return asList(parsed, path.toString()).map { entry ->
             payloadFixtureFromValue(entry)
         }
@@ -75,7 +77,7 @@ internal object AndroidFixtureSupport {
 
     fun loadManifestFixtures(): List<TransactionManifestFixture> {
         val path = resolveSharedResource("transaction_fixtures.manifest.json")
-        val parsed = JsonParser.parse(Files.readString(path))
+        val parsed = JsonParser.parse(path.readText())
         val manifest = asMap(parsed, path.toString())
         return asList(manifest["fixtures"], "manifest.fixtures").map { entry ->
             val map = asMap(entry, "manifest.fixture")
@@ -99,7 +101,7 @@ internal object AndroidFixtureSupport {
     }
 
     fun resolveSharedResource(name: String): Path {
-        var current = Path.of("").toAbsolutePath().normalize()
+        var current = Paths.get("").toAbsolutePath().normalize()
         while (true) {
             val candidate = current.resolve(ANDROID_RESOURCE_ROOT).resolve(name)
             if (Files.exists(candidate)) {
@@ -108,7 +110,7 @@ internal object AndroidFixtureSupport {
             val parent = current.parent ?: break
             current = parent
         }
-        error("Unable to locate $ANDROID_RESOURCE_ROOT/$name from ${Path.of("").toAbsolutePath()}")
+        error("Unable to locate $ANDROID_RESOURCE_ROOT/$name from ${Paths.get("").toAbsolutePath()}")
     }
 
     internal fun buildPayload(name: String, payload: Map<String, Any?>): TransactionPayload {

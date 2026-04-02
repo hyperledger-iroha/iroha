@@ -66,8 +66,7 @@ class ConfigWatcher(
     }
 
     private fun emitReloadSignal(config: ClientConfig, digest: String?, result: String, durationMs: Long, error: Throwable?) {
-        val sink = config.telemetrySink()
-        if (sink.isEmpty) return
+        val sink = config.telemetrySink().orElse(null) ?: return
         val fields = LinkedHashMap<String, Any>()
         fields["source"] = manifestPath.toString()
         fields["result"] = result
@@ -77,7 +76,7 @@ class ConfigWatcher(
             fields["error"] = error.javaClass.simpleName
             fields["message"] = error.message.toString()
         }
-        try { sink.get().emitSignal("sdk.telemetry.config.reload", fields) } catch (_: RuntimeException) {}
+        try { sink.emitSignal("sdk.telemetry.config.reload", fields) } catch (_: RuntimeException) {}
     }
 
     private fun captureSnapshotIfChanged(): FileSnapshot? {

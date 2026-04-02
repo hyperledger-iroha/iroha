@@ -3,7 +3,6 @@ package org.hyperledger.iroha.sdk.connect
 import java.net.URI
 import java.net.URISyntaxException
 import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 import java.util.Locale
 import org.hyperledger.iroha.sdk.crypto.Blake2b
 
@@ -114,7 +113,7 @@ class ConnectWalletRequest private constructor(
         }
 
         private fun urlDecode(value: String): String =
-            URLDecoder.decode(value, StandardCharsets.UTF_8)
+            URLDecoder.decode(value, "UTF-8")
 
         @Throws(ConnectProtocolException::class)
         private fun decodeBase64Url(value: String): ByteArray {

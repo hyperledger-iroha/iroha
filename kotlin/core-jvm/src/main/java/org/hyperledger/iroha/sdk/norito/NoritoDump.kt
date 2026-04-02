@@ -5,6 +5,7 @@ package org.hyperledger.iroha.sdk.norito
 
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 
 /** Simple CLI to print Norito header information. */
 object NoritoDump {
@@ -15,7 +16,7 @@ object NoritoDump {
             System.err.println("Usage: NoritoDump <path>")
             System.exit(1)
         }
-        val data = Files.readAllBytes(Path.of(args[0]))
+        val data = Files.readAllBytes(Paths.get(args[0]))
         val result = NoritoHeader.decode(data, null)
         val header = result.header
         println("Norito header:")

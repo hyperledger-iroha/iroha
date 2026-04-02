@@ -312,9 +312,9 @@ class ToriiEventStreamClient(
             var first = true
             for ((key, value) in params) {
                 if (!first) sb.append('&')
-                sb.append(URLEncoder.encode(key, StandardCharsets.UTF_8))
+                sb.append(URLEncoder.encode(key, "UTF-8"))
                     .append('=')
-                    .append(URLEncoder.encode(value, StandardCharsets.UTF_8))
+                    .append(URLEncoder.encode(value, "UTF-8"))
                 first = false
             }
             return sb.toString()

@@ -12,7 +12,6 @@ import java.security.SecureRandom
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.util.ArrayDeque
-import java.util.HexFormat
 import java.util.LinkedHashSet
 import javax.crypto.Cipher
 import javax.crypto.Mac
@@ -448,9 +447,8 @@ object DeterministicKeyExporter {
             .put(salt)
             .put(nonce)
             .array()
-        val fingerprint = HexFormat.of().formatHex(
-            sha256("iroha-android-software-export-v3-fingerprint", fingerprintMaterial)
-        )
+        val fingerprint = sha256("iroha-android-software-export-v3-fingerprint", fingerprintMaterial)
+            .toHexString()
         fingerprintMaterial.fill(0)
         synchronized(recentExportIndex) {
             if (recentExportIndex.contains(fingerprint)) {
