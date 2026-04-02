@@ -52,6 +52,12 @@ Offline wallet with native libraries:
 - **`sdk.offline.attestation`** — Play Integrity, SafetyDetect
 - **`jniLibs/`** — `libconnect_norito_bridge.so` (built from Rust source, not tracked in git)
 
+## JDK Compatibility
+
+All modules enforce **JDK 8 API compatibility at compile time** via `-Xjdk-release=8` in `freeCompilerArgs`. The compiler uses JDK 21 (`jvmToolchain(21)`) but restricts the available API surface to JDK 8. Using any JDK 9+ API (e.g. `Optional.isEmpty()`, `BigInteger.TWO`, `URLEncoder.encode(String, Charset)`, `Arrays.compareUnsigned()`) will cause a compilation error. Use Kotlin stdlib equivalents or JDK 8 overloads instead.
+
+**Do not remove `-Xjdk-release=8` from any module's `freeCompilerArgs`.** This flag is the only compile-time guard against JDK 9+ API usage. Without it, incompatible calls compile silently and crash at runtime on Android.
+
 ## API Design Rules
 
 ### No data classes in public API
