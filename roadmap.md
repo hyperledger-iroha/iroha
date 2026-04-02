@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-02
 
+Latest sync (2026-04-02 multisig SNS-lease repair):
+the reported multisig integration failures now use SNS-valid runtime-domain
+setup and the cancel-route coverage matches the current Torii public contract.
+
+- `integration_tests/tests/multisig.rs` now provisions runtime domains through
+  the lease-aware `iroha_test_network` helper and uses hyphenated SNS-valid
+  test domain labels instead of underscore labels that can never acquire a
+  domain-name lease;
+- `crates/iroha_test_network/src/lib.rs` now leaves
+  `pricing_class_hint` unset for synthetic SNS lease registration so the helper
+  follows the registrar's real pricing-tier selection instead of assuming tier
+  `0`; and
+- the cancel-route regression now waits on `/v1/multisig/cancel` to expose
+  `APPROVE` mode rather than querying hidden cancel-wrapper proposals through
+  `/v1/multisig/proposals/get`, while still asserting the target proposal lands
+  in terminal `CANCELED` state and remains visible in canceled listings.
+
+Open work for this slice now remains:
+- rerun `cargo test -p integration_tests --test multisig -- --nocapture --test-threads=1`
+  in a clean, non-overlapped slot using the warmed binary reuse path
+  (`IROHA_TEST_SKIP_BUILD=1`, `TEST_NETWORK_BIN_IROHAD`, `TEST_NETWORK_BIN_IROHA`)
+  so the executor-upgrade variants can finish without the extra local parallel
+  network load introduced during this repair session.
+
 Latest sync (2026-04-02 targeted integration-test repair follow-up):
 the reported `connected_peers`, runtime Nexus registration benchmark, and
 account-created trigger regressions are green again on targeted reruns.

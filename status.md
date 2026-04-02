@@ -2,6 +2,31 @@
 
 Last updated: 2026-04-02
 
+## 2026-04-02 Follow-up: multisig integration setup honors SNS-backed runtime domain leases again
+- Fixed the reported `integration_tests/tests/multisig.rs` failures that started
+  rejecting runtime domain registration after the SNS lease invariant landed.
+- `integration_tests/tests/multisig.rs` now routes its runtime domain setup
+  through the lease-aware `iroha_test_network` helper and uses SNS-valid
+  hyphenated domain labels for the multisig-specific test domains.
+- `crates/iroha_test_network/src/lib.rs` no longer hard-codes
+  `pricing_class_hint: Some(0)` for synthetic domain leases; the helper now
+  lets the registrar auto-pick the valid pricing tier for the label under test.
+- The multisig cancel-route regression was deeper than the original setup
+  failure: Torii intentionally hides cancel-wrapper proposals from
+  `/v1/multisig/proposals/get`, and `/v1/multisig/cancel` now uses detached
+  signing / lane admission semantics rather than server-side signing. The test
+  now follows the public route contract by:
+  - using `/v1/multisig/cancel` in draft mode to assert the `PROPOSE`/`APPROVE`
+    transition and deterministic cancel proposal id; and
+  - submitting the equivalent `MultisigPropose(MultisigCancel(...))` /
+    `MultisigApprove(...)` instructions through the blocking client path before
+    asserting the target proposal reaches terminal `CANCELED` state and remains
+    listed there.
+- Verification:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_codex_multisig_cancel IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" TEST_NETWORK_BIN_IROHA="$PWD/target/debug/iroha" cargo test -p integration_tests --test multisig multisig_cancel_route_persists_canceled_terminal_state -- --exact --nocapture --test-threads=1` (pass)
+  - `CARGO_TARGET_DIR=target_codex_multisig_cancel IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" TEST_NETWORK_BIN_IROHA="$PWD/target/debug/iroha" cargo test -p integration_tests --test multisig -- --nocapture --test-threads=1` (replay reached green results for the originally failing non-upgrade cases before the later executor-upgrade tranche was left running alongside additional overlapping local reruns; rerun cleanly before treating the whole shard as closed)
+
 ## 2026-04-02 Follow-up: `iroha_cli` binary reuse now pins the sibling `iroha3d` daemon to the same target/profile
 - Fixed the reported `integration_tests/tests/iroha_cli.rs`
   Soracloud-training timeout slice by tightening the test-only binary reuse

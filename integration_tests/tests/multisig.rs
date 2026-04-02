@@ -58,6 +58,27 @@ fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
     Ok(())
 }
 
+fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId) -> Result<()> {
+    submit_register_domain_with_network_lease(network, client, Domain::new(domain.clone()))
+        .wrap_err_with(|| format!("register multisig test domain `{domain}`"))
+}
+
+fn register_runtime_domain_and_transfer_to_bob(
+    network: &Network,
+    client: &Client,
+    domain: &DomainId,
+) -> Result<()> {
+    register_runtime_domain(network, client, domain)?;
+    client
+        .submit_blocking(Transfer::domain(
+            ALICE_ID.clone(),
+            domain.clone(),
+            BOB_ID.clone(),
+        ))
+        .wrap_err_with(|| format!("transfer multisig test domain `{domain}` to bob"))?;
+    Ok(())
+}
+
 fn canonical_multisig_account_id(spec: &MultisigSpec) -> AccountId {
     let members = spec
         .signatories
@@ -83,15 +104,20 @@ fn post_torii_app_json<T: norito::json::JsonSerialize + ?Sized>(
 ) -> Result<JsonValue> {
     let payload = norito::json::to_vec(body)?;
     let response_body = rt.block_on(async {
-        reqwest::Client::new()
+        let response = reqwest::Client::new()
             .post(endpoint)
             .header(CONTENT_TYPE, "application/json")
             .body(payload)
             .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await
+            .await?;
+        let status = response.status();
+        let body = response.text().await?;
+        if !status.is_success() {
+            return Err(eyre!(
+                "HTTP status {status} for `{endpoint}` with body: {body}"
+            ));
+        }
+        Ok(body)
     })?;
     norito::json::from_str(&response_body).map_err(Into::into)
 }
@@ -152,6 +178,66 @@ fn wait_for_multisig_proposal_status(
     }
 }
 
+fn wait_for_multisig_cancel_action(
+    rt: &Runtime,
+    torii_base: &str,
+    selector: &MultisigAccountSelectorDto,
+    signer_account_id: &AccountId,
+    proposal_id: &str,
+    expected_action: &str,
+) -> Result<JsonValue> {
+    let endpoint = format!("{torii_base}/v1/multisig/cancel");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last_action = None;
+    let mut last_error = None;
+
+    while Instant::now() < deadline {
+        match post_torii_app_json(
+            rt,
+            &endpoint,
+            &MultisigCancelRequestDto {
+                selector: selector.clone(),
+                signer_account_id: signer_account_id.clone(),
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                creation_time_ms: None,
+                proposal_id: Some(proposal_id.to_owned()),
+                instructions_hash: None,
+            },
+        ) {
+            Ok(payload) => {
+                let action = payload
+                    .get("action")
+                    .and_then(JsonValue::as_str)
+                    .map(ToOwned::to_owned);
+                if action.as_deref() == Some(expected_action) {
+                    return Ok(payload);
+                }
+                last_action = action;
+                last_error = None;
+            }
+            Err(err) => last_error = Some(err),
+        }
+
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    if let Some(action) = last_action {
+        Err(eyre!(
+            "timed out waiting for multisig cancel action `{expected_action}`; last action `{action}`"
+        ))
+    } else if let Some(err) = last_error {
+        Err(err).wrap_err_with(|| {
+            format!("timed out waiting for multisig cancel action `{expected_action}`")
+        })
+    } else {
+        Err(eyre!(
+            "timed out waiting for multisig cancel action `{expected_action}`"
+        ))
+    }
+}
+
 #[test]
 fn multisig_normal() -> Result<()> {
     multisig_base(TestSuite::normal(), stringify!(multisig_normal))
@@ -198,9 +284,8 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         return Ok(());
     }
 
-    let domain: DomainId = "multisig_cancel_terminal".parse().unwrap();
-    test_client
-        .submit_blocking(Register::domain(Domain::new(domain.clone())))
+    let domain: DomainId = "multisig-cancel-terminal".parse().unwrap();
+    register_runtime_domain(&network, &test_client, &domain)
         .wrap_err("register multisig cancel test domain")?;
 
     let spec = MultisigSpec::new(
@@ -249,7 +334,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         &MultisigCancelRequestDto {
             selector: selector.clone(),
             signer_account_id: BOB_ID.clone(),
-            private_key: Some(ExposedPrivateKey(BOB_KEYPAIR.private_key().clone())),
+            private_key: None,
             public_key_hex: None,
             signature_b64: None,
             creation_time_ms: None,
@@ -272,44 +357,41 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         .and_then(JsonValue::as_str)
         .expect("cancel proposal id should be returned")
         .to_owned();
-    // The Torii endpoint returns after queue admission, so wait for the cancel wrapper
-    // proposal to commit before sending the approval request that should observe it.
-    wait_for_multisig_proposal_status(
+    let target_instructions_hash = instructions_hash.parse().unwrap();
+    let cancel_instructions =
+        vec![MultisigCancel::new(multisig_account_id.clone(), target_instructions_hash).into()];
+    let expected_cancel_proposal_id = HashOf::new(&cancel_instructions).to_string();
+    assert_eq!(
+        cancel_proposal_id, expected_cancel_proposal_id,
+        "cancel route should report the deterministic cancel proposal hash"
+    );
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
+        .submit_blocking::<InstructionBox>(
+            MultisigPropose::new(multisig_account_id.clone(), cancel_instructions, None).into(),
+        )
+        .wrap_err("submit cancel wrapper proposal for cancel route test")?;
+    let approve_cancel = wait_for_multisig_cancel_action(
         &rt,
         &torii_base,
         &selector,
-        &cancel_proposal_id,
-        "COLLECTING_SIGNATURES",
+        &ALICE_ID,
+        &instructions_hash,
+        "APPROVE",
     )
-    .wrap_err("wait for cancel wrapper proposal to commit")?;
-
-    let approve_cancel = post_torii_app_json(
-        &rt,
-        &format!("{torii_base}/v1/multisig/cancel"),
-        &MultisigCancelRequestDto {
-            selector: selector.clone(),
-            signer_account_id: ALICE_ID.clone(),
-            private_key: Some(ExposedPrivateKey(
-                test_client.key_pair.private_key().clone(),
-            )),
-            public_key_hex: None,
-            signature_b64: None,
-            creation_time_ms: None,
-            proposal_id: Some(instructions_hash.clone()),
-            instructions_hash: None,
-        },
-    )?;
+    .wrap_err("wait for cancel route to expose approval mode")?;
     assert_eq!(
         approve_cancel.get("action").and_then(JsonValue::as_str),
         Some("APPROVE")
     );
-    assert!(
-        approve_cancel
-            .get("executed_tx_hash_hex")
-            .and_then(JsonValue::as_str)
-            .is_some(),
-        "cancel approval should execute the target cancellation"
-    );
+    test_client
+        .submit_blocking::<InstructionBox>(
+            MultisigApprove::new(
+                multisig_account_id.clone(),
+                expected_cancel_proposal_id.parse().unwrap(),
+            )
+            .into(),
+        )
+        .wrap_err("submit cancel wrapper approval for cancel route test")?;
 
     let canceled = wait_for_multisig_proposal_status(
         &rt,
@@ -368,12 +450,8 @@ fn multisig_register_materializes_missing_signatory_account() -> Result<()> {
         return Ok(());
     }
 
-    let domain: DomainId = "multisig_register_materialize".parse().unwrap();
-    let register_domain_and_transfer: [InstructionBox; 2] = [
-        Register::domain(Domain::new(domain.clone())).into(),
-        Transfer::domain(ALICE_ID.clone(), domain.clone(), BOB_ID.clone()).into(),
-    ];
-    test_client.submit_all_blocking(register_domain_and_transfer)?;
+    let domain: DomainId = "multisig-register-materialize".parse().unwrap();
+    register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -427,12 +505,8 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -
         return Ok(());
     }
 
-    let domain: DomainId = "multisig_register_rejected_materialize".parse().unwrap();
-    let register_domain_and_transfer: [InstructionBox; 2] = [
-        Register::domain(Domain::new(domain.clone())).into(),
-        Transfer::domain(ALICE_ID.clone(), domain.clone(), BOB_ID.clone()).into(),
-    ];
-    test_client.submit_all_blocking(register_domain_and_transfer)?;
+    let domain: DomainId = "multisig-register-rejected-materialize".parse().unwrap();
+    register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
     let non_signatory = gen_account_in(&domain);
@@ -490,12 +564,8 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
 
     upgrade_executor(&test_client, "executor_with_admin")?;
 
-    let domain: DomainId = "multisig_register_materialize_upgraded".parse().unwrap();
-    let register_domain_and_transfer: [InstructionBox; 2] = [
-        Register::domain(Domain::new(domain.clone())).into(),
-        Transfer::domain(ALICE_ID.clone(), domain.clone(), BOB_ID.clone()).into(),
-    ];
-    test_client.submit_all_blocking(register_domain_and_transfer)?;
+    let domain: DomainId = "multisig-register-materialize-upgraded".parse().unwrap();
+    register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -550,12 +620,8 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
 
     upgrade_executor(&test_client, "executor_with_admin")?;
 
-    let domain: DomainId = "multisig_register_rejected_upgraded".parse().unwrap();
-    let register_domain_and_transfer: [InstructionBox; 2] = [
-        Register::domain(Domain::new(domain.clone())).into(),
-        Transfer::domain(ALICE_ID.clone(), domain.clone(), BOB_ID.clone()).into(),
-    ];
-    test_client.submit_all_blocking(register_domain_and_transfer)?;
+    let domain: DomainId = "multisig-register-rejected-upgraded".parse().unwrap();
+    register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
     let non_signatory = gen_account_in(&domain);
@@ -610,12 +676,8 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
         return Ok(());
     }
 
-    let domain: DomainId = "multisig_auto_materialize".parse().unwrap();
-    let register_domain_and_transfer: [InstructionBox; 2] = [
-        Register::domain(Domain::new(domain.clone())).into(),
-        Transfer::domain(ALICE_ID.clone(), domain.clone(), BOB_ID.clone()).into(),
-    ];
-    test_client.submit_all_blocking(register_domain_and_transfer)?;
+    let domain: DomainId = "multisig-auto-materialize".parse().unwrap();
+    register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -678,12 +740,8 @@ fn multisig_add_signatory_rejected_does_not_materialize_missing_account() -> Res
         return Ok(());
     }
 
-    let domain: DomainId = "multisig_add_rejected_materialize".parse().unwrap();
-    let register_domain_and_transfer: [InstructionBox; 2] = [
-        Register::domain(Domain::new(domain.clone())).into(),
-        Transfer::domain(ALICE_ID.clone(), domain.clone(), BOB_ID.clone()).into(),
-    ];
-    test_client.submit_all_blocking(register_domain_and_transfer)?;
+    let domain: DomainId = "multisig-add-rejected-materialize".parse().unwrap();
+    register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -811,8 +869,7 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
     }
 
     // Assume some domain registered after genesis
-    test_client
-        .submit_blocking(Register::domain(Domain::new(domain.clone())))
+    register_runtime_domain(&network, &test_client, &domain)
         .wrap_err("register multisig test domain")?;
 
     // Populate residents in the domain
