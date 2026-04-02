@@ -35,9 +35,19 @@ use norito::json::{self, Value};
 use reqwest::Url;
 
 fn program() -> PathBuf {
+    prepare_iroha_cli_test_environment();
+    iroha_test_network::Program::Iroha.resolve().unwrap()
+}
+
+fn prepare_iroha_cli_test_environment() {
     enable_reentrant_builds_for_tests();
     configure_program_overrides_from_existing_binaries();
-    iroha_test_network::Program::Iroha.resolve().unwrap()
+}
+
+fn iroha_cli_test_build_profile_override(current: Option<&str>) -> Option<&'static str> {
+    current
+        .is_none_or(|value| value.trim().is_empty())
+        .then_some("debug")
 }
 
 fn enable_reentrant_builds_for_tests() {
@@ -46,8 +56,10 @@ fn enable_reentrant_builds_for_tests() {
         // Cargo sets `CARGO` for test binaries, which disables reentrant builds by default.
         // Allow nested builds so the CLI binary can be compiled on-demand in fresh workspaces.
         set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
-        if std::env::var_os("IROHA_TEST_BUILD_PROFILE").is_none() {
-            set_env_var("IROHA_TEST_BUILD_PROFILE", "debug");
+        if let Some(profile) = iroha_cli_test_build_profile_override(
+            std::env::var("IROHA_TEST_BUILD_PROFILE").ok().as_deref(),
+        ) {
+            set_env_var("IROHA_TEST_BUILD_PROFILE", profile);
         }
     });
 }
@@ -422,6 +434,25 @@ fn should_reuse_existing_cli_binary_for_tests_accepts_truthy_values() {
     )));
 }
 
+#[test]
+fn iroha_cli_test_build_profile_override_defaults_to_debug_when_unset_or_blank() {
+    assert_eq!(iroha_cli_test_build_profile_override(None), Some("debug"));
+    assert_eq!(
+        iroha_cli_test_build_profile_override(Some("")),
+        Some("debug")
+    );
+    assert_eq!(
+        iroha_cli_test_build_profile_override(Some("   ")),
+        Some("debug")
+    );
+}
+
+#[test]
+fn iroha_cli_test_build_profile_override_preserves_existing_profile() {
+    assert_eq!(iroha_cli_test_build_profile_override(Some("release")), None);
+    assert_eq!(iroha_cli_test_build_profile_override(Some("debug")), None);
+}
+
 fn local_program_config() -> ProgramConfig {
     let key = KeyPair::random();
     let domain_id: DomainId = "wonderland".parse().expect("literal domain should parse");
@@ -663,6 +694,7 @@ fn tagged_enum_label<'a>(value: &'a Value, tag: &str) -> Option<&'a str> {
 
 #[tokio::test]
 async fn can_upgrade_executor() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     if !ivm_build_profile_exists() {
         eprintln!("Skipping test: missing IVM build profile");
         return Ok(());
@@ -719,6 +751,7 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
 
 #[tokio::test]
 async fn reads_client_toml_by_default() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(reads_client_toml_by_default),
@@ -754,6 +787,7 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
 
 #[tokio::test]
 async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -823,6 +857,7 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
 
 #[tokio::test]
 async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -1082,6 +1117,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
 #[tokio::test]
 async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_control_plane()
 -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -1240,6 +1276,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
 #[tokio::test]
 async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane()
 -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -1834,6 +1871,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
 #[tokio::test]
 async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -2263,6 +2301,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
 
 #[tokio::test]
 async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -2576,6 +2615,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
 
 #[tokio::test]
 async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -3067,6 +3107,7 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
 #[tokio::test]
 async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() -> eyre::Result<()>
 {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -3435,6 +3476,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
 #[tokio::test]
 async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -3697,6 +3739,7 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
 #[tokio::test]
 async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane()
 -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -4118,6 +4161,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 #[tokio::test]
 async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane()
 -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
