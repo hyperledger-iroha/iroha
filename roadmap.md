@@ -2,6 +2,23 @@
 
 Last updated: 2026-04-02
 
+Latest sync (2026-04-02 Soracloud HF queued-renewal CLI timing fix):
+the reported pre-expiry renewal CLI regression is green again after making the
+integration test wait against the authoritative active-window expiry returned
+by Torii instead of sleeping a fixed extra lease term from the renew call.
+
+- `integration_tests/tests/iroha_cli.rs` now derives the rollover wait from
+  `renew_pool.window_expires_at_ms` with a small post-expiry buffer, so slower
+  localnet runs still exercise queued-window promotion instead of accidentally
+  falling through to the later `CreateWindow` path after both windows elapsed;
+  and
+- a fresh exact rerun passed with
+  `CARGO_TARGET_DIR=$PWD/target_codex_hf_queue_fix cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --exact --nocapture --test-threads=1`.
+
+Open work for this slice now remains:
+- none for this specific CLI timing fix; broader repo-wide gates remain tracked
+  in the older roadmap entries below.
+
 Latest sync (2026-04-02 multisig SNS-lease repair):
 the reported multisig integration failures now use SNS-valid runtime-domain
 setup and the cancel-route coverage matches the current Torii public contract.

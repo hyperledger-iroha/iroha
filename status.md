@@ -2,6 +2,22 @@
 
 Last updated: 2026-04-02
 
+## 2026-04-02 Follow-up: Soracloud HF queued-renewal CLI integration now waits against the authoritative window expiry
+- Fixed the reported
+  `integration_tests/tests/iroha_cli.rs::soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window`
+  failure without changing the underlying shared-lease state machine.
+- The live CLI integration test now reads `renew_pool.window_expires_at_ms`
+  from the authoritative renew response and sleeps only until just after that
+  active-window expiry instead of sleeping `lease_term_ms + 1.5s` from the
+  renew call itself.
+- This keeps slower localnet replays on the intended queued-window promotion
+  path and avoids overshooting into the later fresh-window `CreateWindow`
+  branch when the earlier deploy/renew/leave round-trips already consumed much
+  of the original lease term.
+- Verification:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=$PWD/target_codex_hf_queue_fix cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --exact --nocapture --test-threads=1` (pass)
+
 ## 2026-04-02 Follow-up: multisig integration setup honors SNS-backed runtime domain leases again
 - Fixed the reported `integration_tests/tests/multisig.rs` failures that started
   rejecting runtime domain registration after the SNS lease invariant landed.
