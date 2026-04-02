@@ -2,6 +2,52 @@
 
 Last updated: 2026-04-02
 
+Latest sync (2026-04-02 JS manifest metadata / curve parity closure):
+the JS SDK now round-trips full `RegisterSmartContractCode.manifest` metadata
+in JS-only mode, canonicalizes manifest provenance and `kotoba` to the same
+JSON shape native decode/Torii use, and proves the remaining curve families
+for the current address/Norito parity surface.
+
+- shipped in `javascript/iroha_js` / `iroha_js_host`:
+  - dedicated pure-JS manifest codecs for populated `entrypoints`, `kotoba`,
+    and `provenance` in `src/norito.js`;
+  - canonical manifest normalization in `src/instructionBuilders.js` and
+    `src/toriiClient.js`, including `msg_id` normalization plus canonical bare
+    signer/signature hex for provenance;
+  - populated-manifest native JSON round-trip coverage in
+    `crates/iroha_js_host/src/lib.rs`;
+  - deterministic `fixtures/account/` coverage for `secp256k1`,
+    `bls_normal`, and `bls_small`, with the JS parity matrix extended across
+    `secp256k1`, `ml-dsa`, `gost256a`, `sm2`, and the feature-gated BLS
+    families; and
+  - a repo-local `javascript/iroha_js/.eslintrc.json` so the package's
+    declared lint gate is actually runnable from the checkout.
+- focused verification is green for the manifest closure slice, including:
+  - `cargo fmt --all`
+  - `cd javascript/iroha_js && CARGO_TARGET_DIR=/tmp/iroha-js-host-target npm run build:native`
+  - `node --test javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/test/address.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js javascript/iroha_js/test/toriiClient.test.js`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/test/address.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js javascript/iroha_js/test/toriiClient.test.js`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-target cargo test -p iroha_js_host smart_contract_code_instruction_json_roundtrip -- --nocapture`
+  - `cargo test -p iroha_js_host smart_contract_code_instruction_json_roundtrip -- --nocapture`
+  - `cd javascript/iroha_js && npm run build:dist`
+
+Open work for this slice now remains:
+- let the heavyweight repo-wide verification finish in a clean slot and fix
+  anything it exposes:
+  - `cargo test --workspace`
+- clear the unrelated pre-existing `javascript/iroha_js` package-test failures
+  surfaced by the now-runnable `lint:test` gate. The current representative
+  blockers are:
+  - `test/transaction.test.js`
+  - `test/transactionBuilder.test.js`
+  - `test/transactionFixturesParity.test.js`
+  - `test/transportSecurity.test.js`
+  - `test/connectAuth.test.js`
+  - `test/connectSession.test.js`
+- rerun `cargo clippy --workspace --all-targets -- -D warnings` after the
+  workspace test slot frees up so this tranche is closed by the full repo-wide
+  gate rather than targeted verification only.
+
 Latest sync (2026-04-02 repo-wide ZK hardening tranche):
 the standalone native IPA helper now binds the full claimed statement into the
 transcript, FASTPQ verifies every carried `PublicIO` claim explicitly, and the
@@ -11,10 +57,11 @@ blurring demo endpoints with ledger verification.
 - shipped in the ZK stack:
   - metadata-bound native IPA opening verification in
     `crates/iroha_zkp_halo2`, with the stricter path wired through
-    `iroha_core`, IVM batch verification, and Torii `/v1/zk/verify-batch`;
+    `iroha_core`, the standalone IVM native-batch helper, and Torii
+    `/v1/zk/verify-batch`;
   - full FASTPQ `PublicIO` equality checks in `fastpq_prover::verify`;
-  - regression tests for tampered IPA statement fields and FASTPQ public claims;
-    and
+  - regression tests for tampered IPA statement fields, `CoreHost` batch
+    verifier routing, and FASTPQ public claims; and
   - a new `docs/source/zk_audit_matrix.md` plus tightened `/v1/zk/*`
     documentation/comments.
 

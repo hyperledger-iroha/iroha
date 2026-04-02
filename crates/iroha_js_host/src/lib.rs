@@ -8550,7 +8550,10 @@ mod tests {
         nft::NftId,
         peer::{Peer, PeerId},
         rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
-        smart_contract::manifest::{AccessSetHints, ContractManifest},
+        smart_contract::manifest::{
+            AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
+            EntrypointParamDescriptor, KotobaTranslation, KotobaTranslationEntry,
+        },
         transaction::{
             Executable, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
         },
@@ -10872,6 +10875,7 @@ mod tests {
 
     #[test]
     fn smart_contract_code_instruction_json_roundtrip() {
+        let signing_key = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
         let manifest = ContractManifest {
             code_hash: Some(Hash::prehashed(sample_hash(0xAA))),
             abi_hash: Some(Hash::prehashed(sample_hash(0xBB))),
@@ -10881,10 +10885,31 @@ mod tests {
                 read_keys: vec!["account:alice".to_owned()],
                 write_keys: vec!["contract:foo".to_owned()],
             }),
-            entrypoints: None,
-            kotoba: None,
+            entrypoints: Some(vec![EntrypointDescriptor {
+                name: "upgrade_ledger".to_owned(),
+                kind: EntryPointKind::Kaizen,
+                params: vec![EntrypointParamDescriptor {
+                    name: "reason".to_owned(),
+                    type_name: "String".to_owned(),
+                }],
+                return_type: Some("bool".to_owned()),
+                permission: Some("can_upgrade".to_owned()),
+                read_keys: vec!["contract:ledger".to_owned()],
+                write_keys: vec!["contract:ledger".to_owned()],
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+            }]),
+            kotoba: Some(vec![KotobaTranslationEntry {
+                msg_id: "contract.title".to_owned(),
+                translations: vec![KotobaTranslation {
+                    lang: "en".to_owned(),
+                    text: "Ledger Contract".to_owned(),
+                }],
+            }]),
             provenance: None,
-        };
+        }
+        .signed(&signing_key);
         let instruction: InstructionBox = Box::new(RegisterSmartContractCode {
             manifest: manifest.clone(),
         })

@@ -159,11 +159,10 @@ Zero‑knowledge (verification/state‑read)
 
 ZK gating & determinism
 - `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core::zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
-- The standalone native IPA batch syscall keeps the current enforced-envelope
-  path: prover and verifier bind `transcript_label`, backend/domain size, `z`,
-  `t`, `p_g`, and any optional `OpenVerifyEnvelope` metadata
-  (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`) before deriving
-  Fiat-Shamir challenges.
+- `DefaultHost` intentionally leaves `ZK_VERIFY_BATCH` disabled. The runtime
+  batch syscall lives on `CoreHost`, where each item is first bound to the VK
+  registry and then verified through
+  `iroha_core::zk::verify_backend_with_timing_guardrails`.
 - Verification is bound to the VK registry before cryptographic checks:
   - envelope/backend must be supported (`backend = halo2-ipa-pasta`), `vk_hash` must be present, and payload/proof sizes must respect config caps.
   - the referenced verifying key must be active and match circuit id, schema hash (`hash(public_inputs)`), namespace, and owner manifest.
@@ -386,7 +385,7 @@ but they must not change the host ABI.
 | 0x65 | ZK_VOTE_GET_TALLY | r10=&NoritoBytes(VoteGetTallyRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_vote_get@ivm.core/v2 |
 | 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest) | r10=ptr (&Blob(32-byte output)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 |
 | 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest) | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | asset:gas/G_verify@ivm.core/v2 |
-| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 |
+| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | host-dependent: `CoreHost` returns `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`; `DefaultHost` returns `r10=0`, `r11=ERR_DISABLED` | asset:gas/G_verify@ivm.core/v2 |
 | 0x69 | NUMERIC_FROM_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Numeric)) | - |
 | 0x6A | NUMERIC_TO_INT | r10=&NoritoBytes(Numeric) | r10=value:i64 | - |
 | 0x6B | NUMERIC_ADD | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
@@ -511,6 +510,7 @@ Codec helpers
 - All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.
 ZK (Halo2 OpenVerify)
 - 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: G_verify
-  - Per-item statuses are `1 = verified`, `0 = not verified`. Each item runs the same binding + full backend verification path as single-item ZK verify syscalls.
-  - Top-level request failures (decode, disabled backend, oversized batch) return `r10=0` and set `r11` (`ERR_DECODE`, `ERR_DISABLED`, `ERR_BACKEND`, `ERR_BATCH`).
+  - `CoreHost` returns per-item statuses (`1 = verified`, `0 = not verified`) and runs the same outer-envelope binding + full backend verification path as the single-item ZK verify syscalls.
+  - `DefaultHost` does not implement batch proof verification and returns `r10=0`, `r11=ERR_DISABLED`.
+  - On `CoreHost`, top-level request failures (decode, disabled backend, oversized batch) return `r10=0` and set `r11` (`ERR_DECODE`, `ERR_DISABLED`, `ERR_BACKEND`, `ERR_BATCH`).
   - On vector return, `r11` carries the first observed precheck/verify error code (or `0` when all succeed).

@@ -10330,6 +10330,47 @@ mod tests {
         rec
     }
 
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn enable_halo2_batch_verifier(host: &mut CoreHost, verifier_max_batch: u32, max_k: u32) {
+        let cfg = ivm::host::ZkHalo2Config {
+            enabled: true,
+            curve: ivm::host::ZkCurve::Pallas,
+            backend: ivm::host::ZkHalo2Backend::Ipa,
+            max_k,
+            verifier_budget_ms: 200,
+            verifier_max_batch,
+            max_proof_bytes: usize::MAX,
+            ..ivm::host::ZkHalo2Config::default()
+        };
+        host.halo2_config = cfg;
+        host.default = ivm::host::DefaultHost::new().with_zk_halo2_config(cfg);
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn registered_halo2_batch_fixture(
+        host: &mut CoreHost,
+        circuit_id: &str,
+        namespace: &str,
+    ) -> iroha_data_model::zk::OpenVerifyEnvelope {
+        let backend = "halo2/ipa";
+        let fixture_seed = crate::zk::test_utils::halo2_fixture_envelope(circuit_id, [0u8; 32]);
+        let vk_bytes = fixture_seed.vk_bytes.expect("fixture vk bytes");
+        let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
+        let fixture = crate::zk::test_utils::halo2_fixture_envelope(circuit_id, commitment);
+        let rec = active_vk_record(
+            commitment,
+            fixture.schema_hash,
+            backend,
+            circuit_id,
+            namespace,
+            vk_bytes,
+        );
+        let mut map = BTreeMap::new();
+        map.insert(VerifyingKeyId::new(backend, "vk"), rec);
+        host.set_verifying_keys(map).expect("set registry");
+        norito::decode_from_bytes(&fixture.proof_bytes).expect("decode fixture envelope")
+    }
+
     #[test]
     fn enforce_zk_envelope_maps_errors_and_ok() {
         crate::test_alias::ensure();
@@ -10479,8 +10520,75 @@ mod tests {
         assert!(host.enforce_zk_envelope(&env_ok, "transfer").is_ok());
     }
 
+    #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn zk_verify_batch_returns_statuses_with_registry_binding() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        host.set_chain_id_bytes(b"chain".to_vec());
+        host.set_current_manifest_id(Some("core".to_string()));
+        enable_halo2_batch_verifier(&mut host, 8, 18);
+
+        let env_ok =
+            registered_halo2_batch_fixture(&mut host, "halo2/ipa:tiny-add-public", "transfer");
+        assert!(
+            !env_ok.public_inputs.is_empty(),
+            "fixture circuit must expose public inputs for schema mismatch coverage"
+        );
+        let mut env_bad = env_ok.clone();
+        env_bad.public_inputs[0] ^= 0x01;
+        let payload = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
+
+        let mut vm = IVM::new(1_000_000);
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+
+        host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
+            .expect("batch verify");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
+        assert_eq!(statuses, vec![1, 0]);
+        assert_eq!(vm.register(11), ivm::host::ERR_VK_MISMATCH);
+        assert_eq!(vm.register(12), 1);
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn zk_verify_batch_reports_backend_verifier_failure_after_prechecks() {
+        crate::test_alias::ensure();
+        let mut host = CoreHost::new(fixture_account("alice"));
+        host.set_chain_id_bytes(b"chain".to_vec());
+        host.set_current_manifest_id(Some("core".to_string()));
+        enable_halo2_batch_verifier(&mut host, 8, 18);
+
+        let env_ok = registered_halo2_batch_fixture(&mut host, "halo2/ipa:tiny-add", "transfer");
+        let mut env_bad = env_ok.clone();
+        let last = env_bad
+            .proof_bytes
+            .last_mut()
+            .expect("fixture proof bytes must not be empty");
+        *last ^= 0x01;
+        let payload = norito::to_bytes(&vec![env_ok, env_bad]).expect("encode batch");
+
+        let mut vm = IVM::new(1_000_000);
+        let ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &payload);
+        vm.set_register(10, ptr);
+
+        host.syscall(ivm_sys::SYSCALL_ZK_VERIFY_BATCH, &mut vm)
+            .expect("batch verify");
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).expect("decode statuses");
+        assert_eq!(statuses, vec![1, 0]);
+        assert_eq!(vm.register(11), ivm::host::ERR_VERIFY);
+        assert_eq!(vm.register(12), 1);
+    }
+
+    #[test]
+    fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
         crate::test_alias::ensure();
         let mut host = CoreHost::new(fixture_account("alice"));
         host.set_chain_id_bytes(b"chain".to_vec());

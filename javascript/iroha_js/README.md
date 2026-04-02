@@ -136,9 +136,9 @@ console.log(formats.i105);
 console.log(formats.i105Warning);
 ```
 
-Optional controller families remain opt-in in the JS codec. Enable them before
-encoding or decoding account ids that use `ml-dsa`, `gost*`, `sm2`, or
-feature-gated `bls_*` public keys:
+`secp256k1` account ids are first-class in the JS codec. Optional controller
+families remain opt-in; enable them before encoding or decoding account ids
+that use `ml-dsa`, `gost*`, `sm2`, or feature-gated `bls_*` public keys:
 
 ```js
 import { configureCurveSupport } from "@iroha/iroha-js";
@@ -2096,8 +2096,10 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
 ```
 
 `buildRegisterSmartContractCodeInstruction/Transaction` accepts partial manifests
-when governance stages code hashes separately. Bytecode helpers enforce the
-32-byte hash length and accept `Buffer`, typed arrays, or base64 strings.
+when governance stages code hashes separately, and the JS-only Norito path now
+round-trips the full current manifest metadata surface including
+`entrypoints`, `kotoba`, and `provenance`. Bytecode helpers enforce the 32-byte
+hash length and accept `Buffer`, typed arrays, or base64 strings.
 Activation helpers normalise namespace/contract IDs into the canonical
 `ActivateContractInstance` shape so governance workflows can bind a manifest to
 an `{namespace, contract_id}` tuple deterministically.
@@ -2112,7 +2114,8 @@ feedback during rehearsals.
 The recipe mirrors the same validation rules: keys can be supplied as
 `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, namespace/contract ids
 must be non-empty strings, and manifest overrides use camelCase fields so CI
-orchestrators can reuse governance artefacts directly.
+orchestrators can reuse governance artefacts directly, including
+`accessSetHints`, `entrypoints`, `kotoba`, and `provenance`.
 
 ### Contract calls via Torii
 

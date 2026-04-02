@@ -16648,6 +16648,16 @@ function normalizeManifestPayload(manifest, context) {
   if (!isPlainObject(manifest)) {
     throw new TypeError(`${context} must be an object`);
   }
+  const hasField = (...keys) =>
+    keys.some((key) => Object.prototype.hasOwnProperty.call(manifest, key));
+  const getField = (...keys) => {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(manifest, key)) {
+        return manifest[key];
+      }
+    }
+    return undefined;
+  };
   const normalized = {
     code_hash: null,
     abi_hash: null,
@@ -16655,28 +16665,30 @@ function normalizeManifestPayload(manifest, context) {
     features_bitmap: null,
     access_set_hints: null,
     entrypoints: null,
+    kotoba: null,
+    provenance: null,
   };
-  if ("code_hash" in manifest) {
+  if (hasField("code_hash", "codeHash")) {
     normalized.code_hash = normalizeOptionalHex32(
-      manifest.code_hash,
+      getField("code_hash", "codeHash"),
       `${context}.code_hash`,
     );
   }
-  if ("abi_hash" in manifest) {
+  if (hasField("abi_hash", "abiHash")) {
     normalized.abi_hash = normalizeOptionalHex32(
-      manifest.abi_hash,
+      getField("abi_hash", "abiHash"),
       `${context}.abi_hash`,
     );
   }
-  if ("compiler_fingerprint" in manifest) {
-    const fingerprint = manifest.compiler_fingerprint ?? null;
+  if (hasField("compiler_fingerprint", "compilerFingerprint")) {
+    const fingerprint = getField("compiler_fingerprint", "compilerFingerprint") ?? null;
     normalized.compiler_fingerprint =
       fingerprint === null
         ? null
         : requireNonEmptyString(fingerprint, `${context}.compiler_fingerprint`);
   }
-  if ("features_bitmap" in manifest) {
-    const features = manifest.features_bitmap ?? null;
+  if (hasField("features_bitmap", "featuresBitmap")) {
+    const features = getField("features_bitmap", "featuresBitmap") ?? null;
     normalized.features_bitmap =
       features === null
         ? null
@@ -16686,15 +16698,15 @@ function normalizeManifestPayload(manifest, context) {
             { allowZero: true },
           );
   }
-  if ("access_set_hints" in manifest) {
-    const hints = manifest.access_set_hints;
+  if (hasField("access_set_hints", "accessSetHints")) {
+    const hints = getField("access_set_hints", "accessSetHints");
     normalized.access_set_hints =
       hints === null
         ? null
         : normalizeAccessSetHintsPayload(hints, `${context}.access_set_hints`);
   }
-  if ("entrypoints" in manifest) {
-    const entries = manifest.entrypoints;
+  if (hasField("entrypoints", "entryPoints")) {
+    const entries = getField("entrypoints", "entryPoints");
     if (entries === null) {
       normalized.entrypoints = null;
     } else if (!Array.isArray(entries)) {
@@ -16708,7 +16720,100 @@ function normalizeManifestPayload(manifest, context) {
       });
     }
   }
+  if (hasField("kotoba")) {
+    const kotoba = getField("kotoba");
+    normalized.kotoba =
+      kotoba === null ? null : normalizeManifestKotobaPayload(kotoba, `${context}.kotoba`);
+  }
+  if (hasField("provenance")) {
+    const provenance = getField("provenance");
+    normalized.provenance =
+      provenance === null
+        ? null
+        : normalizeManifestProvenancePayload(provenance, `${context}.provenance`);
+  }
   return normalized;
+}
+
+function normalizeManifestKotobaPayload(value, context) {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array`);
+  }
+  return value.map((entry, index) => {
+    const record = ensureRecord(entry, `${context}[${index}]`);
+    return {
+      msg_id: requireNonEmptyString(
+        record.msg_id ?? record.msgId,
+        `${context}[${index}].msg_id`,
+      ),
+      translations: cloneJsonValue(
+        record.translations,
+        `${context}[${index}].translations`,
+      ),
+    };
+  });
+}
+
+function normalizeManifestPublicKeyPayload(value, context) {
+  const literal = requireNonEmptyString(value, context).trim();
+  let prefixedAlgorithm = null;
+  let multihashLiteral = literal;
+  const separator = literal.indexOf(":");
+  if (separator > 0) {
+    prefixedAlgorithm = literal.slice(0, separator).trim().toLowerCase();
+    multihashLiteral = literal.slice(separator + 1);
+  }
+  const canonical = canonicalizeMultihashHex(multihashLiteral, context);
+  const bytes = Buffer.from(canonical, "hex");
+  const functionCode = decodeVarintBuffer(bytes, 0, context);
+  const digestLength = decodeVarintBuffer(bytes, functionCode.nextIndex, context);
+  const payload = bytes.subarray(digestLength.nextIndex);
+  if (payload.length !== digestLength.value) {
+    throw new Error(`${context} multihash payload length does not match its digest header`);
+  }
+  const entry = getCurveEntryByPublicKeyMulticodec(functionCode.value);
+  if (!entry) {
+    throw new Error(
+      `${context} uses unsupported multihash code 0x${functionCode.value.toString(16)}`,
+    );
+  }
+  if (
+    prefixedAlgorithm &&
+    prefixedAlgorithm !== entry.algorithm &&
+    !(prefixedAlgorithm === "mldsa" && entry.algorithm === "ml-dsa")
+  ) {
+    throw new Error(`${context} algorithm prefix does not match the multihash payload`);
+  }
+  const fnHex = bytes.subarray(0, functionCode.nextIndex).toString("hex");
+  const lenHex = bytes.subarray(functionCode.nextIndex, digestLength.nextIndex).toString("hex");
+  const payloadHex = payload.toString("hex").toUpperCase();
+  return `${fnHex}${lenHex}${payloadHex}`;
+}
+
+function normalizeManifestSignaturePayload(value, context) {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return Buffer.from(value).toString("hex").toUpperCase();
+  }
+  if (Array.isArray(value)) {
+    return normalizeByteArray(value, context).toString("hex").toUpperCase();
+  }
+  const literal = requireNonEmptyString(value, context).trim();
+  const body =
+    literal.includes(":") && literal.indexOf(":") > 0
+      ? literal.slice(literal.indexOf(":") + 1)
+      : literal;
+  if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/u.test(body)) {
+    throw new TypeError(`${context} must be an even-length hexadecimal string`);
+  }
+  return body.toUpperCase();
+}
+
+function normalizeManifestProvenancePayload(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    signer: normalizeManifestPublicKeyPayload(record.signer, `${context}.signer`),
+    signature: normalizeManifestSignaturePayload(record.signature, `${context}.signature`),
+  };
 }
 
 function normalizeAccessSetHintsPayload(payload, context) {
@@ -16725,9 +16830,12 @@ function normalizeAccessSetHintsPayload(payload, context) {
     );
   };
   return {
-    read_keys: normalizeKeys(record.read_keys, `${context}.read_keys`),
+    read_keys: normalizeKeys(
+      record.read_keys ?? record.readKeys,
+      `${context}.read_keys`,
+    ),
     write_keys: normalizeKeys(
-      record.write_keys,
+      record.write_keys ?? record.writeKeys,
       `${context}.write_keys`,
     ),
   };
@@ -18458,6 +18566,8 @@ function normalizeContractManifestResponse(payload) {
     manifestRecord.access_set_hints ?? null;
   const entrypointsValue =
     manifestRecord.entrypoints ?? null;
+  const kotobaValue = manifestRecord.kotoba ?? null;
+  const provenanceValue = manifestRecord.provenance ?? null;
   return {
     manifest: {
       code_hash: normalizeOptionalHex32(
@@ -18482,6 +18592,14 @@ function normalizeContractManifestResponse(payload) {
         entrypointsValue,
         "manifest.entrypoints",
       ),
+      kotoba:
+        kotobaValue === null
+          ? null
+          : cloneJsonValue(kotobaValue, "manifest.kotoba"),
+      provenance:
+        provenanceValue === null
+          ? null
+          : cloneJsonValue(provenanceValue, "manifest.provenance"),
     },
     code_bytes:
       record.code_bytes === undefined || record.code_bytes === null

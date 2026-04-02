@@ -2,6 +2,52 @@
 
 Last updated: 2026-04-02
 
+## 2026-04-02 Follow-up: JS SDK manifest metadata parity now covers full manifest payloads and broader curve fixtures
+- Closed the remaining `javascript/iroha_js` manifest parity gaps:
+  - `src/norito.js` now encodes and decodes `ContractManifest.entrypoints`,
+    `kotoba`, and `provenance` with dedicated typed codecs instead of rejecting
+    the populated fields in JS-only mode;
+  - `src/instructionBuilders.js` and `src/toriiClient.js` now canonicalize
+    manifest `kotoba` entries to `msg_id` and normalize provenance signer /
+    signature literals to the same bare hex JSON shape native decode and Torii
+    expect; and
+  - `crates/iroha_js_host/src/lib.rs` now has an explicit populated-manifest
+    JSON round-trip regression so the native host stays pinned on the same
+    canonical shape.
+- Broadened the JS account/address parity coverage and fixtures:
+  - added deterministic `fixtures/account/` public-key fixtures for
+    `secp256k1`, `bls_normal`, and `bls_small`; and
+  - extended the JS parity suite so the current address/Norito matrix now
+    covers `secp256k1`, `ml-dsa`, `gost256a`, `sm2`, and feature-gated
+    `bls_normal` / `bls_small` alongside the existing multisig-controlled
+    account-id regressions.
+- Added a repo-local `javascript/iroha_js/.eslintrc.json` so the package's
+  declared `npm run lint` / `npm run lint:test` verification path is runnable
+  inside the checkout instead of failing immediately due to a missing config
+  file.
+- Verification completed so far:
+  - `cargo fmt --all`
+  - `cd javascript/iroha_js && CARGO_TARGET_DIR=/tmp/iroha-js-host-target npm run build:native`
+  - `node --test javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/test/address.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js javascript/iroha_js/test/toriiClient.test.js`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/test/address.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js javascript/iroha_js/test/toriiClient.test.js`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-target cargo test -p iroha_js_host smart_contract_code_instruction_json_roundtrip -- --nocapture`
+  - `cargo test -p iroha_js_host smart_contract_code_instruction_json_roundtrip -- --nocapture`
+  - `cd javascript/iroha_js && npm run build:dist`
+- Verification update:
+  - `cd javascript/iroha_js && CARGO_TARGET_DIR=/tmp/iroha-js-linttest npm run lint:test`
+    now runs the declared lint path successfully and rebuilds the native host,
+    but the package-wide `node --test` phase still fails in pre-existing
+    unrelated areas outside this Norito/manifest tranche. The representative
+    current failures are:
+    `test/transaction.test.js`,
+    `test/transactionBuilder.test.js`,
+    `test/transactionFixturesParity.test.js`,
+    `test/transportSecurity.test.js`,
+    `test/connectAuth.test.js`, and
+    `test/connectSession.test.js`.
+  - `cargo test --workspace` is still in flight while this status entry was
+    updated.
+
 ## 2026-04-02 Follow-up: repo-wide ZK verifier hardening closes the standalone IPA claim-binding gap and tightens FASTPQ claim checks
 - Hardened the standalone native IPA helper in
   `crates/iroha_zkp_halo2/src` so prover and verifier now bind the full claimed
@@ -10,8 +56,13 @@ Last updated: 2026-04-02
   outer metadata carried in `OpenVerifyEnvelope`
   (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`).
 - Threaded that stricter helper through every in-repo standalone consumer:
-  `iroha_core`'s `halo2/ipa/poly-open` path, the IVM batch helper/syscall path,
-  and the Torii `/v1/zk/verify-batch` diagnostics endpoint.
+  `iroha_core`'s `halo2/ipa/poly-open` path, the standalone IVM native-batch
+  helper, and the Torii `/v1/zk/verify-batch` diagnostics endpoint.
+- Aligned the IVM host split around batch verification:
+  `DefaultHost` now has explicit regression coverage showing that
+  `SYSCALL_ZK_VERIFY_BATCH` stays disabled there, while `CoreHost` owns the
+  runtime batch path through the VK-registry-bound
+  `verify_backend_with_timing_guardrails` flow.
 - Tightened FASTPQ verification in `crates/fastpq_prover/src/proof.rs` so the
   verifier now recomputes the expected `PublicIO` from the supplied batch and
   rejects mismatches for every carried claim, not just the ordering and
@@ -22,7 +73,9 @@ Last updated: 2026-04-02
   - native IPA tampering of `z`, `t`, `p_g`, `transcript_label`, and the
     optional bound metadata;
   - Torii batch verification rejecting metadata tampering;
-  - IVM batch syscall rejection of tampered bound metadata; and
+  - `CoreHost` batch verification returning mixed statuses for both registry
+    binding failures and post-precheck proof corruption while `DefaultHost`
+    reports `ERR_DISABLED`; and
   - FASTPQ verifier rejection for each previously-unchecked `PublicIO` field.
 - Clarified the public surface docs/comments so `/v1/zk/verify` and
   `/v1/zk/submit-proof` are explicitly marked decode-only/demo endpoints, while

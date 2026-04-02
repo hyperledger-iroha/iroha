@@ -5517,6 +5517,26 @@ export interface ContractEntrypointInput {
   permission?: string | null;
 }
 
+export interface ContractKotobaTranslationInput {
+  lang: string;
+  text: string;
+}
+
+export type ContractKotobaEntryInput =
+  | {
+      msgId: string;
+      translations: ReadonlyArray<ContractKotobaTranslationInput>;
+    }
+  | {
+      msg_id: string;
+      translations: ReadonlyArray<ContractKotobaTranslationInput>;
+    };
+
+export interface ContractManifestProvenanceInput {
+  signer: string;
+  signature: string;
+}
+
 export interface ContractManifestInput {
   codeHash?: HashLike | null;
   abiHash?: HashLike | null;
@@ -5524,6 +5544,8 @@ export interface ContractManifestInput {
   featuresBitmap?: NumericLike | null;
   accessSetHints?: ContractAccessSetHintsInput | null;
   entrypoints?: ReadonlyArray<ContractEntrypointInput> | null;
+  kotoba?: ReadonlyArray<ContractKotobaEntryInput> | null;
+  provenance?: ContractManifestProvenanceInput | null;
 }
 
 /**
@@ -5538,6 +5560,8 @@ export interface ToriiContractManifestInput {
   featuresBitmap?: NumericLike | null;
   accessSetHints?: ContractAccessSetHintsInput | null;
   entrypoints?: ReadonlyArray<ContractEntrypointInput> | null;
+  kotoba?: ReadonlyArray<ContractKotobaEntryInput> | null;
+  provenance?: ContractManifestProvenanceInput | null;
 }
 
 export interface RegisterContractCodeRequest {
@@ -5624,6 +5648,8 @@ export interface ContractManifestRecord {
         }>
       | null
       | undefined;
+    kotoba?: JsonValue | null | undefined;
+    provenance?: JsonValue | null | undefined;
   };
   code_bytes: string | null;
 }

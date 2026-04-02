@@ -29,6 +29,18 @@ const GOST256_FIXTURE_PATH = path.resolve(
   __dirname,
   "../../../fixtures/account/gost256a_public_key.hex",
 );
+const SECP256K1_FIXTURE_PATH = path.resolve(
+  __dirname,
+  "../../../fixtures/account/secp256k1_public_key.hex",
+);
+const BLS_NORMAL_FIXTURE_PATH = path.resolve(
+  __dirname,
+  "../../../fixtures/account/bls_normal_public_key.hex",
+);
+const BLS_SMALL_FIXTURE_PATH = path.resolve(
+  __dirname,
+  "../../../fixtures/account/bls_small_public_key.hex",
+);
 
 function hexToBytes(hex) {
   const body = hex.replace(/^0x/i, "");
@@ -76,6 +88,9 @@ const ALT_PUBLIC_KEY = hexToBytes(
 );
 const ML_DSA_PUBLIC_KEY = hexToBytes(fs.readFileSync(ML_DSA_FIXTURE_PATH, "utf8").trim());
 const GOST256_PUBLIC_KEY = hexToBytes(fs.readFileSync(GOST256_FIXTURE_PATH, "utf8").trim());
+const SECP256K1_PUBLIC_KEY = hexToBytes(fs.readFileSync(SECP256K1_FIXTURE_PATH, "utf8").trim());
+const BLS_NORMAL_PUBLIC_KEY = hexToBytes(fs.readFileSync(BLS_NORMAL_FIXTURE_PATH, "utf8").trim());
+const BLS_SMALL_PUBLIC_KEY = hexToBytes(fs.readFileSync(BLS_SMALL_FIXTURE_PATH, "utf8").trim());
 const SM2_PUBLIC_KEY = hexToBytes(
   "04361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F",
 );
@@ -476,6 +491,17 @@ test("displayFormats validates chain discriminant input", () => {
 test("configureCurveSupport gates optional curves at encode/decode time", () => {
   configureCurveSupport();
   try {
+    const secpAddress = AccountAddress.fromAccount({
+      publicKey: SECP256K1_PUBLIC_KEY,
+      algorithm: "secp256k1",
+    });
+    const secpI105 = secpAddress.toI105();
+    const { address: parsedSecp } = AccountAddress.parseEncoded(secpI105);
+    assert.deepEqual(
+      Buffer.from(parsedSecp.canonicalBytes()),
+      Buffer.from(secpAddress.canonicalBytes()),
+    );
+
     assert.throws(
       () =>
         AccountAddress.fromAccount({ publicKey: GOST256_PUBLIC_KEY,
@@ -529,6 +555,47 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
     configureCurveSupport();
     assert.throws(
       () => AccountAddress.parseEncoded(sm2I105),
+      (error) =>
+        error instanceof AccountAddressError &&
+        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
+    );
+
+    assert.throws(
+      () =>
+        AccountAddress.fromAccount({
+          publicKey: BLS_NORMAL_PUBLIC_KEY,
+          algorithm: "bls_normal",
+        }),
+      (error) =>
+        error instanceof AccountAddressError &&
+        error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
+    );
+
+    configureCurveSupport({ allowBls: true });
+    const blsNormalAddress = AccountAddress.fromAccount({
+      publicKey: BLS_NORMAL_PUBLIC_KEY,
+      algorithm: "bls_normal",
+    });
+    const blsSmallAddress = AccountAddress.fromAccount({
+      publicKey: BLS_SMALL_PUBLIC_KEY,
+      algorithm: "bls_small",
+    });
+    const blsNormalI105 = blsNormalAddress.toI105();
+    const blsSmallI105 = blsSmallAddress.toI105();
+    const { address: parsedBlsNormal } = AccountAddress.parseEncoded(blsNormalI105);
+    const { address: parsedBlsSmall } = AccountAddress.parseEncoded(blsSmallI105);
+    assert.deepEqual(
+      Buffer.from(parsedBlsNormal.canonicalBytes()),
+      Buffer.from(blsNormalAddress.canonicalBytes()),
+    );
+    assert.deepEqual(
+      Buffer.from(parsedBlsSmall.canonicalBytes()),
+      Buffer.from(blsSmallAddress.canonicalBytes()),
+    );
+
+    configureCurveSupport();
+    assert.throws(
+      () => AccountAddress.parseEncoded(blsNormalI105),
       (error) =>
         error instanceof AccountAddressError &&
         error.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,

@@ -14975,6 +14975,10 @@ test("Connect admin wrappers reject unsupported option fields", async () => {
 
 test("registerContractCode posts manifest JSON", async () => {
   let captured;
+  const signer = `ed25519:ed0120${"11".repeat(32)}`;
+  const signature = `ed25519:${"22".repeat(64)}`;
+  const signerCanonical = signer.split(":")[1];
+  const signatureCanonical = signature.split(":")[1].toUpperCase();
   const fetchImpl = async (url, init) => {
     captured = { url, init };
     return createResponse({ status: 202 });
@@ -14983,7 +14987,23 @@ test("registerContractCode posts manifest JSON", async () => {
   await client.registerContractCode({
     authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
-    manifest: { code_hash: "a".repeat(64), compiler_fingerprint: "rustc" },
+    manifest: {
+      codeHash: "a".repeat(64),
+      compilerFingerprint: "rustc",
+      entrypoints: [
+        { name: "upgrade_ledger", kind: "Kaizen", permission: "can_upgrade" },
+      ],
+      kotoba: [
+        {
+          msg_id: "contract.title",
+          translations: [{ lang: "en", text: "Ledger Contract" }],
+        },
+      ],
+      provenance: {
+        signer,
+        signature,
+      },
+    },
     codeBytes: Buffer.from("hello"),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/code`);
@@ -14999,7 +15019,19 @@ test("registerContractCode posts manifest JSON", async () => {
       abi_hash: null,
       features_bitmap: null,
       access_set_hints: null,
-      entrypoints: null,
+      entrypoints: [
+        { name: "upgrade_ledger", kind: "Kaizen", permission: "can_upgrade" },
+      ],
+      kotoba: [
+        {
+          msg_id: "contract.title",
+          translations: [{ lang: "en", text: "Ledger Contract" }],
+        },
+      ],
+      provenance: {
+        signer: signerCanonical,
+        signature: signatureCanonical,
+      },
     },
     code_bytes: Buffer.from("hello").toString("base64"),
   });
@@ -15037,6 +15069,8 @@ test("deployContract submits base64 payload and returns response", async () => {
     features_bitmap: 1,
     access_set_hints: null,
     entrypoints: null,
+    kotoba: null,
+    provenance: null,
   });
   assert.deepEqual(result, responsePayload);
 });
@@ -15119,6 +15153,8 @@ test("deployContractInstance posts combined payload", async () => {
       features_bitmap: null,
       access_set_hints: { read_keys: [`account:${FIXTURE_ALICE_ID}`], write_keys: [] },
       entrypoints: null,
+      kotoba: null,
+      provenance: null,
     },
   });
   assert.deepEqual(result, responsePayload);
@@ -15491,11 +15527,28 @@ test("getMultisigSpec accepts domain-scoped aliases and rejects unsupported alia
 });
 
 test("getContractManifest returns normalized payload", async () => {
+  const signer = `ed25519:ed0120${"11".repeat(32)}`;
+  const signature = `ed25519:${"22".repeat(64)}`;
+  const signerCanonical = signer.split(":")[1];
+  const signatureCanonical = signature.split(":")[1].toUpperCase();
   const fetchImpl = async () =>
     createResponse({
       status: 200,
       jsonData: {
-        manifest: { code_hash: "0".repeat(64), abi_hash: null },
+        manifest: {
+          code_hash: "0".repeat(64),
+          abi_hash: null,
+          kotoba: [
+            {
+              msg_id: "contract.title",
+              translations: [{ lang: "en", text: "Ledger Contract" }],
+            },
+          ],
+          provenance: {
+            signer: signerCanonical,
+            signature: signatureCanonical,
+          },
+        },
         code_bytes: null,
       },
       headers: { "content-type": "application/json" },
@@ -15505,6 +15558,16 @@ test("getContractManifest returns normalized payload", async () => {
   assert.ok(manifest);
   assert.equal(manifest?.manifest.code_hash, "0".repeat(64));
   assert.equal(manifest?.manifest.abi_hash ?? null, null);
+  assert.deepEqual(manifest?.manifest.kotoba, [
+    {
+      msg_id: "contract.title",
+      translations: [{ lang: "en", text: "Ledger Contract" }],
+    },
+  ]);
+  assert.deepEqual(manifest?.manifest.provenance, {
+    signer: signerCanonical,
+    signature: signatureCanonical,
+  });
   assert.equal(manifest?.code_bytes, null);
 });
 

@@ -11315,6 +11315,24 @@ mod multisig_selector_tests {
         namespace: &str,
         contract_id: &str,
     ) {
+        install_contract_instance_with_code(
+            state,
+            authority,
+            authority_keypair,
+            namespace,
+            contract_id,
+            minimal_ivm_program(1),
+        );
+    }
+
+    fn install_contract_instance_with_code(
+        state: &State,
+        authority: &dm::AccountId,
+        authority_keypair: &KeyPair,
+        namespace: &str,
+        contract_id: &str,
+        code: Vec<u8>,
+    ) {
         let mut block = state.block(dm::BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
             None,
@@ -11335,7 +11353,6 @@ mod multisig_selector_tests {
             .execute(authority, &mut stx)
             .expect("grant CanEnactGovernance");
 
-        let code = minimal_ivm_program(1);
         let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
         let code_hash =
             register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
@@ -12876,6 +12893,105 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
+    async fn multisig_contract_propose_normalizes_payload_before_hashing() {
+        let (
+            state,
+            multisig_account_id,
+            authority_account_id,
+            signer_two_id,
+            alias_literal,
+            authority_keypair,
+        ) = multisig_contract_test_fixture();
+        let code = ivm::KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku BlobPayloadNormalizeTest {
+  meta { abi_version: 1; }
+
+  kotoage fn main() {}
+
+  kotoage fn create(alias_literal: Blob) {}
+}
+"#,
+            )
+            .expect("compile blob contract");
+        install_contract_instance_with_code(
+            state.as_ref(),
+            &authority_account_id,
+            &authority_keypair,
+            "apps",
+            "demo_blob",
+            code,
+        );
+
+        let request_payload = IrohaJson::new(norito::json!({
+            "alias_literal": "banking@centralbank"
+        }));
+        let response = handle_post_contract_call_multisig_propose(
+            Arc::new("multisig-selector-test".parse().expect("chain id")),
+            build_queue(),
+            Arc::clone(&state),
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigContractCallProposeDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id: signer_two_id,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                creation_time_ms: Some(1_700_000_000_345),
+                namespace: "apps".to_owned(),
+                contract_id: "demo_blob".to_owned(),
+                entrypoint: "create".to_owned(),
+                payload: Some(request_payload.clone()),
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: Some(10_000),
+            }),
+        )
+        .await
+        .expect("blob propose response");
+
+        let response_payload = decode_json_response(response).await;
+        let proposal_id = response_payload["proposal_id"]
+            .as_str()
+            .expect("proposal id")
+            .to_owned();
+        let PreparedContractCall {
+            code_bytes,
+            code_hash,
+            manifest,
+            ..
+        } = prepare_contract_call(state.as_ref(), "apps", "demo_blob")
+            .expect("prepared contract call");
+        let entrypoint = ensure_public_contract_entrypoint(&manifest, "create")
+            .expect("blob entrypoint descriptor");
+        let normalized_payload = normalize_contract_payload(entrypoint, Some(&request_payload))
+            .expect("blob payload should normalize")
+            .expect("normalized payload");
+        let (_, expected_hash) = build_multisig_contract_call_instructions(
+            &multisig_account_id,
+            "apps",
+            "demo_blob",
+            "create",
+            Some(&normalized_payload),
+            None,
+            None,
+            10_000,
+            &manifest,
+            &code_hash,
+            code_bytes,
+        )
+        .expect("normalized instructions");
+        let expected_hash = expected_hash.to_string();
+
+        assert_eq!(proposal_id, expected_hash);
+        assert_eq!(
+            response_payload["instructions_hash"].as_str(),
+            Some(expected_hash.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn multisig_generic_propose_accepts_alias_selector_and_returns_resolved_account_id() {
         let (
             state,
@@ -13025,14 +13141,15 @@ pub async fn handle_post_contract_call_multisig_propose(
         manifest,
         ..
     } = prepared;
-    ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
+    let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
     let tx_metadata = build_contract_call_metadata(
         &manifest,
         &namespace,
         &contract_id,
         None,
         Some(&entrypoint),
-        payload.as_ref(),
+        normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
         fee_sponsor.as_ref(),
         gas_limit,
@@ -13042,7 +13159,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         &namespace,
         &contract_id,
         &entrypoint,
-        payload.as_ref(),
+        normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
         fee_sponsor.as_ref(),
         gas_limit,

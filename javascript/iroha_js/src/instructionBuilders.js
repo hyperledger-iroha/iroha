@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { noritoEncodeInstruction } from "./norito.js";
 import {
+  canonicalizeMultihashHex,
   ensureCanonicalAccountId,
   normalizeAccountId,
   normalizeAssetId,
@@ -8,6 +9,7 @@ import {
   normalizeRwaId,
 } from "./normalizers.js";
 import { MultisigSpec, MultisigSpecBuilder } from "./multisig.js";
+import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
 import {
   createValidationError,
   ValidationErrorCode,
@@ -1728,7 +1730,7 @@ function normalizeContractManifest(manifest) {
   const compilerFingerprint = source.compiler_fingerprint ?? source.compilerFingerprint;
   const featuresBitmap = source.features_bitmap ?? source.featuresBitmap;
   const entrypoints = source.entrypoints ?? source.entryPoints;
-  return {
+  const normalized = {
     code_hash: normalizeOptionalHash(
       source.code_hash ?? source.codeHash,
       "manifest.codeHash",
@@ -1756,6 +1758,152 @@ function normalizeContractManifest(manifest) {
       "manifest.accessSetHints",
     ),
     entrypoints: normalizeEntrypoints(entrypoints, "manifest.entrypoints"),
+  };
+  if (Object.prototype.hasOwnProperty.call(source, "kotoba")) {
+    normalized.kotoba =
+      source.kotoba === null
+        ? null
+        : normalizeContractKotobaEntries(source.kotoba, "manifest.kotoba");
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "provenance")) {
+    normalized.provenance =
+      source.provenance === null
+        ? null
+        : normalizeManifestProvenance(source.provenance, "manifest.provenance");
+  }
+  return normalized;
+}
+
+function normalizeContractKotobaEntries(value, name) {
+  if (!Array.isArray(value)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name} must be an array of translation entries`,
+      name,
+    );
+  }
+  return value.map((entry, index) => {
+    const normalizedEntry = assertPlainObject(entry, `${name}[${index}]`);
+    return {
+      msg_id: assertString(
+        normalizedEntry.msg_id ?? normalizedEntry.msgId,
+        `${name}[${index}].msg_id`,
+      ),
+      translations: normalizeJsonValue(
+        normalizedEntry.translations,
+        `${name}[${index}].translations`,
+      ),
+    };
+  });
+}
+
+function decodeManifestVarint(buffer, startIndex, context) {
+  let value = 0n;
+  let shift = 0n;
+  let index = startIndex;
+  while (index < buffer.length) {
+    const byte = BigInt(buffer[index]);
+    value |= (byte & 0x7fn) << shift;
+    index += 1;
+    if ((byte & 0x80n) === 0n) {
+      if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        fail(
+          ValidationErrorCode.INVALID_MULTIHASH,
+          `${context} contains an oversized multihash varint`,
+          context,
+        );
+      }
+      return { value: Number(value), nextIndex: index };
+    }
+    shift += 7n;
+    if (shift > 63n) {
+      fail(
+        ValidationErrorCode.INVALID_MULTIHASH,
+        `${context} contains an invalid multihash varint`,
+        context,
+      );
+    }
+  }
+  fail(
+    ValidationErrorCode.INVALID_MULTIHASH,
+    `${context} contains a truncated multihash varint`,
+    context,
+  );
+}
+
+function normalizeManifestPublicKeyLiteral(value, name) {
+  const literal = assertString(value, name).trim();
+  let prefixedAlgorithm = null;
+  let multihashLiteral = literal;
+  const separator = literal.indexOf(":");
+  if (separator > 0) {
+    prefixedAlgorithm = literal.slice(0, separator).trim().toLowerCase();
+    multihashLiteral = literal.slice(separator + 1);
+  }
+  const canonical = canonicalizeMultihashHex(multihashLiteral, name);
+  const bytes = Buffer.from(canonical, "hex");
+  const functionCode = decodeManifestVarint(bytes, 0, name);
+  const digestLength = decodeManifestVarint(bytes, functionCode.nextIndex, name);
+  const payload = bytes.subarray(digestLength.nextIndex);
+  if (payload.length !== digestLength.value) {
+    fail(
+      ValidationErrorCode.INVALID_MULTIHASH,
+      `${name} multihash payload length does not match its digest header`,
+      name,
+    );
+  }
+  const entry = getCurveEntryByPublicKeyMulticodec(functionCode.value);
+  if (!entry) {
+    fail(
+      ValidationErrorCode.INVALID_MULTIHASH,
+      `${name} uses unsupported multihash code 0x${functionCode.value.toString(16)}`,
+      name,
+    );
+  }
+  if (
+    prefixedAlgorithm &&
+    prefixedAlgorithm !== entry.algorithm &&
+    !(prefixedAlgorithm === "mldsa" && entry.algorithm === "ml-dsa")
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_MULTIHASH,
+      `${name} algorithm prefix does not match the multihash payload`,
+      name,
+    );
+  }
+  const fnHex = bytes.subarray(0, functionCode.nextIndex).toString("hex");
+  const lenHex = bytes.subarray(functionCode.nextIndex, digestLength.nextIndex).toString("hex");
+  const payloadHex = payload.toString("hex").toUpperCase();
+  return `${fnHex}${lenHex}${payloadHex}`;
+}
+
+function normalizeManifestSignatureLiteral(value, name) {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    return Buffer.from(value).toString("hex").toUpperCase();
+  }
+  if (Array.isArray(value)) {
+    return normalizeBytesLikeToBuffer(value, name).toString("hex").toUpperCase();
+  }
+  const literal = assertString(value, name).trim();
+  const body =
+    literal.includes(":") && literal.indexOf(":") > 0
+      ? literal.slice(literal.indexOf(":") + 1)
+      : literal;
+  if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9A-Fa-f]+$/u.test(body)) {
+    fail(
+      ValidationErrorCode.INVALID_HEX,
+      `${name} must be an even-length hexadecimal string`,
+      name,
+    );
+  }
+  return body.toUpperCase();
+}
+
+function normalizeManifestProvenance(value, name) {
+  const source = assertPlainObject(value, name);
+  return {
+    signer: normalizeManifestPublicKeyLiteral(source.signer, `${name}.signer`),
+    signature: normalizeManifestSignatureLiteral(source.signature, `${name}.signature`),
   };
 }
 
